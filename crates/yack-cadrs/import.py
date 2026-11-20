@@ -269,8 +269,9 @@ def transform(rel, text):
         old = "pub mod types;\n"
         if old not in text:
             sys.exit("lib.rs: `pub mod types;` not found")
-        text = text.replace(old, old + "// yack: glue the yack facade calls (not cadrs code; owned by w-m03-api).\npub mod yack_glue;\n", 1)
-        changes.append("`pub mod yack_glue;` (yack's own facade glue) declared")
+        text = text.replace(old, old + "// yack: glue the yack facade calls (not cadrs code; owned by w-m03-api).\npub mod yack_glue;\n"
+                            "// yack: yack's naming and other glue (not cadrs code, src/facade/; not imported).\npub mod facade;\n", 1)
+        changes.append("`pub mod yack_glue;` and `pub mod facade;` (yack's own glue) declared")
         text += (
             "\n"
             "// yack: the shim's other facades under their crates' names. yack-shim is one package,\n"

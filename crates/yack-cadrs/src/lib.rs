@@ -1,8 +1,8 @@
 // yack: The solid-modeling layer of cadrs.
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/lib.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
 // Changes: crate paths cadrs_kernel:: -> yack_cadrs::; `pub use types::*` spelled out item by item
-//   (no glob re-exports); `pub mod yack_glue;` (yack's own facade glue) declared; extern crate
-//   aliases for the shim's rayon, rustc-hash, uuid and web-time facades.
+//   (no glob re-exports); `pub mod yack_glue;` and `pub mod facade;` (yack's own glue) declared;
+//   extern crate aliases for the shim's rayon, rustc-hash, uuid and web-time facades.
 //! The solid-modeling layer of cadrs.
 //!
 //! The rest of cadrs talks to the B-rep kernel only through the [`Kernel`] trait and the types in
@@ -58,6 +58,8 @@ pub mod thin;
 pub mod types;
 // yack: glue the yack facade calls (not cadrs code; owned by w-m03-api).
 pub mod yack_glue;
+// yack: yack's naming and other glue (not cadrs code, src/facade/; not imported).
+pub mod facade;
 
 /// The kernel's internals for its own tests and tools (the `testkit` feature, which the crate's
 /// tests turn on): not part of the API, and free to change. The B-rep data model and geometry
