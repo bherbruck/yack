@@ -116,8 +116,11 @@ macro_rules! id {
         }
 
         impl $name {
+            pub(crate) fn new(stamp: u64, index: u32) -> $name {
+                $name { stamp, index }
+            }
             /// The stamp of the solid this id belongs to.
-            #[allow(dead_code)]
+            #[allow(dead_code)] // VertexId has no lookup yet
             pub(crate) fn stamp(self) -> u64 {
                 self.stamp
             }
@@ -203,6 +206,16 @@ pub struct FaceRef<'a> {
 }
 
 impl FaceRef<'_> {
+    pub(crate) fn new(
+        id: FaceId,
+        kind: SurfaceKind,
+        normal: Option<Vec3>,
+        area: f64,
+        centroid: Point3,
+        bbox: Aabb,
+    ) -> FaceRef<'static> {
+        FaceRef { id, kind, normal, area, centroid, bbox, solid: PhantomData }
+    }
     /// The face's id.
     pub fn id(&self) -> FaceId {
         self.id
@@ -242,6 +255,16 @@ pub struct EdgeRef<'a> {
 }
 
 impl EdgeRef<'_> {
+    pub(crate) fn new(
+        id: EdgeId,
+        kind: CurveKind,
+        ends: [Point3; 2],
+        convex: Option<bool>,
+        length: f64,
+        midpoint: Point3,
+    ) -> EdgeRef<'static> {
+        EdgeRef { id, kind, ends, convex, length, midpoint, solid: PhantomData }
+    }
     /// The edge's id.
     pub fn id(&self) -> EdgeId {
         self.id
@@ -254,7 +277,8 @@ impl EdgeRef<'_> {
     pub fn ends(&self) -> [Point3; 2] {
         self.ends
     }
-    /// Whether the solid is convex across the edge; `None` when tangent or mixed.
+    /// `Some(true)` where the solid is convex across the edge; `None` otherwise (concave, tangent
+    /// or mixed; telling these apart is still to come).
     pub fn convex(&self) -> Option<bool> {
         self.convex
     }

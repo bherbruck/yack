@@ -67,6 +67,42 @@ impl Frame {
         Frame { origin: origin.into(), ..Frame::WORLD }
     }
 
+    /// The frame at `origin` whose z axis runs along `z` (made unit). Its x axis is the world x
+    /// made square to `z`, or the world y when `z` runs along the world x. Refuses a zero `z`.
+    ///
+    /// ```
+    /// use yack_math::{Dir3, Frame};
+    /// let f = Frame::along([1.0, 2.0, 3.0], [0.0, 0.0, -5.0]).unwrap();
+    /// assert_eq!(f.z(), Dir3::new([0.0, 0.0, -1.0]).unwrap());
+    /// assert_eq!(f.x(), Dir3::X);
+    /// ```
+    pub fn along(origin: impl Into<Point3>, z: impl Into<Vec3>) -> Result<Frame> {
+        let op = "Frame::along";
+        let origin = origin.into();
+        if !origin.is_finite() {
+            return Err(Error::invalid(op, "origin", "not finite"));
+        }
+        let z = Dir3::new(z).map_err(|e| e.in_op(op))?;
+        let zv = z.vec();
+        let hint = if zv.cross(Vec3::new(1.0, 0.0, 0.0)).length() <= yack_tol::TANGENT {
+            Vec3::new(0.0, 1.0, 0.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        let x = Dir3::new(hint - zv * hint.dot(zv)).map_err(|e| e.in_op(op))?;
+        let y = Dir3::new(zv.cross(x.vec())).map_err(|e| e.in_op(op))?;
+        Ok(Frame { origin, x, y, z })
+    }
+
+    /// This frame turned by `by` about its own z axis (counter-clockwise looking down z).
+    pub fn turned(&self, by: crate::Angle) -> Frame {
+        let (s, c) = by.radians().sin_cos();
+        let (x, y) = (self.x.vec(), self.y.vec());
+        let x2 = Dir3::new(x * c + y * s).unwrap_or(self.x);
+        let y2 = Dir3::new(y * c - x * s).unwrap_or(self.y);
+        Frame { x: x2, y: y2, ..*self }
+    }
+
     /// This frame carried by the rigid motion `m`.
     pub fn moved(&self, m: &Rigid) -> Frame {
         // A rigid map keeps unit, orthogonal, right-handed axes; renormalising only removes
@@ -119,6 +155,16 @@ mod tests {
         assert_eq!(e.arg, Some("y"));
         let e = Frame::new([0.0; 3], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]).unwrap_err();
         assert_eq!(e.arg, Some("x"));
+    }
+
+    #[test]
+    fn along_and_turned_stay_orthonormal() {
+        let f = Frame::along([0.0; 3], [1.0, 1.0, 1.0]).unwrap().turned(crate::deg(30.0));
+        assert!(Frame::new(f.origin(), f.x(), f.y(), f.z()).is_ok());
+        let g = Frame::along([0.0; 3], [2.0, 0.0, 0.0]).unwrap();
+        assert_eq!(g.x(), Dir3::Y);
+        let q = Frame::WORLD.turned(crate::deg(90.0));
+        assert!((q.x().vec() - Vec3::new(0.0, 1.0, 0.0)).length() < yack_tol::LINEAR);
     }
 
     #[test]

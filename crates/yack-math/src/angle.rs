@@ -30,6 +30,10 @@ impl Angle {
     pub fn degrees(self) -> f64 {
         self.0.to_degrees()
     }
+    /// Whether the angle is a whole turn either way (within `tol::ANGULAR`).
+    pub fn is_full_turn(self) -> bool {
+        (self.0.abs() - core::f64::consts::TAU).abs() <= yack_tol::ANGULAR
+    }
     /// Whether the angle is finite.
     pub fn is_finite(self) -> bool {
         self.0.is_finite()

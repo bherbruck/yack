@@ -9,8 +9,36 @@ yack: pub use solid::Solid
 yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
+yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
+yack::blend: impl Solid { pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, d1: f64, d2: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet(&self, edges: &[EdgeId], radius: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_radii(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn full_round(&self, side_a: FaceId, middle: FaceId, side_b: FaceId) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn difference(&self, tool: &Solid) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn intersection(&self, other: &Solid) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn split(&self, plane: &Plane) -> Result<Split> }
+yack::boolean: impl Solid { pub fn union(&self, other: &Solid) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn union_all(solids: &[Solid]) -> Result<Solid> }
 yack::codec: pub fn decode(b: &[u8]) -> Result<Solid>
 yack::codec: pub fn encode(s: &Solid) -> Vec<u8>
+yack::edit: impl Solid { pub fn delete_faces(&self, faces: &[FaceId]) -> Result<Solid> }
+yack::edit: impl Solid { pub fn draft(&self, faces: &[FaceId], origin: impl Into<Point3>, pull: impl Into<Vec3>, angle: Angle) -> Result<Solid> }
+yack::edit: impl Solid { pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> }
+yack::edit: impl Solid { pub fn offset(&self, distance: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
+yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
+yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
 yack::input: impl Loop { pub fn is_ccw(&self) -> bool }
 yack::input: impl Loop { pub fn labels(&self) -> &[Option<Tag>] }
 yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
@@ -51,72 +79,46 @@ yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sphere, sweep, sweep_path, torus,}
-yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, Tag, Vec3, deg, rad,}
-yack::solid: impl Solid { pub fn area(&self) -> f64 }
-yack::solid: impl Solid { pub fn betti(&self) -> [u64; 3] }
-yack::solid: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
-yack::solid: impl Solid { pub fn centroid(&self) -> Option<Point3> }
-yack::solid: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
-yack::solid: impl Solid { pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, d1: f64, d2: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn check(&self) -> Vec<Issue> }
-yack::solid: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Vec<Side> }
-yack::solid: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Vec<Point3> }
-yack::solid: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Vec<Option<[f64; 2]>> }
-yack::solid: impl Solid { pub fn delete_faces(&self, faces: &[FaceId]) -> Result<Solid> }
-yack::solid: impl Solid { pub fn difference(&self, tool: &Solid) -> Result<Solid> }
-yack::solid: impl Solid { pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> }
+yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
+yack::query: impl Solid { pub fn area(&self) -> f64 }
+yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
+yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
+yack::query: impl Solid { pub fn centroid(&self) -> Option<Point3> }
+yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
+yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Side> }
+yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Point3> }
+yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<[f64; 2]>> }
+yack::query: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
+yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> f64 }
+yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
+yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
+yack::query: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }
+yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<Vec3>> }
+yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> }
+yack::query: impl Solid { pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> }
+yack::query: impl Solid { pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> }
+yack::query: impl Solid { pub fn section_area(&self, plane: &Plane) -> Result<f64> }
+yack::query: impl Solid { pub fn volume(&self) -> f64 }
+yack::select: impl Solid { pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> }
+yack::select: impl Solid { pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> }
+yack::select: impl Solid { pub fn edges(&self) -> Vec<EdgeId> }
+yack::select: impl Solid { pub fn edges_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Result<Vec<EdgeId>> }
+yack::select: impl Solid { pub fn edges_between(&self, a: FaceId, b: FaceId) -> Result<Vec<EdgeId>> }
+yack::select: impl Solid { pub fn edges_of(&self, f: FaceId) -> Result<Vec<EdgeId>> }
+yack::select: impl Solid { pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> }
+yack::select: impl Solid { pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> }
+yack::select: impl Solid { pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> }
+yack::select: impl Solid { pub fn faces(&self) -> Vec<FaceId> }
+yack::select: impl Solid { pub fn faces_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Result<Vec<FaceId>> }
+yack::select: impl Solid { pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> }
+yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> }
+yack::select: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
 yack::solid: impl Solid { pub fn digest(&self) -> [u8; 32] }
-yack::solid: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
-yack::solid: impl Solid { pub fn distance(&self, other: &Solid) -> f64 }
-yack::solid: impl Solid { pub fn draft(&self, faces: &[FaceId], origin: impl Into<Point3>, pull: impl Into<Vec3>, angle: Angle) -> Result<Solid> }
-yack::solid: impl Solid { pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> }
-yack::solid: impl Solid { pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> }
-yack::solid: impl Solid { pub fn edges(&self) -> Vec<EdgeId> }
-yack::solid: impl Solid { pub fn edges_between(&self, a: FaceId, b: FaceId) -> Result<Vec<EdgeId>> }
-yack::solid: impl Solid { pub fn edges_of(&self, f: FaceId) -> Result<Vec<EdgeId>> }
-yack::solid: impl Solid { pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> }
-yack::solid: impl Solid { pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> }
-yack::solid: impl Solid { pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> }
-yack::solid: impl Solid { pub fn faces(&self) -> Vec<FaceId> }
-yack::solid: impl Solid { pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> }
-yack::solid: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> }
-yack::solid: impl Solid { pub fn fillet(&self, edges: &[EdgeId], radius: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_radii(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn full_round(&self, side_a: FaceId, middle: FaceId, side_b: FaceId) -> Result<Solid> }
 yack::solid: impl Solid { pub fn history(&self) -> &History }
-yack::solid: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
-yack::solid: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
-yack::solid: impl Solid { pub fn intersection(&self, other: &Solid) -> Result<Solid> }
 yack::solid: impl Solid { pub fn is_empty(&self) -> bool }
-yack::solid: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }
-yack::solid: impl Solid { pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> }
 yack::solid: impl Solid { pub fn named(&self, tag: impl Into<Tag>) -> Solid }
-yack::solid: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Vec<Option<Vec3>> }
-yack::solid: impl Solid { pub fn offset(&self, distance: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> }
-yack::solid: impl Solid { pub fn raycast(&self, rays: &[Ray]) -> Result<Vec<Vec<f64>>> }
-yack::solid: impl Solid { pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> }
-yack::solid: impl Solid { pub fn section_area(&self, plane: &Plane) -> Result<f64> }
-yack::solid: impl Solid { pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn split(&self, plane: &Plane) -> Result<Split> }
 yack::solid: impl Solid { pub fn strategy(&self) -> &'static str }
-yack::solid: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::solid: impl Solid { pub fn tag(&self) -> Option<&Tag> }
-yack::solid: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
-yack::solid: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
-yack::solid: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
-yack::solid: impl Solid { pub fn union(&self, other: &Solid) -> Result<Solid> }
-yack::solid: impl Solid { pub fn union_all(solids: &[Solid]) -> Result<Solid> }
-yack::solid: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
-yack::solid: impl Solid { pub fn volume(&self) -> f64 }
 yack::step: pub fn read(text: &str) -> Result<Solid>
 yack::step: pub fn sew(text: &str, tolerance: f64) -> Result<Solid>
 yack::step: pub fn write(s: &Solid) -> Result<String>

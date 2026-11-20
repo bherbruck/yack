@@ -12,15 +12,21 @@
 //!     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]])?;
 //!     block.difference(&sphere(&Frame::WORLD, 3.0)?.swept(&Motion::Along { path, law: FrameLaw::Fixed })?)
 //! }
-//! // Until the kernel lands, constructors refuse with `Unsupported`, naming the operation.
+//! // `swept` is not wired yet: it refuses with `Unsupported`, naming the operation.
 //! let e = build().unwrap_err();
-//! assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "block"));
+//! assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
 //! ```
 #![deny(missing_docs)]
 #![deny(clippy::float_arithmetic)]
 
+mod blend;
+mod boolean;
+mod edit;
+mod engine;
 mod input;
 pub mod make;
+mod query;
+mod select;
 mod solid;
 mod values;
 
@@ -51,48 +57,51 @@ pub mod prelude {
     };
     pub use crate::{
         Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2,
-        Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, Tag, Vec3, deg, rad,
+        Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
+        rad,
     };
 }
 
 /// STEP exchange (AP214, exact B-rep; never faceted).
 pub mod step {
-    use crate::{Error, Result, Solid};
+    use crate::{Error, Result, Solid, engine};
 
     /// The solid as an AP214 STEP file.
     pub fn write(s: &Solid) -> Result<String> {
-        let _ = s;
-        Err(Error::unsupported("step::write"))
+        let b = s.brep().ok_or_else(|| Error::invalid("step::write", "s", "the solid is empty"))?;
+        yack_springrep::step::write(b, "yack").map_err(|e| engine::error("step::write", e))
     }
     /// The solid in a STEP file.
     pub fn read(text: &str) -> Result<Solid> {
-        let _ = text;
-        Err(Error::unsupported("step::read"))
+        engine::solid("step::read", yack_springrep::step::read_part(text.as_bytes(), "step"))
     }
     /// The solid sewn from the faces in a STEP file, closing gaps up to `tolerance` mm.
     pub fn sew(text: &str, tolerance: f64) -> Result<Solid> {
-        let _ = (text, tolerance);
-        Err(Error::unsupported("step::sew"))
+        engine::solid("step::sew", yack_springrep::step::sew(text.as_bytes(), tolerance))
     }
 }
 
 /// yack's own lossless binary format.
 pub mod codec {
-    use crate::{Error, Result, Solid};
-
-    const EMPTY: &[u8] = b"yack-codec 0 empty";
+    use crate::{Error, ErrorKind, Result, Solid};
 
     /// The solid as bytes that [`decode`] reads back exactly.
     pub fn encode(s: &Solid) -> Vec<u8> {
-        // M0.3: only the empty solid has an encoding yet.
-        if s.is_empty() { EMPTY.to_vec() } else { Vec::new() }
+        match s.brep() {
+            None => yack_springrep::codec::to_bytes(&[]),
+            Some(b) => yack_springrep::codec::to_bytes(core::slice::from_ref(b)),
+        }
     }
     /// The solid encoded in `b`.
     pub fn decode(b: &[u8]) -> Result<Solid> {
-        if b == EMPTY {
-            return Ok(crate::make::empty());
+        let op = "codec::decode";
+        let parts = yack_springrep::codec::from_bytes(b).ok_or_else(|| Error::invalid(op, "b", "not a yack codec stream"))?;
+        let mut parts = parts.into_iter();
+        match (parts.next(), parts.next()) {
+            (None, _) => Ok(Solid::empty()),
+            (Some(one), None) => Ok(Solid::from_springrep(one)),
+            _ => Err(Error::new(ErrorKind::Unsupported, op, "a stream of several solids")),
         }
-        Err(Error::unsupported("codec::decode"))
     }
 }
 
@@ -118,6 +127,7 @@ pub const SUPPORTS: &[&str] = &[];
 
 #[cfg(test)]
 mod tests {
+    use crate::make;
     use crate::prelude::*;
 
     #[test]
@@ -127,9 +137,14 @@ mod tests {
 
     #[test]
     fn stubs_name_their_op() {
-        let e = sphere(&Frame::WORLD, 3.0).unwrap_err();
-        assert_eq!(e.kind, ErrorKind::Unsupported);
-        assert_eq!(e.op, "sphere");
+        let e = make::loft_guided(&[], &[]).unwrap_err();
+        assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "loft_guided"));
+    }
+
+    #[test]
+    fn solids_are_send_and_sync() {
+        fn both<T: Send + Sync>() {}
+        both::<Solid>();
     }
 
     #[test]

@@ -11,6 +11,7 @@ publish = true
 [dependencies]
 yack-base = { path = "../yack-base" }
 yack-math = { path = "../yack-math" }
+yack-springrep = { path = "../yack-springrep" }
 yack-tol = { path = "../yack-tol" }
 
 [lints]

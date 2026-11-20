@@ -66,9 +66,10 @@ pub fn arc_ends(center: Point2, radius: f64, start: Angle, sweep: Angle) -> [Poi
     [at(start.radians()), at(start.radians() + sweep.radians())]
 }
 
-/// The counter-clockwise arc from `from` to `to` about `center`: `(radius, start, sweep)`, with
-/// `0 < sweep ≤ 2π` (`from == to` is a full circle). Refuses ends at different radii.
-pub fn arc_to(op: &'static str, from: Point2, to: Point2, center: Point2) -> Result<(f64, Angle, Angle)> {
+/// The arc from `from` to `to` about `center`, counter-clockwise if `ccw`, else clockwise:
+/// `(radius, start, sweep)` with `0 < |sweep| ≤ 2π` (`from == to` is a full circle). Refuses ends
+/// whose radii differ beyond `tol::LINEAR`, naming both.
+pub fn arc_to(op: &'static str, from: Point2, to: Point2, center: Point2, ccw: bool) -> Result<(f64, Angle, Angle)> {
     let r0 = from.distance(center);
     let r1 = to.distance(center);
     if !(r0.is_finite() && r1.is_finite()) || r0 <= yack_tol::LINEAR {
@@ -84,9 +85,9 @@ pub fn arc_to(op: &'static str, from: Point2, to: Point2, center: Point2) -> Res
     let a0 = (from.y - center.y).atan2(from.x - center.x);
     let a1 = (to.y - center.y).atan2(to.x - center.x);
     let tau = core::f64::consts::TAU;
-    let mut sweep = (a1 - a0).rem_euclid(tau);
+    let mut sweep = if ccw { (a1 - a0).rem_euclid(tau) } else { -(a0 - a1).rem_euclid(tau) };
     if from.distance(to) <= yack_tol::LINEAR {
-        sweep = tau;
+        sweep = if ccw { tau } else { -tau };
     }
     Ok((r0, crate::rad(a0), crate::rad(sweep)))
 }
@@ -375,9 +376,11 @@ mod tests {
 
     #[test]
     fn slot_from_arc_to() {
-        let (r, start, sweep) = arc_to("t", [1.0, 0.0].into(), [-1.0, 0.0].into(), [0.0, 0.0].into()).unwrap();
+        let (r, start, sweep) = arc_to("t", [1.0, 0.0].into(), [-1.0, 0.0].into(), [0.0, 0.0].into(), true).unwrap();
         assert_eq!(r, 1.0);
         assert!(start.radians().abs() < yack_tol::LINEAR);
         assert!((sweep.radians() - core::f64::consts::PI).abs() < yack_tol::LINEAR);
+        let (_, _, cw) = arc_to("t", [0.0, 1.0].into(), [1.0, 0.0].into(), [0.0, 0.0].into(), false).unwrap();
+        assert!((cw.radians() + core::f64::consts::FRAC_PI_2).abs() < yack_tol::LINEAR);
     }
 }

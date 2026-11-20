@@ -10,10 +10,12 @@ mod angle;
 mod frame;
 pub mod planar;
 mod vector;
+mod view;
 mod xform;
 
 pub use aabb::Aabb;
 pub use angle::{Angle, deg, rad};
 pub use frame::Frame;
 pub use vector::{Dir3, Point2, Point3, Vec3};
+pub use view::{mean, scale2, scale_length, view_axes, view_point};
 pub use xform::{Affine, Rigid, Similarity};

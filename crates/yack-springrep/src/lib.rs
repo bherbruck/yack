@@ -4,7 +4,7 @@
 //   MIT, (c) 2026 Springcraft, Inc. (LICENSE-springrep). Copied by script; every .rs file carries
 //   its own header. Only crate paths (springrep:: -> yack_springrep::) and headers differ.
 // Adapted from springrep@a03e8a1 src/lib.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: this header added; one line `pub mod facade;` (yack glue, src/facade/).
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![warn(unreachable_pub)]
@@ -16,6 +16,8 @@ pub mod codec;
 pub mod distance;
 pub mod draw;
 pub mod edit;
+// yack: glue the yack facade calls (not springrep code).
+pub mod facade;
 mod error;
 pub mod geom;
 pub mod loft;
