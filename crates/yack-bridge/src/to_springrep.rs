@@ -22,6 +22,9 @@ const SEAM_SLACK: f64 = 1e-9; // tol: parameter round-off on a seam, relative to
 /// springrep's `BSpline` stops at cubics; higher degrees go to its `NurbsCurve` (up to 15).
 const BSPLINE_MAX_DEGREE: usize = 3;
 
+/// The widest gap between an edge and its faces carried into springrep (cadrs's LOOP_GAP).
+const GAP_CAP: f64 = 1e-5; // tol: cadrs's LOOP_GAP, mm
+
 /// Samples per coedge when measuring how far cadrs's pcurves, curves and vertices stray apart.
 const GAP_SAMPLES: usize = 9;
 
@@ -227,6 +230,13 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
     }
     let mut bb = Builder::new();
     let (edge_gap, vert_gap) = gaps(body);
+    // Geometry that meets only to more than cadrs's loop gap is not carried: springrep's booleans
+    // on it would answer for a solid that is not quite the one cadrs built.
+    if let Some((i, g)) = edge_gap.iter().enumerate().find(|&(_, &g)| g > GAP_CAP) {
+        return Err(Error::Unsupported(format!(
+            "cadrs edge {i}: its curve and its faces meet only to {g:.1e} mm (over {GAP_CAP:e})"
+        )));
+    }
     // Twice the measured gap: the tolerance must hold the gap, not just reach it.
     let held = |tol: f64, gap: Option<&f64>| tol.max(2.0 * gap.copied().unwrap_or(0.0));
     let verts: Vec<VertexId> =

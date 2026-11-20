@@ -371,7 +371,7 @@ pub fn breaks_requirement(op: &str, detail: &str) -> bool {
         // a revolved or screwed profile must keep to one side of the axis
         || (is(&["revolve", "screw"]) && detail.contains("axis crosses the profile"))
         // a screw's turns must stay apart
-        || (op == "screw" && detail.contains("coils met"))
+        || (op == "screw" && detail.contains("coils meet"))
         // a torus needs major > minor > 0
         || (op == "torus" && detail.contains("clear of its axis"))
         // a shell's walls must not meet; a moved face may not pass the face it meets
