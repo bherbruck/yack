@@ -286,6 +286,8 @@ pub struct Src {
     pub test_file: bool,
     /// The crate's top-level module this file belongs to (`None` for the crate root).
     pub top_module: Option<String>,
+    /// The file's module path below the crate root (`src/a/b.rs` → `["a", "b"]`; empty for the root).
+    pub module_path: Vec<String>,
     /// Out-of-line `mod` declarations: (name, `#[path]` value, behind cfg(test)).
     pub mods: Vec<(String, Option<String>, bool)>,
 }
@@ -343,7 +345,7 @@ impl Src {
             }
             k += 1;
         }
-        Src { path: path.to_string(), toks, test, test_file: whole, top_module: None, mods }
+        Src { path: path.to_string(), toks, test, test_file: whole, top_module: None, module_path: Vec::new(), mods }
     }
 
     /// Whether token `k` is ordinary (non-test) code.
@@ -396,16 +398,17 @@ pub fn crate_sources(dir: &str, files: &BTreeMap<String, String>) -> Vec<Src> {
     let src_dir = format!("{dir}/src");
     let mut roots: Vec<String> = vec![format!("{src_dir}/lib.rs"), format!("{src_dir}/main.rs")];
     roots.extend(srcs.keys().filter(|p| p.starts_with(&format!("{src_dir}/bin/"))).cloned());
-    // (file, inherited test flag, top-level module)
-    let mut queue: Vec<(String, bool, Option<String>)> = roots.into_iter().map(|r| (r, false, None)).collect();
+    // (file, inherited test flag, module path)
+    let mut queue: Vec<(String, bool, Vec<String>)> = roots.into_iter().map(|r| (r, false, Vec::new())).collect();
     let mut seen = std::collections::BTreeSet::new();
-    while let Some((file, test, top)) = queue.pop() {
+    while let Some((file, test, mpath)) = queue.pop() {
         if !seen.insert(file.clone()) {
             continue;
         }
         let Some(s) = srcs.get_mut(&file) else { continue };
         s.test_file |= test;
-        s.top_module = top.clone();
+        s.top_module = mpath.first().cloned();
+        s.module_path = mpath.clone();
         let test_now = s.test_file;
         let text = files.get(&file).map(String::as_str).unwrap_or_default();
         let (fdir, stem) = match file.rsplit_once('/') {
@@ -417,13 +420,14 @@ pub fn crate_sources(dir: &str, files: &BTreeMap<String, String>) -> Vec<Src> {
         let path_values = path_attr_values(text);
         let mut pv = path_values.into_iter();
         for (name, path_attr, t) in s.mods.clone() {
-            let child_top = top.clone().or_else(|| Some(name.clone()));
+            let mut child_path = mpath.clone();
+            child_path.push(name.clone());
             let cands = match path_attr {
                 Some(_) => pv.next().map(|v| vec![format!("{fdir}/{v}")]).unwrap_or_default(),
                 None => vec![format!("{child_dir}/{name}.rs"), format!("{child_dir}/{name}/mod.rs")],
             };
             for c in cands {
-                queue.push((c, test_now || t, child_top.clone()));
+                queue.push((c, test_now || t, child_path.clone()));
             }
         }
     }

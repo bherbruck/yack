@@ -1,6 +1,7 @@
 // yack: `cargo xtask`, the gates and benchmark drivers (PLAN §5, §6.6). Std only.
 mod bench;
 mod conformance;
+mod digest;
 mod gate;
 mod json;
 mod meta;
@@ -18,6 +19,7 @@ commands (see AGENTS.md):
   api [--bless|--print]  diff the yack public surface against crates/yack/api.txt (M0.2)
   conformance   brep-conformance run, ratcheted against scores/        (M0.4)
   bench         brep-bench run, ratcheted against scores/bench.json    (M0.5)
+  digest [--check] [--only conformance|bench]  result digests in scores/digests/ (M1.6)
   modgraph --crate <c>  module-level DAG check inside one crate       (M2)
   fuzz          seeded robustness fuzz
   corpus        run a named corpus
@@ -53,6 +55,8 @@ fn run(cmd: &str, args: &[String]) -> ExitCode {
         "modgraph" => finish(gate::modgraph::main(args)),
         "conformance" => conformance::run(args),
         "bench" => bench::run(args),
+        "digest" => digest::run(args),
+        "digest-proxy" => digest::proxy(args),
         other => {
             eprintln!("xtask: `{other}` is not implemented yet\n\n{HELP}");
             ExitCode::FAILURE

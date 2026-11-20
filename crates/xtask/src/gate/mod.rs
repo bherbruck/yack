@@ -47,8 +47,17 @@ impl Spec {
 pub struct Layers {
     pub crates: BTreeMap<String, Spec>,
     pub reexport: Vec<String>,
-    /// `[modules.<crate>]`: top-level module → allowed top-level modules.
+    /// `[modules.<crate>]`: unit module → allowed unit modules.
     pub modules: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// `root = "a::b"` in `[modules.<crate>]`: the units are the modules under `a::b`
+    /// (default: the crate's top-level modules).
+    pub module_roots: BTreeMap<String, Vec<String>>,
+}
+
+impl Layers {
+    pub fn module_root(&self, krate: &str) -> &[String] {
+        self.module_roots.get(krate).map(Vec::as_slice).unwrap_or_default()
+    }
 }
 
 pub fn parse_layers(text: &str) -> Result<Layers, String> {
@@ -85,11 +94,15 @@ pub fn parse_layers(text: &str) -> Result<Layers, String> {
     }
     let reexport = t.path(&["reexport", "items"]).map(Toml::strings).unwrap_or_default();
     let mut modules = BTreeMap::new();
+    let mut module_roots = BTreeMap::new();
     for (krate, m) in t.get("modules").and_then(Toml::as_table).into_iter().flatten() {
-        let map = m.as_table().into_iter().flatten().map(|(k, v)| (k.clone(), v.strings())).collect();
+        let map = m.as_table().into_iter().flatten().filter(|(k, _)| *k != "root").map(|(k, v)| (k.clone(), v.strings())).collect();
         modules.insert(krate.clone(), map);
+        if let Some(r) = m.get("root").and_then(Toml::as_str) {
+            module_roots.insert(krate.clone(), r.split("::").map(str::to_string).collect());
+        }
     }
-    Ok(Layers { crates, reexport, modules })
+    Ok(Layers { crates, reexport, modules, module_roots })
 }
 
 /// What the checks read: the tree, layers.toml and every crate's tokenized sources.
@@ -207,12 +220,15 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         println!("gate on fixture `{name}`");
         return Ok(report(&run_all(&ctx)));
     }
-    let ctx = Ctx::new(crate::meta::load(&root)?)?;
+    let mut ctx = Ctx::new(crate::meta::load(&root)?)?;
     if args.iter().any(|a| a == "--bless") {
+        // the ratchets are written whatever else fails; the checks below then read the new values,
+        // so only non-ratchet failures remain (and still fail the run)
         for (file, text) in ratchet_files(&ctx) {
             let p = root.join("scores").join(file);
-            std::fs::write(&p, text).map_err(|e| format!("write {}: {e}", p.display()))?;
+            std::fs::write(&p, &text).map_err(|e| format!("write {}: {e}", p.display()))?;
             println!("blessed scores/{file}");
+            ctx.tree.files.insert(format!("scores/{file}"), text);
         }
     }
     Ok(report(&run_all(&ctx)))
