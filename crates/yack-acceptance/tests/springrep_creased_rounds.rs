@@ -32,7 +32,7 @@ fn side(n: u32) -> Role {
 
 /// springrep's `<id>.side` of a ruled loft: every side face of `id`.
 fn loft_side(b: &Solid, id: &str) -> Vec<FaceId> {
-    b.faces_where(|f| matches!(f.role(id), Some(Role::Side(_))))
+    b.faces_where(|f| matches!(f.role(id), Some(Role::Side(_)))).unwrap()
 }
 
 /// Every edge where a face of `a` meets a face of `b`, for each `(a, b)` of `pairs`.
@@ -148,7 +148,7 @@ fn a_concave_round_past_a_short_edge_is_trimmed_by_the_ramp_beyond_it() {
     let walls = b.faces_where(|f| {
         matches!(f.kind(), SurfaceKind::Plane { normal } if normal.y.abs() > 1.0 - 1e-12)
             && (f.centroid().y.abs() - 5.0).abs() < 1e-9
-    });
+    }).unwrap();
     for f in walls {
         for e in b.edges_of(f).unwrap() {
             for at in b.edge(e).unwrap().ends() {

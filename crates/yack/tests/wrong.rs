@@ -30,7 +30,7 @@ fn boss_root_round_deleted() {
         (|| {
             let part = cylinder(&Frame::at([0.0, 0.0, -4.0]), 8.0, 4.0)?.union(&cylinder(&Frame::WORLD, 3.0, 8.0)?)?;
             let rounded = part.fillet(&[part.edge_at([0.0, 3.0, 0.0])?], 1.0)?;
-            rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus)))
+            rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus))?)
         })(),
         1034.7887252527948,
     );
@@ -43,7 +43,7 @@ fn l_block_inside_round_deleted() {
             let l = Profile::polygon(&[[0.0, 0.0], [20.0, 0.0], [20.0, 5.0], [5.0, 5.0], [5.0, 15.0], [0.0, 15.0]])?;
             let b = extrude(&Frame::WORLD, &l, 8.0)?;
             let rounded = b.fillet(&[b.edge_at([5.0, 5.0, 4.0])?], 2.0)?;
-            rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), SurfaceKind::Cylinder { .. })))
+            rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), SurfaceKind::Cylinder { .. }))?)
         })(),
         1206.8672587712813,
     );
@@ -59,7 +59,7 @@ fn rounded_box_top_rim_chain_deleted() {
             let rimmed = b.fillet(&b.edges_of(b.face_at([10.0, 6.0, 8.0])?)?, 1.0)?;
             let chain = rimmed.faces_where(|f| {
                 matches!(f.kind(), SurfaceKind::Cylinder { radius, .. } if radius < 2.0) || matches!(f.kind(), SurfaceKind::Torus)
-            });
+            })?;
             rimmed.delete_faces(&chain)
         })(),
         1845.8666338298958,
@@ -205,7 +205,7 @@ fn half_torus_outer_rim_round_deleted() {
     let half = torus(&Frame::WORLD, 6.0, 2.0).unwrap().split(&Plane::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]).unwrap()).unwrap().front;
     let rounded = half.fillet(&[half.edge_at([0.0, 8.0, 0.0]).unwrap()], 0.5);
     if let Ok(r) = rounded {
-        let rounds = r.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus) && f.area() < 100.0);
+        let rounds = r.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus) && f.area() < 100.0).unwrap();
         assert!(rounds.len() <= 1, "{} small toroidal rounds (strategy {})", rounds.len(), r.strategy());
     }
 }

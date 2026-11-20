@@ -50,3 +50,21 @@ fn a_block_builds_on_either_forced_engine() {
     }
     force(Engine::Both);
 }
+
+/// conformance closing-offsets-f9a2a750057b7630 (modify/push-faces-until-they-merge): an L-block's
+/// low top pushed up to the high one. Why the bridge holds the cadrs result (if it does), printed.
+#[test]
+fn why_a_merged_l_block_is_held() {
+    let (w, d, h, step, lo) = (8.270117232320677, 4.286181010494695, 5.3617773736568015, 3.6147345061240137, 3.9611320861080412);
+    let l = Profile::polygon(&[[0.0, 0.0], [w, 0.0], [w, lo], [step, lo], [step, h], [0.0, h]]).unwrap();
+    let f = Frame::new([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]).unwrap();
+    let b = extrude(&f, &l, d).unwrap();
+    let top = b.face_at([5.942425869222346, -2.1430905052473475, lo]).unwrap();
+    let s = b.offset_faces(&[top], 1.4006452875487603).unwrap();
+    println!("WHY strategy {} roundtrip {:?}", s.strategy(), yack::bakeoff::roundtrip(&s));
+    let text = yack::step::write(&s);
+    println!("WHY write {:?}", text.as_ref().map(|t| t.len()));
+    if let Ok(t) = text {
+        println!("WHY read {:?}", yack::step::read(&t).map(|r| r.volume()));
+    }
+}

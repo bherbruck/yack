@@ -91,6 +91,13 @@ impl Kernel for Yack {
                 Primitive::Sphere { radius, .. } => make::sphere(f, *radius),
                 Primitive::Torus { major, minor, .. } => make::torus(f, *major, *minor),
                 Primitive::Cone { bottom, top, height, .. } => make::cone(f, *bottom, *top, *height),
+                // The protocol's extrude rises up the frame's z; yack reads a negative height as
+                // the mirror image down −z, which no protocol request means.
+                Primitive::Extrude { height, .. } if *height < 0.0 => Err(yack::Error::invalid(
+                    "extrude",
+                    "height",
+                    format!("height {height} is negative; the protocol's extrude height is positive"),
+                )),
                 Primitive::Extrude { profile, height, .. } => {
                     make::extrude(f, &sketch(profile)?, *height)
                 }
@@ -304,10 +311,10 @@ impl Kernel for Yack {
         Ok(arrays(s.closest(at).map_err(r)?))
     }
     fn normal(&self, s: &Solid, at: &[V]) -> Res<Vec<Option<V>>> {
-        Ok(s.normal_at(at).into_iter().map(|n| n.map(yack::Vec3::to_array)).collect())
+        Ok(s.normal_at(at).map_err(r)?.into_iter().map(|n| n.map(yack::Vec3::to_array)).collect())
     }
     fn curvature(&self, s: &Solid, at: &[V]) -> Res<Vec<Option<[f64; 2]>>> {
-        Ok(s.curvature_at(at))
+        s.curvature_at(at).map_err(r)
     }
     fn centroid(&self, s: &Solid) -> Res<Option<V>> {
         Ok(s.centroid().map(yack::Point3::to_array))

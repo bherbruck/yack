@@ -198,7 +198,7 @@ fn the_nearest_point_of_one_face_ignores_the_rest_of_the_solid() {
     // above it,
     // the top face's nearest point is on its edge, √29 away; the bottom face's is √(25 + 144).
     let b = block(&Frame::WORLD, [20.0, 20.0, 10.0]).unwrap();
-    let face = |z: f64| b.faces_where(|f| (f.centroid().z - z).abs() < 1e-9)[0];
+    let face = |z: f64| b.faces_where(|f| (f.centroid().z - z).abs() < 1e-9).unwrap()[0];
     let p = Point3::new(25.0, 10.0, 12.0);
     for (z, want) in [(10.0, 29f64.sqrt()), (0.0, 169f64.sqrt())] {
         let on_b = b.face(face(z)).unwrap().closest(p).unwrap();

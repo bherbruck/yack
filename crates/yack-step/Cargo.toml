@@ -1,0 +1,26 @@
+[package]
+name = "yack-step"
+description = "yack internal crate (not published; use the `yack` crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack-base = { path = "../yack-base" }
+yack-math = { path = "../yack-math" }
+yack-p21 = { path = "../yack-p21" }
+yack-tol = { path = "../yack-tol" }
+
+[lints]
+workspace = true
+
+[features]
+# The file measurer while it is brought up; on by default once it builds (w-m11-springrep).
+wip = []
+
+[[example]]
+name = "measure"
+required-features = ["wip"]

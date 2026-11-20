@@ -35,7 +35,7 @@ fn drafted(solid: &Solid, faces: &[FaceId], angle: f64) -> Solid {
 }
 
 fn faces_of(b: &Solid, keep: impl Fn(SurfaceKind) -> bool) -> usize {
-    b.faces_where(|f| keep(f.kind())).len()
+    b.faces_where(|f| keep(f.kind())).unwrap().len()
 }
 
 #[test]

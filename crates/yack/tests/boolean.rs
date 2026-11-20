@@ -67,7 +67,7 @@ fn queries_on_a_block() {
     let hits = a.raycast(&[Ray::new([0.0, 3.0, 4.0], [1.0, 0.0, 0.0]).unwrap()]).unwrap();
     assert_eq!(hits[0].len(), 2);
     assert!(a.mesh(0.01).unwrap().triangles.len() >= 12);
-    let tops = a.faces_where(|f| matches!(f.kind(), yack::SurfaceKind::Plane { normal } if normal.z > 0.5));
+    let tops = a.faces_where(|f| matches!(f.kind(), yack::SurfaceKind::Plane { normal } if normal.z > 0.5)).unwrap();
     assert_eq!(tops.len(), 1);
     assert_eq!(a.edges_of(tops[0]).unwrap().len(), 4);
 }
@@ -84,9 +84,9 @@ fn closest_pairs_meshes_and_vertices() {
     close(m.volume(), 8.0);
     let corners: Vec<_> = a.vertices().into_iter().map(|v| a.vertex(v).unwrap().point()).collect();
     assert!(corners.iter().any(|p| p.x == 2.0 && p.y == 2.0 && p.z == 2.0));
-    assert!(a.edges_where(|e| e.uses() == 2).len() == 12);
+    assert!(a.edges_where(|e| e.uses() == 2).unwrap().len() == 12);
     let touching = a.union(&cube([2.0, 2.0, 0.0])).unwrap();
-    assert_eq!(touching.edges_where(|e| e.uses() == 4).len(), 1);
+    assert_eq!(touching.edges_where(|e| e.uses() == 4).unwrap().len(), 1);
 }
 
 #[test]

@@ -130,7 +130,7 @@ fn a_tilted_cylinder_turns_its_tensor_with_it() {
 /// Each way a solid's volume is measured, on a fresh copy so no face memo carries from one to the
 /// next, against `want`, to `rel` of it.
 fn assert_volume_every_way(b: &Solid, want: f64, rel: f64) {
-    let fresh = || codec::decode(&codec::encode(b)).unwrap();
+    let fresh = || codec::decode(&codec::encode(b).unwrap()).unwrap();
     // API GAP: §4.3 has one volume integral; springrep's "rough sign" (solid_volume_sign),
     // "to 1e-10" (volume_to) and "exact" (solid_volume) measures are dropped.
     for (what, v) in [("moments", fresh().volume())] {
@@ -148,7 +148,7 @@ fn a_lofted_cylinder_cut_on_a_slant_measures_its_closed_form_every_way() {
     let sections: Vec<(f64, Profile)> =
         [0.0, 5.0, 10.0, 15.0].iter().map(|&z| (z, Profile::circle([0.0, 0.0], r).unwrap())).collect();
     let can = loft_through(&Frame::WORLD, &sections).unwrap();
-    assert!(!can.faces_where(|f| matches!(f.kind(), SurfaceKind::Spline)).is_empty());
+    assert!(!can.faces_where(|f| matches!(f.kind(), SurfaceKind::Spline)).unwrap().is_empty());
     // The 100-cube from (−50, −50, −100) to (50, 50, 0), turned −θ about y through the origin and
     // then raised h.
     let turn = Rigid::rotation([0.0; 3], [0.0, 1.0, 0.0], rad(-theta)).unwrap();

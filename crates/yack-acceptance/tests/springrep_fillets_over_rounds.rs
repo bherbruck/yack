@@ -99,11 +99,11 @@ fn watertight(b: &Solid) -> bool {
 }
 
 fn faces_of(b: &Solid, pick: fn(&SurfaceKind) -> bool) -> usize {
-    b.faces_where(|f| pick(&f.kind())).len()
+    b.faces_where(|f| pick(&f.kind())).unwrap().len()
 }
 
 fn patches_of(b: &Solid) -> Vec<FaceId> {
-    b.faces_where(|f| matches!(f.kind(), SurfaceKind::Spline))
+    b.faces_where(|f| matches!(f.kind(), SurfaceKind::Spline)).unwrap()
 }
 
 /// Each of `patches` is tangent to every face it meets, exactly: their outward normals agree all

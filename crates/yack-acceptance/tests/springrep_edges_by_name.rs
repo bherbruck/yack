@@ -58,7 +58,7 @@ fn watertight(b: &Solid) -> bool {
 }
 
 fn cylinders(b: &Solid) -> usize {
-    b.faces_where(|f| matches!(f.kind(), SurfaceKind::Cylinder { .. })).len()
+    b.faces_where(|f| matches!(f.kind(), SurfaceKind::Cylinder { .. })).unwrap().len()
 }
 
 #[test]

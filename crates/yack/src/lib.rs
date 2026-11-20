@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(s.classify(&[[0.0, 0.0, 0.0]]).unwrap(), vec![Side::Out]);
         assert!(s.face_at([0.0, 0.0, 0.0]).is_err());
         assert!(s.mesh(0.1).unwrap().triangles.is_empty());
-        let bytes = crate::codec::encode(&s);
+        let bytes = crate::codec::encode(&s).unwrap();
         assert!(crate::codec::decode(&bytes).unwrap().is_empty());
     }
 

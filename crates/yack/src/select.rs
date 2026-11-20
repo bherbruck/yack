@@ -165,17 +165,24 @@ impl Solid {
     /// The faces carrying feature name `tag`, given by [`named`](Solid::named).
     pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> {
         let tag = tag.into();
-        let Some(b) = self.brep() else { return Vec::new() };
-        b.face_ids()
-            .filter(|&f| b.face(f).names.iter().any(|n| n.feature == tag.as_str()))
-            .map(|f| self.face_id(f))
+        self.named_faces(|n| n.feature == tag.as_str())
+    }
+
+    /// The faces one of whose names `pick` takes (from the names alone: a cadrs-held solid too).
+    fn named_faces(&self, pick: impl Fn(&yack_springrep::topo::FaceName) -> bool) -> Vec<FaceId> {
+        self.face_names()
+            .iter()
+            .enumerate()
+            .filter(|(_, names)| names.iter().any(&pick))
+            .filter_map(|(i, _)| u32::try_from(i).ok())
+            .map(|i| FaceId::new(self.stamp(), i))
             .collect()
     }
 
     /// The faces playing `role` in the operation named `tag`.
     pub fn faces_by(&self, tag: impl Into<Tag>, role: Role) -> Vec<FaceId> {
         let tag = tag.into();
-        self.faces_where(|f| f.roles().iter().any(|(t, r)| *t == tag && *r == role))
+        self.named_faces(|n| n.feature == tag.as_str() && engine::role(&n.face).is_some_and(|r| r == role))
     }
 
     /// The one face playing `role` in the operation named `tag`: `NotFound` if none,
@@ -205,15 +212,15 @@ impl Solid {
     }
 
     /// The faces for which `keep` is true.
-    pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> {
-        let Some(b) = self.brep() else { return Vec::new() };
-        b.face_ids().map(|f| face_ref(self, b, f)).filter(|r| keep(r)).map(|r| r.id()).collect()
+    pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Result<Vec<FaceId>> {
+        let Some(b) = self.form("faces_where")? else { return Ok(Vec::new()) };
+        Ok(b.face_ids().map(|f| face_ref(self, b, f)).filter(|r| keep(r)).map(|r| r.id()).collect())
     }
 
     /// The edges (poles aside) for which `keep` is true.
-    pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> {
-        let Some(b) = self.brep() else { return Vec::new() };
-        b.edge_ids().filter_map(|e| edge_ref(self, b, e)).filter(|r| keep(r)).map(|r| r.id()).collect()
+    pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Result<Vec<EdgeId>> {
+        let Some(b) = self.form("edges_where")? else { return Ok(Vec::new()) };
+        Ok(b.edge_ids().filter_map(|e| edge_ref(self, b, e)).filter(|r| keep(r)).map(|r| r.id()).collect())
     }
 
     /// A view of face `id`.

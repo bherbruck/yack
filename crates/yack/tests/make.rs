@@ -133,7 +133,7 @@ fn a_straight_sweep_is_an_extrusion() {
 #[test]
 fn codec_and_step_round_trip() {
     let b = block(&tilted(), [3.0, 2.0, 4.0]).unwrap();
-    let back = yack::codec::decode(&yack::codec::encode(&b)).unwrap();
+    let back = yack::codec::decode(&yack::codec::encode(&b).unwrap()).unwrap();
     assert_eq!(back.digest(), b.digest());
     let text = yack::step::write(&b).unwrap();
     close(yack::step::read(&text).unwrap().volume(), 24.0);
@@ -158,12 +158,6 @@ fn named_faces_survive_later_operations() {
     assert_eq!(base.faces_tagged("base").len(), 6);
 }
 
-#[test]
-fn a_negative_extrusion_points_at_the_frame() {
-    let e = extrude(&Frame::WORLD, &Profile::rectangle([0.0, 0.0], [1.0, 1.0]).unwrap(), -2.0).unwrap_err();
-    assert_eq!((e.kind, e.arg), (ErrorKind::Invalid, Some("height")));
-    assert!(e.detail.contains("flip the frame"));
-}
 
 #[test]
 fn horn_tori_and_parabolic_profiles() {
@@ -226,5 +220,32 @@ fn a_drafted_extrude_one_and_both_ways() {
     assert!((one.volume() - want).abs() < 1e-6 * want, "{} vs {want}", one.volume());
     let both = extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), true).unwrap();
     assert!((both.volume() - 2.0 * want).abs() < 1e-6 * want, "{} vs {}", both.volume(), 2.0 * want);
-    assert_eq!(extrude_drafted(&Frame::WORLD, &sq, -1.0, deg(5.0), false).unwrap_err().kind, ErrorKind::Invalid);
+    // reversed: the mirror image in the profile's plane
+    let down = extrude_drafted(&Frame::WORLD, &sq, -10.0, deg(5.0), false).unwrap();
+    assert!(down.check().is_empty(), "{:?}", down.check());
+    assert_eq!(down.classify(&[[0.0, 0.0, -5.0]]).unwrap(), vec![Side::In]);
+    assert!((down.volume() - want).abs() < 1e-6 * want, "{} vs {want}", down.volume());
+    let (a, b) = (one.bounding_box().unwrap(), down.bounding_box().unwrap());
+    assert!((a.min.z - 0.0).abs() < 1e-9 && (b.max.z - 0.0).abs() < 1e-9 && (b.min.z + 10.0).abs() < 1e-9, "{a:?} {b:?}");
+}
+
+/// A negative height extrudes the same outline to the other side of its plane: an asymmetric L,
+/// at +h and −h, gives mirror images across the profile's plane with the same outline at the base.
+#[test]
+fn a_negative_height_extrudes_the_other_way() {
+    let l = Profile::polygon(&[[0.0, 0.0], [6.0, 0.0], [6.0, 2.0], [2.0, 2.0], [2.0, 5.0], [0.0, 5.0]]).unwrap();
+    let f = Frame::new([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]).unwrap();
+    let (up, down) = (extrude(&f, &l, 3.0).unwrap(), extrude(&f, &l, -3.0).unwrap());
+    // the L: 6 × 2 and 2 × 3, area 18, so 54 at a height of 3
+    assert!((up.volume() - 54.0).abs() < 1e-9 && (down.volume() - 54.0).abs() < 1e-9, "{} {}", up.volume(), down.volume());
+    // a mirror flips handedness: the reversed solid must still be valid with outward faces
+    assert!(down.check().is_empty(), "{:?}", down.check());
+    assert_eq!(down.betti(), [1, 0, 0]);
+    let (a, b) = (up.bounding_box().unwrap(), down.bounding_box().unwrap());
+    // the frame's z is −y: +h runs to y = −3, −h to y = +3; x and z (the outline) alike
+    assert!((a.min.y + 3.0).abs() < 1e-9 && (b.max.y - 3.0).abs() < 1e-9, "{a:?} {b:?}");
+    assert!((a.min.x - b.min.x).abs() < 1e-9 && (a.max.x - b.max.x).abs() < 1e-9 && (a.max.z - b.max.z).abs() < 1e-9);
+    // the base outline: the L's notch corner (6, 2) in (x, z) is on both, at y = 0
+    assert_eq!(up.classify(&[[5.0, -1.5, 1.0], [5.0, -1.5, 3.0]]).unwrap(), vec![Side::In, Side::Out]);
+    assert_eq!(down.classify(&[[5.0, 1.5, 1.0], [5.0, 1.5, 3.0]]).unwrap(), vec![Side::In, Side::Out]);
 }

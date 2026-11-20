@@ -141,7 +141,20 @@ t = rd(p)
 i = t.index("/// The cells of an arrangement of solids (OCCT's `BopAlgo_CellsBuilder`)".replace("Bop", "BOP"))
 j = t.index("    /// ```\n", t.index("    /// # Examples", i))
 t = t[:j] + "    /// ```text\n" + t[j + len("    /// ```\n"):]
-t = t[:i] + "/// yack (M4.0b): removed, not reached from yack; refuses (Unsupported). Was:\n    " + t[i:]
+t = t[:i] + "/// (yack M4.0b: refuses, Unsupported.) " + t[i + len("/// "):]
 wr(p, t)
+# IMPORT.md records it (the native files' headers stay as they are: they may not grow).
+p = ROOT + "/IMPORT.md"
+t = rd(p)
+if "M4.0b" not in t:
+    t = t.rstrip("\n") + (
+        "\n\n## M4.0b: what yack can't reach, dropped\n\n"
+        "Deleted `native/{" + ",".join(GONE) + "}.rs` (each at least 90 % unreachable from yack's glue,\n"
+        "swarm/done/m4-rehost-plan.md). Their callers, entry points yack never calls, now refuse\n"
+        "(`Unsupported`, \"removed in M4.0b: not reached from yack\"): " + "; ".join(stubbed) + ".\n"
+        "Also gone: draw.rs's `sector` (only split_by_number used it), the conformance test\n"
+        "`fillet_smooth_corner`, and Kernel::cells's runnable doc example (kept as text).\n"
+    )
+    wr(p, t)
 print("deleted:", ", ".join(m + ".rs" for m in GONE))
 print("refusing now:", "; ".join(stubbed))

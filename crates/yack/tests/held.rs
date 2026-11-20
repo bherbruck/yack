@@ -6,10 +6,14 @@ use yack::prelude::*;
 /// cannot carry. Held in cadrs form, it is measured, listed and written by cadrs, and a springrep
 /// query on it refuses (Unsupported), never answers empty.
 fn tumbling_torus() -> Solid {
+    tumbling_torus_swept().unwrap()
+}
+
+fn tumbling_torus_swept() -> Result<Solid> {
     let ring = torus(&Frame::at([3.0, 0.0, 2.0]), 1.0, 0.5).unwrap();
     let roll = Motion::turn(Point3::new(2.0, 0.0, 0.0), Dir3::Z, deg(-18.75), deg(18.75));
     let tumble = Motion::turn(Point3::new(0.0, 0.5, 0.5), Dir3::X, deg(75.0), deg(-75.0));
-    ring.swept(&Motion::together(vec![roll, tumble])).unwrap()
+    ring.swept(&Motion::together(vec![roll, tumble]))
 }
 
 #[test]
@@ -25,15 +29,23 @@ fn a_held_solid_is_measured_listed_and_refuses_springrep_queries() {
     assert_eq!(e.kind, ErrorKind::Unsupported, "{e}");
     let e = s.classify(&[[3.0, 0.0, 2.0]]).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Unsupported, "{e}");
+    assert_eq!(s.faces_where(|_| true).unwrap_err().kind, ErrorKind::Unsupported);
+    assert_eq!(s.edges_where(|_| true).unwrap_err().kind, ErrorKind::Unsupported);
+    assert_eq!(s.normal_at(&[[3.0, 0.0, 2.0]]).unwrap_err().kind, ErrorKind::Unsupported);
+    assert_eq!(s.curvature_at(&[[3.0, 0.0, 2.0]]).unwrap_err().kind, ErrorKind::Unsupported);
+    assert_eq!(yack::codec::encode(&s).unwrap_err().kind, ErrorKind::Unsupported);
 }
 
 #[test]
-fn a_held_solid_digests_alike_and_writes_its_step() {
+fn a_held_solid_digests_alike_and_refuses_a_step_our_reader_cannot_read() {
     let (a, b) = (tumbling_torus(), tumbling_torus());
     assert_eq!(a.digest(), b.digest());
     assert_ne!(a.digest(), [0; 32]);
-    let text = yack::step::write(&a).unwrap();
-    assert!(text.starts_with("ISO-10303-21;"));
+    // strict (lead ruling): a held solid's file must read back through our own step::read
+    // (springrep's reader), which cannot carry the folded swept face, so the write refuses
+    let e = yack::step::write(&a).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Failed, "{e}");
+    assert!(e.to_string().contains("step::read"), "{e}");
 }
 
 #[test]
@@ -55,3 +67,24 @@ fn a_paraboloid_tip_is_not_lost() {
     let want = 1.2566370614359173e-7;
     assert!((tip.volume() - want).abs() < 1e-5 * want, "{} ({})", tip.volume(), tip.strategy());
 }
+
+/// conformance closing-offsets-12002a6de0a0c47b (modify/push-faces-until-they-merge): a U-block's
+/// notch pushed shut is the box 10.4856 × 3.0050 × 5.6476. Whichever engine answers, the area is
+/// the box's or the op refuses: never cadrs's quadrature off by tens of mm² (it read 234.92).
+#[test]
+fn a_notch_pushed_shut_reports_the_boxs_area_or_refuses() {
+    let (w, h, d) = (10.485590877076831, 5.647614152176731, 3.0049592791799498);
+    let u = Profile::polygon(&[[0.0, 0.0], [w, 0.0], [w, h], [6.426407687457797, h], [6.426407687457797, 2.399759974379497], [2.1996469896794357, 2.399759974379497], [2.1996469896794357, h], [0.0, h]]).unwrap();
+    let f = Frame::new([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]).unwrap();
+    let block = extrude(&f, &u, d).unwrap();
+    let wall = block.face_at([2.1996469896794357, -1.5024796395899749, 4.023687063278114]).unwrap();
+    match block.offset_faces(&[wall], 4.226760697778361) {
+        Ok(s) => {
+            let area = 2.0 * (w * d + d * h + h * w);
+            assert!((s.volume() - w * h * d).abs() < 1e-6 * w * h * d, "{}", s.volume());
+            assert!((s.area() - area).abs() < 1e-6 * area, "area {} against the box's {area} ({})", s.area(), s.strategy());
+        }
+        Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
+    }
+}
+

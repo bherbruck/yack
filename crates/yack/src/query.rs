@@ -5,7 +5,7 @@ use yack_springrep::{check, distance, draw, measure, mesh, overlap, rays};
 use crate::{engine, engine_cadrs, firewall, ladder};
 use crate::solid::Body;
 use crate::{
-    Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point2, Point3, Ray, Result, Side, Solid, Vec3,
+    Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
 };
 
 fn pts<P: Into<Point3> + Copy>(pts: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
@@ -103,17 +103,17 @@ impl Solid {
     }
 
     /// The outward unit normal at each boundary point; `None` at a crease or off the boundary.
-    pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<Vec3>> {
-        let Some(b) = self.brep() else { return vec![None; pts_.len()] };
+    pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<Vec3>>> {
+        let Some(b) = self.form("normal_at")? else { return Ok(vec![None; pts_.len()]) };
         let outlines = measure::Outlines::new(b);
-        pts(pts_).map(|p| outlines.normal_at(p, yack_tol::PICK).map(engine::vec)).collect()
+        Ok(pts(pts_).map(|p| outlines.normal_at(p, yack_tol::PICK).map(engine::vec)).collect())
     }
 
     /// The principal curvatures at each boundary point; `None` at a crease or off the boundary.
-    pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<[f64; 2]>> {
-        let Some(b) = self.brep() else { return vec![None; pts_.len()] };
+    pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<[f64; 2]>>> {
+        let Some(b) = self.form("curvature_at")? else { return Ok(vec![None; pts_.len()]) };
         let outlines = measure::Outlines::new(b);
-        pts(pts_).map(|p| outlines.curvature(p)).collect()
+        Ok(pts(pts_).map(|p| outlines.curvature(p)).collect())
     }
 
     /// The least distance between the two solids: zero if they touch or overlap, infinite if
@@ -198,13 +198,9 @@ impl Solid {
             };
             Ok(Drawing { visible: flat(drawn.visible), hidden: flat(drawn.hidden) })
         };
-        let cadrs = || -> Result<Drawing> {
-            let (visible, hidden) = engine_cadrs::hidden_lines(op, self, d.to_array(), u.vec().to_array(), chord)?;
-            let flat = |lines: Vec<Vec<[f64; 2]>>| lines.into_iter().map(|l| l.into_iter().map(Point2::from).collect()).collect();
-            Ok(Drawing { visible: flat(visible), hidden: flat(hidden) })
-        };
-        let (s, c): (ladder::Run<Drawing>, ladder::Run<Drawing>) = (("springrep", &springrep), ("cadrs", &cadrs));
-        if ladder::cadrs_first(op) { ladder::first(op, &[c, s]) } else { ladder::first(op, &[s, c]) }
+        // springrep only: cadrs's hidden-line removal gives a whole edge one visibility, so a partly
+        // hidden edge comes out wrong (w-m17's measurement); no cadrs rung, not even as a fallback
+        ladder::first(op, &[("springrep", &springrep)])
     }
 
     /// For each ray, the sorted distances at which it crosses the boundary.

@@ -68,7 +68,7 @@ fn outline(segments: Vec<Segment>) -> Profile {
 /// Every edge where `id`'s first side (s0) meets slope.side (any side face of the loft `slope`).
 fn foot_edges(b: &Solid, id: &str) -> Vec<EdgeId> {
     let wall = b.faces_by(id, Role::Side("s0".into()));
-    let slope = b.faces_where(|f| matches!(f.role("slope"), Some(Role::Side(_))));
+    let slope = b.faces_where(|f| matches!(f.role("slope"), Some(Role::Side(_)))).unwrap();
     let mut out = Vec::new();
     for &x in &wall {
         for &y in &slope {

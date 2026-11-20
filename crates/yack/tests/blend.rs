@@ -78,13 +78,13 @@ fn picks_on_shared_boundaries_are_ambiguous() {
 #[test]
 fn convexity_tells_convex_concave_and_tangent() {
     let b = ten();
-    assert!(b.edges_where(|e| e.convex() == Some(true)).len() == 12);
+    assert!(b.edges_where(|e| e.convex() == Some(true)).unwrap().len() == 12);
     let l = b.union(&block(&Frame::WORLD, [20.0, 10.0, 5.0]).unwrap()).unwrap();
-    let concave = l.edges_where(|e| e.convex() == Some(false));
+    let concave = l.edges_where(|e| e.convex() == Some(false)).unwrap();
     assert_eq!(concave.len(), 1, "{concave:?}");
     let e = b.edge_at([5.0, 0.0, 10.0]).unwrap();
     let r = b.fillet(&[e], 2.0).unwrap();
-    assert_eq!(r.edges_where(|e| e.convex().is_none()).len(), 2);
+    assert_eq!(r.edges_where(|e| e.convex().is_none()).unwrap().len(), 2);
 }
 
 #[test]

@@ -3,12 +3,13 @@
 //! yack's own lossless binary format.
 use crate::{Error, ErrorKind, Result, Solid, firewall};
 
-/// The solid as bytes that [`decode`] reads back exactly.
-pub fn encode(s: &Solid) -> Vec<u8> {
-    match s.brep() {
+/// The solid as bytes that [`decode`] reads back exactly; `Unsupported` for a solid held in
+/// cadrs form only (the format carries springrep bodies), never an empty stream in its place.
+pub fn encode(s: &Solid) -> Result<Vec<u8>> {
+    Ok(match s.form("codec::encode")? {
         None => yack_springrep::codec::to_bytes(&[]),
         Some(b) => yack_springrep::codec::to_bytes(core::slice::from_ref(b)),
-    }
+    })
 }
 /// The solid encoded in `b`.
 pub fn decode(b: &[u8]) -> Result<Solid> {

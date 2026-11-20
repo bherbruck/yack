@@ -147,7 +147,7 @@ fn a_ball_beside_a_spline_extrusion_is_the_profile_curves_distance_away() {
     let disc = extrude(&Frame::WORLD, &p, 10.0).unwrap();
     let centre = Point3::new(33.0, 9.0, 5.0);
     let outline =
-        disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. }))[0];
+        disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. })).unwrap()[0];
     let c = disc.edge(outline).unwrap();
     let [t0, t1] = c.range();
     let plan = |t: f64| {

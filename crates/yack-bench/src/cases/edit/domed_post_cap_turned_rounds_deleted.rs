@@ -9,5 +9,5 @@ pub fn build() -> Result<Solid> {
     let post = cylinder(&Frame::WORLD, 4.0, 6.0)?.union(&dome)?;
     let rim = post.edges_between(post.face_at([0.0, 4.0, 3.0])?, post.face_at([0.0, 3.0, 7.0])?)?;
     let rounded = post.fillet(&rim, 1.0)?;
-    rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), yack::SurfaceKind::Torus)))
+    rounded.delete_faces(&rounded.faces_where(|f| matches!(f.kind(), yack::SurfaceKind::Torus))?)
 }

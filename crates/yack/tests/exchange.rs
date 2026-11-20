@@ -50,11 +50,11 @@ fn bad_step_is_refused_not_a_crash() {
 #[test]
 fn codec_round_trips_exactly() {
     let s = part();
-    let bytes = yack::codec::encode(&s);
+    let bytes = yack::codec::encode(&s).unwrap();
     let back = yack::codec::decode(&bytes).unwrap();
     assert_eq!(back.digest(), s.digest());
     close(back.volume(), s.volume());
     assert!(yack::codec::decode(&bytes[..bytes.len() / 2]).is_err());
     assert!(yack::codec::decode(b"not a stream").is_err());
-    assert!(yack::codec::decode(&yack::codec::encode(&empty())).unwrap().is_empty());
+    assert!(yack::codec::decode(&yack::codec::encode(&empty()).unwrap()).unwrap().is_empty());
 }

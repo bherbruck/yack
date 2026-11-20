@@ -91,7 +91,7 @@ fn names(b: &Solid, n: &str) -> usize {
 }
 
 fn kinds(b: &Solid, keep: fn(&SurfaceKind) -> bool) -> usize {
-    b.faces_where(|f| keep(&f.kind())).len()
+    b.faces_where(|f| keep(&f.kind())).unwrap().len()
 }
 
 fn is_cylinder(k: &SurfaceKind) -> bool {

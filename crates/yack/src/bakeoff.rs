@@ -52,7 +52,7 @@ pub(crate) fn allows(name: &str) -> bool {
 /// `back:`, `order:`, `volume:`, `area:`, `face-area:`, `classify:`).
 pub fn roundtrip(s: &Solid) -> Vec<String> {
     match s.brep() {
-        None if s.held().is_some() => vec!["back: held in cadrs form only (the bridge refused it)".to_string()],
+        None if let Some(h) = s.held() => vec![format!("back: held in cadrs form only ({})", h.why)],
         None => Vec::new(),
         Some(b) => yack_bridge::round_trip(b).problems,
     }

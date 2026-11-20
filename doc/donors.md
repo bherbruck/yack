@@ -6,9 +6,12 @@ with each engine forced (`YACK_ENGINE` on a `--features bakeoff` build), case by
 
 | Op | Order | Benchmark, family | springrep passes | cadrs passes | Only one engine passes | Time (ms, springrep / cadrs) | Date, binary |
 |---|---|---|---|---|---|---|---|
-| `project` | cadrs, springrep | conformance `projections`, seeds 0-3 (120 cases) | 117 (s0 28, s1 30, s2 30, s3 29) | 118 (s0 28, s1 30, s2 30, s3 30) | cadrs only: s3 `projections-efec3338c153cbee` (hidden lines of a cylinder); springrep only: none | 1514 / 851 | 2026-11-20, yack-conformance res w-m11-springrep-86 |
+| `project` | springrep only (no ladder) | conformance `projections`, seeds 0-3 (120 cases) | **void**: no valid bake-off | **void** | none measured | none measured | 2026-11-20 row withdrawn; the res w-m11-springrep-86 runs were both springrep |
 
 Notes:
-- `project`: cadrs-first loses no case on any seed, gains one, and is faster on every seed. The two
-  s0 failures (`hidden-lines-of-a-sphere`, `hidden-lines-of-a-box-behind-a-box`) fail on both engines.
+- `project`: the earlier row (117 springrep / 118 cadrs, res w-m11-springrep-86) was invalid. `project`
+  was not a ladder op when it was run, so `YACK_ENGINE` did not reach it and both "forced" runs ran
+  springrep; the one-case difference on s3 was not an engine difference. The cadrs rung that was then
+  added on the strength of that row cost seed-3 `projections` cases at 03fd97d and has been removed.
+  `project` runs springrep only until a real bake-off (both rungs reachable, each forced) is measured.
 - brep-bench grades from the STEP file and has no `project` case, so only conformance decides this row.

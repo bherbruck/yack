@@ -186,21 +186,19 @@ fn pcurve(pc: &CCurve, t: [f64; 2], fwd: bool) -> PCurve {
     }
 }
 
-/// How far, relative, the springrep form's volume and area may be from cadrs's.
+/// How far, relative, the springrep form's volume may be from cadrs's.
 const MEASURE_AGREES: f64 = 1e-5; // tol: two engines' quadratures of one body (as CADRS_AGREE)
 
-/// Refuses `back` where its volume or area differs from `body`'s (cadrs's own measure).
+/// Refuses `back` where its volume differs from `body`'s (cadrs's own measure). Volume only:
+/// cadrs's face-area quadrature is wrong on offset bodies (closing-offsets: 24 bodies refused that
+/// were sound), while a lost face or a lost region always shows in the volume.
 fn same_measure(body: &Body, back: &Brep) -> Result<()> {
     let cv = yack_cadrs::native::mass::body_volume(body);
-    let ca: f64 = (0..body.faces().len()).map(|f| yack_cadrs::native::mass::face_area(body, f).0).sum();
-    let (sv, sa) = (yack_springrep::measure::volume(back), yack_springrep::measure::area(back));
-    let off = |x: f64, want: f64| (x - want).abs() / want.abs().max(1.0);
-    if off(sv, cv) <= MEASURE_AGREES && off(sa, ca) <= MEASURE_AGREES {
+    let sv = yack_springrep::measure::volume(back);
+    if (sv - cv).abs() / cv.abs().max(1.0) <= MEASURE_AGREES {
         Ok(())
     } else {
-        Err(Error::Unsupported(format!(
-            "the body lost geometry crossing: springrep volume {sv}, area {sa}; cadrs's {cv}, {ca}"
-        )))
+        Err(Error::Unsupported(format!("the body lost geometry crossing: springrep volume {sv}, cadrs's {cv}")))
     }
 }
 
@@ -399,7 +397,7 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
         }
         other => Error::Rejected(vec![other.to_string()]),
     })?;
-    // Nothing may be lost crossing: the springrep form's volume and area are cadrs's own, to the
+    // Nothing may be lost crossing: the springrep form's volume is cadrs's own, to the
     // measuring agreement of two engines (bench swept/ring-lying-flat-turned-whole once came over at
     // 217.13 of cadrs's 761.10 with every other check passed).
     same_measure(body, &b)?;

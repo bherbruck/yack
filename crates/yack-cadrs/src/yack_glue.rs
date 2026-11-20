@@ -261,7 +261,82 @@ pub fn offset(k: &mut DefaultKernel, body: BodyId, distance: f64) -> Result<Made
 /// Faces `ix` offset by `distance`, their neighbours extended.
 pub fn offset_faces(k: &mut DefaultKernel, body: BodyId, ix: &[u64], distance: f64) -> Result<Made> {
     let by = faces(ix).into_iter().map(|f| (f, distance)).collect();
-    made(k.offset(body, &OffsetSpec { distance: 0.0, faces: by, sharp: true }))
+    let (out, history) = made(k.offset(body, &OffsetSpec { distance: 0.0, faces: by, sharp: true }))?;
+    if inner_faces(k, out)?.is_empty() && !has_null_edge(k, out)? {
+        return Ok((out, history));
+    }
+    // A face pushed out onto the wall facing it, or level with the face beside it: cadrs keeps
+    // the two back to back inside the solid (conformance closing-offsets: its volume exact, its
+    // area two walls too much), or an edge of no length where the step closed. Pushed out, the
+    // same solid is the body united with the slabs the faces sweep (thickened by their
+    // distance): taken where that leaves no face inside nor edge of no length and holds cadrs's
+    // volume; else refused.
+    let want = k.mass_properties(out)?.volume;
+    k.release(out);
+    let refuse = || KernelError::Unsupported("cadrs leaves faces pushed together inside the solid");
+    if !(distance > 0.0) {
+        return Err(refuse());
+    }
+    let (slab, _) = thicken(k, body, ix, distance)?;
+    let united = made(k.boolean(crate::BoolOp::Union, body, &[slab]));
+    k.release(slab);
+    let (u, uh) = united?;
+    let v = k.mass_properties(u)?.volume;
+    if !inner_faces(k, u)?.is_empty() || has_null_edge(k, u)? || (v - want).abs() > crate::native::tol::REL_POINT * want.abs().max(1.0) {
+        k.release(u);
+        return Err(refuse());
+    }
+    Ok((u, uh))
+}
+
+/// Whether `body` has an edge of no length that isn't closed round (a whole circle) nor a
+/// pole: two of its vertices at one point (a step offset level with the face beside it).
+fn has_null_edge(k: &DefaultKernel, body: BodyId) -> Result<bool> {
+    let b = k.get(body)?;
+    Ok(b.edges.iter().any(|e| {
+        !e.degenerate && e.v[0] != e.v[1] && (e.point(e.t[0]) - e.point(e.t[1])).norm() <= crate::native::tol::POINT && {
+            let m = e.point((e.t[0] + e.t[1]) * 0.5);
+            (m - e.point(e.t[0])).norm() <= crate::native::tol::POINT
+        }
+    }))
+}
+
+/// The faces of `body` with its material on both sides (a point just off either side of the
+/// face inside the solid): faces left back to back inside it. Each face is tried at its
+/// largest triangle's centroid projected onto the face's surface, along the surface's normal there.
+pub fn inner_faces(k: &DefaultKernel, body: BodyId) -> Result<Vec<u64>> {
+    let mesh = k.tessellate(body, crate::Tessellation::default())?;
+    let bb = k.bounding_box(body)?;
+    // A thousandth of the body's smallest extent (a sliver 0.03 thick is stepped across by
+    // 3e-5, not through), never under ten times the point tolerance.
+    let ext = bb.max - bb.min;
+    let step = (1e-3 * ext.x.min(ext.y).min(ext.z)).max(10.0 * crate::native::tol::POINT); // tol: a thousandth of the body
+    let mut best: std::collections::BTreeMap<u64, (f64, Point3<f64>, Vector3<f64>)> = std::collections::BTreeMap::new();
+    for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
+        let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_else(Point3::origin));
+        let n = (b - a).cross(&(c - a));
+        let area = n.norm();
+        if area > best.get(&f.0).map_or(0.0, |x| x.0) {
+            best.insert(f.0, (area, Point3::from((a.coords + b.coords + c.coords) / 3.0), n / area));
+        }
+    }
+    let b = k.get(body)?;
+    let mut out = Vec::new();
+    for (f, (_, c, n)) in best {
+        // From the face's own surface (a triangle's centroid sags inside a curved face by up to
+        // the mesh's deflection, far more than the step): the centroid projected onto it.
+        let Some(face) = usize::try_from(f).ok().and_then(|i| b.faces.get(i)) else { continue };
+        let (u, v) = face.surf.project(&c, None);
+        let p = face.surf.eval(u, v);
+        // The surface's own normal there (the triangle's, where it has none: a pole).
+        let sn = face.surf.normal(u, v);
+        let n = if sn.norm() > 0.0 { sn.normalize() } else { n };
+        let side = |q: Point3<f64>| matches!(k.classify(body, q, crate::native::tol::POINT), Ok(crate::PointClass::Inside));
+        if side(p + n * step) && side(p - n * step) {
+            out.push(f);
+        }
+    }
+    Ok(out)
 }
 
 /// The shell `shell` and `shell_rounded` build, as cadrs's runner asks for it.
@@ -502,34 +577,6 @@ pub fn replace_face(
     };
     let surface = crate::native::NurbsSurface::from_points(degree[0], degree[1], knots_u.to_vec(), knots_v.to_vec(), poles, weights)?;
     made(k.replace_faces(body, &[crate::FaceReplacement { face: FaceId(face), surface: surface.into(), domain: Some(((u0, u1), (v0, v1))) }]))
-}
-
-/// A drawing's polylines: those the viewer sees, then those the solid hides.
-pub type Drawn = (Vec<Vec<[f64; 2]>>, Vec<Vec<[f64; 2]>>);
-
-/// `body`'s hidden-line drawing looking along `dir`, drawn on the view axes `u` (across) and
-/// `v = u × dir` (up): its sharp edges and its curved faces' outlines, each cut where it passes
-/// behind the solid, as polylines within `tolerance` (cadrs's hidden-line removal, exact
-/// silhouettes; edges between tangent faces, and seams, not drawn).
-pub fn hidden_lines(k: &DefaultKernel, body: BodyId, dir: [f64; 3], u: [f64; 3], tolerance: f64) -> Result<Drawn> {
-    if !(tolerance > 0.0) {
-        return Err(KernelError::InvalidInput("a drawing's tolerance must be positive".into()));
-    }
-    let frame = crate::ViewFrame::new(v3(dir), v3(u));
-    let opts = crate::ProjectOptions { tolerance, hidden: true };
-    let p = k.project(&[body], &frame, &opts)?;
-    let (mut seen, mut hidden) = (Vec::new(), Vec::new());
-    for e in p.edges {
-        if matches!(e.class, crate::ProjClass::Smooth) {
-            continue;
-        }
-        let line: Vec<[f64; 2]> = e.points.iter().map(|q| [q.x, q.y]).collect();
-        match e.visibility {
-            crate::ProjVisibility::Visible => seen.push(line),
-            crate::ProjVisibility::Hidden => hidden.push(line),
-        }
-    }
-    Ok((seen, hidden))
 }
 
 /// `body` with its face `face` replaced by cadrs's fill of the closed chain `boundary` (each

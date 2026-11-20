@@ -17,17 +17,15 @@ pub fn write(s: &Solid) -> Result<String> {
         return Err(Error::invalid(op, "s", "the solid is empty"));
     }
     if s.held().is_some() {
-        // held in cadrs form: cadrs writes it; cadrs's reader checks it, springrep's if not
+        // held in cadrs form: cadrs writes it, and our own reader (springrep's, as step::read)
+        // must read it back, with cadrs's reader as an extra check; else the write is refused
         let (v, a) = (s.volume(), s.area());
         return firewall::run(op, || {
             ladder::allowed(op, "cadrs")?;
             let text = engine_cadrs::write_step(op, s)?;
-            match yack_bridge::check_written_cadrs(&text, v, a) {
-                Ok(_) => Ok(text),
-                Err(first) => sr::check_written(&text, v, a)
-                    .map(|_| text)
-                    .map_err(|second| Error::failed(op, Stage::Check, format!("cadrs: {first}; springrep: {second}"))),
-            }
+            sr::check_written(&text, v, a).map_err(|e| Error::failed(op, Stage::Check, format!("springrep (step::read): {e}")))?;
+            yack_bridge::check_written_cadrs(&text, v, a).map_err(|e| Error::failed(op, Stage::Check, format!("cadrs: {e}")))?;
+            Ok(text)
         });
     }
     let b = s.need(op)?;

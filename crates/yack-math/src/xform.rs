@@ -145,6 +145,18 @@ impl Similarity {
     /// The identity.
     pub const IDENTITY: Similarity = Similarity(IDENTITY);
 
+    /// The reflection in the plane through `origin` square to `normal`.
+    pub fn mirror(origin: impl Into<Point3>, normal: impl Into<Vec3>) -> Result<Similarity> {
+        let n = Dir3::new(normal)?.vec().to_array();
+        let o = origin.into().to_array();
+        let d = 2.0 * (o[0] * n[0] + o[1] * n[1] + o[2] * n[2]);
+        let row = |i: usize, ni: f64| {
+            let r = |j: usize, nj: f64| if i == j { 1.0 - 2.0 * ni * nj } else { -2.0 * ni * nj };
+            [r(0, n[0]), r(1, n[1]), r(2, n[2]), d * ni]
+        };
+        Similarity::from_rows([row(0, n[0]), row(1, n[1]), row(2, n[2])])
+    }
+
     /// From rows `[c·Q | t]`: `Q` orthogonal (mirrors allowed), `c > 0`. Refuses anything else.
     pub fn from_rows(m: [[f64; 4]; 3]) -> Result<Similarity> {
         let op = "Similarity::from_rows";

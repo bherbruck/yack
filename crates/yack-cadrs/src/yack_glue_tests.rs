@@ -427,25 +427,6 @@ fn faces_replaced_by_b_spline_nets() {
 }
 
 #[test]
-fn hidden_lines_of_a_ball_and_a_box() {
-    let mut k = DefaultKernel::new();
-    // A ball seen along -z: its outline, the circle of its radius, all seen.
-    let ball = k
-        .primitive(&Primitive::Sphere { center: Point3::origin(), radius: 5.0, axis: nalgebra::Unit::new_normalize(Vector3::z()), seam: nalgebra::Unit::new_normalize(Vector3::x()) })
-        .and_then(|r| r.first())
-        .unwrap();
-    let (seen, hidden) = hidden_lines(&k, ball, [0.0, 0.0, -1.0], [0.0, -1.0, 0.0], 0.01).unwrap();
-    println!("ball: {} seen, {} hidden", seen.len(), hidden.len());
-    assert!(!seen.is_empty() && hidden.is_empty());
-    assert!(seen.iter().flatten().all(|p| (p[0].hypot(p[1]) - 5.0).abs() < 0.01 + 1e-9));
-    // A cube seen along a body diagonal: nine edges seen, three hidden.
-    let c = cube(&mut k);
-    let d = [-1.0, -1.0, -1.0];
-    let (seen, hidden) = hidden_lines(&k, c, d, [1.0, -1.0, 0.0], 0.01).unwrap();
-    assert_eq!((seen.len(), hidden.len()), (9, 3), "{seen:?} {hidden:?}");
-}
-
-#[test]
 fn a_ring_lying_flat_turned_whole() {
     // brep-bench swept/ring-lying-flat-turned-whole: the torus (8, 0) R 3 r 1, axis upright,
     // turned a whole turn about z: 2πD(4rR + πr²) = 761.0994599066700 (Pappus). Its axis is
@@ -484,6 +465,86 @@ fn a_block_top_replaced_by_a_fill_of_four_parabolas() {
     let (r, _) = replace_face_fill(&mut k, c, top, &b).unwrap();
     let v = k.mass_properties(r).unwrap().volume;
     assert!((v - 1000.0).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_notch_pushed_shut_is_the_box() {
+    // conformance closing-offsets-3c8da3c4: a U-block's notch wall pushed 2.77 onto the facing
+    // wall: the box, 6 faces, area 262.83918347690224 (cadrs's offset keeps both walls back to
+    // back inside: 10 faces, area 310.06).
+    use crate::facade::profile::{extrude, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let (w, h, d) = (8.894168270224732, 5.248374306338988, 5.9918269330986);
+    let p = [[0.0, 0.0], [w, 0.0], [w, h], [5.514168303630225, h], [5.514168303630225, 1.307900772125746], [2.7449948436746756, 1.307900772125746], [2.7449948436746756, h], [0.0, h]];
+    let segs: Vec<Seg> = (0..8).map(|i| Seg::Line { a: p[i], b: p[(i + 1) % 8] }).collect();
+    let at = Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 0.0, 1.0], z: [0.0, -1.0, 0.0] };
+    let (u, _) = extrude(&mut k, &at, &[&segs], d).unwrap();
+    assert!(inner_faces(&k, u).unwrap().is_empty());
+    let f = k.face_at(u, Point3::new(2.7449948436746756, -2.9959134665493, 3.2781375392323673)).unwrap().0;
+    // cadrs's own offset: the two walls back to back inside, both found.
+    let raw = k.offset(u, &OffsetSpec { distance: 0.0, faces: vec![(FaceId(f), 2.769173459955549)], sharp: true }).and_then(|r| r.first()).unwrap();
+    assert_eq!(inner_faces(&k, raw).unwrap().len(), 2);
+    let (b, _) = offset_faces(&mut k, u, &[f], 2.769173459955549).unwrap();
+    let m = k.mass_properties(b).unwrap();
+    assert_eq!(k.get(b).unwrap().faces.len(), 6);
+    assert!((m.surface_area - 2.0 * (w * h + h * d + d * w)).abs() < 1e-9, "{}", m.surface_area);
+    assert!((m.volume - w * h * d).abs() < 1e-9, "{}", m.volume);
+}
+#[test]
+fn curved_solids_have_no_inner_faces() {
+    // A torus, a ball, a cone, a tumbling torus's sweep: no face with the solid on both sides
+    // (a tessellation triangle's centroid sags inside a convex face by up to its deflection).
+    let mut k = DefaultKernel::new();
+    let (t, _) = torus(&mut k, [0.0; 3], [0.0, 0.0, 1.0], 5.0, 1.0).unwrap();
+    let ball = k.primitive(&Primitive::Sphere { center: Point3::origin(), radius: 3.0, axis: nalgebra::Unit::new_normalize(Vector3::z()), seam: nalgebra::Unit::new_normalize(Vector3::x()) }).and_then(|r| r.first()).unwrap();
+    let cone = k.primitive(&Primitive::Cone { base: Point3::origin(), axis: nalgebra::Unit::new_normalize(Vector3::z()), base_radius: 3.0, top_radius: 1.0, height: 4.0 }).and_then(|r| r.first()).unwrap();
+    // crates/yack/tests/held.rs's tumbling torus: the ring (3, 0, 2) R 1 r 0.5 rolled ±18.75° about
+    // the upright through (2, 0, 0) while tumbled 75° to −75° about x through (0, 0.5, 0.5).
+    let (ring, _) = torus(&mut k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.5).unwrap();
+    let r = 18.75f64.to_radians();
+    let t75 = 75f64.to_radians();
+    let tumble = [
+        crate::facade::motion::Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -r, to: r },
+        crate::facade::motion::Step::Turn { point: [0.0, 0.5, 0.5], axis: [1.0, 0.0, 0.0], from: t75, to: -t75 },
+    ];
+    let tumbled = crate::facade::motion::together(&mut k, ring, &tumble).unwrap().made.0;
+    // held.rs's paraboloid tip: the paraboloid z = x²/8 to 8, cut by the slab below 1e-4 (a
+    // sliver 0.03 across).
+    use crate::facade::profile::{revolve, Place, Seg};
+    let side = [
+        Seg::Conic { a: [0.0, 0.0], apex: [4.0, 0.0], b: [8.0, 8.0], weight: 1.0 },
+        Seg::Line { a: [8.0, 8.0], b: [0.0, 8.0] },
+        Seg::Line { a: [0.0, 8.0], b: [0.0, 0.0] },
+    ];
+    let world = Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (para, _) = revolve(&mut k, &world, &[&side], std::f64::consts::TAU).unwrap();
+    let slab = k.primitive(&Primitive::Box { min: Point3::new(-9.0, -9.0, -1.0), max: Point3::new(9.0, 9.0, 1e-4) }).and_then(|r| r.first()).unwrap();
+    let (tip, _) = boolean(&mut k, crate::BoolOp::Intersect, para, &[slab]).unwrap();
+    assert!(k.get(tumbled).unwrap().faces.len() > 1);
+    for b in [t, ball, cone, tumbled, tip] {
+        assert!(inner_faces(&k, b).unwrap().is_empty(), "{:?}", inner_faces(&k, b));
+    }
+}
+
+#[test]
+fn an_l_step_pushed_level_is_the_box() {
+    // conformance closing-offsets-f9a2a750: an L-block's low top pushed 1.40065 up level with
+    // its high top: the box (cadrs's offset leaves an edge of no length there).
+    use crate::facade::profile::{extrude, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let (w, h, d) = (8.270117232320677, 5.3617773736568015, 4.286181010494695);
+    let p = [[0.0, 0.0], [w, 0.0], [w, 3.9611320861080412], [3.6147345061240137, 3.9611320861080412], [3.6147345061240137, h], [0.0, h]];
+    let segs: Vec<Seg> = (0..6).map(|i| Seg::Line { a: p[i], b: p[(i + 1) % 6] }).collect();
+    let at = Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 0.0, 1.0], z: [0.0, -1.0, 0.0] };
+    let (l, _) = extrude(&mut k, &at, &[&segs], d).unwrap();
+    let f = k.face_at(l, Point3::new(5.9424, -2.1431, 3.9611320861080412)).unwrap().0;
+    let raw = k.offset(l, &OffsetSpec { distance: 0.0, faces: vec![(FaceId(f), 1.4006452875487603)], sharp: true }).and_then(|r| r.first()).unwrap();
+    assert!(has_null_edge(&k, raw).unwrap());
+    let (b, _) = offset_faces(&mut k, l, &[f], 1.4006452875487603).unwrap();
+    let m = k.mass_properties(b).unwrap();
+    assert!(!has_null_edge(&k, b).unwrap());
+    assert_eq!(k.get(b).unwrap().faces.len(), 6);
+    assert!((m.volume - w * h * d).abs() < 1e-9 && (m.surface_area - 2.0 * (w * h + h * d + d * w)).abs() < 1e-9, "{} {}", m.volume, m.surface_area);
 }
 
 #[test]

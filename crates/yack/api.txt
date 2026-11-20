@@ -37,7 +37,7 @@ yack::boolean: impl Solid { pub fn split(&self, plane: &Plane) -> Result<Split> 
 yack::boolean: impl Solid { pub fn union(&self, other: &Solid) -> Result<Solid> }
 yack::boolean: impl Solid { pub fn union_all(solids: &[Solid]) -> Result<Solid> }
 yack::codec: pub fn decode(b: &[u8]) -> Result<Solid>
-yack::codec: pub fn encode(s: &Solid) -> Vec<u8>
+yack::codec: pub fn encode(s: &Solid) -> Result<Vec<u8>>
 yack::edit: impl Solid { pub fn delete_faces(&self, faces: &[FaceId]) -> Result<Solid> }
 yack::edit: impl Solid { pub fn draft(&self, faces: &[FaceId], origin: impl Into<Point3>, pull: impl Into<Vec3>, angle: Angle) -> Result<Solid> }
 yack::edit: impl Solid { pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> }
@@ -123,14 +123,14 @@ yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
 yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> }
 yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> }
 yack::query: impl Solid { pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> }
-yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<[f64; 2]>> }
+yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<[f64; 2]>>> }
 yack::query: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
 yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
 yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
 yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
 yack::query: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }
 yack::query: impl Solid { pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> }
-yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<Vec3>> }
+yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<Vec3>>> }
 yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> }
 yack::query: impl Solid { pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> }
 yack::query: impl Solid { pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> }
@@ -142,7 +142,7 @@ yack::select: impl Solid { pub fn edges(&self) -> Vec<EdgeId> }
 yack::select: impl Solid { pub fn edges_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Result<Vec<EdgeId>> }
 yack::select: impl Solid { pub fn edges_between(&self, a: FaceId, b: FaceId) -> Result<Vec<EdgeId>> }
 yack::select: impl Solid { pub fn edges_of(&self, f: FaceId) -> Result<Vec<EdgeId>> }
-yack::select: impl Solid { pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> }
+yack::select: impl Solid { pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Result<Vec<EdgeId>> }
 yack::select: impl Solid { pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> }
 yack::select: impl Solid { pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> }
 yack::select: impl Solid { pub fn face_by(&self, tag: impl Into<Tag>, role: Role) -> Result<FaceId> }
@@ -151,7 +151,7 @@ yack::select: impl Solid { pub fn faces_at<P: Into<Point3> + Copy>(&self, pts: &
 yack::select: impl Solid { pub fn faces_by(&self, tag: impl Into<Tag>, role: Role) -> Vec<FaceId> }
 yack::select: impl Solid { pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> }
 yack::select: impl Solid { pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> }
-yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> }
+yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Result<Vec<FaceId>> }
 yack::select: impl Solid { pub fn vertex(&self, id: VertexId) -> Result<VertexRef> }
 yack::select: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
 yack::solid: impl Solid { pub fn digest(&self) -> [u8; 32] }

@@ -103,13 +103,13 @@ pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> 
 /// `profile`, drawn in the frame's xy plane, extruded `height` (`> 0`) along the frame's z. To
 /// extrude the other way, flip the frame (`Frame::new(origin, x, -y, -z)`); a negative height is
 /// refused.
+///
+/// A negative `height` extrudes to the other side of the profile's plane, along the frame's −z
+/// ("reverse direction"): the same outline, drawn as given, the solid the mirror image of the
+/// positive one in that plane. (Flipping the frame instead would mirror the outline.)
 pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
     if height < 0.0 {
-        return Err(Error::invalid(
-            "extrude",
-            "height",
-            format!("height {height} is negative; to extrude the other way, flip the frame: Frame::new(origin, x, -y, -z)"),
-        ));
+        return reversed("extrude", frame, extrude(frame, profile, height.abs()));
     }
     firewall::run("extrude", || {
         ladder::two(
@@ -324,6 +324,12 @@ pub fn empty() -> Solid {
     Solid::empty()
 }
 
+/// An extrusion to the other side of the frame's plane: `positive`'s mirror image in that plane.
+fn reversed(op: &'static str, frame: &Frame, positive: Result<Solid>) -> Result<Solid> {
+    let m = crate::Similarity::mirror(frame.origin(), frame.z()).map_err(|e| Error { op, ..e })?;
+    positive?.transform(&m)
+}
+
 /// One cadrs rung behind the firewall: the constructors only cadrs builds.
 fn cadrs_only(op: &'static str, run: &dyn Fn() -> Result<Solid>) -> Result<Solid> {
     firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run }]))
@@ -332,10 +338,17 @@ fn cadrs_only(op: &'static str, run: &dyn Fn() -> Result<Solid>) -> Result<Solid
 /// `profile` extruded `height` along the frame's z with its sides drafted by `draft`: positive
 /// leans them in as they rise (the top smaller), negative out. With `both_ways` the same again
 /// below the profile's plane, the two halves meeting in a crease there.
+///
+/// A negative `height` extrudes to the other side of the profile's plane (along the frame's −z),
+/// the draft still leaning the sides in as they leave that plane: the mirror image of the
+/// positive one in it.
 pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Angle, both_ways: bool) -> Result<Solid> {
     let op = "extrude_drafted";
-    if height.is_nan() || height <= 0.0 {
-        return Err(Error::invalid(op, "height", format!("height {height} is not positive")));
+    if height < 0.0 {
+        return reversed(op, frame, extrude_drafted(frame, profile, height.abs(), draft, both_ways));
+    }
+    if height.is_nan() || height == 0.0 {
+        return Err(Error::invalid(op, "height", format!("height {height} is not a non-zero length")));
     }
     let d = draft.radians();
     cadrs_only(op, &|| engine_cadrs::extrude_drafted(op, frame, profile, height, d, both_ways))

@@ -159,8 +159,10 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
     let body = lock(session).get(id).map_err(|e| error(op, e))?.clone();
     let names = names(feature, body.faces().len(), &history, how);
     // Edges cadrs left unused by any face are dropped (ids are springrep's, so nothing to remap).
-    // The carried body must measure as cadrs's does (ring-lying-flat: carried 217.13, cadrs and
-    // its STEP 761.10), else it is not carried: a reported volume never disagrees with the file.
+    // The carried body must hold cadrs's volume (ring-lying-flat: carried 217.13, cadrs and its
+    // STEP 761.10), else it is not carried: a reported volume never disagrees with the file. Volume
+    // only: cadrs's area quadrature is off by tens of mm² on some offset faces whose volumes agree
+    // exactly (conformance closing-offsets), where the carried form's area is the right one.
     let mass = {
         use yack_cadrs::Kernel as _;
         lock(session).mass_properties(id).ok()
@@ -168,10 +170,7 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
     let carried = yack_bridge::to_springrep_mapped(&body, &names).map_err(|e| e.to_string()).and_then(|(b, edges)| {
         let (v, a) = (yack_springrep::measure::volume(&b), yack_springrep::measure::area(&b));
         match &mass {
-            Some(m)
-                if yack_math::relative_gap(v, m.volume) > yack_bridge::CADRS_AGREE
-                    || yack_math::relative_gap(a, m.surface_area) > yack_bridge::CADRS_AGREE =>
-            {
+            Some(m) if yack_math::relative_gap(v, m.volume) > yack_bridge::CADRS_AGREE => {
                 Err(format!("the carried body measures volume {v}, area {a}; cadrs's measures {}, {}", m.volume, m.surface_area))
             }
             _ => Ok((b, edges)),
@@ -186,6 +185,16 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
             if !body.is_solid() || !issues.is_empty() {
                 let why = issues.first().map_or("it is not a closed solid", String::as_str);
                 return Err(unsupported(op, format!("the cadrs result cannot be carried back: {e}; nor held in cadrs form: {why}")));
+            }
+            // held only if no face has the solid on both sides: a held solid is measured by cadrs,
+            // whose area counts such faces (closing-offsets: a notch pushed shut kept both walls)
+            match yack_glue::inner_faces(&lock(session), id) {
+                Ok(inner) if inner.is_empty() => {}
+                Ok(inner) => {
+                    let why = format!("{} of its faces have the solid on both sides", inner.len());
+                    return Err(unsupported(op, format!("the cadrs result cannot be carried back: {e}; nor held: {why}")));
+                }
+                Err(err) => return Err(unsupported(op, format!("the cadrs result cannot be carried back: {e}; nor held: {err}"))),
             }
             let held = Held { cadrs: CadrsRef { session: session.clone(), id }, names, why: format!("bridge: {e}") };
             return Ok(Solid::from_held(held).with_feature(feature).with_strategy("cadrs"));
@@ -856,14 +865,6 @@ pub(crate) fn conical_helix(
     turns: f64,
 ) -> Result<(Vec<f64>, Vec<[f64; 3]>)> {
     cp::conical_helix(origin, axis, x, r0, r1, height, start, turns).map_err(|e| error(op, e))
-}
-
-/// `s`'s hidden-line drawing by cadrs, looking along `dir`, on the view axes `u` and `v = u × dir`
-/// (the protocol's), within `tolerance`: (visible, hidden) polylines.
-pub(crate) fn hidden_lines(op: &'static str, s: &Solid, dir: [f64; 3], u: [f64; 3], tolerance: f64) -> Result<yack_glue::Drawn> {
-    let c = of(op, s)?;
-    let k = lock(&c.session);
-    yack_glue::hidden_lines(&k, c.id, dir, u, tolerance).map_err(|e| error(op, e))
 }
 
 /// `s` with face `face` replaced by cadrs's fill of the closed chain `boundary`.

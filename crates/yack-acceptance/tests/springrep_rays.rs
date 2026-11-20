@@ -62,7 +62,7 @@ fn a_ray_through_a_ball_crosses_twice_touching_once_and_missing_never() {
     assert_ts(&hits, &[10.0 - half, 10.0 + half]);
     // The normal points out of the ball: from the centre to the point.
     let points: Vec<Point3> = hits.iter().map(|&t| o + x * t).collect();
-    for (p, n) in points.iter().zip(b.normal_at(&points)) {
+    for (p, n) in points.iter().zip(b.normal_at(&points).unwrap()) {
         let n = n.unwrap();
         assert!(((*p - c) * (1.0 / r) - n).length() < 1e-9, "{p:?}: {n:?}");
     }
@@ -118,7 +118,7 @@ fn a_ray_clipping_a_cylinder_shallower_than_the_mesh_crosses_it_twice() {
         let hits = cast(&b, p, d);
         assert_ts(&hits, &[(-bq - root) / a, (-bq + root) / a]);
         let at = [p + d * hits[0], p + d * hits[1]];
-        let n = b.normal_at(&at);
+        let n = b.normal_at(&at).unwrap();
         assert!(n[0].unwrap().dot(d) < 0.0 && n[1].unwrap().dot(d) > 0.0);
     }
 }
@@ -196,7 +196,7 @@ fn a_ray_across_a_spline_extrusion_crosses_where_the_outline_does() {
     let p = Profile::new(Loop::through(&pts).unwrap(), vec![]).unwrap();
     let disc = extrude(&Frame::WORLD, &p, 10.0).unwrap();
     let outline =
-        disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. }))[0];
+        disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. })).unwrap()[0];
     let c = disc.edge(outline).unwrap();
     let [t0, t1] = c.range();
     let side = |t: f64| c.point(t).y - 9.0;
