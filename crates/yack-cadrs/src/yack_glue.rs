@@ -40,11 +40,8 @@ pub enum Move<'a> {
     Along { degree: usize, knots: &'a [f64], ctrl: &'a [[f64; 3]], up: [f64; 3] },
 }
 
-/// The most turns a screw [`swept`] takes on at all (a runaway bound).
+/// The most turns a screw [`cut_swept`] takes on at all (a runaway bound).
 pub const SCREW_TURNS_MAX: f64 = 64.0;
-
-/// A leg of a long screw: half a turn, the most cadrs sweeps without the sweep overlapping itself.
-const SCREW_LEG: f64 = std::f64::consts::PI;
 
 /// cadrs's motion for `m`.
 fn solid_motion(m: &Move) -> SolidMotion {
@@ -84,26 +81,14 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
     if v3(dir).norm() == 0.0 {
         return Err(KernelError::InvalidInput("a motion needs a non-zero direction".into()));
     }
-    if let Move::Screw { point, axis, angle, rise_per_turn } = *m
-        && angle.abs() > SCREW_LEG
+    // A screw past a whole turn sweeps over itself; cadrs makes it only as a mesh-bounded solid
+    // (seconds, tens of thousands of facets), and the union of its half-turn legs measured 0.1 %
+    // off the exact cut (fine-thread: 1278.13 against 1276.70). Refused: cut by it with
+    // [`cut_swept`] (cadrs's own cut by a moving tool, exact there).
+    if let Move::Screw { angle, .. } = *m
+        && angle.abs() > std::f64::consts::TAU
     {
-        if angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU {
-            return Err(KernelError::Unsupported("a screw of more than 64 turns"));
-        }
-        // A swept solid is the point set the body passes through: a long screw's is the union of
-        // its half-turn legs' (each from where the one before left the body), each of which
-        // cadrs sweeps without overlapping itself.
-        let n = (angle.abs() / SCREW_LEG).ceil();
-        let legs = vec![Move::Screw { point, axis, angle: angle / n, rise_per_turn }; n as usize];
-        // The first leg alone tells whether cadrs sweeps this body exactly: faceted, the rest
-        // would cost as much again each (seconds), so refuse at once.
-        let (first, _) = made(k.sweep_solid(body, &solid_motion(&legs[0])))?;
-        let flat = faceted(k, first)?;
-        k.release(first);
-        if flat {
-            return Err(KernelError::Unsupported("cadrs sweeps this body by a screw only as a mesh of flat facets"));
-        }
-        return crate::facade::motion::swept_then(k, body, &legs);
+        return Err(KernelError::Unsupported("a screw past a whole turn (cut by it with cut_swept)"));
     }
     let (out, history) = made(k.sweep_solid(body, &solid_motion(m)))?;
     if faceted(k, out)? {
@@ -145,7 +130,6 @@ use crate::{ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, DraftSpec,
 fn faces(ix: &[u64]) -> Vec<FaceId> {
     ix.iter().map(|&i| FaceId(i)).collect()
 }
-
 
 /// `body` less faces `ix`, the gap healed from the neighbours.
 pub fn delete_faces(k: &mut DefaultKernel, body: BodyId, ix: &[u64]) -> Result<Made> {
@@ -513,7 +497,17 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
         Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } => near_axis(k, tool, target, point, axis)?,
         _ => tool,
     };
-    let r = k.cut_swept(target, used, &solid_motion(m));
+    // cadrs's cut by a moving tool is exact for a screw (fine-thread: 1276.703 against cadrs's
+    // runner's 1276.703) but not for a turn (pin-swung-through-ring-sector: 53.931 against the
+    // exact 53.843, MEASURED natively): there the sweep, exact for one turn, is cut instead.
+    let r = match *m {
+        Move::Screw { .. } => k.cut_swept(target, used, &solid_motion(m)),
+        _ => swept(k, used, m).and_then(|(sw, _)| {
+            let r = k.boolean(crate::BoolOp::Subtract, target, &[sw]);
+            k.release(sw);
+            r
+        }),
+    };
     if used != tool {
         k.release(used);
     }
@@ -660,5 +654,29 @@ mod tests {
         let v = k.mass_properties(cut).unwrap().volume;
         assert!(v > 0.0 && v < 500.0 * std::f64::consts::PI, "{v}");
         assert!(!faceted(&k, cut).unwrap());
+    }
+
+    #[test]
+    fn a_pin_swung_through_a_ring_sector_cuts_exactly() {
+        let mut k = DefaultKernel::new();
+        let spec = crate::CylindricalBox {
+            frame: crate::Plane::new(Point3::new(0.0, 0.0, -1.0), nalgebra::Vector3::x(), nalgebra::Vector3::z()),
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        };
+        let block = k.cylindrical_box(&spec).and_then(|r| r.first()).unwrap();
+        let pin = k
+            .primitive(&Primitive::cylinder(Point3::new(6.0, 0.0, 0.0), nalgebra::Vector3::x(), 0.5, 5.0))
+            .and_then(|r| r.first())
+            .unwrap();
+        let start = k.transform_motion(pin, &Motion::rotation(&Axis::new(Point3::origin(), nalgebra::Vector3::z()), (-140f64).to_radians())).and_then(|r| r.first()).unwrap();
+        let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 280f64.to_radians() };
+        let (cut, _) = cut_swept(&mut k, block, start, &[m]).unwrap();
+        // cadrs's runner's (sweep, then cut) volume; cadrs's own cut_swept gives 53.931 here.
+        let v = k.mass_properties(cut).unwrap().volume;
+        assert!((v - 53.843407424025).abs() < 1e-6, "{v}");
     }
 }
