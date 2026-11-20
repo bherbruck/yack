@@ -1,0 +1,13 @@
+[package]
+name = "yack-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+yack = { path = "../yack" }
+brep-protocol = { git = "https://example.invalid/brep-protocol" }
+
+[lints]
+workspace = true

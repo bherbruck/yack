@@ -1,0 +1,12 @@
+[package]
+name = "yack-cadrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+yack-shim = { path = "../yack-shim" }
+
+[lints]
+workspace = true

@@ -1,0 +1,4 @@
+# yack public surface: `cargo xtask api --bless` regenerates this file. One item per line.
+yack: pub const VERSION: &str
+yack: pub fn guarded() -> bool
+yack: pub use yack_geom::Point3

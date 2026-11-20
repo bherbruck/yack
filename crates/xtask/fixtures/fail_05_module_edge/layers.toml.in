@@ -1,0 +1,66 @@
+# fixture layers.toml
+[reexport]
+items = ["Point3"]
+
+[crate.yack-base]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-tol]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-geom]
+layer = 1
+kind = "kernel"
+owner = "lead"
+deps = ["yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-shim]
+layer = 1
+kind = "temporary"
+owner = "lead"
+deps = []
+delete_by = "M4"
+license = "MIT OR Apache-2.0"
+
+[crate.yack-cadrs]
+layer = 2
+kind = "temporary"
+owner = "lead"
+deps = ["yack-shim"]
+delete_by = "M4"
+license = "MIT OR Apache-2.0"
+
+[crate.yack]
+layer = 3
+kind = "public"
+owner = "api-owner"
+deps = ["*kernel", "yack-cadrs"]
+license = "MIT OR Apache-2.0"
+
+[crate.xtask]
+layer = 4
+kind = "tool"
+owner = "harness-owner"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-conformance]
+layer = 4
+kind = "tool"
+owner = "api-owner"
+deps = ["yack"]
+external = ["brep-protocol"]
+license = "MIT OR Apache-2.0"
+
+[modules.yack-geom]
+curve = []
+surface = []

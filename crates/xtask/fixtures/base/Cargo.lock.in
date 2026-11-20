@@ -1,0 +1,49 @@
+version = 4
+
+[[package]]
+name = "brep-protocol"
+version = "0.1.0"
+source = "git+https://example.invalid/brep-protocol#0000000"
+
+[[package]]
+name = "xtask"
+version = "0.0.0"
+
+[[package]]
+name = "yack"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-cadrs",
+ "yack-geom",
+]
+
+[[package]]
+name = "yack-base"
+version = "0.0.0"
+
+[[package]]
+name = "yack-cadrs"
+version = "0.0.0"
+dependencies = [
+ "yack-shim",
+]
+
+[[package]]
+name = "yack-conformance"
+version = "0.0.0"
+dependencies = [
+ "brep-protocol",
+ "yack",
+]
+
+[[package]]
+name = "yack-geom"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+]
+
+[[package]]
+name = "yack-shim"
+version = "0.0.0"

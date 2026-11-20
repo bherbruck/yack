@@ -1,33 +1,58 @@
 // yack: `cargo xtask`, the gates and benchmark drivers (PLAN §5, §6.6). Std only.
+mod bench;
+mod conformance;
+mod gate;
+mod json;
+mod meta;
+mod toml;
+
 use std::process::ExitCode;
 
 const HELP: &str = "\
 cargo xtask <command>
 
 commands (see AGENTS.md):
-  gate          structure gates: layers, one public crate, zero deps, leaks, file size,
+  gate [--bless] [--fixture <f>]  structure gates: layers, one public crate, zero deps, leaks, file size,
                 epsilons, hidden state, lints, provenance and licence, build dir,
                 temporaries, facade discipline                         (M0.2)
-  api           diff the yack public surface against crates/yack/api.txt (M0.2)
+  api [--bless|--print]  diff the yack public surface against crates/yack/api.txt (M0.2)
   conformance   brep-conformance run, ratcheted against scores/        (M0.4)
   bench         brep-bench run, ratcheted against scores/bench.json    (M0.5)
-  modgraph      module-level DAG check inside one crate                (M2)
+  modgraph --crate <c>  module-level DAG check inside one crate       (M2)
   fuzz          seeded robustness fuzz
   corpus        run a named corpus
   help          this text
 ";
 
 fn main() -> ExitCode {
-    let cmd = std::env::args().nth(1).unwrap_or_else(|| "help".to_string());
-    run(&cmd)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cmd = args.first().cloned().unwrap_or_else(|| "help".to_string());
+    run(&cmd, args.get(1..).unwrap_or_default())
 }
 
-fn run(cmd: &str) -> ExitCode {
+/// Maps a command's result to an exit code.
+fn finish(r: Result<bool, String>) -> ExitCode {
+    match r {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("error: xtask: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(cmd: &str, args: &[String]) -> ExitCode {
     match cmd {
         "help" | "-h" | "--help" => {
             print!("{HELP}");
             ExitCode::SUCCESS
         }
+        "gate" => finish(gate::main(args)),
+        "api" => finish(gate::api::main(args)),
+        "modgraph" => finish(gate::modgraph::main(args)),
+        "conformance" => conformance::run(args),
+        "bench" => bench::run(args),
         other => {
             eprintln!("xtask: `{other}` is not implemented yet\n\n{HELP}");
             ExitCode::FAILURE

@@ -1,0 +1,13 @@
+[package]
+name = "yack-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+yack-base = { path = "../yack-base" }
+serde = "1"
+
+[lints]
+workspace = true
