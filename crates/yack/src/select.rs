@@ -74,11 +74,19 @@ fn edge_ref<'a>(s: &Solid, b: &'a Brep, e: engine_ids::Edge) -> Option<EdgeRef<'
 impl Solid {
     /// Every face, in a stable order.
     pub fn faces(&self) -> Vec<FaceId> {
+        if let Some(h) = self.held() {
+            let (n, _, _) = crate::engine_cadrs::held_counts(h);
+            return (0..n).filter_map(|i| u32::try_from(i).ok()).map(|i| FaceId::new(self.stamp(), i)).collect();
+        }
         self.brep().map_or_else(Vec::new, |b| b.face_ids().map(|f| self.face_id(f)).collect())
     }
 
     /// Every edge (poles aside), in a stable order.
     pub fn edges(&self) -> Vec<EdgeId> {
+        if let Some(h) = self.held() {
+            let (_, edges, _) = crate::engine_cadrs::held_counts(h);
+            return edges.into_iter().filter_map(|i| u32::try_from(i).ok()).map(|i| EdgeId::new(self.stamp(), i)).collect();
+        }
         self.brep().map_or_else(Vec::new, |b| {
             b.edge_ids().filter(|&e| !b.edge(e).is_degenerate()).map(|e| self.edge_id(e)).collect()
         })
@@ -86,6 +94,10 @@ impl Solid {
 
     /// Every vertex, in a stable order.
     pub fn vertices(&self) -> Vec<VertexId> {
+        if let Some(h) = self.held() {
+            let (_, _, n) = crate::engine_cadrs::held_counts(h);
+            return (0..n).filter_map(|i| u32::try_from(i).ok()).map(|i| VertexId::new(self.stamp(), i)).collect();
+        }
         self.brep().map_or_else(Vec::new, |b| b.vertex_ids().map(|v| self.vertex_id(v)).collect())
     }
 
@@ -95,7 +107,7 @@ impl Solid {
     pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> {
         let op = "face_at";
         let p = p.into();
-        let found = match self.brep() {
+        let found = match self.form(op)? {
             None => api::Pick::None,
             Some(b) => api::face_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };
@@ -115,7 +127,7 @@ impl Solid {
     pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> {
         let op = "edge_at";
         let p = p.into();
-        let found = match self.brep() {
+        let found = match self.form(op)? {
             None => api::Pick::None,
             Some(b) => api::edge_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };

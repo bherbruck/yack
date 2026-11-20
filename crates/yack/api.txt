@@ -43,6 +43,7 @@ yack::edit: impl Solid { pub fn draft(&self, faces: &[FaceId], origin: impl Into
 yack::edit: impl Solid { pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> }
 yack::edit: impl Solid { pub fn offset(&self, distance: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn replace_face(&self, face: FaceId, patch: &crate::Patch) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell_outward(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
@@ -80,21 +81,26 @@ yack::input: impl Profile { pub fn new(outer: Loop, holes: Vec<Loop>) -> Result<
 yack::input: impl Profile { pub fn outer(&self) -> &Loop }
 yack::input: impl Profile { pub fn polygon(corners: &[[f64; 2]]) -> Result<Profile> }
 yack::input: impl Profile { pub fn rectangle(min: impl Into<Point2>, max: impl Into<Point2>) -> Result<Profile> }
+yack::input: impl Profile { pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Profile> }
 yack::input: impl Spline3 { pub fn bezier(ctrl: &[[f64; 3]]) -> Result<Spline3> }
 yack::input: impl Spline3 { pub fn ctrl(&self) -> &[Point3] }
 yack::input: impl Spline3 { pub fn degree(&self) -> u32 }
 yack::input: impl Spline3 { pub fn knots(&self) -> &[f64] }
 yack::input: impl Spline3 { pub fn new(degree: u32, knots: Vec<f64>, ctrl: Vec<Point3>) -> Result<Spline3> }
+yack::make: impl Spline3 { pub fn conical_helix(axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, x: impl Into<crate::Vec3>, r0: f64, r1: f64, height: f64, start: Angle, turns: f64,) -> Result<Spline3> }
 yack::make: pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid>
 yack::make: pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid>
 yack::make: pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid>
 yack::make: pub fn empty() -> Solid
 yack::make: pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid>
+yack::make: pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Angle, both_ways: bool) -> Result<Solid>
 yack::make: pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid>
 yack::make: pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<Solid>
 yack::make: pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
+yack::make: pub fn loft_to_point(frame: &Frame, profile: &Profile, apex: impl Into<Point3>, guides: &[Spline3]) -> Result<Solid>
 yack::make: pub fn nurbs_solid(frame: &Frame, degree: [u32; 2], knots: [&[f64]; 2], ctrl: &[Vec<Point3>], weights: Option<&[Vec<f64>]>,) -> Result<Solid>
 yack::make: pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid>
+yack::make: pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile: &Profile) -> Result<Solid>
 yack::make: pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Result<Solid>
 yack::make: pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle, taper: f64) -> Result<Solid>
 yack::make: pub fn sewn(patches: &[Patch]) -> Result<Solid>
@@ -102,10 +108,12 @@ yack::make: pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v:
 yack::make: pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid>
 yack::make: pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid>
+yack::make: pub fn sweep_helix(frame: &Frame, profile: &Profile, axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, lead: Lead, angle: Angle) -> Result<Solid>
 yack::make: pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], closed: bool) -> Result<Solid>
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
+yack::make: pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist: Angle, end_scale: f64) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
-yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus,}
+yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus, extrude_drafted, ruled, sweep_helix, sweep_scaled, loft_to_point,}
 yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }

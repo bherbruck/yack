@@ -14,6 +14,7 @@ fn made(r: Result<OpResult>) -> Result<Made> {
     Ok((r.first()?, r.history))
 }
 
+
 fn p3(p: [f64; 3]) -> Point3<f64> {
     Point3::new(p[0], p[1], p[2])
 }
@@ -92,10 +93,6 @@ fn runaway(m: &Move) -> bool {
 fn solid_motion(m: &Move) -> SolidMotion {
     match *m {
         Move::Slide { by } => SolidMotion::slide(v3(by)),
-        // A whole turn or more sweeps what one does: cadrs's endless turn, which it makes exactly
-        // where it can (v-wheel-turned-once-round-rod, as cadrs's runner) and by the swing only
-        // as a mesh.
-        Move::Turn { point, axis, angle } if angle.abs() >= std::f64::consts::TAU => SolidMotion::Turn { axis: Axis::new(p3(point), v3(axis)) },
         Move::Turn { point, axis, angle } => SolidMotion::swing(Axis::new(p3(point), v3(axis)), 0.0, angle),
         Move::Screw { point, axis, angle, rise_per_turn } => {
             SolidMotion::helical(Axis::new(p3(point), v3(axis)), rise_per_turn, 0.0, angle)
@@ -134,11 +131,22 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
 /// where cadrs would answer a moving solid only by a mesh, it refuses at once (yack returns no
 /// faceted solid, and the mesh can take a minute). The session's tolerances as they were after.
 pub fn exact<T>(k: &mut DefaultKernel, f: impl FnOnce(&mut DefaultKernel) -> Result<T>) -> Result<T> {
+    /// Puts the session's tolerances back as it goes, on every way out: an error, or an unwind
+    /// that yack's firewall catches (the session lives on in the solids it holds).
+    struct Restore<'a> {
+        k: &'a mut DefaultKernel,
+        was: crate::native::tol::Tolerances,
+    }
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            // (Tolerances the session held before validate as they did then.)
+            let _ = self.k.set_tolerances(self.was);
+        }
+    }
     let was = k.tolerances();
     k.set_tolerances(crate::native::tol::Tolerances { exact_only: true, ..was })?;
-    let r = f(k);
-    k.set_tolerances(was)?;
-    r
+    let g = Restore { k, was };
+    f(g.k)
 }
 
 fn swept_exactly(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
@@ -156,15 +164,19 @@ fn swept_exactly(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> 
     if runaway(m) {
         return Err(KernelError::Unsupported("a screw of more than 64 turns"));
     }
-    let r = match (k.sweep_solid(body, &solid_motion(m)), m) {
-        // cadrs's endless turn takes only a solid of revolution (a torus, or a convex section
-        // turned); any other body's whole turn is its swing round.
-        (Err(KernelError::Unsupported(_)), &Move::Turn { point, axis, angle }) if angle.abs() >= std::f64::consts::TAU => {
-            k.sweep_solid(body, &SolidMotion::swing(Axis::new(p3(point), v3(axis)), 0.0, angle))
-        }
-        (r, _) => r,
-    };
-    made(r)
+    // A whole turn of a solid of revolution whose own axis leans to the turn's: cadrs's endless
+    // turn, which it makes exactly there (v-wheel-turned-once-round-rod, as cadrs's runner) where
+    // the swing meshes. Not one whose axis is parallel to the turn's: there the endless turn's
+    // slicing answers wrong (ring-lying-flat-turned-whole: 217.13 against the exact 761.10 in
+    // ladder12), and the swing is exact (cadrs's runner swings it).
+    if let &Move::Turn { point, axis, angle } = m
+        && angle.abs() >= std::f64::consts::TAU
+        && k.get(body).ok().and_then(|b| revolution_axis(&b.faces)).is_some_and(|(_, a)| a.normalize().cross(&v3(axis).normalize()).norm() > crate::native::tol::ANGULAR)
+        && let Ok(r) = k.sweep_solid(body, &SolidMotion::Turn { axis: Axis::new(p3(point), v3(axis)) })
+    {
+        return made(Ok(r));
+    }
+    made(k.sweep_solid(body, &solid_motion(m)))
 }
 
 /// The unit normal of the plane holding every control point, or `None` when they are collinear
@@ -518,6 +530,18 @@ pub fn hidden_lines(k: &DefaultKernel, body: BodyId, dir: [f64; 3], u: [f64; 3],
         }
     }
     Ok((seen, hidden))
+}
+
+/// `body` with its face `face` replaced by cadrs's fill of the closed chain `boundary` (each
+/// curve in a plane of its own, as [`crate::facade::profile::GluePatch::Fill`]), its neighbours
+/// re-trimmed to it (fill/coons-patch-of-four-parabolas as a block's top replaced).
+pub fn replace_face_fill(k: &mut DefaultKernel, body: BodyId, face: u64, boundary: &[crate::facade::profile::Spline]) -> Result<Made> {
+    let curves = boundary.iter().map(crate::facade::profile::spline_sketch).collect::<Result<Vec<_>>>()?;
+    let sheet = k.fill(&crate::FillSpec::sketched(&curves))?.first()?;
+    let surface = k.get(sheet).map(|b| b.faces.first().map(|f| f.surf.clone()));
+    k.release(sheet);
+    let surface = surface?.ok_or_else(|| KernelError::InvalidInput("the fill made no face".into()))?;
+    made(k.replace_faces(body, &[crate::FaceReplacement { face: FaceId(face), surface, domain: None }]))
 }
 
 /// The solid torus about the line through `center` along `axis` (horn and spindle tori too).

@@ -278,3 +278,56 @@ fn a_cadrs_written_step_is_checked_by_cadrs_reading_it_back() {
     assert!(yack_bridge::check_written_cadrs(&text, 6000.0, 2200.0).is_ok());
     assert!(yack_bridge::check_written_cadrs(&text, 6100.0, 2200.0).is_err());
 }
+
+/// bench swept/ring-lying-flat-turned-whole: cadrs's swing of a torus turned a whole turn about a
+/// parallel axis beside it (761.0994599066700) crosses into springrep whole, or is refused; never
+/// smaller (it once came over at 217.13).
+#[test]
+fn a_swung_ring_crosses_whole_or_not_at_all() {
+    use yack_cadrs::{DefaultKernel, Kernel, yack_glue};
+    let mut k = DefaultKernel::new();
+    let ring = yack_glue::torus(&mut k, [8.0, 0.0, 0.0], [0.0, 0.0, 1.0], 3.0, 1.0).unwrap().0;
+    let turn = yack_glue::Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: std::f64::consts::TAU };
+    let (swept, _) = yack_glue::swept(&mut k, ring, &turn).unwrap();
+    let want = k.mass_properties(swept).unwrap().volume;
+    assert!((want - 761.09945990667).abs() < 1e-6 * want, "\nFAILED cadrs swing {want}");
+    let body = (**k.get(swept).unwrap()).clone();
+    match yack_bridge::to_springrep(&body, &[]) {
+        Ok(b) => {
+            let got = yack_springrep::measure::volume(&b);
+            assert!((got - want).abs() < 1e-5 * want, "\nFAILED carried {got} of {want}");
+        }
+        Err(e) => {
+            let _ = std::fs::write("/tmp/claude-1000/-home-brenn-github-yack/dfbaa7ec-edce-4285-9cb7-59a45b5f05a4/scratchpad/ring-probe.txt", e.to_string());
+        }
+    }
+}
+
+/// As `a_swung_ring_crosses_whole_or_not_at_all`, along the ladder's path: springrep's torus
+/// carried into cadrs, swung there, and carried back.
+#[test]
+fn a_bridged_swung_ring_crosses_whole_or_not_at_all() {
+    use yack_cadrs::{DefaultKernel, Kernel, yack_glue};
+    let torus = primitive::torus(&at(8.0, 0.0, 0.0), 3.0, 1.0, "t").unwrap();
+    let mut k = DefaultKernel::new();
+    let ring = k.insert(yack_bridge::to_cadrs(&torus).unwrap().0);
+    let turn = yack_glue::Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: std::f64::consts::TAU };
+    let (swept, _) = yack_glue::swept(&mut k, ring, &turn).unwrap();
+    let want = k.mass_properties(swept).unwrap().volume;
+    let body = (**k.get(swept).unwrap()).clone();
+    let r = yack_bridge::to_springrep(&body, &[]);
+    let line = match &r {
+        Ok(b) => format!("cadrs {want}, carried {}", yack_springrep::measure::volume(b)),
+        Err(e) => format!("cadrs {want}, refused: {e}"),
+    };
+    let faces: Vec<String> = body.faces().iter().map(|f| format!("{:?}/{} loops", f.surf.kind(), f.loops.len())).collect();
+    let _ = std::fs::write(
+        "/tmp/claude-1000/-home-brenn-github-yack/dfbaa7ec-edce-4285-9cb7-59a45b5f05a4/scratchpad/ring-bridged.txt",
+        format!("{line}\nfaces {}", faces.join(" ")),
+    );
+    assert!((want - 761.09945990667).abs() < 1e-6 * want, "\nFAILED cadrs swing {want}");
+    if let Ok(b) = r {
+        let got = yack_springrep::measure::volume(&b);
+        assert!((got - want).abs() < 1e-5 * want, "\nFAILED carried {got} of {want}");
+    }
+}

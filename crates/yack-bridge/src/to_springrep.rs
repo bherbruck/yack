@@ -45,11 +45,23 @@ fn gaps(body: &Body) -> (Vec<f64>, Vec<f64>) {
             if e.degenerate {
                 continue;
             }
+            // A straight pcurve is carried as it is (springrep's `Affine`), so its own points are
+            // measured. Any other becomes springrep's `Projected`: springrep re-projects the exact
+            // edge onto the surface and keeps nothing of cadrs's curve but a seed, so what counts is
+            // how far the edge itself lies from the surface (bench swept/ball-screwed-round-a-tight-
+            // helix: one cadrs pcurve 4.8e-4 off, its edge within 4.5e-7).
+            let carried = matches!(pcurve(&co.pc, e.t, co.fwd), PCurve::Affine { .. });
             let worst = (0..GAP_SAMPLES)
                 .map(|i| {
                     let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / (GAP_SAMPLES - 1) as f64;
                     let uv = co.pc.point(t);
-                    (f.surf.eval(uv.x, uv.y) - e.curve.point(t)).norm()
+                    let q = e.curve.point(t);
+                    if carried {
+                        (f.surf.eval(uv.x, uv.y) - q).norm()
+                    } else {
+                        let (u, v) = f.surf.project(&q, Some((uv.x, uv.y)));
+                        (f.surf.eval(u, v) - q).norm()
+                    }
                 })
                 .fold(0.0, f64::max);
             if let Some(g) = edge.get_mut(co.edge) {
@@ -171,6 +183,24 @@ fn pcurve(pc: &CCurve, t: [f64; 2], fwd: bool) -> PCurve {
             let p = pc.point(if fwd { t[0] } else { t[1] });
             PCurve::Projected { seed: Vec2::new(p.x, p.y) }
         }
+    }
+}
+
+/// How far, relative, the springrep form's volume and area may be from cadrs's.
+const MEASURE_AGREES: f64 = 1e-5; // tol: two engines' quadratures of one body (as CADRS_AGREE)
+
+/// Refuses `back` where its volume or area differs from `body`'s (cadrs's own measure).
+fn same_measure(body: &Body, back: &Brep) -> Result<()> {
+    let cv = yack_cadrs::native::mass::body_volume(body);
+    let ca: f64 = (0..body.faces().len()).map(|f| yack_cadrs::native::mass::face_area(body, f).0).sum();
+    let (sv, sa) = (yack_springrep::measure::volume(back), yack_springrep::measure::area(back));
+    let off = |x: f64, want: f64| (x - want).abs() / want.abs().max(1.0);
+    if off(sv, cv) <= MEASURE_AGREES && off(sa, ca) <= MEASURE_AGREES {
+        Ok(())
+    } else {
+        Err(Error::Unsupported(format!(
+            "the body lost geometry crossing: springrep volume {sv}, area {sa}; cadrs's {cv}, {ca}"
+        )))
     }
 }
 
@@ -369,6 +399,10 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
         }
         other => Error::Rejected(vec![other.to_string()]),
     })?;
+    // Nothing may be lost crossing: the springrep form's volume and area are cadrs's own, to the
+    // measuring agreement of two engines (bench swept/ring-lying-flat-turned-whole once came over at
+    // 217.13 of cadrs's 761.10 with every other check passed).
+    same_measure(body, &b)?;
     crate::selfcheck::same_sides(body, &b)?;
     Ok((b, map))
 }

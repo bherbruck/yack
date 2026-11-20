@@ -349,6 +349,35 @@ pub fn check_profile(op: &'static str, outer: &LoopShape, holes: &[LoopShape]) -
     Ok(())
 }
 
+/// The points where a chain of circles, taken in order round an outline (counter-clockwise),
+/// meets the common tangents that join each circle to the next: per circle, the point where the
+/// line from the previous circle arrives, then where the line to the next one leaves. A circle
+/// of positive radius is a tip (the outline turns round it counter-clockwise, its centre
+/// inside); of negative radius a fillet (clockwise, its centre outside). `Invalid` where two
+/// circles have no such tangent (one inside the other's reach).
+pub fn tangent_chain(op: &'static str, circles: &[(Point2, f64)]) -> Result<Vec<(Point2, Point2)>> {
+    let n = circles.len();
+    if n < 2 || circles.iter().any(|&(_, r)| !r.is_finite() || r == 0.0) {
+        return Err(Error::invalid(op, "circles", "a tangent chain needs two circles or more, each of non-zero radius"));
+    }
+    // The tangent from circle i to the next: its left normal m solves (c₂ − c₁)·m = r₂ − r₁, and
+    // the line runs forward along the centres; it touches circle k at c_k − r_k m.
+    let mut legs = Vec::with_capacity(n);
+    for (i, (&(c1, r1), &(c2, r2))) in circles.iter().zip(circles.iter().cycle().skip(1)).enumerate() {
+        let (dx, dy) = (c2.x - c1.x, c2.y - c1.y);
+        let len = dx.hypot(dy);
+        let a = if len > 0.0 { (r2 - r1) / len } else { f64::INFINITY };
+        if a.is_nan() || a.abs() >= 1.0 {
+            return Err(Error::invalid(op, "circles", format!("circles {i} and {} have no common tangent between them", (i + 1) % n)));
+        }
+        let b = (1.0 - a * a).sqrt();
+        let (ux, uy) = (dx / len, dy / len);
+        let (mx, my) = (a * ux - b * uy, a * uy + b * ux);
+        legs.push((Point2::new(c1.x - r1 * mx, c1.y - r1 * my), Point2::new(c2.x - r2 * mx, c2.y - r2 * my)));
+    }
+    Ok(legs.iter().zip(legs.iter().cycle().skip(n - 1)).map(|(leave, arrive)| (arrive.1, leave.0)).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

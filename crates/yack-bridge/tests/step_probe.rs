@@ -96,3 +96,41 @@ fn ring_hole_step_ladder_path_native_seam() {
     let b = (**k.get(cut).unwrap()).clone();
     std::fs::write(format!("{OUT}/ring3-probe.txt"), format!("edges {} x {:?}", b.edges().len(), cf.x)).unwrap();
 }
+
+/// Timing (scratchpad, never failing): the STEP backstop's re-read of bench fine-thread's file
+/// (written by the ladder12 binary), by springrep's reader and by cadrs's.
+#[test]
+#[allow(clippy::disallowed_methods)] // a timing probe, test only
+fn time_the_backstop_re_reads() {
+    use std::time::Instant;
+    let Ok(text) = std::fs::read_to_string(format!("{OUT}/stepperf/ft.step")) else { return };
+    let mut lines = Vec::new();
+    let t = Instant::now();
+    let s = yack_springrep::facade::exchange::check_written(&text, 1.0, 1.0);
+    lines.push(format!("springrep re-read: {:.1} s, {:?}", t.elapsed().as_secs_f64(), s.map_err(|e| e.chars().take(120).collect::<String>())));
+    let t = Instant::now();
+    let c = yack_bridge::check_written_cadrs(&text, 1.0, 1.0);
+    lines.push(format!("cadrs re-read: {:.1} s, {:?}", t.elapsed().as_secs_f64(), c.map_err(|e| e.chars().take(120).collect::<String>())));
+    std::fs::write(format!("{OUT}/stepperf/times.txt"), lines.join("\n")).unwrap();
+}
+
+/// The cheap backstop must still catch the ring-pushed fault: cadrs's re-read of the bad file the
+/// ladder once wrote (the harness reads 1930.17 from it; the solid is 1907.0021203, 1164.5686686)
+/// must refuse it, and its re-read of the good one must accept it. Timed.
+#[test]
+#[allow(clippy::disallowed_methods)] // a timing probe, test only
+fn the_cadrs_re_read_catches_the_ring_pushed_fault() {
+    use std::time::Instant;
+    let (v, a) = (1907.0021203274207, 1164.568668645316);
+    let mut lines = Vec::new();
+    for name in ["ring.step", "ring2-springrep.step", "ring-springrep.step"] {
+        let Ok(text) = std::fs::read_to_string(format!("{OUT}/{name}")) else { continue };
+        let t = Instant::now();
+        let r = yack_bridge::check_written_cadrs(&text, v, a);
+        lines.push(format!("{name}: cadrs {:.2} s, {:?}", t.elapsed().as_secs_f64(), r.map_err(|e| e.chars().take(140).collect::<String>())));
+        let t = Instant::now();
+        let r = yack_springrep::facade::exchange::check_written(&text, v, a);
+        lines.push(format!("{name}: springrep {:.2} s, {:?}", t.elapsed().as_secs_f64(), r.map_err(|e| e.chars().take(140).collect::<String>())));
+    }
+    std::fs::write(format!("{OUT}/stepperf/ring-catch.txt"), lines.join("\n")).unwrap();
+}

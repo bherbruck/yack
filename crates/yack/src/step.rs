@@ -13,7 +13,24 @@ type Writer<'a> = (&'static str, &'a dyn Fn() -> Result<String>);
 /// way; a file neither writes faithfully is refused (Failed), never returned.
 pub fn write(s: &Solid) -> Result<String> {
     let op = "step::write";
-    let b = s.brep().ok_or_else(|| Error::invalid(op, "s", "the solid is empty"))?;
+    if s.is_empty() {
+        return Err(Error::invalid(op, "s", "the solid is empty"));
+    }
+    if s.held().is_some() {
+        // held in cadrs form: cadrs writes it; cadrs's reader checks it, springrep's if not
+        let (v, a) = (s.volume(), s.area());
+        return firewall::run(op, || {
+            ladder::allowed(op, "cadrs")?;
+            let text = engine_cadrs::write_step(op, s)?;
+            match yack_bridge::check_written_cadrs(&text, v, a) {
+                Ok(_) => Ok(text),
+                Err(first) => sr::check_written(&text, v, a)
+                    .map(|_| text)
+                    .map_err(|second| Error::failed(op, Stage::Check, format!("cadrs: {first}; springrep: {second}"))),
+            }
+        });
+    }
+    let b = s.need(op)?;
     let springrep = || sr::write_step(b).map_err(|e| engine::error(op, e));
     let cadrs = || engine_cadrs::write_step(op, s);
     let writers: [Writer; 2] =
@@ -26,9 +43,18 @@ pub fn write(s: &Solid) -> Result<String> {
 fn written(op: &'static str, volume: f64, area: f64, writers: &[Writer]) -> Result<String> {
     let mut why = Vec::new();
     for &(name, w) in writers {
+        // a cadrs file is read back by both engines' readers (springrep's alone can share the
+        // bridge's reading of it); springrep's by its own
+        let read = |text: &str| -> core::result::Result<(), String> {
+            sr::check_written(text, volume, area)?;
+            if name == "cadrs" {
+                yack_bridge::check_written_cadrs(text, volume, area)?;
+            }
+            Ok(())
+        };
         let checked = ladder::allowed(op, name)
             .and_then(|()| w())
-            .and_then(|text| sr::check_written(&text, volume, area).map(|_| text).map_err(|e| Error::failed(op, Stage::Check, e)));
+            .and_then(|text| read(&text).map(|()| text).map_err(|e| Error::failed(op, Stage::Check, e)));
         match checked {
             Ok(text) => return Ok(text),
             Err(e) => why.push(format!("{name}: {e}")),

@@ -49,6 +49,16 @@ pub fn per_turn_of(per_radian: f64) -> f64 {
     per_radian * core::f64::consts::TAU
 }
 
+/// How far `got` is from `want`, relative to `want` (to 1 where `want` is smaller).
+pub fn relative_gap(got: f64, want: f64) -> f64 {
+    (got - want).abs() / want.abs().max(1.0)
+}
+
+/// An angle in radians as whole turns.
+pub fn turns_of(radians: f64) -> f64 {
+    radians / core::f64::consts::TAU
+}
+
 /// A rise per whole turn as the rise per radian.
 pub fn per_radian_of(per_turn: f64) -> f64 {
     per_turn / core::f64::consts::TAU

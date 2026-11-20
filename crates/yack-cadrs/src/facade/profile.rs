@@ -291,6 +291,50 @@ pub enum GluePatch<'a> {
         #[allow(missing_docs)]
         boundary: &'a [Spline<'a>],
     },
+    /// The face cadrs's fill makes on a closed chain of curves, each lying in a plane of its own
+    /// (a surface through all of them, flat where they all lie in one plane): a Coons-like
+    /// patch on four parabolas, a cap of a rim.
+    Fill {
+        #[allow(missing_docs)]
+        boundary: &'a [Spline<'a>],
+    },
+}
+
+/// `c` as a sketch curve on a plane holding it (one through it and its chord's sideways
+/// direction when it is a straight line).
+pub(crate) fn spline_sketch(c: &Spline) -> Result<(Plane, Curve2)> {
+    let (Some(&first), Some(&last)) = (c.ctrl.first(), c.ctrl.last()) else {
+        return Err(bad("a boundary curve with no control points"));
+    };
+    let o = v3(first);
+    let chord = v3(last) - o;
+    let far = c.ctrl.iter().map(|&p| v3(p) - o).max_by(|a, b| a.norm().total_cmp(&b.norm())).unwrap_or(chord);
+    let x = Unit::try_new(far, 0.0).ok_or_else(|| bad("a boundary curve is a point"))?.into_inner();
+    let n = match crate::yack_glue::plane_normal(c.ctrl, crate::native::tol::REL) {
+        Some(n) => v3(n),
+        None => {
+            // Collinear (a straight boundary): any plane through it.
+            if c.ctrl.iter().any(|&p| (v3(p) - o).cross(&x).norm() > crate::native::tol::POINT) {
+                return Err(bad("a boundary curve does not lie in a plane"));
+            }
+            let side = if x.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+            x.cross(&side).normalize()
+        }
+    };
+    let y = n.cross(&x);
+    let plane = Plane::new(Point3::from(o), x, n);
+    let to2 = |p: [f64; 3]| {
+        let d = v3(p) - o;
+        Point2::new(d.dot(&x), d.dot(&y))
+    };
+    let curve = Curve2::Spline {
+        degree: c.degree,
+        knots: c.knots.to_vec(),
+        poles: c.ctrl.iter().map(|&p| to2(p)).collect(),
+        weights: c.weights.map(<[f64]>::to_vec).unwrap_or_default(),
+        source: None,
+    };
+    Ok((plane, curve))
 }
 
 /// The solid the `patches` close, sewn where their edges meet (cadrs's B-spline face, fill and
@@ -343,6 +387,10 @@ pub fn sewn(k: &mut DefaultKernel, patches: &[GluePatch]) -> Result<Made> {
                         })
                         .collect();
                     k.fill(&crate::FillSpec { curves, source: 0 })?.first()?
+                }
+                GluePatch::Fill { boundary } => {
+                    let curves = boundary.iter().map(spline_sketch).collect::<Result<Vec<_>>>()?;
+                    k.fill(&crate::FillSpec::sketched(&curves))?.first()?
                 }
             };
             sheets.push(sheet);
@@ -402,11 +450,30 @@ fn drafted_half(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], height: 
     Ok((r.first()?, r.history))
 }
 
+/// `loops` with each loop that is one whole circle's arc split into two halves at its start.
+fn circles_halved<'a>(loops: &[&[Seg<'a>]]) -> Vec<Vec<Seg<'a>>> {
+    loops
+        .iter()
+        .map(|l| match *l {
+            [Seg::Arc { center, radius, start, sweep }] if sweep.abs() >= std::f64::consts::TAU => {
+                let (center, radius, start, h) = (*center, *radius, *start, *sweep / 2.0);
+                vec![Seg::Arc { center, radius, start, sweep: h }, Seg::Arc { center, radius, start: start + h, sweep: h }]
+            }
+            _ => l.to_vec(),
+        })
+        .collect()
+}
+
 /// The solid ruled (lofted straight) from the profile in `bottom`'s xy plane to the one in
 /// `top`'s: each section in its own frame, so a top frame turned about the axis twists the
 /// rulings (cadrs's loft of two sections, as cadrs's runner rules geometry/hyperboloid-ruled).
 pub fn ruled(k: &mut DefaultKernel, bottom: &Place, bottom_loops: &[&[Seg]], top: &Place, top_loops: &[&[Seg]]) -> Result<Made> {
-    let spec = LoftSpec::through(vec![profile(xy_plane(bottom), bottom_loops)?, profile(xy_plane(top), top_loops)?]);
+    // A whole circle drawn as one arc has no vertex to rule from: cadrs's loft then pairs its
+    // two circles by where they lie, not by their frames' x. Halved at its start (each frame's
+    // local angle of the arc's start), the rulings run from start to start.
+    let (b, t) = (circles_halved(bottom_loops), circles_halved(top_loops));
+    let (b, t): (Vec<&[Seg]>, Vec<&[Seg]>) = (b.iter().map(Vec::as_slice).collect(), t.iter().map(Vec::as_slice).collect());
+    let spec = LoftSpec::through(vec![profile(xy_plane(bottom), &b)?, profile(xy_plane(top), &t)?]);
     let r = k.loft_with(&spec)?;
     Ok((r.first()?, r.history))
 }
@@ -1005,6 +1072,11 @@ mod tests {
         let (h, _) = ruled(&mut k, &lower, &[&rim], &upper, &[&rim]).unwrap();
         let v = k.mass_properties(h).unwrap().volume;
         assert!((v - 523.5987755982987).abs() < 1e-6 * v, "{v}");
+        // Drawn as one whole arc (as the facade's Profile::circle): the same.
+        let one = [Seg::Arc { center: [0.0, 0.0], radius: 5.0, start: 0.0, sweep: std::f64::consts::TAU }];
+        let (h, _) = ruled(&mut k, &lower, &[&one], &upper, &[&one]).unwrap();
+        let v = k.mass_properties(h).unwrap().volume;
+        assert!((v - 523.5987755982987).abs() < 1e-6 * v, "{v}");
         // brep-bench fill/coons-patch-of-four-parabolas: 1000 (cadrs's runner).
         let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let arcs = [
@@ -1121,6 +1193,39 @@ mod tests {
         let (f, _) = sweep_mitered_closed(&mut k, &at, &[&segs], &corners).unwrap();
         let v = k.mass_properties(f).unwrap().volume;
         assert!((v - 9864.0).abs() < 1e-6 * v, "{v}");
+    }
+
+    #[test]
+    fn the_coons_solid_sewn_from_fill_patches() {
+        // fill/coons-patch-of-four-parabolas as make::sewn would build it: the patch on its four
+        // parabolas, four walls under them and the floor, each a Fill of its boundary: 1000.
+        let mut k = DefaultKernel::new();
+        let q = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let l = [0.0, 0.0, 1.0, 1.0];
+        let arcs = [
+            [[0.0, 0.0, 10.0], [5.0, 0.0, 14.0], [10.0, 0.0, 10.0]],
+            [[10.0, 0.0, 10.0], [10.0, 5.0, 6.0], [10.0, 10.0, 10.0]],
+            [[10.0, 10.0, 10.0], [5.0, 10.0, 6.0], [0.0, 10.0, 10.0]],
+            [[0.0, 10.0, 10.0], [0.0, 5.0, 14.0], [0.0, 0.0, 10.0]],
+        ];
+        let drop = |p: [f64; 3]| [p[0], p[1], 0.0];
+        let lines: Vec<[[f64; 3]; 2]> = arcs.iter().flat_map(|a| [[a[2], drop(a[2])], [drop(a[2]), drop(a[0])], [drop(a[0]), a[0]]]).collect();
+        let floor: Vec<[[f64; 3]; 2]> = arcs.iter().map(|a| [drop(a[0]), drop(a[2])]).collect();
+        let top: Vec<Spline> = arcs.iter().map(|c| Spline { degree: 2, knots: &q, ctrl: c, weights: None }).collect();
+        let walls: Vec<Vec<Spline>> = (0..4)
+            .map(|i| {
+                let mut w = vec![top[i]];
+                w.extend(lines[3 * i..3 * i + 3].iter().map(|c| Spline { degree: 1, knots: &l, ctrl: c, weights: None }));
+                w
+            })
+            .collect();
+        let floor: Vec<Spline> = floor.iter().map(|c| Spline { degree: 1, knots: &l, ctrl: c, weights: None }).collect();
+        let mut patches = vec![GluePatch::Fill { boundary: &top }];
+        patches.extend(walls.iter().map(|w| GluePatch::Fill { boundary: w }));
+        patches.push(GluePatch::Fill { boundary: &floor });
+        let (c, _) = sewn(&mut k, &patches).unwrap();
+        let v = k.mass_properties(c).unwrap().volume;
+        assert!((v - 1000.0).abs() < 1e-6 * v, "{v}");
     }
 
     #[test]

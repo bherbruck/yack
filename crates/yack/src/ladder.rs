@@ -6,6 +6,9 @@
 // and a cadrs result is carried back only through the bridge, which checks it). When every rung
 // declined: Unsupported if all were, else Failed with every rung's reason.
 //
+// An empty result is tentative: the later rungs still run, and a non-empty solid from any of
+// them is the answer (springrep's intersection once lost a paraboloid's tip and said "empty").
+//
 // Soft guards (a springrep result doubted on inputs it mostly gets right) only redirect: a doubted
 // result is held and returned if every later rung fails or panics; they never turn a springrep
 // answer into a refusal or a crash. Hard guards are only for input classes where brep-bench
@@ -21,7 +24,7 @@ pub(crate) struct Rung<'a> {
 /// Ops cadrs runs first until the bake-off (doc/donors.md) orders them; springrep first elsewhere.
 /// (chamfer went back to springrep first: cadrs-first lost 77 chamfer-prism conformance cases.)
 const CADRS_FIRST: &[&str] =
-    &["swept", "delete_faces", "move_faces", "offset_faces", "shell", "shell_outward", "thicken", "draft", "fillet_variable"];
+    &["swept", "delete_faces", "move_faces", "offset_faces", "shell", "shell_outward", "thicken", "draft", "fillet_variable", "project"];
 
 
 /// Whether cadrs leads `op`'s ladder.
@@ -71,6 +74,9 @@ fn faceted(op: &'static str) -> Error {
 pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
     let mut declined: Vec<(&'static str, Error)> = Vec::new();
     let mut held: Option<Solid> = None;
+    // An empty answer is tentative: a later rung's non-empty solid wins over it (an engine can
+    // lose a whole result and say "empty"); empty is the answer only if no rung builds more.
+    let mut empty: Option<Solid> = None;
     for rung in rungs {
         #[cfg(feature = "bakeoff")]
         if !crate::bakeoff::allows(rung.name) {
@@ -79,11 +85,16 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
         }
         match crate::firewall::run(op, rung.run) {
             Ok(s) if !s.is_exact() => declined.push((rung.name, faceted(op))),
+            Ok(s) if s.is_empty() => {
+                if empty.is_none() {
+                    empty = Some(s);
+                }
+            }
             Ok(s) if s.suspected().is_some() && held.is_none() => held = Some(s.with_strategy(rung.name)),
             Ok(s) if s.suspected().is_some() => {}
             Ok(s) => return Ok(s.with_strategy(rung.name)),
             Err(e) if is_final(&e) => {
-                return match held {
+                return match held.or(empty) {
                     Some(h) => Ok(h.trusted()),
                     None => Err(e),
                 };
@@ -91,7 +102,7 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
             Err(e) => declined.push((rung.name, e)),
         }
     }
-    if let Some(h) = held {
+    if let Some(h) = held.or(empty) {
         return Ok(h.trusted());
     }
     if let [(_, only)] = declined.as_slice() {
@@ -115,6 +126,29 @@ pub(crate) fn springrep_only(op: &'static str, run: impl Fn() -> Result<Solid>) 
     crate::firewall::run(op, || ladder(op, &[Rung { name: "springrep", run: &run }]))
 }
 
+/// A rung of [`first`]: the engine's name and its run.
+pub(crate) type Run<'a, T> = (&'static str, &'a dyn Fn() -> Result<T>);
+
+/// The ladder for an op whose answer is not one solid (a drawing): the first rung that answers
+/// wins, each behind its own firewall and the bake-off switch; `Invalid` and the other final
+/// refusals end it; else every rung's reason.
+pub(crate) fn first<T>(op: &'static str, rungs: &[Run<T>]) -> Result<T> {
+    let mut declined: Vec<(&'static str, Error)> = Vec::new();
+    for &(name, run) in rungs {
+        match allowed(op, name).and_then(|()| crate::firewall::run(op, run)) {
+            Ok(t) => return Ok(t),
+            Err(e) if is_final(&e) => return Err(e),
+            Err(e) => declined.push((name, e)),
+        }
+    }
+    if let [(_, only)] = declined.as_slice() {
+        return Err(only.clone());
+    }
+    let detail = declined.iter().map(|(n, e)| format!("{n}: {e}")).collect::<Vec<_>>().join("; ");
+    let kind = if declined.iter().all(|(_, e)| e.kind == ErrorKind::Unsupported) { ErrorKind::Unsupported } else { ErrorKind::Failed };
+    Err(Error { kind, op, arg: None, stage: None, detail })
+}
+
 /// Whether the engine `name` may run (always, unless the bake-off forced another): for ops whose
 /// result is not one solid.
 pub(crate) fn allowed(op: &'static str, name: &'static str) -> Result<()> {
@@ -133,6 +167,18 @@ mod tests {
 
     fn cube(size: f64) -> Result<Solid> {
         crate::make::block(&crate::Frame::WORLD, [size, size, size])
+    }
+
+    #[test]
+    fn an_empty_answer_is_tentative() {
+        let empty = || Ok(Solid::empty());
+        let cube = || cube(1.0);
+        let none = || Err(Error::new(ErrorKind::Unsupported, "op", "no"));
+        let s = ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &cube }]).unwrap();
+        assert!(!s.is_empty() && s.strategy() == "cadrs");
+        assert!(ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &empty }]).unwrap().is_empty());
+        assert!(ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &none }]).unwrap().is_empty());
+        assert!(two("intersection", &empty, &cube).is_ok_and(|s| !s.is_empty()));
     }
 
     #[test]

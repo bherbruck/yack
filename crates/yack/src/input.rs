@@ -317,6 +317,33 @@ impl Pen {
 }
 
 impl Profile {
+    /// The outline round a chain of circles, taken in order counter-clockwise, each joined to the
+    /// next by their common tangent. A positive radius is a tip: the outline wraps round that
+    /// circle's outside, bulging out (a star's point). A negative radius is a fillet: the outline
+    /// runs round the inside of the circle, curving in between two tips (a star's notch). So
+    /// tips at the four compass points with fillets on the diagonals between them make a
+    /// four-pointed star whose sides are straight lines tangent to both.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let star = Profile::tangent_chain(&[([30.0, 0.0].into(), 4.0), ([10.0, 10.0].into(), -3.0), ([0.0, 30.0].into(), 4.0),
+    ///     ([-10.0, 10.0].into(), -3.0), ([-30.0, 0.0].into(), 4.0), ([-10.0, -10.0].into(), -3.0), ([0.0, -30.0].into(), 4.0),
+    ///     ([10.0, -10.0].into(), -3.0)])?;
+    /// assert_eq!(star.outer().segments().len(), 16);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Profile> {
+        let op = "Profile::tangent_chain";
+        let ends = yack_math::planar::tangent_chain(op, circles)?;
+        let Some(&(_, start)) = ends.first() else { return Err(Error::invalid(op, "circles", "no circles")) };
+        let mut pen = Loop::starting_at(start);
+        for ((c, r), (arrive, leave)) in circles.iter().zip(&ends).skip(1).chain(circles.iter().zip(&ends).take(1)) {
+            pen = pen.line_to(*arrive);
+            pen = if *r > 0.0 { pen.arc_ccw_to(*leave, *c) } else { pen.arc_cw_to(*leave, *c) };
+        }
+        Profile::new(pen.close()?, Vec::new())
+    }
+
     /// A profile from an outer loop and holes. The outer loop must run counter-clockwise and the
     /// holes clockwise, strictly inside it and apart from each other; anything else is refused,
     /// never repaired.
@@ -582,4 +609,57 @@ pub enum Patch {
         /// The boundary curves.
         boundary: Vec<Spline3>,
     },
+    /// The face cadrs's fill makes on a closed chain of curves laid end to end, each in a plane of
+    /// its own: flat when they share one, a Coons-like blend of them otherwise.
+    Fill {
+        /// The boundary curves.
+        boundary: Vec<Spline3>,
+    },
+    /// A clamped B-spline (NURBS with `weights`) patch: `ctrl` rows along u, `degree` and `knots`
+    /// for u then v; each knot vector holds its row or column count + degree + 1 knots.
+    Bspline {
+        /// Degree along u, then v.
+        degree: [u32; 2],
+        /// Knots along u, then v.
+        knots: [Vec<f64>; 2],
+        /// The control net.
+        ctrl: Vec<Vec<Point3>>,
+        /// One weight per control point (rational), or none.
+        weights: Option<Vec<Vec<f64>>>,
+    },
+}
+
+/// A patch's net as cadrs takes it: degree (u, v), knots (u, v), poles, weights; `Invalid` for a
+/// malformed net, and for a planar fill (not a net).
+#[allow(clippy::type_complexity)]
+pub(crate) fn patch_net(op: &'static str, p: &Patch) -> Result<([u32; 2], [Vec<f64>; 2], Vec<Vec<[f64; 3]>>, Option<Vec<Vec<f64>>>)> {
+    let rows = |ctrl: &[Vec<Point3>]| -> Result<(usize, usize)> {
+        let n = ctrl.first().map_or(0, Vec::len);
+        if ctrl.len() < 2 || n < 2 || ctrl.iter().any(|r| r.len() != n) {
+            return Err(Error::invalid(op, "patch", "a net needs two rows or more, each of one length, two points or more"));
+        }
+        Ok((ctrl.len(), n))
+    };
+    let poles = |ctrl: &[Vec<Point3>]| ctrl.iter().map(|r| r.iter().map(|q| q.to_array()).collect()).collect();
+    match p {
+        Patch::Bezier { ctrl } => {
+            let (m, n) = rows(ctrl)?;
+            let du = u32::try_from(m - 1).unwrap_or(u32::MAX);
+            let dv = u32::try_from(n - 1).unwrap_or(u32::MAX);
+            let clamped = |k: usize| core::iter::repeat_n(0.0, k).chain(core::iter::repeat_n(1.0, k)).collect::<Vec<f64>>();
+            Ok(([du, dv], [clamped(m), clamped(n)], poles(ctrl), None))
+        }
+        Patch::Bspline { degree, knots, ctrl, weights } => {
+            let (m, n) = rows(ctrl)?;
+            knots_ok(op, degree[0], &knots[0], m, true)?;
+            knots_ok(op, degree[1], &knots[1], n, true)?;
+            if let Some(w) = weights
+                && (w.len() != m || w.iter().any(|r| r.len() != n || r.iter().any(|&x| x.is_nan() || x <= 0.0)))
+            {
+                return Err(Error::invalid(op, "weights", "one positive weight per control point"));
+            }
+            Ok((*degree, knots.clone(), poles(ctrl), weights.clone()))
+        }
+        Patch::PlanarFill { .. } | Patch::Fill { .. } => Err(Error::invalid(op, "patch", "a fill is not a surface net")),
+    }
 }

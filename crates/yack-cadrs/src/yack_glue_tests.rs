@@ -446,6 +446,47 @@ fn hidden_lines_of_a_ball_and_a_box() {
 }
 
 #[test]
+fn a_ring_lying_flat_turned_whole() {
+    // brep-bench swept/ring-lying-flat-turned-whole: the torus (8, 0) R 3 r 1, axis upright,
+    // turned a whole turn about z: 2πD(4rR + πr²) = 761.0994599066700 (Pappus). Its axis is
+    // parallel to the turn's: swung, not cadrs's endless turn (which answers 217.13 there).
+    let mut k = DefaultKernel::new();
+    let (ring, _) = torus(&mut k, [8.0, 0.0, 0.0], [0.0, 0.0, 1.0], 3.0, 1.0).unwrap();
+    let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: std::f64::consts::TAU };
+    let (s, _) = swept(&mut k, ring, &m).unwrap();
+    let v = k.mass_properties(s).unwrap().volume;
+    assert!((v - 761.09945990667004).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn exact_puts_the_tolerances_back_on_every_way_out() {
+    let mut k = DefaultKernel::new();
+    let r: Result<()> = exact(&mut k, |_| Err(KernelError::Unsupported("no")));
+    assert!(r.is_err() && !k.tolerances().exact_only);
+}
+
+#[test]
+fn a_block_top_replaced_by_a_fill_of_four_parabolas() {
+    // fill/coons-patch-of-four-parabolas as block(10 × 10 × 10).replace_face(top, Fill { the 4
+    // arcs }): 1000 (cadrs's runner).
+    use crate::facade::profile::Spline;
+    let mut k = DefaultKernel::new();
+    let c = cube(&mut k);
+    let top = k.face_at(c, Point3::new(5.0, 5.0, 10.0)).unwrap().0;
+    let q = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let arcs = [
+        [[0.0, 0.0, 10.0], [5.0, 0.0, 14.0], [10.0, 0.0, 10.0]],
+        [[10.0, 0.0, 10.0], [10.0, 5.0, 6.0], [10.0, 10.0, 10.0]],
+        [[10.0, 10.0, 10.0], [5.0, 10.0, 6.0], [0.0, 10.0, 10.0]],
+        [[0.0, 10.0, 10.0], [0.0, 5.0, 14.0], [0.0, 0.0, 10.0]],
+    ];
+    let b: Vec<Spline> = arcs.iter().map(|a| Spline { degree: 2, knots: &q, ctrl: a, weights: None }).collect();
+    let (r, _) = replace_face_fill(&mut k, c, top, &b).unwrap();
+    let v = k.mass_properties(r).unwrap().volume;
+    assert!((v - 1000.0).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
 fn a_split_sorts_its_sides() {
     let mut k = DefaultKernel::new();
     let b = cube(&mut k);

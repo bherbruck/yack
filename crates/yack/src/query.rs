@@ -2,10 +2,10 @@
 // take a tolerance or build geometry.
 use yack_springrep::{check, distance, draw, measure, mesh, overlap, rays};
 
-use crate::{engine, firewall};
+use crate::{engine, engine_cadrs, firewall, ladder};
 use crate::solid::Body;
 use crate::{
-    Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
+    Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point2, Point3, Ray, Result, Side, Solid, Vec3,
 };
 
 fn pts<P: Into<Point3> + Copy>(pts: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
@@ -15,26 +15,41 @@ fn pts<P: Into<Point3> + Copy>(pts: &[P]) -> impl Iterator<Item = yack_springrep
 impl Solid {
     /// The volume (mm³).
     pub fn volume(&self) -> f64 {
-        self.brep().map_or(0.0, measure::volume)
+        match self.held() {
+            Some(h) => engine_cadrs::held_mass(h).map_or(f64::NAN, |m| m.0),
+            None => self.brep().map_or(0.0, measure::volume),
+        }
     }
 
     /// The surface area (mm²).
     pub fn area(&self) -> f64 {
-        self.brep().map_or(0.0, measure::area)
+        match self.held() {
+            Some(h) => engine_cadrs::held_mass(h).map_or(f64::NAN, |m| m.1),
+            None => self.brep().map_or(0.0, measure::area),
+        }
     }
 
     /// The volume centroid; `None` for the empty solid.
     pub fn centroid(&self) -> Option<Point3> {
-        self.brep().map(|b| engine::point(measure::mass_properties(b).centre))
+        match self.held() {
+            Some(h) => engine_cadrs::held_mass(h).map(|m| Point3::from(m.2)),
+            None => self.brep().map(|b| engine::point(measure::mass_properties(b).centre)),
+        }
     }
 
     /// The inertia tensor about the centroid, unit density (mm⁵).
     pub fn inertia(&self) -> [[f64; 3]; 3] {
-        self.brep().map_or([[0.0; 3]; 3], |b| measure::mass_properties(b).inertia)
+        match self.held() {
+            Some(h) => engine_cadrs::held_mass(h).map_or([[f64::NAN; 3]; 3], |m| m.3),
+            None => self.brep().map_or([[0.0; 3]; 3], |b| measure::mass_properties(b).inertia),
+        }
     }
 
     /// The bounding box; `None` for the empty solid.
     pub fn bounding_box(&self) -> Option<Aabb> {
+        if let Some(h) = self.held() {
+            return engine_cadrs::held_bbox(h).map(|(lo, hi)| Aabb::new(Point3::from(lo), Point3::from(hi)));
+        }
         self.brep().map(|b| {
             let bb = measure::bbox(b);
             Aabb::new(engine::point(bb.min), engine::point(bb.max))
@@ -43,11 +58,17 @@ impl Solid {
 
     /// Betti numbers: pieces, tunnels, voids.
     pub fn betti(&self) -> [u64; 3] {
-        self.brep().map_or([0; 3], measure::betti)
+        match self.held() {
+            Some(h) => engine_cadrs::held_betti(h),
+            None => self.brep().map_or([0; 3], measure::betti),
+        }
     }
 
     /// Validity problems; empty for anything yack built.
     pub fn check(&self) -> Vec<Issue> {
+        if let Some(h) = self.held() {
+            return engine_cadrs::held_check(h).into_iter().map(|detail| Issue { code: "cadrs", detail }).collect();
+        }
         self.brep().map_or_else(Vec::new, |b| {
             check::check(b).into_iter().map(|i| Issue { code: "springrep", detail: i.message }).collect()
         })
@@ -164,14 +185,26 @@ impl Solid {
 
     /// The visible and hidden edges looking along `direction`, in the protocol's view axes.
     pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> {
+        let op = "project";
         let d = direction.into();
         let (u, v) = yack_math::view_axes(d)?;
-        let Some(b) = self.form("project")? else { return Ok(Drawing::default()) };
-        let drawn = draw::hidden_lines(b, engine::v3(d), chord).map_err(|e| engine::error("project", e))?;
-        let flat = |lines: Vec<Vec<yack_springrep::math::Vec3>>| {
-            lines.into_iter().map(|l| l.into_iter().map(|p| yack_math::view_point(engine::point(p), u, v)).collect()).collect()
+        if self.is_empty() {
+            return Ok(Drawing::default());
+        }
+        let springrep = || -> Result<Drawing> {
+            let drawn = draw::hidden_lines(self.need(op)?, engine::v3(d), chord).map_err(|e| engine::error(op, e))?;
+            let flat = |lines: Vec<Vec<yack_springrep::math::Vec3>>| {
+                lines.into_iter().map(|l| l.into_iter().map(|p| yack_math::view_point(engine::point(p), u, v)).collect()).collect()
+            };
+            Ok(Drawing { visible: flat(drawn.visible), hidden: flat(drawn.hidden) })
         };
-        Ok(Drawing { visible: flat(drawn.visible), hidden: flat(drawn.hidden) })
+        let cadrs = || -> Result<Drawing> {
+            let (visible, hidden) = engine_cadrs::hidden_lines(op, self, d.to_array(), u.vec().to_array(), chord)?;
+            let flat = |lines: Vec<Vec<[f64; 2]>>| lines.into_iter().map(|l| l.into_iter().map(Point2::from).collect()).collect();
+            Ok(Drawing { visible: flat(visible), hidden: flat(hidden) })
+        };
+        let (s, c): (ladder::Run<Drawing>, ladder::Run<Drawing>) = (("springrep", &springrep), ("cadrs", &cadrs));
+        if ladder::cadrs_first(op) { ladder::first(op, &[c, s]) } else { ladder::first(op, &[s, c]) }
     }
 
     /// For each ray, the sorted distances at which it crosses the boundary.
@@ -200,7 +233,7 @@ impl Solid {
     pub fn display(&self, chord: f64) -> Result<Display> {
         let b = match self.body() {
             Body::Empty => return Ok(Display::default()),
-            Body::Springrep(b) => b,
+            _ => self.need("display")?,
         };
         let d = mesh::display::display_within(b, chord, chord).map_err(|e| engine::error("display", e))?;
         let wide = |p: [f32; 3]| p.map(f64::from);

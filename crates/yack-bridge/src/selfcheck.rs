@@ -14,11 +14,22 @@ use crate::{Error, Result};
 /// Grid points per axis over the body's box.
 const GRID: usize = 4;
 
-/// How far off a face, as a fraction of the box's diagonal, its two probe points lie.
-const OFF_FACE: f64 = 1e-3; // tol: a probe's step off a face, well past both engines' tolerances
+/// How far off a face, as a fraction of the box's smallest side, its two probe points lie: a thin
+/// solid (bench tangent/paraboloid-tip-a-ten-thousandth-high, 1e-4 high) must keep its probes beside
+/// the face, not past the far side, where a step scaled by the diagonal put them.
+const OFF_FACE: f64 = 1e-2; // tol: a fraction of the smallest side, not a length
+
+/// The least probe step, in mm: well past both engines' tolerances.
+const LEAST_STEP: f64 = 1e-6; // tol: ten times the linear tolerance
 
 /// How far a face's probe point is drawn from its loop's first coedge toward the loop's middle.
 const INTO_FACE: f64 = 0.1; // tol: a fraction of the way into the face, not a length
+
+/// Half the probe step: how near the boundary a probe may lie and still be asked.
+fn near_boundary(body: &Body) -> f64 {
+    let d = body.bbox().max - body.bbox().min;
+    0.5 * (OFF_FACE * d.x.min(d.y).min(d.z).max(0.0)).max(LEAST_STEP)
+}
 
 /// The points both engines classify: a grid over the box grown by a tenth, nudged off symmetry
 /// planes, and two points just off each face (outside and inside along its normal).
@@ -26,7 +37,8 @@ fn probes(body: &Body) -> Vec<P3> {
     let bb = body.bbox();
     let (lo, hi) = (bb.min, bb.max);
     let d = hi - lo;
-    let diag = d.norm();
+    let side = d.x.min(d.y).min(d.z).max(0.0);
+    let step_len = (OFF_FACE * side).max(LEAST_STEP);
     let grow = d * 0.1;
     let (lo, hi) = (lo - grow, hi + grow);
     let at = |n: usize, a: f64, b: f64| a + (b - a) * (n as f64 + 0.37) / GRID as f64;
@@ -54,7 +66,7 @@ fn probes(body: &Body) -> Vec<P3> {
         if !(len > 0.0) || !p.coords.iter().all(|x| x.is_finite()) {
             continue;
         }
-        let step: V3 = n * (OFF_FACE * diag / len);
+        let step: V3 = n * (step_len / len);
         out.push(p + step);
         out.push(p - step);
     }
@@ -66,7 +78,14 @@ fn probes(body: &Body) -> Vec<P3> {
 pub(crate) fn same_sides(body: &Body, back: &Brep) -> Result<()> {
     let rays = Rays::new(back).map_err(|e| Error::Rejected(vec![format!("no ray caster for the body: {e}")]))?;
     let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(body, f)).collect();
+    // A probe the boundary passes within half a probe step of is not asked: there the two engines'
+    // casters may round either way (a pole, a tip, a tangent strip), and a disagreement says
+    // nothing about the body (bench geometry/lemon, spline/rational-spheroid).
+    let near = near_boundary(body);
     for p in probes(body) {
+        if matches!(classify::classify_point(body, &polys, &p, near), PointClass::OnBoundary) {
+            continue;
+        }
         let c = classify::classify_point(body, &polys, &p, yack_springrep::tol::LINEAR);
         let s = rays.side(Vec3::new(p.x, p.y, p.z));
         let apart = matches!((c, s), (PointClass::Inside, Side::Outside) | (PointClass::Outside, Side::Inside));

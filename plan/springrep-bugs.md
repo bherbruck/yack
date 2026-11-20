@@ -42,3 +42,19 @@ takes over the code, with the repro as its regression test.
   (cadrs-built solids stay in cadrs form until a springrep op needs them).
 - **For M3.** Give `yack-topo`'s `PCurve` the PLAN's third kind, `Curve2` (a 2-D B-spline by the
   edge's t), and use it wherever a pcurve is known rather than projected.
+
+## B3. `boolean::intersection` loses a tiny overlap and returns no solid (owner: M3 `yack-boolean`)
+
+- **Repro.** brep-bench `tangent/paraboloid-tip-a-ten-thousandth-high`. The paraboloid x² + y² = 8z
+  (revolved from its vertex to (8, 8)) intersected with the block (−9, −9, −1)-(9, 9, 0.0001):
+  `boolean::intersection(&paraboloid, &block)` returns a Brep with 0 solids (volume −0), and no error.
+  Probe: `crates/yack-bridge/tests/tip_probe.rs`.
+- **Wrong.** The overlap is the paraboloid's tip, 1e-4 high: volume 1.2566e-7, area 5.0266e-3.
+  Returning nothing without an error let the M1.10 ladder hand the empty solid out as the answer
+  (ladder12 WRONG).
+- **Right.** cadrs's intersection gives 1.2566373e-7 / 5.02658e-3, the bench's values.
+- **Related.** springrep's `Rays` cannot classify points on this solid (it is 0.028 mm across, below
+  the 0.01 mm mesh its candidate pass uses), so even cadrs's correct body classifies wrongly in
+  springrep form; see `swarm/done/m3-locate-plan.md` §2.
+- **Found by** w-m11-springrep, 2026-11-20. Guarded meanwhile by the ladder: an empty result is
+  tentative (w-m03).

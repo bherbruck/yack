@@ -208,3 +208,66 @@ fn a_bracket_thickens_sharp_or_round() {
     close(b.thicken(&sheet, 1.0, Join::Sharp).unwrap().volume(), 168.0);
     close(b.thicken(&sheet, 1.0, Join::Round).unwrap().volume(), 160.0 + 2.0 * PI);
 }
+
+/// nurbs/bspline-dome (case header: volume 3081.0055555555555): a 20 × 20 block's top replaced by
+/// a clamped bicubic B-spline with a double knot, its sides re-trimmed to it.
+#[test]
+fn a_block_top_replaced_by_a_bspline() {
+    let xs = [0.0, 3.0, 7.0, 11.0, 16.0, 20.0];
+    let ys = [0.0, 5.0, 10.0, 15.0, 20.0];
+    let z = [[3.0, 5.0, 6.0, 5.0, 4.0], [5.0, 9.0, 11.0, 8.0, 5.0], [6.0, 12.0, 15.0, 10.0, 6.0], [4.0, 10.0, 18.0, 9.0, 5.0], [5.0, 8.0, 9.0, 7.0, 4.0], [2.0, 4.0, 5.0, 4.0, 3.0]];
+    let ctrl = xs.iter().zip(&z).map(|(&x, row)| ys.iter().zip(row).map(|(&y, &h)| Point3::new(x, y, h)).collect()).collect();
+    let knots = [vec![0.0, 0.0, 0.0, 0.0, 0.4, 0.4, 1.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 1.0, 1.0, 1.0, 1.0]];
+    let top = Patch::Bspline { degree: [3, 3], knots, ctrl, weights: None };
+    let b = block(&Frame::WORLD, [20.0, 20.0, 10.0]).unwrap();
+    let s = b.replace_face(b.face_at([10.0, 10.0, 10.0]).unwrap(), &top).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 3081.0055555555555).abs() < 1e-6 * 3081.0, "{}", s.volume());
+    let fill = Patch::PlanarFill { boundary: Vec::new() };
+    assert_eq!(b.replace_face(b.faces()[0], &fill).unwrap_err().kind, ErrorKind::Invalid);
+}
+
+/// fill/coons-patch-of-four-parabolas (case header: volume 1000): four parabolic arcs over the
+/// square [0, 10]² filled, upright walls and a floor, sewn.
+#[test]
+fn a_block_capped_by_a_fill_of_four_parabolas() {
+    let c = |p: &[[f64; 3]]| Spline3::bezier(p).unwrap();
+    let arcs = [
+        c(&[[0.0, 0.0, 10.0], [5.0, 0.0, 14.0], [10.0, 0.0, 10.0]]),
+        c(&[[10.0, 0.0, 10.0], [10.0, 5.0, 6.0], [10.0, 10.0, 10.0]]),
+        c(&[[10.0, 10.0, 10.0], [5.0, 10.0, 6.0], [0.0, 10.0, 10.0]]),
+        c(&[[0.0, 10.0, 10.0], [0.0, 5.0, 14.0], [0.0, 0.0, 10.0]]),
+    ];
+    let corner = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    let mut patches = vec![Patch::Fill { boundary: arcs.to_vec() }];
+    for (i, arc) in arcs.iter().enumerate() {
+        let ([ax, ay], [bx, by]) = (corner[i], corner[(i + 1) % 4]);
+        let down = c(&[[bx, by, 10.0], [bx, by, 0.0]]);
+        let floor = c(&[[bx, by, 0.0], [ax, ay, 0.0]]);
+        let up = c(&[[ax, ay, 0.0], [ax, ay, 10.0]]);
+        patches.push(Patch::PlanarFill { boundary: vec![arc.clone(), down, floor, up] });
+    }
+    let back = [corner[0], corner[3], corner[2], corner[1], corner[0]];
+    let floor = back.windows(2).map(|w| c(&[[w[0][0], w[0][1], 0.0], [w[1][0], w[1][1], 0.0]])).collect();
+    patches.push(Patch::PlanarFill { boundary: floor });
+    let s = sewn(&patches).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 1000.0).abs() < 1e-6 * 1000.0, "{}", s.volume());
+}
+
+/// fill/coons-patch-of-four-parabolas the short way: a 10³ block's top replaced by the fill of
+/// the four arcs (case header: volume 1000).
+#[test]
+fn a_block_top_replaced_by_a_fill() {
+    let c = |p: &[[f64; 3]]| Spline3::bezier(p).unwrap();
+    let arcs = vec![
+        c(&[[0.0, 0.0, 10.0], [5.0, 0.0, 14.0], [10.0, 0.0, 10.0]]),
+        c(&[[10.0, 0.0, 10.0], [10.0, 5.0, 6.0], [10.0, 10.0, 10.0]]),
+        c(&[[10.0, 10.0, 10.0], [5.0, 10.0, 6.0], [0.0, 10.0, 10.0]]),
+        c(&[[0.0, 10.0, 10.0], [0.0, 5.0, 14.0], [0.0, 0.0, 10.0]]),
+    ];
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0]).unwrap();
+    let s = b.replace_face(b.face_at([5.0, 5.0, 10.0]).unwrap(), &Patch::Fill { boundary: arcs }).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 1000.0).abs() < 1e-6 * 1000.0, "{}", s.volume());
+}

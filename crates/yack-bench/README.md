@@ -28,3 +28,10 @@ the limit is 10. Documented exceptions:
 | swept/helicon-face-gear-hobbed-by-its-worm | 15 | data: the worm thread's trapezoidal section |
 | swept/spiroid-face-gear-hobbed-by-its-worm | 17 | data: the tapered thread's section on its pitch cone |
 | integration/utah-teapot | 71 | data: the teapot's 32 Bézier patch control nets |
+| fill/coons-patch-of-four-parabolas | 19 | data: the four arcs and the four side faces' boundary chains for `make::sewn` (shortens to ~5 with `replace_face` taking `Patch::Fill`, requested) |
+
+## Cases refused on purpose
+
+| Case | Why |
+|---|---|
+| integration/benchy | A reference shape: it passes only as the original (1385 trimmed faces) within 2e-5. Copying the reference's faces into the program is forbidden by the case text ("the reference's faces are not taken in as its own") and by AGENTS.md rule 9 (no hand-built geometry). A modelled reconstruction would grade wrong, which ranks below a refusal. So it refuses. |

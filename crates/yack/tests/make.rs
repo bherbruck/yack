@@ -203,3 +203,28 @@ fn a_mitred_picture_frame() {
     assert!((s.volume() - 9864.0).abs() < 1e-6 * 9864.0, "{}", s.volume());
     assert!((s.area() - 6544.0).abs() < 1e-6 * 6544.0, "{}", s.area());
 }
+
+/// geometry/hyperboloid-ruled (case header: volume 523.5987755982989): rims of radius 5 at
+/// z = ±5, the top turned a quarter turn.
+#[test]
+fn a_ruled_hyperboloid() {
+    let rim = Profile::circle([0.0, 0.0], 5.0).unwrap();
+    let bottom = Frame::at([0.0, 0.0, -5.0]);
+    let top = Frame::new([0.0, 0.0, 5.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]).unwrap();
+    let s = ruled(&bottom, &rim, &top, &rim).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 523.5987755982989).abs() < 1e-6 * 523.6, "{}", s.volume());
+}
+
+/// A square drafted 5° inward up 10: a square frustum (h/3)(A + a + √(Aa)); both ways, twice it.
+#[test]
+fn a_drafted_extrude_one_and_both_ways() {
+    let sq = Profile::rectangle([-5.0, -5.0], [5.0, 5.0]).unwrap();
+    let top = 10.0 - 20.0 * 5f64.to_radians().tan();
+    let want = 10.0 / 3.0 * (100.0 + top * top + 10.0 * top);
+    let one = extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), false).unwrap();
+    assert!((one.volume() - want).abs() < 1e-6 * want, "{} vs {want}", one.volume());
+    let both = extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), true).unwrap();
+    assert!((both.volume() - 2.0 * want).abs() < 1e-6 * want, "{} vs {}", both.volume(), 2.0 * want);
+    assert_eq!(extrude_drafted(&Frame::WORLD, &sq, -1.0, deg(5.0), false).unwrap_err().kind, ErrorKind::Invalid);
+}

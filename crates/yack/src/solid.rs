@@ -4,8 +4,9 @@ use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::engine::{self, Brep};
-use crate::engine_cadrs::CadrsRef;
-use crate::{EdgeId, Error, FaceId, History, Result, Tag, VertexId};
+use crate::engine_cadrs::{CadrsRef, Held};
+use crate::{EdgeId, Error, ErrorKind, FaceId, History, Result, Tag, VertexId};
+use yack_springrep::topo::FaceName;
 
 /// A solid: an immutable, checked B-rep value, cheap to clone and share between threads.
 ///
@@ -62,11 +63,18 @@ struct Inner {
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum Body {
     Empty,
     Springrep(Box<Brep>),
+    /// A cadrs answer the bridge cannot carry to springrep, held in cadrs form (the lazy bridge):
+    /// valid by cadrs's full check; measured, written and operated on by cadrs; a springrep rung
+    /// or query on it declines (`Unsupported`, naming why).
+    Cadrs(Box<Held>),
 }
+
+
+
 
 impl Solid {
     fn new(body: Body) -> Solid {
@@ -97,24 +105,54 @@ impl Solid {
         &self.0.body
     }
 
-    /// The springrep body, if the solid is not empty.
+    /// A cadrs-held answer (no springrep form) as a solid.
+    pub(crate) fn from_held(h: Held) -> Solid {
+        Solid::new(Body::Cadrs(Box::new(h)))
+    }
+
+    /// The springrep body, if the solid has one: `None` for the empty solid and for a cadrs-held
+    /// one (see [`Solid::held`]); callers that mean "empty" ask [`Solid::is_empty`].
     pub(crate) fn brep(&self) -> Option<&Brep> {
         match &self.0.body {
-            Body::Empty => None,
+            Body::Empty | Body::Cadrs(_) => None,
             Body::Springrep(b) => Some(b.as_ref()),
+        }
+    }
+
+    /// The cadrs-held body, if this solid is one.
+    pub(crate) fn held(&self) -> Option<&Held> {
+        match &self.0.body {
+            Body::Cadrs(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Each face's names, by face index (the cadrs and springrep forms number faces alike).
+    pub(crate) fn face_names(&self) -> Vec<std::collections::BTreeSet<FaceName>> {
+        match &self.0.body {
+            Body::Empty => Vec::new(),
+            Body::Springrep(b) => b.face_ids().map(|f| b.face(f).names.clone()).collect(),
+            Body::Cadrs(h) => h.names.clone(),
         }
     }
 
     /// The springrep form for a query that is not a ladder rung: `None` for the empty solid; an
     /// error when the solid has no springrep form (never an empty answer in its place).
     pub(crate) fn form(&self, op: &'static str) -> Result<Option<&Brep>> {
-        let _ = op;
-        Ok(self.brep())
+        match &self.0.body {
+            Body::Empty => Ok(None),
+            _ => self.need(op).map(Some),
+        }
     }
 
-    /// The springrep body, or `Invalid` naming `op` for the empty solid.
+    /// The springrep body: `Invalid` naming `op` for the empty solid, `Unsupported` for a
+    /// cadrs-held one (a springrep rung declines it; the cadrs rung takes it).
     pub(crate) fn need(&self, op: &'static str) -> Result<&Brep> {
-        self.brep().ok_or_else(|| Error::invalid(op, "self", "the solid is empty"))
+        match &self.0.body {
+            Body::Empty => Err(Error::invalid(op, "self", "the solid is empty")),
+            Body::Springrep(b) => Ok(b.as_ref()),
+            Body::Cadrs(h) => Err(Error::new(ErrorKind::Unsupported, op, format!("this solid is held in cadrs form only ({})", h.why))),
+        }
     }
 
     /// The stamp this solid's ids carry: unique in the process.
@@ -176,6 +214,7 @@ impl Solid {
         match &self.0.body {
             Body::Empty => [0; 32],
             Body::Springrep(b) => engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(b.as_ref()))),
+            Body::Cadrs(h) => crate::engine_cadrs::held_digest(h, true),
         }
     }
 
@@ -192,11 +231,11 @@ impl Solid {
         match Arc::try_unwrap(self.0) {
             Ok(mut inner) => {
                 let mut name = feature.to_string();
+                let short = |d: [u8; 32]| format!("yack#{}", d.iter().take(8).map(|x| format!("{x:02x}")).collect::<String>());
                 if feature == engine::PROVISIONAL
                     && let Body::Springrep(b) = &mut inner.body
                 {
-                    let d = bare_digest(b);
-                    name = format!("yack#{}", d.iter().take(8).map(|x| format!("{x:02x}")).collect::<String>());
+                    name = short(bare_digest(b));
                     b.rename_faces(|n| {
                         let mut n = n.clone();
                         if n.feature == engine::PROVISIONAL {
@@ -204,6 +243,12 @@ impl Solid {
                         }
                         Some(n)
                     });
+                }
+                if feature == engine::PROVISIONAL
+                    && let Body::Cadrs(h) = &mut inner.body
+                {
+                    name = short(crate::engine_cadrs::held_digest(h, false));
+                    rename_held(h, engine::PROVISIONAL, &name);
                 }
                 inner.feature = Some(name);
                 Solid(Arc::new(inner))
@@ -290,6 +335,9 @@ impl Solid {
 
     /// This solid's cadrs form, converted through the bridge on first use.
     pub(crate) fn cadrs_form(&self, convert: impl FnOnce(&Brep) -> core::result::Result<CadrsRef, String>) -> core::result::Result<&CadrsRef, &str> {
+        if let Body::Cadrs(h) = &self.0.body {
+            return Ok(&h.cadrs);
+        }
         let r = self.0.cadrs.get_or_init(|| match self.brep() {
             Some(b) => convert(b),
             None => Err("the solid is empty".to_string()),
@@ -315,6 +363,11 @@ impl Solid {
         let tag = tag.into();
         let name = tag.as_str().to_string();
         let body = match (&self.0.body, &self.0.feature) {
+            (Body::Cadrs(h), Some(f)) => {
+                let mut h = (**h).clone();
+                rename_held(&mut h, f, &name);
+                Body::Cadrs(Box::new(h))
+            }
             (Body::Springrep(b), Some(f)) => {
                 let mut b = (**b).clone();
                 b.rename_faces(|n| {
@@ -353,7 +406,23 @@ impl Solid {
             (_, Body::Empty) => "empty",
             (Some(name), _) => name,
             (None, Body::Springrep(_)) => "springrep",
+            (None, Body::Cadrs(_)) => "cadrs",
         }
+    }
+}
+
+/// `h`'s face names of feature `from` renamed to feature `to`.
+fn rename_held(h: &mut Held, from: &str, to: &str) {
+    for set in &mut h.names {
+        *set = core::mem::take(set)
+            .into_iter()
+            .map(|mut n| {
+                if n.feature == from {
+                    n.feature = to.to_string();
+                }
+                n
+            })
+            .collect();
     }
 }
 

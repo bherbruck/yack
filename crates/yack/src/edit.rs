@@ -74,6 +74,37 @@ impl Solid {
             )
         })
     }
+    /// The solid with `face`'s surface replaced by `patch`, its neighbours re-trimmed to it: a
+    /// Bézier or B-spline net over its whole domain, or the fill of a closed chain of curves
+    /// ([`Patch::Fill`](crate::Patch::Fill)); `Invalid` for a planar fill.
+    pub fn replace_face(&self, face: FaceId, patch: &crate::Patch) -> Result<Solid> {
+        let op = "replace_face";
+        if face.stamp() != self.stamp() {
+            return Err(Error::foreign_id(op, "face"));
+        }
+        if !self.faces().contains(&face) {
+            return Err(Error::not_found(op, "face", format!("no {face}")));
+        }
+        if let crate::Patch::Fill { boundary } = patch {
+            let i = u64::from(face.index());
+            return firewall::run(op, || {
+                ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::replace_face_fill(op, self, i, boundary) }])
+            });
+        }
+        let (degree, [ku, kv], poles, weights) = crate::input::patch_net(op, patch)?;
+        let d = degree.map(|x| usize::try_from(x).unwrap_or(usize::MAX));
+        let i = u64::from(face.index());
+        firewall::run(op, || {
+            ladder::ladder(
+                op,
+                &[ladder::Rung {
+                    name: "cadrs",
+                    run: &|| engine_cadrs::op(op, self, |k, id| glue::replace_face(k, id, i, d, &ku, &kv, &poles, weights.as_deref())),
+                }],
+            )
+        })
+    }
+
     /// Removes `faces` and heals the gap from the neighbours.
     pub fn delete_faces(&self, faces: &[FaceId]) -> Result<Solid> {
         let op = "delete_faces";

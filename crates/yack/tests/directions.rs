@@ -27,3 +27,11 @@ fn a_zero_axis_is_refused_not_panicked() {
     assert!(Plane::new(Point3::ORIGIN, [0.0, 0.0, 0.0]).is_err());
     assert!(Frame::along(Point3::ORIGIN, Vec3::ZERO).is_err());
 }
+
+/// project: a ball seen from anywhere is one outline, nothing hidden (cadrs's exact silhouettes).
+#[test]
+fn a_ball_projects_to_one_outline() {
+    let d = sphere(&Frame::WORLD, 5.0).unwrap().project(Dir3::Z, 0.01).unwrap();
+    assert!(!d.visible.is_empty());
+    assert!(d.hidden.is_empty(), "{} hidden", d.hidden.len());
+}

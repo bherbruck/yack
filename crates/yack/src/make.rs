@@ -323,3 +323,84 @@ pub fn nurbs_solid(
 pub fn empty() -> Solid {
     Solid::empty()
 }
+
+/// One cadrs rung behind the firewall: the constructors only cadrs builds.
+fn cadrs_only(op: &'static str, run: &dyn Fn() -> Result<Solid>) -> Result<Solid> {
+    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run }]))
+}
+
+/// `profile` extruded `height` along the frame's z with its sides drafted by `draft`: positive
+/// leans them in as they rise (the top smaller), negative out. With `both_ways` the same again
+/// below the profile's plane, the two halves meeting in a crease there.
+pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Angle, both_ways: bool) -> Result<Solid> {
+    let op = "extrude_drafted";
+    if height.is_nan() || height <= 0.0 {
+        return Err(Error::invalid(op, "height", format!("height {height} is not positive")));
+    }
+    let d = draft.radians();
+    cadrs_only(op, &|| engine_cadrs::extrude_drafted(op, frame, profile, height, d, both_ways))
+}
+
+/// The solid whose sides are straight lines from `bottom_profile` (drawn in `bottom`) to
+/// `top_profile` (drawn in `top`); turning the top frame about the axis twists the rulings.
+pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile: &Profile) -> Result<Solid> {
+    let op = "ruled";
+    cadrs_only(op, &|| engine_cadrs::ruled(op, bottom, bottom_profile, top, top_profile))
+}
+
+/// `profile` (in the frame's xy plane) carried along the helix about the line through
+/// `axis_point` along `axis` that starts at the frame's origin, rising `lead` while turning
+/// `angle`; its radius is the origin's distance from the axis. Not [`screw`], which turns a
+/// profile drawn through its axis.
+pub fn sweep_helix(frame: &Frame, profile: &Profile, axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, lead: Lead, angle: Angle) -> Result<Solid> {
+    let op = "sweep_helix";
+    let pitch = match &lead.0 {
+        LeadKind::PerTurn(p) => *p,
+        LeadKind::PerRadian(c) => yack_math::per_turn_of(*c),
+        LeadKind::Polynomial(_) => return Err(Error::new(crate::ErrorKind::Unsupported, op, "a helix of growing lead is not built yet")),
+    };
+    let (p, a) = (axis_point.into().to_array(), axis.into().to_array());
+    let turns = yack_math::turns_of(angle.radians());
+    cadrs_only(op, &|| engine_cadrs::sweep_helix(op, frame, profile, p, a, pitch, turns))
+}
+
+/// [`sweep`], the profile turning `twist` about the path and scaling to `end_scale` times its
+/// size by the path's end, both evenly along it.
+pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist: Angle, end_scale: f64) -> Result<Solid> {
+    let op = "sweep_scaled";
+    if end_scale.is_nan() || end_scale <= 0.0 {
+        return Err(Error::invalid(op, "end_scale", format!("scale {end_scale} is not positive")));
+    }
+    let t = twist.radians();
+    cadrs_only(op, &|| engine_cadrs::sweep_scaled(op, frame, profile, path, t, end_scale))
+}
+
+/// `profile` (in the frame's xy plane) lofted to the point `apex`, its sides following
+/// `guides` (each from the profile to the apex).
+pub fn loft_to_point(frame: &Frame, profile: &Profile, apex: impl Into<Point3>, guides: &[Spline3]) -> Result<Solid> {
+    let op = "loft_to_point";
+    let apex = apex.into().to_array();
+    cadrs_only(op, &|| engine_cadrs::loft_to_point(op, frame, profile, apex, guides))
+}
+
+impl Spline3 {
+    /// The conical helix about the line through `axis_point` along `axis`, its radius going from
+    /// `r0` to `r1` as it rises `height`, from the angle `start` (measured from `x`, square to the
+    /// axis) over `turns` turns, as one clamped quintic B-spline (a loft guide or a path).
+    #[allow(clippy::too_many_arguments)]
+    pub fn conical_helix(
+        axis_point: impl Into<Point3>,
+        axis: impl Into<crate::Vec3>,
+        x: impl Into<crate::Vec3>,
+        r0: f64,
+        r1: f64,
+        height: f64,
+        start: Angle,
+        turns: f64,
+    ) -> Result<Spline3> {
+        let op = "Spline3::conical_helix";
+        let (o, a, x) = (axis_point.into().to_array(), axis.into().to_array(), x.into().to_array());
+        let (knots, ctrl) = engine_cadrs::conical_helix(op, o, a, x, r0, r1, height, start.radians(), turns)?;
+        Spline3::new(5, knots, ctrl.into_iter().map(Point3::from).collect())
+    }
+}
