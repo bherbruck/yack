@@ -5,11 +5,13 @@
 
 use core::fmt;
 
+mod report;
 mod to_cadrs;
 mod to_springrep;
 
+pub use report::{AGREE, CADRS_AGREE, RoundTrip, round_trip};
 pub use to_cadrs::to_cadrs;
-pub use to_springrep::to_springrep;
+pub use to_springrep::{to_springrep, to_springrep_mapped};
 
 /// Why a conversion did not happen.
 #[derive(Clone, Debug, PartialEq, Eq)]

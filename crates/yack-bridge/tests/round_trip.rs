@@ -1,66 +1,16 @@
 // yack: round trips springrep → cadrs → springrep on one solid of each surface and curve kind (MAPPING.md §5).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-use yack_bridge::{to_cadrs, to_springrep};
-use yack_cadrs::native::{Body, P3, classify, mass};
+use yack_bridge::round_trip;
 use yack_springrep::{
-    boolean, check,
+    boolean,
     math::{Frame, Vec3},
-    measure, primitive,
-    rays::{Rays, Side},
+    primitive,
     topo::Brep,
 };
 
-fn cadrs_area(b: &Body) -> f64 {
-    (0..b.faces().len()).map(|f| mass::face_area(b, f).0).sum()
-}
-
-fn rel(a: f64, b: f64) -> f64 {
-    (a - b).abs() / b.abs().max(1.0)
-}
-
-/// Sample points on a 7×7×7 grid over the box, nudged off symmetry planes.
-fn samples(s: &Brep) -> Vec<Vec3> {
-    let bb = measure::bbox(s);
-    let (lo, hi) = (bb.min - Vec3::new(1.0, 1.0, 1.0), bb.max + Vec3::new(1.0, 1.0, 1.0));
-    let mut out = Vec::new();
-    for i in 0..7 {
-        for j in 0..7 {
-            for k in 0..7 {
-                let f = |n: usize, a: f64, b: f64| a + (b - a) * (n as f64 + 0.37) / 7.0;
-                out.push(Vec3::new(f(i, lo.x, hi.x), f(j, lo.y, hi.y), f(k, lo.z, hi.z)));
-            }
-        }
-    }
-    out
-}
-
-fn round_trip(name: &str, s: &Brep) {
-    let (body, names) = to_cadrs(s).unwrap_or_else(|e| panic!("{name}: to cadrs: {e}"));
-    assert!(body.check_with(yack_cadrs::native::CheckLevel::Full).is_empty(), "{name}");
-    let (v, a) = (measure::volume(s), measure::area(s));
-    assert!(rel(mass::body_volume(&body), v) < 1e-9, "{name}: cadrs volume {} vs {v}", mass::body_volume(&body));
-    assert!(rel(cadrs_area(&body), a) < 1e-9, "{name}: cadrs area {} vs {a}", cadrs_area(&body));
-    let back = to_springrep(&body, &names).unwrap_or_else(|e| panic!("{name}: back: {e}"));
-    assert!(check::check(&back).is_empty(), "{name}: {:?}", check::check(&back));
-    assert!(rel(measure::volume(&back), v) < 1e-9, "{name}: back volume");
-    assert!(rel(measure::area(&back), a) < 1e-9, "{name}: back area");
-    let (rs, rb) = (Rays::new(s).unwrap(), Rays::new(&back).unwrap());
-    let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(&body, f)).collect();
-    for p in samples(s) {
-        let want = rs.side(p);
-        assert_eq!(rb.side(p), want, "{name}: springrep side at {p:?}");
-        let c = classify::classify_point(&body, &polys, &P3::new(p.x, p.y, p.z), 1e-7);
-        let same = matches!(
-            (want, c),
-            (Side::Inside, yack_cadrs::PointClass::Inside)
-                | (Side::Outside, yack_cadrs::PointClass::Outside)
-                | (Side::On, yack_cadrs::PointClass::OnBoundary)
-        );
-        assert!(same, "{name}: cadrs class {c:?} vs springrep {want:?} at {p:?}");
-    }
-    // And the second leg: the body back across equals the first.
-    let (again, _) = to_cadrs(&back).unwrap();
-    assert!(rel(mass::body_volume(&again), v) < 1e-9, "{name}: C→S→C volume");
+fn check(name: &str, s: &Brep) {
+    let r = round_trip(s);
+    assert!(r.ok(), "\nFAILED {name}: {}", r.problems.join("\nFAILED   "));
 }
 
 fn at(x: f64, y: f64, z: f64) -> Frame {
@@ -69,21 +19,138 @@ fn at(x: f64, y: f64, z: f64) -> Frame {
 
 #[test]
 fn primitives() {
-    round_trip("block", &primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap());
-    round_trip("cylinder", &primitive::cylinder(&at(1.0, 2.0, 3.0), 4.0, 9.0, "c").unwrap());
-    round_trip("sphere", &primitive::sphere(&at(0.0, 0.0, 0.0), 5.0, "s").unwrap());
-    round_trip("torus", &primitive::torus(&at(0.0, 0.0, 0.0), 6.0, 2.0, "t").unwrap());
-    round_trip("cone", &primitive::cone(&at(0.0, 0.0, 0.0), 4.0, 1.0, 6.0, "k").unwrap());
-    round_trip("apex", &primitive::cone(&at(0.0, 0.0, 0.0), 4.0, 0.0, 6.0, "k").unwrap());
+    check("block", &primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap());
+    check("cylinder", &primitive::cylinder(&at(1.0, 2.0, 3.0), 4.0, 9.0, "c").unwrap());
+    check("sphere", &primitive::sphere(&at(0.0, 0.0, 0.0), 5.0, "s").unwrap());
+    check("torus", &primitive::torus(&at(0.0, 0.0, 0.0), 6.0, 2.0, "t").unwrap());
+    check("cone", &primitive::cone(&at(0.0, 0.0, 0.0), 4.0, 1.0, 6.0, "k").unwrap());
+    check("apex", &primitive::cone(&at(0.0, 0.0, 0.0), 4.0, 0.0, 6.0, "k").unwrap());
 }
 
 #[test]
-fn booleans() {
+fn drilled_and_ball() {
     let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
     let rod = primitive::cylinder(&at(5.0, 5.0, -1.0), 2.0, 12.0, "c").unwrap();
-    round_trip("drilled", &boolean::difference(&block, &rod).unwrap());
-    let side = primitive::cylinder(&Frame::new(Vec3::new(-1.0, 5.0, 5.0), Vec3::X, Vec3::Y).unwrap(), 3.0, 12.0, "x").unwrap();
-    round_trip("cross-drilled", &boolean::difference(&boolean::difference(&block, &rod).unwrap(), &side).unwrap());
+    check("drilled", &boolean::difference(&block, &rod).unwrap());
     let ball = primitive::sphere(&at(10.0, 10.0, 10.0), 4.0, "s").unwrap();
-    round_trip("corner ball", &boolean::union(&block, &ball).unwrap());
+    check("corner ball", &boolean::union(&block, &ball).unwrap());
+}
+
+#[test]
+fn cross_drilled() {
+    let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
+    let rod = primitive::cylinder(&at(5.0, 5.0, -1.0), 2.0, 12.0, "c").unwrap();
+    let side = primitive::cylinder(&Frame::new(Vec3::new(-1.0, 5.0, 5.0), Vec3::X, Vec3::Y).unwrap(), 3.0, 12.0, "x").unwrap();
+    check("cross-drilled", &boolean::difference(&boolean::difference(&block, &rod).unwrap(), &side).unwrap());
+}
+
+/// Diagnostic: every coedge's uv samples, original vs round-tripped (printed, never failing).
+#[test]
+fn cross_drilled_pcurves_diagnostic() {
+    use yack_springrep::topo::PCurve;
+    let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
+    let rod = primitive::cylinder(&at(5.0, 5.0, -1.0), 2.0, 12.0, "c").unwrap();
+    let side = primitive::cylinder(&Frame::new(Vec3::new(-1.0, 5.0, 5.0), Vec3::X, Vec3::Y).unwrap(), 3.0, 12.0, "x").unwrap();
+    let s = boolean::difference(&boolean::difference(&block, &rod).unwrap(), &side).unwrap();
+    let (body, names) = yack_bridge::to_cadrs(&s).unwrap();
+    let back = yack_bridge::to_springrep(&body, &names).unwrap();
+    let mut out = Vec::new();
+    for (c, d) in s.coedge_ids().zip(back.coedge_ids()) {
+        let e = s.edge(s.coedge(c).edge);
+        let ts: Vec<f64> = (0..5).map(|i| e.range.0 + (e.range.1 - e.range.0) * i as f64 / 4.0).collect();
+        let (a, b) = (s.coedge_uvs(c, &ts), back.coedge_uvs(d, &ts));
+        let off = a.iter().zip(&b).map(|(p, q)| (p.x - q.x).abs().max((p.y - q.y).abs())).fold(0.0, f64::max);
+        let kind = |p: &PCurve| if matches!(p, PCurve::Affine { .. }) { "affine" } else { "projected" };
+        if off > 1e-9 || s.coedge(c).edge != back.coedge(d).edge || s.coedge(c).reversed != back.coedge(d).reversed {
+            out.push(format!(
+                "FAILED-DIAG coedge {} edge {}/{} rev {}/{} {}/{} face {} off {off:.3e} a {:?} b {:?}",
+                c.index(), s.coedge(c).edge.index(), back.coedge(d).edge.index(),
+                s.coedge(c).reversed, back.coedge(d).reversed,
+                kind(&s.coedge(c).pcurve), kind(&back.coedge(d).pcurve),
+                s.coedge_face(c).index(),
+                a.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), b.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()
+            ));
+        }
+    }
+    for (f, g) in s.face_ids().zip(back.face_ids()) {
+        let (lf, lg) = (&s.face(f).loops, &back.face(g).loops);
+        let cs = |b: &Brep, l: &[yack_springrep::topo::LoopId]| l.iter().map(|&x| b.lp(x).coedges.iter().map(|c| c.index()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        if cs(&s, lf) != cs(&back, lg) || s.face(f).reversed != back.face(g).reversed {
+            out.push(format!("FAILED-DIAG face {} loops {:?} vs {:?} rev {}/{}", f.index(), cs(&s, lf), cs(&back, lg), s.face(f).reversed, back.face(g).reversed));
+        }
+    }
+    println!("{}", out.join("\n"));
+}
+
+/// An edge no face uses, as cadrs leaves after some ops: `to_springrep` refuses it (indices would
+/// move); `to_springrep_mapped` drops it and its map takes every other cadrs edge id to the
+/// springrep edge with the same geometry.
+#[test]
+fn an_unused_cadrs_edge_is_dropped_and_mapped() {
+    let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap();
+    let (mut body, names) = yack_bridge::to_cadrs(&block).unwrap();
+    // Insert a stray edge at index 3, shifting every later edge's index up by one.
+    let k = 3;
+    let stray = body.edges[0].clone();
+    body.edges.insert(k, stray);
+    for co in body.faces.iter_mut().flat_map(|f| f.loops.iter_mut().flatten()) {
+        if co.edge >= k {
+            co.edge += 1;
+        }
+    }
+    assert!(yack_bridge::to_springrep(&body, &names).is_err());
+    let (back, map) = yack_bridge::to_springrep_mapped(&body, &names).unwrap();
+    assert_eq!(map[k], None);
+    assert!(yack_springrep::check::check(&back).is_empty());
+    for (i, m) in map.iter().enumerate() {
+        let Some(j) = *m else { continue };
+        let ce = &body.edges[i];
+        let se = back.edge(back.edge_ids().nth(j).unwrap());
+        assert_eq!([se.range.0, se.range.1], ce.t, "edge {i} -> {j}");
+        let (a, b) = (ce.curve.point(ce.t[0]), se.curve.as_ref().unwrap().eval(se.range.0));
+        assert!((a.x - b.x).abs() + (a.y - b.y).abs() + (a.z - b.z).abs() < 1e-12, "edge {i} -> {j}");
+    }
+}
+
+/// A cadrs-built box carried to springrep keeps its creases: no normal at any edge midpoint
+/// (bench conformance "joints off" on cadrs-built solids).
+#[test]
+fn a_cadrs_box_keeps_its_creases() {
+    use yack_cadrs::native::P3;
+    use yack_cadrs::{DefaultKernel, Kernel, Primitive};
+    let mut k = DefaultKernel::new();
+    let id = k.primitive(&Primitive::Box { min: P3::new(0.0, 0.0, 0.0), max: P3::new(10.0, 20.0, 30.0) }).unwrap().first().unwrap();
+    let body = (**k.get(id).unwrap()).clone();
+    let back = yack_bridge::to_springrep(&body, &[]).unwrap();
+    let outlines = yack_springrep::measure::Outlines::new(&back);
+    let mut bad = Vec::new();
+    for e in back.edge_ids() {
+        let edge = back.edge(e);
+        let Some(c) = &edge.curve else { continue };
+        let p = c.eval(0.5 * (edge.range.0 + edge.range.1));
+        if let Some(n) = outlines.normal_at(p, 1e-6) {
+            bad.push(format!("edge {} at {p:?}: normal {n:?}", e.index()));
+        }
+    }
+    assert!(bad.is_empty(), "\nFAILED creases lost: {}", bad.join("\nFAILED   "));
+}
+
+/// Regression (bench `fillet/box-all-edges`, cause BR): cadrs's box with every edge rounded has
+/// sphere-corner faces whose loops cross u = 0; carried to springrep they must stay closed.
+#[test]
+fn a_cadrs_box_rounded_on_every_edge_carries_back() {
+    use yack_cadrs::native::P3;
+    use yack_cadrs::{DefaultKernel, Kernel, Primitive};
+    let mut k = DefaultKernel::new();
+    let id = k.primitive(&Primitive::Box { min: P3::new(0.0, 0.0, 0.0), max: P3::new(10.0, 10.0, 10.0) }).unwrap().first().unwrap();
+    let edges: Vec<_> = k.edges(id).unwrap().into_iter().map(|e| e.id).collect();
+    let r = k.fillet(id, &edges, 2.0).unwrap().first().unwrap();
+    let body = (**k.get(r).unwrap()).clone();
+    let cadrs_volume = k.mass_properties(r).unwrap().volume;
+    let back = yack_bridge::to_springrep(&body, &[]).unwrap_or_else(|e| panic!("\nFAILED box-all-edges: {e}"));
+    assert!(yack_springrep::check::check(&back).is_empty());
+    let v = yack_springrep::measure::volume(&back);
+    assert!((v - cadrs_volume).abs() <= 1e-6 * v, "\nFAILED box-all-edges volume {v} vs cadrs {cadrs_volume}");
+    let r = yack_bridge::round_trip(&back);
+    assert!(r.ok(), "\nFAILED box-all-edges round trip: {}", r.problems.join("\nFAILED   "));
 }

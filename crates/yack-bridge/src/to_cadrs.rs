@@ -20,6 +20,16 @@ use crate::{Error, Result};
 /// conversion is refused rather than trusted.
 const PCURVE_SLACK: f64 = 1e-6; // tol: uv agreement of two engines' pcurves of one exact edge
 
+/// A pcurve whose surface point stays this close to its edge needs no tolerance beyond cadrs's own.
+const GAP_TIGHT: f64 = 1e-8; // tol: well inside cadrs's CONFUSION (1e-7 mm)
+
+/// The most a carried pcurve may stray from its edge, in mm; the edge's cadrs tolerance is raised to
+/// hold it, and anything wider is refused.
+const GAP_CAP: f64 = 1e-5; // tol: cadrs's LOOP_GAP
+
+/// A surface derivative this short means the surface does not depend on that coordinate (a pole).
+const DEGENERATE: f64 = 1e-9; // tol: a pole's vanishing partial derivative
+
 /// How many parameters along each coedge the carried pcurve is checked at.
 const SAMPLES: usize = 9;
 
@@ -86,7 +96,12 @@ fn bspline(b: &yack_springrep::geom::BSpline, range: (f64, f64)) -> Result<CCurv
     let cs: Vec<Vec3> = (j0 - pi..=j1)
         .map(|i| ctrl.get(i.rem_euclid(ni) as usize).copied().unwrap_or(Vec3::ZERO))
         .collect();
-    nurbs_curve(p, &ks, &cs, None)
+    // Clamped to the edge's own range by knot insertion (exact), so neither engine sees the
+    // unrolled spline's unclamped ends.
+    match nurbs_curve(p, &ks, &cs, None)? {
+        CCurve::Nurbs(n) => Ok(CCurve::nurbs(n.restricted(range.0, range.1))),
+        other => Ok(other),
+    }
 }
 
 /// A 3-D edge curve, and how far it may lie from springrep's (zero unless approximated).
@@ -174,6 +189,38 @@ fn surface(s: &SSurface) -> Result<CSurface> {
     })
 }
 
+/// The surface in cadrs's native orientation, and whether its v was negated to get there. cadrs's
+/// ops assume an analytic surface's natural normal points away from its axis; springrep may give
+/// a cone a half-angle past ±90° (v running toward the apex), whose natural normal points in, and
+/// reverse the face. That cone is the same set of points with v → −v and a → a ∓ π.
+fn canonical(s: CSurface) -> (CSurface, bool) {
+    match s {
+        CSurface::Cone { f, r, a } if a.cos() < 0.0 => {
+            let a = if a > 0.0 { a - std::f64::consts::PI } else { a + std::f64::consts::PI };
+            (CSurface::Cone { f, r, a }, true)
+        }
+        other => (other, false),
+    }
+}
+
+/// The pcurve with its v negated (for a surface [`canonical`] flipped).
+fn flip_v(pc: CCurve) -> CCurve {
+    let neg = |p: P3| P3::new(p.x, -p.y, p.z);
+    let negv = |v: V3| V3::new(v.x, -v.y, v.z);
+    match pc {
+        CCurve::Line { o, d } => CCurve::Line { o: neg(o), d: negv(d) },
+        CCurve::Circle { c, x, y, r } => CCurve::Circle { c: neg(c), x: negv(x), y: negv(y), r },
+        CCurve::Ellipse { c, x, y, a, b } => CCurve::Ellipse { c: neg(c), x: negv(x), y: negv(y), a, b },
+        CCurve::Nurbs(n) => {
+            let mut n = (*n).clone();
+            for h in &mut n.cps {
+                h.y = -h.y;
+            }
+            CCurve::Nurbs(std::sync::Arc::new(n))
+        }
+    }
+}
+
 /// A straight pcurve from `a` at `t0` to `b` at `t1`, parametrised by the edge's t.
 fn straight(a: Vec2, b: Vec2, t0: f64, t1: f64) -> Result<CCurve> {
     let cps = vec![H::new(a.x, a.y, 0.0, 1.0), H::new(b.x, b.y, 0.0, 1.0)];
@@ -190,64 +237,101 @@ fn params(t0: f64, t1: f64) -> Vec<f64> {
 }
 
 /// The coedge's pcurve in cadrs's form: by the edge's t, on the branch springrep's runs on.
-fn coedge_pcurve(b: &Brep, c: CoedgeId, surf: &CSurface, edge_curve: Option<&CCurve>) -> Result<CCurve> {
+fn coedge_pcurve(b: &Brep, c: CoedgeId, surf: &CSurface, edge_curve: Option<&CCurve>) -> Result<(CCurve, f64)> {
     let co = b.coedge(c);
     let e = b.edge(co.edge);
+    let s = &b.face(b.coedge_face(c)).surface;
     let (t0, t1) = e.range;
     let ts = params(t0, t1);
     let want = b.coedge_uvs(c, &ts);
     let (Some(&first), Some(&last)) = (want.first(), want.last()) else {
         return Err(Error::Unsupported(format!("coedge {} has no pcurve samples", c.index())));
     };
-    let pc = match (&co.pcurve, edge_curve) {
+    // The edge's own point at t (its vertex for a pole).
+    let on_edge = |t: f64| match &e.curve {
+        Some(k) => k.eval(t),
+        None => b.vertex(e.start).point,
+    };
+    // How far a candidate's uv strays from springrep's, in parameter units, leaving out a
+    // coordinate the surface does not depend on there (u at a pole), where any value is right.
+    let uv_off = |pc: &CCurve, t: f64, w: Vec2| -> f64 {
+        let g = pc.point(t);
+        let (_, su, sv) = s.d1(w.x, w.y);
+        let du = if su.norm() <= DEGENERATE { 0.0 } else { (g.x - w.x).abs() };
+        let dv = if sv.norm() <= DEGENERATE { 0.0 } else { (g.y - w.y).abs() };
+        du.max(dv) / (1.0 + w.x.abs().max(w.y.abs()))
+    };
+    // How far the candidate's surface point strays from the edge, in mm.
+    let gap = |pc: &CCurve, t: f64| -> f64 {
+        let g = pc.point(t);
+        s.eval(g.x, g.y).dist(on_edge(t))
+    };
+    // Checked at the samples and halfway between them.
+    // In increasing order: springrep follows a periodic pcurve from one parameter to the next.
+    let mut check_ts = ts.clone();
+    check_ts.extend(ts.windows(2).map(|w| 0.5 * (w[0] + w[1])));
+    check_ts.sort_by(f64::total_cmp);
+    let check_uv = b.coedge_uvs(c, &check_ts);
+    let judge = |pc: &CCurve| -> Option<f64> {
+        let mut worst = 0.0f64;
+        for (&t, &w) in check_ts.iter().zip(&check_uv) {
+            let d = uv_off(pc, t, w);
+            if d.is_nan() || d > PCURVE_SLACK {
+                return None;
+            }
+            worst = worst.max(gap(pc, t));
+        }
+        worst.is_finite().then_some(worst)
+    };
+    let first_try = match (&co.pcurve, edge_curve) {
         (PCurve::Affine { .. }, _) | (_, None) => straight(first, last, t0, t1)?,
         (PCurve::Projected { .. }, Some(curve)) => {
             let mid = want.get(SAMPLES / 2).copied().unwrap_or(first);
             pcurve(surf, curve, t0, t1, Some(P2::new(mid.x, mid.y)))
         }
     };
-    let off = |pc: &CCurve| -> Vec<f64> {
-        ts.iter()
-            .zip(&want)
-            .map(|(&t, w)| {
-                let got = pc.point(t);
-                (got.x - w.x).abs().max((got.y - w.y).abs()) / (1.0 + w.x.abs().max(w.y.abs()))
-            })
-            .collect()
-    };
-    let bad = |pc: &CCurve| off(pc).iter().any(|d| d.is_nan() || *d > PCURVE_SLACK);
-    if !bad(&pc) {
-        return Ok(pc);
+    let mut best: Option<(CCurve, f64)> = judge(&first_try).map(|g| (first_try.clone(), g));
+    if best.as_ref().is_some_and(|(_, g)| *g <= GAP_TIGHT) {
+        return best.ok_or_else(|| Error::Unsupported("unreachable".into()));
     }
-    // cadrs's own fit went astray (it can wrap a closed ring at its seam): interpolate springrep's
-    // pcurve itself, in the edge's t, finer until it agrees between its samples too.
-    for n in [33usize, 129, 513] {
+    // cadrs's own fit went astray or is loose (it can wrap a closed ring at its seam): interpolate
+    // springrep's pcurve itself, in the edge's t, finer until it is tight.
+    for n in [33usize, 129, 513, 2049] {
         let ts_n = spaced(t0, t1, n);
         let uv = b.coedge_uvs(c, &ts_n);
         let pts: Vec<P3> = uv.iter().map(|w| P3::new(w.x, w.y, 0.0)).collect();
         let fit = CCurve::nurbs(CNurbsCurve::interpolate(&pts, &ts_n, 3, None, None));
         let mids: Vec<f64> = ts_n.windows(2).map(|w| 0.5 * (w[0] + w[1])).collect();
-        let want_mid = b.coedge_uvs(c, &mids);
-        let worst = mids.iter().zip(&want_mid).map(|(&t, w)| {
-            let g = fit.point(t);
-            (g.x - w.x).abs().max((g.y - w.y).abs()) / (1.0 + w.x.abs().max(w.y.abs()))
-        }).fold(0.0, f64::max);
-        if worst <= PCURVE_SLACK && !bad(&fit) {
-            return Ok(fit);
+        let fit_gap = mids.iter().map(|&t| gap(&fit, t)).fold(0.0, f64::max);
+        if let Some(g) = judge(&fit).map(|g| g.max(fit_gap)) {
+            if best.as_ref().is_none_or(|(_, b)| g < *b) {
+                best = Some((fit, g));
+            }
+            if g <= GAP_TIGHT {
+                break;
+            }
         }
     }
-    {
-        let curve = e.curve.as_ref().map_or("degenerate", |c| c.kind());
-        let along: Vec<String> = ts.iter().zip(&want).map(|(&t, w)| {
-            let g = pc.point(t);
-            format!("t {t:.4}: sr ({:.4}, {:.4}) cadrs ({:.4}, {:.4})", w.x, w.y, g.x, g.y)
-        }).collect();
-        Err(Error::Unsupported(format!(
-            "coedge {} ({curve} on {}): cadrs's pcurve strays from springrep's: {}",
-            c.index(),
-            b.face(b.coedge_face(c)).surface.kind(),
-            along.join("; ")
-        )))
+    match best {
+        Some((pc, g)) if g <= GAP_CAP => Ok((pc, g)),
+        other => {
+            let curve = e.curve.as_ref().map_or("degenerate", |c| c.kind());
+            let along: Vec<String> = ts
+                .iter()
+                .zip(&want)
+                .map(|(&t, w)| {
+                    let g = first_try.point(t);
+                    format!("t {t:.4}: sr ({:.4}, {:.4}) cadrs ({:.4}, {:.4})", w.x, w.y, g.x, g.y)
+                })
+                .collect();
+            Err(Error::Unsupported(format!(
+                "coedge {} ({curve} on {}): no pcurve within {GAP_CAP:e} mm (best {:?}): {}",
+                c.index(),
+                s.kind(),
+                other.map(|(_, g)| g),
+                along.join("; ")
+            )))
+        }
     }
 }
 
@@ -313,20 +397,36 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
         if face.shell.is_none() {
             return Err(Error::Unsupported(format!("face {} belongs to no shell", f.index())));
         }
+        // Pcurves are made in springrep's parametrisation (the same formula as cadrs's for this
+        // surface), then carried onto the canonical one.
         let surf = surface(&face.surface)?;
+        let (canon, flipped) = canonical(surf.clone());
         let mut loops = Vec::with_capacity(face.loops.len());
         for &lp in &face.loops {
             let mut coedges = Vec::new();
             for &c in &b.lp(lp).coedges {
                 let co = b.coedge(c);
                 let curve = body.edges.get(co.edge.index()).filter(|e| !e.degenerate).map(|e| e.curve.clone());
-                let pc = coedge_pcurve(b, c, &surf, curve.as_ref())?;
+                let (pc, gap) = coedge_pcurve(b, c, &surf, curve.as_ref())?;
+                if gap > 0.0 {
+                    let mut ends = [None, None];
+                    if let Some(edge) = body.edges.get_mut(co.edge.index()) {
+                        edge.tol = edge.tol.max(2.0 * gap);
+                        ends = [Some(edge.v[0]), Some(edge.v[1])];
+                    }
+                    for v in ends.into_iter().flatten() {
+                        if let Some(vx) = body.verts.get_mut(v) {
+                            vx.tol = vx.tol.max(2.0 * gap);
+                        }
+                    }
+                }
+                let pc = if flipped { flip_v(pc) } else { pc };
                 coedges.push(Coedge { edge: co.edge.index(), fwd: !co.reversed, pc });
             }
-            chain(&surf, &body.edges, &mut coedges);
+            chain(&canon, &body.edges, &mut coedges);
             loops.push(coedges);
         }
-        body.faces.push(CFace { surf, sense: !face.reversed, loops });
+        body.faces.push(CFace { surf: canon, sense: face.reversed == flipped, loops });
         names.push(face.names.clone());
     }
     for s in b.solid_ids() {
