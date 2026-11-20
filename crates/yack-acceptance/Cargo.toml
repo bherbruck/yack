@@ -1,0 +1,16 @@
+# yack: acceptance tests ported from donors, run against the public yack API only (PLAN §7 M1.14).
+[package]
+name = "yack-acceptance"
+description = "yack's acceptance tests: donor test suites ported onto the public API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack = { path = "../yack" }
+
+[lints]
+workspace = true

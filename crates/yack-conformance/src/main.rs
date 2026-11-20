@@ -17,6 +17,42 @@ use yack::{Affine, Plane, Ray, Rigid, Side, Similarity, Solid, make, rad};
 type V = model::Vec3;
 type Res<T> = Result<T, Refusal>;
 
+/// Where to log each returned solid's digest (`YACK_DIGESTS`, read once), for the M1.6
+/// bit-identical gate (`cargo xtask digest`). Unset: nothing is written.
+fn digest_log() -> Option<&'static std::path::PathBuf> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    #[allow(clippy::disallowed_methods)] // tool crate: the digest gate's opt-in switch (M1.6)
+    PATH.get_or_init(|| std::env::var_os("YACK_DIGESTS").map(std::path::PathBuf::from)).as_ref()
+}
+
+/// Appends `digest <hex>` for `s` to the digest log, if one is set.
+fn log_digest(s: &Solid) {
+    use std::io::Write;
+    let Some(path) = digest_log() else { return };
+    let hex: String = s.digest().iter().map(|b| format!("{b:02x}")).collect();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "digest {hex}");
+        let _ = f.flush();
+    }
+}
+
+/// A solid returned to the protocol, its digest logged.
+fn rec(r: Res<Solid>) -> Res<Solid> {
+    if let Ok(s) = &r {
+        log_digest(s);
+    }
+    r
+}
+
+/// Two solids returned to the protocol (`split`), front then back, their digests logged.
+fn rec2(r: Res<(Solid, Solid)>) -> Res<(Solid, Solid)> {
+    if let Ok((a, b)) = &r {
+        log_digest(a);
+        log_digest(b);
+    }
+    r
+}
+
 struct Yack;
 
 fn arrays(ps: Vec<yack::Point3>) -> Vec<V> {
@@ -27,6 +63,7 @@ fn plane(origin: V, normal: V) -> Res<Plane> {
     Plane::new(origin, normal).map_err(r)
 }
 
+#[allow(clippy::redundant_closure_call)] // each Solid-returning method wraps its body for the digest log
 impl Kernel for Yack {
     type Solid = Solid;
 
@@ -44,130 +81,188 @@ impl Kernel for Yack {
     }
 
     fn make(&self, p: &Primitive) -> Res<Solid> {
-        let f = &frame(&p.frame())?;
-        match p {
-            Primitive::Box { size, .. } => make::block(f, *size),
-            Primitive::Cylinder { radius, height, .. } => make::cylinder(f, *radius, *height),
-            Primitive::Sphere { radius, .. } => make::sphere(f, *radius),
-            Primitive::Torus { major, minor, .. } => make::torus(f, *major, *minor),
-            Primitive::Cone { bottom, top, height, .. } => make::cone(f, *bottom, *top, *height),
-            Primitive::Extrude { profile, height, .. } => {
-                make::extrude(f, &sketch(profile)?, *height)
+        rec((|| -> Res<Solid> {
+            let f = &frame(&p.frame())?;
+            match p {
+                Primitive::Box { size, .. } => make::block(f, *size),
+                Primitive::Cylinder { radius, height, .. } => make::cylinder(f, *radius, *height),
+                Primitive::Sphere { radius, .. } => make::sphere(f, *radius),
+                Primitive::Torus { major, minor, .. } => make::torus(f, *major, *minor),
+                Primitive::Cone { bottom, top, height, .. } => make::cone(f, *bottom, *top, *height),
+                Primitive::Extrude { profile, height, .. } => {
+                    make::extrude(f, &sketch(profile)?, *height)
+                }
+                Primitive::Revolve { profile, angle: a, .. } => {
+                    make::revolve(f, &sketch(profile)?, rad(*a))
+                }
+                Primitive::Screw { profile, rise, angle: a, .. } => {
+                    make::screw(f, &sketch(profile)?, *rise, rad(*a))
+                }
+                Primitive::Sweep { profile, path: p, .. } => {
+                    make::sweep(f, &sketch(profile)?, &path(p))
+                }
+                Primitive::SweepPath { profile, path: p, twist, .. } => {
+                    make::sweep_path(f, &sketch(profile)?, &spline(p)?, rad(*twist))
+                }
+                Primitive::Slab { size, knots_u, knots_v, heights, .. } => {
+                    make::slab(f, *size, knots_u, knots_v, heights)
+                }
+                Primitive::Loft { profile, scale, height, top, .. } => {
+                    make::loft(f, &sketch(profile)?, *scale, *height, &sketch(top)?)
+                }
             }
-            Primitive::Revolve { profile, angle: a, .. } => {
-                make::revolve(f, &sketch(profile)?, rad(*a))
-            }
-            Primitive::Screw { profile, rise, angle: a, .. } => {
-                make::screw(f, &sketch(profile)?, *rise, rad(*a))
-            }
-            Primitive::Sweep { profile, path: p, .. } => {
-                make::sweep(f, &sketch(profile)?, &path(p))
-            }
-            Primitive::SweepPath { profile, path: p, twist, .. } => {
-                make::sweep_path(f, &sketch(profile)?, &spline(p)?, rad(*twist))
-            }
-            Primitive::Slab { size, knots_u, knots_v, heights, .. } => {
-                make::slab(f, *size, knots_u, knots_v, heights)
-            }
-            Primitive::Loft { profile, scale, height, top, .. } => {
-                make::loft(f, &sketch(profile)?, *scale, *height, &sketch(top)?)
-            }
-        }
-        .map_err(r)
+            .map_err(r)
+        })())
     }
     fn loft_through(&self, f: &model::Frame, ps: &[profile::Profile], hs: &[f64]) -> Res<Solid> {
-        let sections = ps.iter().map(sketch).collect::<Res<Vec<_>>>()?;
-        let sections = pairs(sections, hs, "heights")?.into_iter().map(|(p, h)| (h, p));
-        make::loft_through(&frame(f)?, &sections.collect::<Vec<_>>()).map_err(r)
+        rec((|| -> Res<Solid> {
+            let sections = ps.iter().map(sketch).collect::<Res<Vec<_>>>()?;
+            let sections = pairs(sections, hs, "heights")?.into_iter().map(|(p, h)| (h, p));
+            make::loft_through(&frame(f)?, &sections.collect::<Vec<_>>()).map_err(r)
+        })())
     }
 
     // ---- booleans ----
     fn union(&self, a: &Solid, b: &Solid) -> Res<Solid> {
-        a.union(b).map_err(r)
+        rec((|| -> Res<Solid> {
+            a.union(b).map_err(r)
+        })())
     }
     fn intersection(&self, a: &Solid, b: &Solid) -> Res<Solid> {
-        a.intersection(b).map_err(r)
+        rec((|| -> Res<Solid> {
+            a.intersection(b).map_err(r)
+        })())
     }
     fn difference(&self, a: &Solid, b: &Solid) -> Res<Solid> {
-        a.difference(b).map_err(r)
+        rec((|| -> Res<Solid> {
+            a.difference(b).map_err(r)
+        })())
     }
     fn union_all(&self, solids: &[&Solid]) -> Res<Solid> {
-        Solid::union_all(&solids.iter().map(|&s| s.clone()).collect::<Vec<_>>()).map_err(r)
+        rec((|| -> Res<Solid> {
+            Solid::union_all(&solids.iter().map(|&s| s.clone()).collect::<Vec<_>>()).map_err(r)
+        })())
     }
     fn difference_all(&self, target: &Solid, tools: &[&Solid]) -> Res<Solid> {
-        target.difference_all(&tools.iter().map(|&s| s.clone()).collect::<Vec<_>>()).map_err(r)
+        rec((|| -> Res<Solid> {
+            target.difference_all(&tools.iter().map(|&s| s.clone()).collect::<Vec<_>>()).map_err(r)
+        })())
     }
     fn split(&self, s: &Solid, origin: V, normal: V) -> Res<(Solid, Solid)> {
-        let parts = s.split(&plane(origin, normal)?).map_err(r)?;
-        Ok((parts.front, parts.back))
+        rec2((|| -> Res<(Solid, Solid)> {
+            let parts = s.split(&plane(origin, normal)?).map_err(r)?;
+            Ok((parts.front, parts.back))
+        })())
     }
 
     // ---- blends ----
     fn fillet(&self, s: &Solid, at: &[V], radius: f64) -> Res<Solid> {
-        s.fillet(&edges(s, at)?, radius).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet(&edges(s, at)?, radius).map_err(r)
+        })())
     }
     fn fillet_radii(&self, s: &Solid, at: &[V], radii: &[f64]) -> Res<Solid> {
-        s.fillet_radii(&pairs(edges(s, at)?, radii, "radii")?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_radii(&pairs(edges(s, at)?, radii, "radii")?).map_err(r)
+        })())
     }
     fn fillet_variable(&self, s: &Solid, e: V, from: V, r_from: f64, r_to: f64) -> Res<Solid> {
-        s.fillet_variable(s.edge_at(e).map_err(r)?, from, r_from, r_to).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_variable(s.edge_at(e).map_err(r)?, from, r_from, r_to).map_err(r)
+        })())
     }
     fn fillet_conic(&self, s: &Solid, at: &[V], setback: f64, rho: f64) -> Res<Solid> {
-        s.fillet_conic(&edges(s, at)?, setback, rho).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_conic(&edges(s, at)?, setback, rho).map_err(r)
+        })())
     }
     fn fillet_g2(&self, s: &Solid, at: &[V], offset: f64, center: f64) -> Res<Solid> {
-        s.fillet_g2(&edges(s, at)?, offset, center).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_g2(&edges(s, at)?, offset, center).map_err(r)
+        })())
     }
     fn fillet_setback(&self, s: &Solid, at: &[V], radius: f64, setback: f64) -> Res<Solid> {
-        s.fillet_setback(&edges(s, at)?, radius, setback).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_setback(&edges(s, at)?, radius, setback).map_err(r)
+        })())
     }
     fn fillet_setback_g2(&self, s: &Solid, at: &[V], radius: f64, setback: f64) -> Res<Solid> {
-        s.fillet_setback_g2(&edges(s, at)?, radius, setback).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_setback_g2(&edges(s, at)?, radius, setback).map_err(r)
+        })())
     }
     fn fillet_faces(&self, s: &Solid, a: V, b: V, radius: f64) -> Res<Solid> {
-        s.fillet_faces(s.face_at(a).map_err(r)?, s.face_at(b).map_err(r)?, radius).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.fillet_faces(s.face_at(a).map_err(r)?, s.face_at(b).map_err(r)?, radius).map_err(r)
+        })())
     }
     fn full_round(&self, s: &Solid, a: V, middle: V, b: V) -> Res<Solid> {
-        let [a, m, b] = [a, middle, b].map(|p| s.face_at(p).map_err(r));
-        s.full_round(a?, m?, b?).map_err(r)
+        rec((|| -> Res<Solid> {
+            let [a, m, b] = [a, middle, b].map(|p| s.face_at(p).map_err(r));
+            s.full_round(a?, m?, b?).map_err(r)
+        })())
     }
     fn chamfer(&self, s: &Solid, at: &[V], distance: f64) -> Res<Solid> {
-        s.chamfer(&edges(s, at)?, distance).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.chamfer(&edges(s, at)?, distance).map_err(r)
+        })())
     }
     fn chamfer_two(&self, s: &Solid, e: V, f: V, d1: f64, d2: f64) -> Res<Solid> {
-        s.chamfer_two(s.edge_at(e).map_err(r)?, s.face_at(f).map_err(r)?, d1, d2).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.chamfer_two(s.edge_at(e).map_err(r)?, s.face_at(f).map_err(r)?, d1, d2).map_err(r)
+        })())
     }
     fn chamfer_distances(&self, s: &Solid, at: &[V], distances: &[f64]) -> Res<Solid> {
-        s.chamfer_distances(&pairs(edges(s, at)?, distances, "distances")?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.chamfer_distances(&pairs(edges(s, at)?, distances, "distances")?).map_err(r)
+        })())
     }
 
     // ---- edits ----
     fn offset(&self, s: &Solid, distance: f64) -> Res<Solid> {
-        s.offset(distance).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.offset(distance).map_err(r)
+        })())
     }
     fn offset_faces(&self, s: &Solid, at: &[V], distance: f64) -> Res<Solid> {
-        s.offset_faces(&faces(s, at)?, distance).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.offset_faces(&faces(s, at)?, distance).map_err(r)
+        })())
     }
     fn delete_faces(&self, s: &Solid, at: &[V]) -> Res<Solid> {
-        s.delete_faces(&faces(s, at)?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.delete_faces(&faces(s, at)?).map_err(r)
+        })())
     }
     fn move_faces(&self, s: &Solid, at: &[V], m: [[f64; 4]; 3]) -> Res<Solid> {
-        s.move_faces(&faces(s, at)?, &Rigid::from_rows(m).map_err(r)?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.move_faces(&faces(s, at)?, &Rigid::from_rows(m).map_err(r)?).map_err(r)
+        })())
     }
     fn thicken(&self, s: &Solid, at: &[V], thickness: f64) -> Res<Solid> {
-        s.thicken(&faces(s, at)?, thickness).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.thicken(&faces(s, at)?, thickness).map_err(r)
+        })())
     }
     fn shell(&self, s: &Solid, open: &[V], thickness: f64) -> Res<Solid> {
-        s.shell(&faces(s, open)?, thickness).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.shell(&faces(s, open)?, thickness).map_err(r)
+        })())
     }
     fn draft(&self, s: &Solid, at: &[V], origin: V, pull: V, a: f64) -> Res<Solid> {
-        s.draft(&faces(s, at)?, origin, pull, rad(a)).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.draft(&faces(s, at)?, origin, pull, rad(a)).map_err(r)
+        })())
     }
     fn transform(&self, s: &Solid, m: [[f64; 4]; 3]) -> Res<Solid> {
-        s.transform(&Similarity::from_rows(m).map_err(r)?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.transform(&Similarity::from_rows(m).map_err(r)?).map_err(r)
+        })())
     }
     fn affine(&self, s: &Solid, m: [[f64; 4]; 3]) -> Res<Solid> {
-        s.transform_affine(&Affine::from_rows(m).map_err(r)?).map_err(r)
+        rec((|| -> Res<Solid> {
+            s.transform_affine(&Affine::from_rows(m).map_err(r)?).map_err(r)
+        })())
     }
 
     // ---- exchange ----
@@ -175,10 +270,14 @@ impl Kernel for Yack {
         yack::step::write(s).map_err(r)
     }
     fn read_step(&self, text: &str) -> Res<Solid> {
-        yack::step::read(text).map_err(r)
+        rec((|| -> Res<Solid> {
+            yack::step::read(text).map_err(r)
+        })())
     }
     fn sew(&self, text: &str, tolerance: f64) -> Res<Solid> {
-        yack::step::sew(text, tolerance).map_err(r)
+        rec((|| -> Res<Solid> {
+            yack::step::sew(text, tolerance).map_err(r)
+        })())
     }
 
     // ---- queries ----
