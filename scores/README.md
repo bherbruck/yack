@@ -8,7 +8,7 @@ the same commit as the change that earned it.
 |---|---|
 | `conformance/seed<N>.json` | per case: outcome, tier, time_ms |
 | `bench.json` | per case: outcome, time, loc, strategy |
-| `digests/seed0.txt` | per case: result digests (M2–M3 pure-move gate) |
+| `digests/conformance-seed0.txt`, `digests/bench.txt` | `<case> <k> <op> <digest>` / `<case> <digest>\|refused`; the header names the tree and the bless reason. Re-recorded only with `xtask digest --bless --reason` (lead). The M2–M3 pure-move gate |
 | `waivers.toml` | the only allowed exceptions (case, reason, owner, expiry); never for `wrong` |
 | `eps.txt`, `filesize.txt`, `cadrs-loc.txt` | counts that may only fall |
 | `known-failing.txt` | a ledger that may only shrink |

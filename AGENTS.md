@@ -108,7 +108,9 @@ These commands are for the builder, or for an agent working alone.
 | `cargo build` / `cargo build --release` | Build into `bin/` |
 | `cargo check -p yack-<crate>` | Fast per-crate check |
 | `cargo test -p yack-<crate>` / `cargo test --workspace` | Run tests |
-| `cargo xtask gate` | The structure gates: layers, one public crate, zero deps, leaks, file size, epsilons, hidden state, provenance, build dir. **Must be green before every commit** |
+| `cargo xtask gate` | The structure gates: layers, one public crate, zero deps, leaks, file size, epsilons, hidden state, provenance, build dir. |
+| `cargo xtask ci` / `ci --quick` | **The pre-commit gate:** `gate`, `api`, `digest --check` and the conformance ratchet. `--quick` samples 10% of families (1-2 min of digests, seed 1 for the ratchet). In swarm mode run it outside the builder from frozen binaries: `--bin-dir yack-ref/bin/digest-<fp> --tree <fp>` |
+| `cargo xtask digest --check` | Every conformance seed-0 and bench result's `Solid::digest()` must equal `scores/digests/`. Pure moves (M2, M3) must pass it unchanged |
 | `cargo xtask api` | Diff the `yack` public surface against `crates/yack/api.txt` |
 | `cargo xtask conformance --seed 0` | brep-conformance on seed 0, ratcheted against `scores/conformance/` |
 | `cargo xtask conformance --seeds 0-3` | Seeds 0–3 |
@@ -122,6 +124,8 @@ These commands are for the builder, or for an agent working alone.
 | `cargo xtask corpus <name>` | Run a corpus |
 
 Rules for the ratchets:
+
+- `scores/digests/` is re-recorded only by the lead: `cargo xtask digest --bless --reason "<why>"`; the reason and tree go into the file header. Never two digest runs from one binary set at once; each run gets its own scratch dir.
 
 - A worse outcome on any case fails, including on a seed you did not touch.
 - Bless only real improvements, in the same commit as the change that caused them.
