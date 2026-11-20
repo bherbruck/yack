@@ -8,18 +8,23 @@ use yack_cadrs::yack_glue as glue;
 use crate::{Angle, EdgeId, FaceId, Point3, Result, Solid};
 
 /// A hard guard (brep-bench edit/half-torus-outer-rim-round-deleted): springrep's fillet given
-/// one rim of a half torus's flat face rounds both. A springrep blend that made more blend faces
-/// than the given edges' tangent chains have edges blended past them: refused (never this solid),
-/// so cadrs answers.
-fn over_blend(op: &'static str, input: &Solid, edges: &[u64], part: &str, out: Solid) -> Result<Solid> {
-    match engine_cadrs::chain_len(input, edges) {
-        Some(n) if out.own_parts(part) > n => Err(crate::Error::failed(
-            op,
-            crate::Stage::Validate,
-            format!("springrep declines: it blended {} faces where the given edges' chains have {n} edges", out.own_parts(part)),
-        )),
-        _ => Ok(out),
+/// one rim of a half torus's flat face rounds both. A springrep blend with a group of blend faces
+/// that comes nowhere near the given edges (judged on springrep's own result): refused (never
+/// this solid), so cadrs answers.
+fn over_blend(op: &'static str, input: &Solid, edges: &[u64], part: &str, size: f64, out: Solid) -> Result<Solid> {
+    let near: Vec<crate::Point3> = edges
+        .iter()
+        .filter_map(|&e| input.edges().into_iter().find(|id| u64::from(*id) == e))
+        .filter_map(|id| input.edge(id).ok().map(|r| r.midpoint()))
+        .collect();
+    let strays = match (out.brep(), out.feature_name()) {
+        (Some(b), Some(f)) => yack_springrep::facade::api::blend_strays(b, f, part, &near.iter().map(|&p| engine::p3(p)).collect::<Vec<_>>(), yack_math::scale_length(size, 2.0)),
+        _ => false,
+    };
+    if strays {
+        return Err(crate::Error::failed(op, crate::Stage::Validate, "springrep declines: it blended faces away from the given edges' chains"));
     }
+    Ok(out)
 }
 
 impl Solid {
@@ -42,7 +47,7 @@ impl Solid {
             let ix = crate::edit::indices(edges);
             ladder::two(
                 op,
-                &|| over_blend(op, self, &ix, "round_", engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))?),
+                &|| over_blend(op, self, &ix, "round_", radius, engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))?),
                 &|| engine_cadrs::blend(op, self, &ix, "round", |k, id| glue::fillet(k, id, &ix, radius)),
             )
         })
@@ -148,7 +153,7 @@ impl Solid {
             let ix = crate::edit::indices(edges);
             ladder::two(
                 op,
-                &|| over_blend(op, self, &ix, "bevel_", engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?),
+                &|| over_blend(op, self, &ix, "bevel_", distance, engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?),
                 &|| engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance)),
             )
         })

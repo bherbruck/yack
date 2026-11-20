@@ -437,9 +437,3 @@ pub(crate) fn shell(name: &'static str, s: &Solid, open: &[u64], thickness: f64,
     result(name, &feature, &c.session, made, &how)
 }
 
-/// How many edges a blend of `edges` on `s` runs along (each edge's tangent chain, seams aside),
-/// by cadrs's rule; `None` when cadrs cannot take the solid.
-pub(crate) fn chain_len(s: &Solid, edges: &[u64]) -> Option<usize> {
-    let c = of("blend", s).ok()?;
-    yack_glue::chained(&lock(&c.session), c.id, edges).ok().map(|v| v.len())
-}

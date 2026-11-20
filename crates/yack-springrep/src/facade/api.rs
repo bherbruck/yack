@@ -294,3 +294,52 @@ pub fn open_at_concave_edge(b: &Brep, open: &[FaceId]) -> bool {
         b.face(f).loops.iter().any(|&l| b.lp(l).coedges.iter().any(|&c| convexity(b, b.coedge(c).edge) == Some(false)))
     })
 }
+
+/// Whether the blend `feature` made in `out` strays from the given edges: some connected group of
+/// its blend faces (faces of `feature` whose part starts `part`, joined where they share an edge)
+/// comes no nearer than `reach` to any of the given edges' midpoints `near`. A fillet of one rim
+/// that also rounded another rim makes such a group (brep-bench edit/half-torus-outer-rim-round-deleted).
+pub fn blend_strays(out: &Brep, feature: &str, part: &str, near: &[Point3], reach: f64) -> bool {
+    if near.is_empty() {
+        return false;
+    }
+    let blend: Vec<FaceId> = out
+        .face_ids()
+        .filter(|&f| out.face(f).names.iter().any(|n| n.feature == feature && n.face.starts_with(part)))
+        .collect();
+    let edges_of = |f: FaceId| -> std::collections::BTreeSet<EdgeId> {
+        out.face(f).loops.iter().flat_map(|&l| out.lp(l).coedges.iter().map(|&c| out.coedge(c).edge)).collect()
+    };
+    let sets: Vec<std::collections::BTreeSet<EdgeId>> = blend.iter().map(|&f| edges_of(f)).collect();
+    let mut group: Vec<usize> = (0..blend.len()).collect();
+    fn root(g: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while g.get(r).copied().unwrap_or(r) != r {
+            r = g.get(r).copied().unwrap_or(r);
+        }
+        r
+    }
+    for i in 0..blend.len() {
+        for j in (i + 1)..blend.len() {
+            if let (Some(a), Some(b)) = (sets.get(i), sets.get(j))
+                && !a.is_disjoint(b)
+            {
+                let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                if let Some(slot) = group.get_mut(ri) {
+                    *slot = rj;
+                }
+            }
+        }
+    }
+    let mut best: std::collections::BTreeMap<usize, f64> = std::collections::BTreeMap::new();
+    for (i, &f) in blend.iter().enumerate() {
+        let d = near
+            .iter()
+            .filter_map(|&p| Nearest::of(out, &Selection::face(f)).ok()?.to(p).ok().map(|c| c.distance))
+            .fold(f64::INFINITY, f64::min);
+        let r = root(&mut group, i);
+        let e = best.entry(r).or_insert(f64::INFINITY);
+        *e = e.min(d);
+    }
+    best.values().any(|&d| d > reach)
+}

@@ -34,6 +34,7 @@ const INVALID_PER_PROTOCOL: &[(&str, &str)] = &[
     ("*", "takes a whole face"),
     ("*", "runs past the end of an edge"),
     ("*", "does not fit on its faces"),
+    ("fillet", "the faces are parallel"),
     ("cone", "needs a positive height"),
     ("extrude", "must be nonzero"),
     ("loft_through", "do not come in order"),

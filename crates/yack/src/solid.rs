@@ -212,11 +212,9 @@ impl Solid {
         }
     }
 
-    /// How many faces carry this solid's own feature with a face part starting `prefix`
-    /// (`round_`, `bevel_`): the faces the op that made it blended.
-    pub(crate) fn own_parts(&self, prefix: &str) -> usize {
-        let (Some(b), Some(f)) = (self.brep(), self.0.feature.as_deref()) else { return 0 };
-        b.face_ids().filter(|&x| b.face(x).names.iter().any(|n| n.feature == f && n.face.starts_with(prefix))).count()
+    /// The engine feature name the op that made this solid gave its new faces.
+    pub(crate) fn feature_name(&self) -> Option<&str> {
+        self.0.feature.as_deref()
     }
 
     /// Why a guard doubts this solid, if one does.

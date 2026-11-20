@@ -77,3 +77,45 @@ pub fn affine(b: &Brep, m: [[f64; 4]; 3]) -> Result<Brep> {
     let (m, t) = split(m);
     edit::affine(b, &edit::Affine { m, t })
 }
+
+/// `b` with every face that has no name named `<feature>.<part>`: springrep's face edits keep the
+/// names of the faces they carry over and leave the faces they make unnamed.
+fn name_new(mut b: Brep, feature: &str, part: &str) -> Brep {
+    let fresh: Vec<FaceId> = b.face_ids().filter(|&f| b.face(f).names.is_empty()).collect();
+    for f in fresh {
+        b.set_face_names(f, std::iter::once(crate::topo::FaceName::new(feature, part)).collect());
+    }
+    b
+}
+
+/// [`offset_faces`], naming the faces it makes `<feature>.side`.
+pub fn offset_faces_named(b: &Brep, faces: &[FaceId], distance: f64, feature: &str) -> Result<Brep> {
+    offset_faces(b, faces, distance).map(|r| name_new(r, feature, "side"))
+}
+
+/// [`delete_faces`], naming the faces it makes `<feature>.fill`.
+pub fn delete_faces_named(b: &Brep, faces: &[FaceId], feature: &str) -> Result<Brep> {
+    delete_faces(b, faces).map(|r| name_new(r, feature, "fill"))
+}
+
+/// [`move_faces`], naming the faces it makes `<feature>.side`.
+pub fn move_faces_named(b: &Brep, faces: &[FaceId], m: [[f64; 4]; 3], feature: &str) -> Result<Brep> {
+    move_faces(b, faces, m).map(|r| name_new(r, feature, "side"))
+}
+
+/// [`thicken`], naming the faces it makes `<feature>.side`.
+pub fn thicken_named(b: &Brep, faces: &[FaceId], thickness: f64, feature: &str) -> Result<Brep> {
+    thicken(b, faces, thickness).map(|r| name_new(r, feature, "side"))
+}
+
+/// [`draft`], naming the faces it makes `<feature>.side`.
+pub fn draft_named(
+    b: &Brep,
+    faces: &[FaceId],
+    origin: [f64; 3],
+    pull: [f64; 3],
+    angle: f64,
+    feature: &str,
+) -> Result<Brep> {
+    draft(b, faces, origin, pull, angle).map(|r| name_new(r, feature, "side"))
+}
