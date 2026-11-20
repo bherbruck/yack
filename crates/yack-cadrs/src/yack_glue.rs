@@ -92,6 +92,10 @@ fn runaway(m: &Move) -> bool {
 fn solid_motion(m: &Move) -> SolidMotion {
     match *m {
         Move::Slide { by } => SolidMotion::slide(v3(by)),
+        // A whole turn or more sweeps what one does: cadrs's endless turn, which it makes exactly
+        // where it can (v-wheel-turned-once-round-rod, as cadrs's runner) and by the swing only
+        // as a mesh.
+        Move::Turn { point, axis, angle } if angle.abs() >= std::f64::consts::TAU => SolidMotion::Turn { axis: Axis::new(p3(point), v3(axis)) },
         Move::Turn { point, axis, angle } => SolidMotion::swing(Axis::new(p3(point), v3(axis)), 0.0, angle),
         Move::Screw { point, axis, angle, rise_per_turn } => {
             SolidMotion::helical(Axis::new(p3(point), v3(axis)), rise_per_turn, 0.0, angle)
@@ -120,16 +124,24 @@ fn solid_motion(m: &Move) -> SolidMotion {
     }
 }
 
-/// Whether cadrs made `body` only as a mesh (a thousand flat facets and no curved face: its
-/// contouring fallback), not as the solid's own faces.
-fn faceted(k: &DefaultKernel, body: BodyId) -> Result<bool> {
-    let b = k.get(body)?;
-    let flat = b.faces.iter().filter(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })).count();
-    Ok(flat == b.faces.len() && flat > 1000)
-}
 
 /// Everything `body` passes through as it moves by `m` (cadrs's sweep of a solid).
 pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
+    exact(k, |k| swept_exactly(k, body, m))
+}
+
+/// Runs `f` with the session's [`Tolerances::exact_only`](crate::native::tol::Tolerances) set:
+/// where cadrs would answer a moving solid only by a mesh, it refuses at once (yack returns no
+/// faceted solid, and the mesh can take a minute). The session's tolerances as they were after.
+pub fn exact<T>(k: &mut DefaultKernel, f: impl FnOnce(&mut DefaultKernel) -> Result<T>) -> Result<T> {
+    let was = k.tolerances();
+    k.set_tolerances(crate::native::tol::Tolerances { exact_only: true, ..was })?;
+    let r = f(k);
+    k.set_tolerances(was)?;
+    r
+}
+
+fn swept_exactly(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
     let dir = match *m {
         Move::Turn { axis, .. } | Move::Screw { axis, .. } | Move::Climb { axis, .. } => axis,
         Move::Along { up, .. } => up,
@@ -144,12 +156,15 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
     if runaway(m) {
         return Err(KernelError::Unsupported("a screw of more than 64 turns"));
     }
-    let (out, history) = made(k.sweep_solid(body, &solid_motion(m)))?;
-    if faceted(k, out)? {
-        k.release(out);
-        return Err(KernelError::Unsupported("cadrs sweeps this body only as a mesh of flat facets"));
-    }
-    Ok((out, history))
+    let r = match (k.sweep_solid(body, &solid_motion(m)), m) {
+        // cadrs's endless turn takes only a solid of revolution (a torus, or a convex section
+        // turned); any other body's whole turn is its swing round.
+        (Err(KernelError::Unsupported(_)), &Move::Turn { point, axis, angle }) if angle.abs() >= std::f64::consts::TAU => {
+            k.sweep_solid(body, &SolidMotion::swing(Axis::new(p3(point), v3(axis)), 0.0, angle))
+        }
+        (r, _) => r,
+    };
+    made(r)
 }
 
 /// The unit normal of the plane holding every control point, or `None` when they are collinear
@@ -264,6 +279,15 @@ pub fn shell_rounded(k: &mut DefaultKernel, body: BodyId, open: &[u64], thicknes
 
 /// Faces `ix` thickened by `thickness` (positive along their outward normals).
 pub fn thicken(k: &mut DefaultKernel, body: BodyId, ix: &[u64], thickness: f64) -> Result<Made> {
+    thicken_joined(k, body, ix, thickness, false)
+}
+
+/// Faces `ix` of `body` thickened by `thickness` (> 0 along their outward normals, < 0 against),
+/// where two of them meet the walls joined `sharp` (the moved faces run on until they meet:
+/// mitred) or round (a round of `thickness` about the edge), as cadrs's Thicken of faces
+/// (cadrs's runner's thicken/angle-bracket-* and open-box-outward-*). The sheet's free rims are
+/// swept along the faces' normals.
+pub fn thicken_joined(k: &mut DefaultKernel, body: BodyId, ix: &[u64], thickness: f64, sharp: bool) -> Result<Made> {
     let inputs = faces(ix).into_iter().map(|face| FaceInput { body, face, source: 0 }).collect();
     let spec = ThickenSpec {
         bodies: Vec::new(),
@@ -271,7 +295,7 @@ pub fn thicken(k: &mut DefaultKernel, body: BodyId, ix: &[u64], thickness: f64) 
         profiles: Vec::new(),
         along: thickness.max(0.0),
         against: (-thickness).max(0.0),
-        sharp: false,
+        sharp,
         source: 0,
     };
     made(k.thicken_surfaces(&spec))
@@ -373,6 +397,7 @@ fn fits(k: &DefaultKernel, body: BodyId, es: &[EdgeId], size: f64, out: &Made) -
     Ok(())
 }
 
+
 /// Edges `ix` (and their tangent chains) rounded with `radius`.
 pub fn fillet(k: &mut DefaultKernel, body: BodyId, ix: &[u64], radius: f64) -> Result<Made> {
     let es = chain_ids(k, body, ix)?;
@@ -443,6 +468,56 @@ pub fn chamfer_two(k: &mut DefaultKernel, body: BodyId, e: u64, face: u64, d1: f
 pub fn chamfer_angle(k: &mut DefaultKernel, body: BodyId, e: u64, face: u64, distance: f64, angle: f64) -> Result<Made> {
     let opts = ChamferOpts::new(ChamferSpec::DistanceAngle { distance, angle }).first_on(FaceId(face));
     chamfer_opts(k, body, &[e], &opts)
+}
+
+/// `body` with its face `face` replaced by the B-spline surface on the net `poles` (rows along
+/// u; `weights` the same shape, or `None`), its neighbours re-trimmed to it over the surface's
+/// whole domain (cadrs's replace-face, as cadrs's runner builds nurbs/bspline-dome's block under
+/// a free net and nurbs/flat-bspline-slabs-united's flat patches).
+#[allow(clippy::too_many_arguments)]
+pub fn replace_face(
+    k: &mut DefaultKernel,
+    body: BodyId,
+    face: u64,
+    degree: [usize; 2],
+    knots_u: &[f64],
+    knots_v: &[f64],
+    poles: &[Vec<[f64; 3]>],
+    weights: Option<&[Vec<f64>]>,
+) -> Result<Made> {
+    let (Some(&u0), Some(&u1), Some(&v0), Some(&v1)) = (knots_u.first(), knots_u.last(), knots_v.first(), knots_v.last()) else {
+        return Err(KernelError::InvalidInput("a face's net needs knots each way".into()));
+    };
+    let surface = crate::native::NurbsSurface::from_points(degree[0], degree[1], knots_u.to_vec(), knots_v.to_vec(), poles, weights)?;
+    made(k.replace_faces(body, &[crate::FaceReplacement { face: FaceId(face), surface: surface.into(), domain: Some(((u0, u1), (v0, v1))) }]))
+}
+
+/// A drawing's polylines: those the viewer sees, then those the solid hides.
+pub type Drawn = (Vec<Vec<[f64; 2]>>, Vec<Vec<[f64; 2]>>);
+
+/// `body`'s hidden-line drawing looking along `dir`, drawn on the view axes `u` (across) and
+/// `v = u × dir` (up): its sharp edges and its curved faces' outlines, each cut where it passes
+/// behind the solid, as polylines within `tolerance` (cadrs's hidden-line removal, exact
+/// silhouettes; edges between tangent faces, and seams, not drawn).
+pub fn hidden_lines(k: &DefaultKernel, body: BodyId, dir: [f64; 3], u: [f64; 3], tolerance: f64) -> Result<Drawn> {
+    if !(tolerance > 0.0) {
+        return Err(KernelError::InvalidInput("a drawing's tolerance must be positive".into()));
+    }
+    let frame = crate::ViewFrame::new(v3(dir), v3(u));
+    let opts = crate::ProjectOptions { tolerance, hidden: true };
+    let p = k.project(&[body], &frame, &opts)?;
+    let (mut seen, mut hidden) = (Vec::new(), Vec::new());
+    for e in p.edges {
+        if matches!(e.class, crate::ProjClass::Smooth) {
+            continue;
+        }
+        let line: Vec<[f64; 2]> = e.points.iter().map(|q| [q.x, q.y]).collect();
+        match e.visibility {
+            crate::ProjVisibility::Visible => seen.push(line),
+            crate::ProjVisibility::Hidden => hidden.push(line),
+        }
+    }
+    Ok((seen, hidden))
 }
 
 /// The solid torus about the line through `center` along `axis` (horn and spindle tori too).
@@ -547,6 +622,16 @@ pub fn primitive(k: &mut DefaultKernel, frame: &crate::facade::profile::Place, p
             axis: up,
             seam: nalgebra::Unit::new_unchecked(Vector3::x()),
         },
+        // A pointed cone drawn from its point (the same solid): cadrs sweeps one so drawn exactly
+        // where, drawn from its base, it only meshes it (cone-spun-about-a-line-through-it, as
+        // cadrs's runner draws it).
+        Prim::Cone { bottom, top, height } if top == 0.0 && bottom > 0.0 => Primitive::Cone {
+            base: Point3::new(0.0, 0.0, height),
+            axis: nalgebra::Unit::new_unchecked(-Vector3::z()),
+            base_radius: 0.0,
+            top_radius: bottom,
+            height,
+        },
         Prim::Cone { bottom, top, height } => {
             Primitive::Cone { base: Point3::origin(), axis: up, base_radius: bottom, top_radius: top, height }
         }
@@ -650,11 +735,6 @@ fn near_axis(k: &mut DefaultKernel, tool: BodyId, target: BodyId, point: [f64; 3
 /// `target` less everything `tool` passes through as it moves by `m` (cadrs's cut by a moving
 /// tool, which builds what it removes a stretch at a time). Under a turn or screw only the tool's
 /// part within the target's reach of the axis is moved.
-/// Whether `faces` are all of revolution about one axis (spheres, tori, cones and cylinders on
-/// it, planes square to it): a body cadrs sweeps by a turn or screw by its envelope.
-fn of_revolution(faces: &[crate::native::topo::Face]) -> bool {
-    revolution_axis(faces).is_some()
-}
 
 /// The axis `faces` are all of revolution about (a point on it and its direction), if any: a
 /// ball's is the vertical through its centre.
@@ -695,21 +775,30 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
     if runaway(m) {
         return Err(KernelError::Unsupported("a screw of more than 64 turns"));
     }
-    // A body of revolution with a torus or cone on it is left whole: cadrs cuts by a turned or
-    // screwed one exactly, by its envelope (torus-screwed-through-rod: 4 faces in 0.1 s,
-    // v-wheel-screwed-through-rod), and by a trimmed piece of one only as a mesh. A drum (a
-    // cylinder) is trimmed, as cadrs's runner trims it: whole, cadrs meshes its screw
-    // (drum-end-screwed-through-rod: 10.7 s to a mesh, MEASURED).
-    let whole = k.get(tool).is_ok_and(|b| {
-        use crate::native::surface::Surface as S;
-        of_revolution(&b.faces) && b.faces.iter().any(|f| matches!(f.surf, S::Torus { .. } | S::Cone { .. } | S::Revolution { .. }))
-    });
-    let used = match *m {
-        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } | Move::Climb { point, axis, .. } if !whole => {
+    // A turned or screwed tool is first trimmed to the target's reach of the axis, as cadrs's
+    // runner trims a drum, a bar or a cone's point (whole, cadrs meshes them); where cadrs
+    // would cut by the trimmed tool only as a mesh (a torus or a wheel: it cuts by those
+    // exactly whole, by their envelope), the whole tool. Under exact_only a mesh is a refusal
+    // at once, so the second try costs nothing.
+    let trimmed = match *m {
+        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } | Move::Climb { point, axis, .. } => {
             near_axis(k, tool, target, point, axis)?
         }
         _ => tool,
     };
+    let r = cut_by(k, target, trimmed, m);
+    if trimmed == tool {
+        return r;
+    }
+    k.release(trimmed);
+    match r {
+        Err(_) => cut_by(k, target, tool, m),
+        r => r,
+    }
+}
+
+/// `target` less what `used` passes through along `m`, a mesh refused.
+fn cut_by(k: &mut DefaultKernel, target: BodyId, used: BodyId, m: &Move) -> Result<Made> {
     // cadrs's cut by a moving tool is exact for a screw (fine-thread: 1276.703 against cadrs's
     // runner's 1276.703) but not for a turn (pin-swung-through-ring-sector: 53.931 against the
     // exact 53.843, MEASURED natively): there the sweep, exact for one turn, is cut instead.
@@ -727,15 +816,7 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
             r
         }),
     };
-    if used != tool {
-        k.release(used);
-    }
-    let (out, history) = made(r)?;
-    if faceted(k, out)? {
-        k.release(out);
-        return Err(KernelError::Unsupported("cadrs cuts by this moving tool only as a mesh of flat facets"));
-    }
-    Ok((out, history))
+    made(r)
 }
 
 /// `target` less everything `tool` passes through as it moves by each of `moves` in turn (one:
@@ -743,6 +824,10 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
 /// by each leg in order. The history is the last cut's (for a single move, the target's faces
 /// kept or modified, as a boolean's); Unsupported where cadrs would make the cut only as a mesh.
 pub fn cut_swept(k: &mut DefaultKernel, target: BodyId, tool: BodyId, moves: &[Move]) -> Result<Made> {
+    exact(k, |k| cut_swept_exactly(k, target, tool, moves))
+}
+
+fn cut_swept_exactly(k: &mut DefaultKernel, target: BodyId, tool: BodyId, moves: &[Move]) -> Result<Made> {
     if moves.is_empty() {
         return Err(KernelError::InvalidInput("a cut by no motion".into()));
     }
@@ -828,12 +913,9 @@ fn slides_cut(k: &mut DefaultKernel, target: BodyId, tool: BodyId, slides: &[Mov
             at += v;
         }
         let motion = SolidMotion::Path { path, up: nalgebra::Unit::new_normalize(a) };
+        // (exact_only: a mesh is refused, and the slides are cut one by one instead.)
         if let Ok(r) = k.cut_swept(target, tool, &motion) {
-            let (out, history) = (r.first()?, r.history);
-            if !faceted(k, out)? {
-                return Ok((out, history));
-            }
-            k.release(out);
+            return Ok((r.first()?, r.history));
         }
     }
     let mut tools = Vec::with_capacity(by.len());
@@ -887,6 +969,7 @@ pub fn boolean(k: &mut DefaultKernel, how: crate::BoolOp, a: BodyId, tools: &[Bo
             confusion: base.confusion.min(point / 10.0),
             point,
             retries: [base.retries[0].min(least / 30.0).max(point), base.retries[1].min(least / 10.0).max(point)],
+            ..base
         };
         k.set_tolerances(tol)?;
     }

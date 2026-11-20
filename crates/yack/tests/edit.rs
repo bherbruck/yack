@@ -61,7 +61,7 @@ fn shell_outward_grows_a_wall_outside() {
 #[test]
 fn thicken_makes_a_slab_of_a_face() {
     let s = brick();
-    let t = s.thicken(&[top(&s)], 2.0).unwrap();
+    let t = s.thicken(&[top(&s)], 2.0, Join::Round).unwrap();
     assert!(t.check().is_empty());
     close(t.volume(), 10.0 * 20.0 * 2.0);
 }
@@ -173,4 +173,38 @@ fn turns_together_and_from_a_start_angle() {
     ]);
     let c = cube.unwrap();
     assert!((c.volume() - 1.0).abs() < 1e-6, "{}", c.volume());
+}
+
+/// swept/tumbling-cube: cadrs sweeps a cube under two turns at once exactly (its polyhedron
+/// path), so the answer is kept: exact-only refuses only where cadrs would mesh.
+#[test]
+fn a_tumbling_cube_is_swept_exactly() {
+    let cube = block(&Frame::at([2.4, -0.6, 1.4]), [1.2, 1.2, 1.2]).unwrap();
+    let roll = Motion::turn(Point3::new(2.0, 0.0, 0.0), Dir3::Z, deg(-18.75), deg(18.75));
+    let tumble = Motion::turn(Point3::new(0.0, 0.5, 0.5), Dir3::X, deg(75.0), deg(-75.0));
+    let s = cube.swept(&Motion::together(vec![roll, tumble])).unwrap();
+    assert!(s.is_exact() && s.check().is_empty());
+    assert!(s.volume() > cube.volume());
+}
+
+/// The meshed control: a cube climbing a screw whose lead grows is one cadrs sweeps only as a
+/// mesh; it is refused, never answered faceted.
+#[test]
+fn a_climb_cadrs_only_meshes_is_refused() {
+    let cube = block(&Frame::at([2.0, -0.5, 0.0]), [1.0, 1.0, 1.0]).unwrap();
+    let climb = Motion::screw(Point3::ORIGIN, Dir3::Z, rad(0.0), rad(1.0), Lead::polynomial(vec![0.0, 0.5, 0.5]));
+    match cube.swept(&climb) {
+        Ok(s) => panic!("answered, strategy {}, volume {}", s.strategy(), s.volume()),
+        Err(e) => assert_ne!(e.kind, ErrorKind::Internal, "{e}"),
+    }
+}
+
+/// thicken/angle-bracket-{sharp,rounded}: the floor and one wall of a block, thickened outward
+/// together; the crease between them mitred (168) or rounded by a quarter cylinder (166.28…).
+#[test]
+fn a_bracket_thickens_sharp_or_round() {
+    let b = block(&Frame::WORLD, [10.0, 8.0, 10.0]).unwrap();
+    let sheet = b.faces_at(&[[5.0, 4.0, 0.0], [0.0, 4.0, 5.0]]).unwrap();
+    close(b.thicken(&sheet, 1.0, Join::Sharp).unwrap().volume(), 168.0);
+    close(b.thicken(&sheet, 1.0, Join::Round).unwrap().volume(), 160.0 + 2.0 * PI);
 }

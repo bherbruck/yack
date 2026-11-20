@@ -6,12 +6,15 @@
 use core::fmt;
 
 mod report;
+mod selfcheck;
 mod to_cadrs;
 mod to_springrep;
+mod written;
 
 pub use report::{AGREE, CADRS_AGREE, RoundTrip, round_trip};
 pub use to_cadrs::to_cadrs;
 pub use to_springrep::{to_springrep, to_springrep_mapped};
+pub use written::{CADRS_WRITTEN_AGREES, check_written_cadrs};
 
 /// Why a conversion did not happen.
 #[derive(Clone, Debug, PartialEq, Eq)]

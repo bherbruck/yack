@@ -98,6 +98,15 @@ impl fmt::Display for Tag {
     }
 }
 
+/// How a thickened sheet closes where its faces part at a crease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Join {
+    /// The moved faces extended until they meet (a mitre), adding no round.
+    Sharp,
+    /// A cylinder of the thickness about each crease, a ball about each corner.
+    Round,
+}
+
 /// Where a point lies relative to a solid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Side {

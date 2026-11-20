@@ -18,12 +18,12 @@ impl Solid {
     /// ```
     pub fn union(&self, other: &Solid) -> Result<Solid> {
         firewall::run("union", || {
-            match (self.brep(), other.brep()) {
-                (None, _) => Ok(other.clone()),
-                (_, None) => Ok(self.clone()),
-                (Some(a), Some(b)) => ladder::two(
+            match (self.is_empty(), other.is_empty()) {
+                (true, _) => Ok(other.clone()),
+                (_, true) => Ok(self.clone()),
+                _ => ladder::two(
                     "union",
-                    &|| engine::solid("union", sr::union(a, b)),
+                    &|| engine::solid("union", sr::union(self.need("union")?, other.need("union")?)),
                     &|| engine_cadrs::boolean("union", BoolOp::Union, self, &[other]),
                 ),
             }
@@ -33,10 +33,11 @@ impl Solid {
     /// Everything in both solids.
     pub fn intersection(&self, other: &Solid) -> Result<Solid> {
         firewall::run("intersection", || {
-            match (self.brep(), other.brep()) {
-                (Some(a), Some(b)) => ladder::two(
+            match (self.is_empty(), other.is_empty()) {
+                (false, false) => ladder::two(
                     "intersection",
                     &|| {
+                        let (a, b) = (self.need("intersection")?, other.need("intersection")?);
                         let out = engine::solid("intersection", sr::intersection(a, b))?;
                         if out.is_empty() && yack_springrep::facade::api::boxes_overlap(a, b) {
                             return Ok(out.suspect("an empty intersection of solids whose boxes overlap (a sliver it may have lost)"));
@@ -53,12 +54,12 @@ impl Solid {
     /// This solid less `tool`.
     pub fn difference(&self, tool: &Solid) -> Result<Solid> {
         firewall::run("difference", || {
-            match (self.brep(), tool.brep()) {
-                (None, _) => Ok(Solid::empty()),
-                (_, None) => Ok(self.clone()),
-                (Some(a), Some(b)) => ladder::two(
+            match (self.is_empty(), tool.is_empty()) {
+                (true, _) => Ok(Solid::empty()),
+                (_, true) => Ok(self.clone()),
+                _ => ladder::two(
                     "difference",
-                    &|| engine::solid("difference", sr::difference(a, b)),
+                    &|| engine::solid("difference", sr::difference(self.need("difference")?, tool.need("difference")?)),
                     &|| engine_cadrs::boolean("difference", BoolOp::Subtract, self, &[tool]),
                 ),
             }
@@ -73,11 +74,13 @@ impl Solid {
                 [] => Ok(Solid::empty()),
                 [one] => Ok((*one).clone()),
                 _ => {
-                    let breps: Vec<&Brep> = parts.iter().filter_map(|s| s.brep()).collect();
                     let [first, rest @ ..] = parts.as_slice() else { return Ok(Solid::empty()) };
                     ladder::two(
                         "union_all",
-                        &|| engine::solid("union_all", sr::union_all(&breps)),
+                        &|| {
+                            let breps = parts.iter().map(|s| s.need("union_all")).collect::<Result<Vec<&Brep>>>()?;
+                            engine::solid("union_all", sr::union_all(&breps))
+                        },
                         &|| engine_cadrs::boolean("union_all", BoolOp::Union, first, rest),
                     )
                 }
@@ -88,15 +91,19 @@ impl Solid {
     /// This solid less every tool.
     pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> {
         firewall::run("difference_all", || {
-            let Some(a) = self.brep() else { return Ok(Solid::empty()) };
-            let breps: Vec<&Brep> = tools.iter().filter_map(|s| s.brep()).collect();
-            if breps.is_empty() {
-                return Ok(self.clone());
+            if self.is_empty() {
+                return Ok(Solid::empty());
             }
             let tools: Vec<&Solid> = tools.iter().filter(|s| !s.is_empty()).collect();
+            if tools.is_empty() {
+                return Ok(self.clone());
+            }
             ladder::two(
                 "difference_all",
-                &|| engine::solid("difference_all", sr::difference_all(a, &breps)),
+                &|| {
+                    let breps = tools.iter().map(|s| s.need("difference_all")).collect::<Result<Vec<&Brep>>>()?;
+                    engine::solid("difference_all", sr::difference_all(self.need("difference_all")?, &breps))
+                },
                 &|| engine_cadrs::boolean("difference_all", BoolOp::Subtract, self, &tools),
             )
         })

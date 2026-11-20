@@ -25,7 +25,7 @@ crates/yack-cadrs/src/native/sweep/frames.rs 1609
 crates/yack-cadrs/src/native/sweep_faces.rs 2141
 crates/yack-cadrs/src/native/sweep_generate.rs 6800
 crates/yack-cadrs/src/native/sweep_moving.rs 4297
-crates/yack-cadrs/src/native/sweep_solid.rs 5490
+crates/yack-cadrs/src/native/sweep_solid.rs 5493
 crates/yack-cadrs/src/native/sweep_tube.rs 5625
 crates/yack-cadrs/src/native/tess.rs 2839
 crates/yack-cadrs/src/native/topo.rs 3538
@@ -37,7 +37,7 @@ crates/yack-cadrs/tests/conformance.rs 4954
 crates/yack-springrep/src/blend.rs 3467
 crates/yack-springrep/src/intersect/csi.rs 2540
 crates/yack-springrep/src/boolean/mod.rs 2945
-crates/yack-springrep/src/boolean/tests.rs 1833
+crates/yack-springrep/src/boolean/tests.rs 1771
 crates/yack-springrep/src/geom/nurbs.rs 2555
 crates/yack-springrep/src/measure.rs 1969
 crates/yack-springrep/src/step/tests.rs 1964

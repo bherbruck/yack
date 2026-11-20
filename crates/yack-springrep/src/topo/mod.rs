@@ -4,10 +4,10 @@
 //! The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 //! edge by one face. Every entity lives in one [`Brep`] and is referred to by a typed id.
 
-mod codec;
 mod facts;
 mod memo;
 mod names;
+mod parts;
 pub(crate) mod pcurve;
 pub(crate) mod radial;
 mod similar;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 pub use facts::{Facts, OnFace};
 pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey};
 pub use names::FaceName;
+pub(crate) use parts::{Entities, Parts};
 pub use pcurve::PCurve;
 pub(crate) use walks::{coedge_params, fans_at_vertices};
 pub(crate) use pcurve::project_on;
@@ -43,6 +44,16 @@ macro_rules! id {
 
             fn at(i: usize) -> $name {
                 $name(u32::try_from(i).expect("arena index fits in u32"))
+            }
+
+            /// The id as the encoder writes it.
+            pub(crate) fn raw(self) -> u32 {
+                self.0
+            }
+
+            /// The id the encoder wrote as `raw`; the arena checks it names one of its entities.
+            pub(crate) fn from_raw(raw: u32) -> $name {
+                $name(raw)
             }
         }
     };
@@ -159,9 +170,9 @@ pub type Tolerant = (Vec<(VertexId, f64)>, Vec<(EdgeId, f64)>);
 /// (doc/design.md, "Tolerance policy"). A vertex's sphere holds the tube of every edge ending at
 /// it, and two entities coincide within the sum of their tolerances.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Tolerances {
-    vertices: BTreeMap<VertexId, f64>,
-    edges: BTreeMap<EdgeId, f64>,
+pub(crate) struct Tolerances {
+    pub(crate) vertices: BTreeMap<VertexId, f64>,
+    pub(crate) edges: BTreeMap<EdgeId, f64>,
 }
 
 impl Brep {

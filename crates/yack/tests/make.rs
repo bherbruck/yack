@@ -173,3 +173,33 @@ fn horn_tori_and_parabolic_profiles() {
     // a paraboloid's volume between z = 0 and 4 under r = 4·sqrt(z/4)... the solid of r ≤ x(z):
     assert!(s.volume() > 0.0);
 }
+
+/// sweep/mitered-elbow (case header: volume 8000, area 3400): a 10 × 10 bar along two runs of 40
+/// meeting at 60°, mitred at the corner.
+#[test]
+fn a_mitred_elbow() {
+    let corners = [Point3::new(0.0, 0.0, 0.0), Point3::new(40.0, 0.0, 0.0), Point3::new(20.0, 20.0 * 3f64.sqrt(), 0.0)];
+    let f = Frame::along(corners[0], Dir3::X).unwrap();
+    let bar = Profile::polygon(&[[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]]).unwrap();
+    let s = sweep_mitered(&f, &bar, &corners, false).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 8000.0).abs() < 1e-6 * 8000.0, "{}", s.volume());
+    assert!((s.area() - 3400.0).abs() < 1e-6 * 3400.0, "{}", s.area());
+    let off = Frame::along([1.0, 0.0, 0.0], Dir3::X).unwrap();
+    let e = sweep_mitered(&off, &bar, &corners, false).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Invalid);
+    assert!(e.to_string().contains("frame must sit on corners[0] with z along the first run"), "{e}");
+}
+
+/// sweep/mitered-picture-frame (case header: volume 9864, area 6544): a rabbeted molding lying
+/// outside the closed rectangle (±30, ±20, 0), mitred at its four corners.
+#[test]
+fn a_mitred_picture_frame() {
+    let corners = [[30.0, -20.0, 0.0], [-30.0, -20.0, 0.0], [-30.0, 20.0, 0.0], [30.0, 20.0, 0.0]].map(Point3::from);
+    let f = Frame::new(corners[0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]).unwrap();
+    let molding = Profile::polygon(&[[0.0, 2.0], [3.0, 2.0], [3.0, 0.0], [8.0, 0.0], [8.0, 6.0], [0.0, 6.0]]).unwrap();
+    let s = sweep_mitered(&f, &molding, &corners, true).unwrap();
+    assert!(s.check().is_empty());
+    assert!((s.volume() - 9864.0).abs() < 1e-6 * 9864.0, "{}", s.volume());
+    assert!((s.area() - 6544.0).abs() < 1e-6 * 6544.0, "{}", s.area());
+}

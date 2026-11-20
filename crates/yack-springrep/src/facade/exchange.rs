@@ -49,3 +49,33 @@ pub fn check_written(text: &str, volume: f64, area: f64) -> std::result::Result<
         Err(format!("the written file reads back as volume {v}, area {a}; the solid is {volume}, {area}"))
     }
 }
+
+/// Whether a STEP file's solid is a mesh rather than exact geometry: the file writes a faceted
+/// B-rep or a polygon loop, or every face of the solid read is a flat triangle.
+fn is_mesh(text: &str, b: &Brep) -> bool {
+    if text.contains("FACETED_BREP") || text.contains("POLY_LOOP") {
+        return true;
+    }
+    let mut faces = b.face_ids().peekable();
+    faces.peek().is_some()
+        && faces.all(|f| {
+            let face = b.face(f);
+            matches!(face.surface, crate::geom::Surface::Plane(_))
+                && face.loops.len() == 1
+                && face.loops.first().is_some_and(|&lp| b.lp(lp).coedges.len() == 3)
+        })
+}
+
+/// [`read_step`], and whether the file's solid was a mesh (see `is_mesh`).
+pub fn read_step_report(text: &str) -> Result<(Brep, bool)> {
+    let b = read_step(text)?;
+    let mesh = is_mesh(text, &b);
+    Ok((b, mesh))
+}
+
+/// [`sew_step`], and whether the file's solid was a mesh (see `is_mesh`).
+pub fn sew_step_report(text: &str, tolerance: f64) -> Result<(Brep, bool)> {
+    let b = sew_step(text, tolerance)?;
+    let mesh = is_mesh(text, &b);
+    Ok((b, mesh))
+}

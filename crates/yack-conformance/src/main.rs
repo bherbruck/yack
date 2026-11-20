@@ -243,7 +243,7 @@ impl Kernel for Yack {
     }
     fn thicken(&self, s: &Solid, at: &[V], thickness: f64) -> Res<Solid> {
         rec((|| -> Res<Solid> {
-            s.thicken(&faces(s, at)?, thickness).map_err(r)
+            s.thicken(&faces(s, at)?, thickness, yack::Join::Round).map_err(r)
         })())
     }
     fn shell(&self, s: &Solid, open: &[V], thickness: f64) -> Res<Solid> {

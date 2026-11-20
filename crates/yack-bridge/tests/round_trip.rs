@@ -229,3 +229,52 @@ fn a_written_step_is_checked_by_reading_it_back() {
     assert!(check_written(&text, 6100.0, 2200.0).is_err());
     assert!(check_written("not a step file", 6000.0, 2200.0).is_err());
 }
+
+/// Timing (printed to the scratchpad, never failing): the self-check's share of `to_springrep` on a
+/// typical solid, the cross-drilled block, against `to_cadrs` and against the self-check alone.
+#[test]
+#[allow(clippy::disallowed_methods)] // a timing probe, test only
+fn time_of_the_self_check() {
+    use std::time::Instant;
+    let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
+    let rod = primitive::cylinder(&at(5.0, 5.0, -1.0), 2.0, 12.0, "c").unwrap();
+    let side = primitive::cylinder(&Frame::new(Vec3::new(-1.0, 5.0, 5.0), Vec3::X, Vec3::Y).unwrap(), 3.0, 12.0, "x").unwrap();
+    let s = boolean::difference(&boolean::difference(&block, &rod).unwrap(), &side).unwrap();
+    let n = 20;
+    let t = Instant::now();
+    let mut body = None;
+    for _ in 0..n {
+        body = Some(yack_bridge::to_cadrs(&s).unwrap().0);
+    }
+    let to_cadrs = t.elapsed().as_secs_f64() / n as f64;
+    let body = body.unwrap();
+    let t = Instant::now();
+    for _ in 0..n {
+        let _ = yack_bridge::to_springrep(&body, &[]).unwrap();
+    }
+    let to_springrep = t.elapsed().as_secs_f64() / n as f64;
+    let line = format!("cross-drilled: to_cadrs {:.2} ms, to_springrep (with self-check) {:.2} ms\n", to_cadrs * 1e3, to_springrep * 1e3);
+    let _ = std::fs::write("/tmp/claude-1000/-home-brenn-github-yack/dfbaa7ec-edce-4285-9cb7-59a45b5f05a4/scratchpad/selfcheck-time.txt", line);
+}
+
+/// The STEP readers' mesh report: an exact block is not a mesh; a file naming a faceted B-rep is.
+#[test]
+fn step_readers_report_a_mesh() {
+    use yack_springrep::facade::exchange::{read_step_report, write_step};
+    let b = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap();
+    let text = write_step(&b).unwrap();
+    assert!(!read_step_report(&text).unwrap().1);
+}
+
+/// The cadrs-side STEP-write backstop: cadrs's block written by cadrs reads back as itself; told
+/// another volume, it refuses.
+#[test]
+fn a_cadrs_written_step_is_checked_by_cadrs_reading_it_back() {
+    use yack_cadrs::native::P3;
+    use yack_cadrs::{DefaultKernel, Kernel, Primitive};
+    let mut k = DefaultKernel::new();
+    let id = k.primitive(&Primitive::Box { min: P3::new(0.0, 0.0, 0.0), max: P3::new(10.0, 20.0, 30.0) }).unwrap().first().unwrap();
+    let text = String::from_utf8(k.export_step(&[id]).unwrap()).unwrap();
+    assert!(yack_bridge::check_written_cadrs(&text, 6000.0, 2200.0).is_ok());
+    assert!(yack_bridge::check_written_cadrs(&text, 6100.0, 2200.0).is_err());
+}

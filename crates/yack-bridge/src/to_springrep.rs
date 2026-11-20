@@ -27,8 +27,11 @@ const BSPLINE_MAX_DEGREE: usize = 3;
 /// spline faces reach (~2e-5 mm, bench fillet/bezier-dome-one-edge). Wider is refused.
 const GAP_CAP: f64 = 1e-4; // tol: cadrs's widest boolean retry tolerance, mm (lead ruling)
 
-/// Samples per coedge when measuring how far cadrs's pcurves, curves and vertices stray apart.
-const GAP_SAMPLES: usize = 9;
+/// Samples per coedge when measuring how far cadrs's pcurves, curves and vertices stray apart:
+/// springrep's checker reads each coedge at 16 even steps, so the gap is measured there and halfway
+/// between (a 9-point measure missed a 1.36e-7 mm point it then refused, bench
+/// swept/ball-screwed-round-a-tight-helix).
+const GAP_SAMPLES: usize = 33;
 
 /// How far an edge's 3-D curve and its pcurves on its faces, and its ends and its vertices, lie
 /// apart in `body` (cadrs's geometry may meet only to its own tolerance, ~1e-7 mm): springrep
@@ -207,6 +210,61 @@ fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) {
     }
 }
 
+/// A cadrs face in a few words: its surface, its range and closed periods, and its loops' uv span.
+fn describe_face(body: &Body, fi: usize, f: &yack_cadrs::native::Face) -> String {
+    let mut span = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
+    for co in f.loops.iter().flatten() {
+        let Some(e) = body.edges().get(co.edge) else { continue };
+        for i in 0..GAP_SAMPLES {
+            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / (GAP_SAMPLES - 1) as f64;
+            let w = co.pc.point(t);
+            span = ((span.0.0.min(w.x), span.0.1.max(w.x)), (span.1.0.min(w.y), span.1.1.max(w.y)));
+        }
+    }
+    let range = match &f.surf {
+        CSurface::Nurbs(n) => format!(" range {:?} degrees ({}, {})", n.range(), n.du, n.dv),
+        _ => String::new(),
+    };
+    format!("(cadrs face {fi}: {:?}{range} periods {:?} loops span {span:?})", f.surf.kind(), closed_periods(&f.surf))
+}
+
+/// `s` unrolled over the uv span the face's pcurves reach, where it is a closed B-spline surface
+/// they run past; otherwise as it is.
+fn cover_span(s: CSurface, body: &Body, f: &yack_cadrs::native::Face) -> Result<CSurface> {
+    let CSurface::Nurbs(n) = &s else { return Ok(s) };
+    let periods = closed_periods(&s);
+    if periods.iter().all(Option::is_none) {
+        return Ok(s);
+    }
+    let mut span = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
+    for co in f.loops.iter().flatten() {
+        let Some(e) = body.edges().get(co.edge) else { continue };
+        for i in 0..GAP_SAMPLES {
+            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / (GAP_SAMPLES - 1) as f64;
+            let w = co.pc.point(t);
+            span = ((span.0.0.min(w.x), span.0.1.max(w.x)), (span.1.0.min(w.y), span.1.1.max(w.y)));
+        }
+    }
+    let ((u0, u1), (v0, v1)) = n.range();
+    let slack = SEAM_SLACK * (u1 - u0).abs().max(v1 - v0).max(1.0);
+    let inside_u = span.0.0 >= u0 - slack && span.0.1 <= u1 + slack;
+    let inside_v = span.1.0 >= v0 - slack && span.1.1 <= v1 + slack;
+    if inside_u && inside_v {
+        return Ok(s);
+    }
+    let (mut ku, mut kv, mut cps) = (n.ku.clone(), n.kv.clone(), n.cps.clone());
+    if !inside_u && periods[0].is_some() {
+        (ku, cps) = crate::to_cadrs::unroll_u(n.du, ku, cps, span.0)?;
+    }
+    if !inside_v && periods[1].is_some() {
+        let (k, rows) = crate::to_cadrs::unroll_u(n.dv, kv, crate::to_cadrs::transpose(cps), span.1)?;
+        kv = k;
+        cps = crate::to_cadrs::transpose(rows);
+    }
+    let m = yack_cadrs::native::NurbsSurface::new(n.du, n.dv, ku, kv, cps).map_err(|e| Error::Rejected(vec![e.to_string()]))?;
+    Ok(CSurface::Nurbs(std::sync::Arc::new(m)))
+}
+
 /// The face's surface with its frame turned about its axis so that u = 0 is the lowest u its loops
 /// reach (springrep's place for a seam), and by how much u moved (the pcurves move by it too).
 fn seam_frame(s: &CSurface, body: &Body, f: &yack_cadrs::native::Face) -> (CSurface, f64) {
@@ -296,9 +354,22 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
     };
     let map = edges.iter().map(|e| e.map(EdgeId::index)).collect();
     let b = bb.finish().map_err(|e| match e {
-        yack_springrep::Error::InvalidResult(issues) => Error::Rejected(issues),
+        yack_springrep::Error::InvalidResult(mut issues) => {
+            // What the refused faces were in cadrs, to say what to fix.
+            let named: BTreeSet<usize> = issues
+                .iter()
+                .filter_map(|m| m.strip_prefix("face ").and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next()).and_then(|n| n.parse().ok()))
+                .collect();
+            for fi in named.into_iter().take(3) {
+                if let Some(f) = body.faces().get(fi) {
+                    issues.push(describe_face(body, fi, f));
+                }
+            }
+            Error::Rejected(issues)
+        }
         other => Error::Rejected(vec![other.to_string()]),
     })?;
+    crate::selfcheck::same_sides(body, &b)?;
     Ok((b, map))
 }
 
@@ -395,6 +466,9 @@ fn assemble(
         // springrep keeps a revolved surface's seam at u = 0 of its frame (its ray caster relies on
         // it); cadrs's frame may sit anywhere about the axis. Turn the frame to the face's lowest u.
         let (surf, turn) = seam_frame(&f.surf, body, f);
+        // A closed cadrs spline surface whose loops run past its knots (cadrs keeps them continuous
+        // across the seam): unrolled over their span, so springrep's projections stay on it.
+        let surf = cover_span(surf, body, f)?;
         let id = bb.face(surface(&surf)?, !f.sense, names.get(i).cloned().unwrap_or_default().into_iter().collect());
         let periods = closed_periods(&f.surf);
         let mut face_loops = Vec::with_capacity(f.loops.len());

@@ -129,6 +129,19 @@ impl Frame {
         self.z
     }
 
+    /// Whether the frame sits on `start` with its z along the straight run from `start` to
+    /// `next` (to the model's linear and tangent tolerances); false for a run of no length.
+    pub fn starts_run(&self, start: Point3, next: Point3) -> bool {
+        let run = next - start;
+        let len = run.length();
+        let along = self.z.vec().dot(run);
+        let across = (run - self.z.vec() * along).length();
+        len > yack_tol::LINEAR
+            && self.origin.distance(start) <= yack_tol::LINEAR
+            && along > 0.0
+            && across <= len * yack_tol::TANGENT
+    }
+
     /// The world point at local coordinates `local`.
     pub fn point(&self, local: [f64; 3]) -> Point3 {
         let [a, b, c] = local;

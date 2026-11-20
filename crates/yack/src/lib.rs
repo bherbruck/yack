@@ -41,7 +41,7 @@ pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Se
 pub use solid::Solid;
 pub use values::{
     CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh,
-    Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,
+    Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,
 };
 pub use yack_base::{Error, ErrorKind, Result, Stage};
 pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3};
@@ -60,11 +60,11 @@ pub fn rad(r: f64) -> Angle {
 pub mod prelude {
     pub use crate::make::{
         block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab,
-        sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_path, torus,
+        sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus,
     };
     pub use crate::{
         Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2,
-        Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
+        Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
         rad,
     };
 }

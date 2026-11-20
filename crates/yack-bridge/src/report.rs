@@ -174,7 +174,9 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
         let Some(curve) = &edge.curve else { continue };
         let p = curve.eval(0.5 * (edge.range.0 + edge.range.1));
         let (a, b) = (os.normal_at(p, within), ob.normal_at(p, within));
-        if a.is_none() != b.is_none() {
+        // A crease lost is a fault; one found where springrep's own answer was smooth is not: its
+        // `normal_at` can miss one of two faces at an edge (plan/springrep-bugs.md B2).
+        if a.is_none() && b.is_some() {
             say(format!(
                 "crease: edge {} midpoint ({}, {}, {}): normal {} before, {} after (edge {})",
                 e.index(),

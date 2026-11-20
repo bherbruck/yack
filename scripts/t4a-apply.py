@@ -34,7 +34,7 @@ open(p("codec/topo.rs"), "w").write("""// yack: [`Codec`] for the topology arena
 //! [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 //! reference into it holds; one whose ids point outside its own arrays is refused.
 
-use super::{Codec, Reader, Writer, fields};
+use super::{Codec, Reader, Writer};
 use crate::topo::{
     Brep, Coedge, CoedgeId, Edge, EdgeId, Entities, Face, FaceId, FaceName, Loop, LoopId, PCurve,
     Parts, Shell, ShellId, Solid, SolidId, Tolerances, Vertex, VertexId,

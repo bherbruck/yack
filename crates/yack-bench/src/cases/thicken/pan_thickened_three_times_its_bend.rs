@@ -6,5 +6,5 @@ pub fn build() -> Result<Solid> {
     let outline = pen.line_to([6.0, 8.0]).line_to([0.0, 8.0]).close()?;
     let pan = revolve(&Frame::WORLD, &Profile::new(outline, vec![])?, deg(360.0))?;
     let bend = pan.face_at([0.0, 5.0 + 0.5f64.sqrt(), 1.0 - 0.5f64.sqrt()])?;
-    pan.thicken(&[pan.face_at([1.0, 1.0, 0.0])?, bend, pan.face_at([0.0, 6.0, 5.0])?], -3.0)
+    pan.thicken(&[pan.face_at([1.0, 1.0, 0.0])?, bend, pan.face_at([0.0, 6.0, 5.0])?], -3.0, Join::Round)
 }

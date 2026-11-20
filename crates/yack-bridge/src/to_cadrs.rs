@@ -209,10 +209,21 @@ fn curve(c: &SCurve, range: (f64, f64)) -> Result<(CCurve, f64)> {
         SCurve::BSpline(b) => (bspline(b, range)?, 0.0),
         SCurve::Nurbs(n) => {
             let (d0, d1) = n.domain();
-            if range.0 < d0 || range.1 > d1 {
-                return Err(Error::Unsupported("an edge past the ends of a closed NURBS curve".into()));
+            let whole = nurbs_curve(n.degree(), n.knots(), n.control_points(), n.weights())?;
+            if range.0 >= d0 && range.1 <= d1 {
+                (whole, 0.0)
+            } else if n.period().is_some() {
+                // A closed clamped curve springrep wraps; repeated end to end over the edge's range
+                // (each pole a one-point row of the surface case: the same exact concatenation).
+                let CCurve::Nurbs(c) = whole else { return Err(Error::Unsupported("a NURBS curve that is not one".into())) };
+                let rows: Vec<Vec<H>> = c.cps.iter().map(|h| vec![*h]).collect();
+                let (knots, rows) = unroll_u(c.degree, c.knots.clone(), rows, range)?;
+                let cps = rows.into_iter().flatten().collect();
+                let m = CNurbsCurve::new(c.degree, knots, cps).map_err(|e| Error::Rejected(vec![e.to_string()]))?;
+                (CCurve::nurbs(clamp(m)?), 0.0)
+            } else {
+                return Err(Error::Unsupported("an edge past the ends of an open NURBS curve".into()));
             }
-            (nurbs_curve(n.degree(), n.knots(), n.control_points(), n.weights())?, 0.0)
         }
         SCurve::Intersection(ic) => {
             let a = &ic.approx;
@@ -247,6 +258,8 @@ fn reparametrised(s: &SSurface) -> bool {
 /// surface point strays from the edge (cadrs's own geometry on both sides).
 fn fresh_pcurve(surf: &CSurface, edge: &CEdge, near: Option<P2>) -> Result<(CCurve, f64)> {
     if edge.degenerate {
+        // Tried: the pole as a straight line at s = 0 or 1. It converts, but springrep then
+        // classifies the body brought back differently (bench spline/rational-cap), so refused.
         return Err(Error::Unsupported("a pole on a re-parametrised conic surface".into()));
     }
     let [t0, t1] = edge.t;
@@ -324,7 +337,7 @@ fn widen(domain: (f64, f64), want: (f64, f64)) -> (f64, f64) {
 /// A clamped closed net (its first and last rows along u coincide) repeated end to end so it spans
 /// `want` in u: springrep wraps a closed surface's parameter, cadrs evaluates only inside the knots.
 /// The copies meet with C0 knots; the surface is the same point set, parameter for parameter.
-fn unroll_u(p: usize, knots: Vec<f64>, rows: Vec<Vec<H>>, want: (f64, f64)) -> Result<(Vec<f64>, Vec<Vec<H>>)> {
+pub(crate) fn unroll_u(p: usize, knots: Vec<f64>, rows: Vec<Vec<H>>, want: (f64, f64)) -> Result<(Vec<f64>, Vec<Vec<H>>)> {
     let (Some(&a), Some(&b)) = (knots.first(), knots.last()) else {
         return Err(Error::Unsupported("a B-spline net with no knots".into()));
     };
@@ -390,7 +403,7 @@ fn cover_loops(s: CSurface, edges: &[CEdge], loops: &[Vec<Coedge>], extra: [Opti
     Ok(CSurface::Nurbs(std::sync::Arc::new(m)))
 }
 
-fn transpose(rows: Vec<Vec<H>>) -> Vec<Vec<H>> {
+pub(crate) fn transpose(rows: Vec<Vec<H>>) -> Vec<Vec<H>> {
     let n = rows.first().map_or(0, Vec::len);
     (0..n).map(|j| rows.iter().filter_map(|r| r.get(j).copied()).collect()).collect()
 }

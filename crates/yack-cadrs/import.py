@@ -235,6 +235,24 @@ def transform(rel, text):
             sys.exit("boolean.rs: span_boxes_of's segments not found")
         text = text.replace(old, new)
         changes.append("span_boxes_of declines a curve with no whole Bézier segment (was an index panic)")
+    if rel == "src/native/tol.rs":
+        # yack returns no faceted solid: a session may ask cadrs to refuse what it would mesh.
+        for old, add in [
+            ("    pub confusion: f64,\n}\n", "    /// yack: refuse an answer cadrs would only approximate by a mesh (a moving solid's sweep it\n    /// cannot make exactly) at once, instead of meshing it: yack returns no faceted solid, and\n    /// the mesh took tens of seconds (brep-bench swept/coil-spring-pushed-aslant-through-plate).\n    pub exact_only: bool,\n"),
+            ("            confusion: CONFUSION,\n        }\n", "            exact_only: false,\n"),
+            ("            confusion: d.confusion,\n        }\n", "            exact_only: d.exact_only,\n"),
+        ]:
+            if text.count(old) != 1:
+                sys.exit("tol.rs: " + old.strip() + " not found once")
+            i = text.index(old) + old.rindex("\n", 0, len(old) - 1) + 1
+            text = text[:i] + add + text[i:]
+        changes.append("Tolerances::exact_only (yack: refuse instead of meshing)")
+    if rel == "src/native/sweep_solid.rs":
+        old = ") -> Result<OpResult> {\n    let t0 = web_time::Instant::now();\n    // The places sampled, and their inverses"
+        if text.count(old) != 1:
+            sys.exit("sweep_solid.rs: meshed_within's start not found")
+        text = text.replace(old, ") -> Result<OpResult> {\n    if k.tolerances().exact_only {\n        return Err(KernelError::Unsupported(\"cadrs makes this only as a mesh (exact_only)\")); // yack: no mesh fallback\n    }\n    let t0 = web_time::Instant::now();\n    // The places sampled, and their inverses")
+        changes.append("no mesh under exact_only")
     if rel == "src/native/sweep_faces.rs":
         # The wall-clock give-up (EFFORT_SECONDS) cannot fire under the shim's frozen clock: a
         # deterministic budget of checks takes its place at both sites.

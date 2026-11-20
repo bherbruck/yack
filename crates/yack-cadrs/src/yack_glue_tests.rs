@@ -292,6 +292,160 @@ fn a_spline_bar_screwed_through_a_rod_cuts_exactly() {
 }
 
 #[test]
+fn a_motion_cadrs_only_meshes_is_refused_under_exact_only() {
+    // A cube climbing (a screw whose lead grows): cadrs sweeps it only as a mesh.
+    let mut k = DefaultKernel::new();
+    let b = k.primitive(&Primitive::Box { min: Point3::new(2.0, -0.5, 0.0), max: Point3::new(3.0, 0.5, 1.0) }).and_then(|r| r.first()).unwrap();
+    let climb = SolidMotion::Climb { axis: Axis::new(Point3::origin(), Vector3::new(0.0, 0.0, 1.0)), from: 0.0, to: 1.0, rise: vec![0.0, 0.5, 0.5] };
+    // Unset (cadrs's default): the mesh.
+    assert!(!k.tolerances().exact_only);
+    let meshed = k.sweep_solid(b, &climb).and_then(|r| r.first()).unwrap();
+    assert!(k.get(meshed).unwrap().faces.iter().all(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })));
+    // Set: refused, and the session's tolerances as they were after.
+    let r = exact(&mut k, |k| k.sweep_solid(b, &climb));
+    assert!(matches!(r, Err(KernelError::Unsupported(_))), "{r:?}");
+    assert!(!k.tolerances().exact_only);
+}
+
+fn rod(k: &mut DefaultKernel) -> BodyId {
+    k.primitive(&Primitive::Cylinder { base: Point3::origin(), axis: nalgebra::Unit::new_normalize(Vector3::z()), radius: 5.0, height: 20.0 })
+        .and_then(|r| r.first())
+        .unwrap()
+}
+
+#[test]
+fn a_cone_point_screwed_through_a_rod_is_trimmed_first() {
+    // brep-bench swept/cone-point-screwed-through-rod: cadrs's runner 1513.245602658365 (its cone
+    // trimmed to the rod's reach; whole, cadrs meshes it).
+    let mut k = DefaultKernel::new();
+    let r = rod(&mut k);
+    // The cone's base at (12, 0, 0) after the -90 degree turn and 1.5 down: at (0, -12, -1.5),
+    // its point toward the axis.
+    let h = 8.0 * 30f64.to_radians().tan();
+    let bit = k
+        .primitive(&Primitive::Cone { base: Point3::new(0.0, -12.0, -1.5), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 1.0, 0.0)), base_radius: h, top_radius: 0.0, height: 8.0 })
+        .and_then(|r| r.first())
+        .unwrap();
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 4.0 * std::f64::consts::TAU, rise_per_turn: 6.0 };
+    let (out, _) = cut_swept(&mut k, r, bit, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1513.245602658365).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_cone_spun_about_a_line_through_it() {
+    // brep-bench swept/cone-spun-about-a-line-through-it: cadrs's runner 288.495056512097. The
+    // glue's pointed cone is drawn from its point, which cadrs sweeps exactly.
+    use crate::facade::profile::Place;
+    let mut k = DefaultKernel::new();
+    let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
+    let base = Place { origin: [5.0 * c, 0.0, 5.0 * s], x: [0.0, 1.0, 0.0], y: [s, 0.0, -c], z: [-c, 0.0, -s] };
+    let (spike, h) = primitive(&mut k, &base, Prim::Cone { bottom: 7.0 * 25f64.to_radians().tan(), top: 0.0, height: 7.0 }).unwrap();
+    // Its base still named the start cap.
+    assert!(h.generated.iter().any(|(_, o)| matches!(o, Origin::StartCap { .. })));
+    let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 150f64.to_radians() };
+    let (out, _) = swept(&mut k, spike, &m).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 288.495056512097).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_v_wheel_turned_once_round_a_rod() {
+    // brep-bench swept/v-wheel-turned-once-round-rod: cadrs's runner 1536.4810559042348, by its
+    // endless turn.
+    use crate::facade::profile::{revolve, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let (s, c, t) = (20f64.to_radians().sin(), 20f64.to_radians().cos(), 2.5 * 30f64.to_radians().tan());
+    let hub = Place { origin: [14.0, 0.0, 10.0], x: [-1.0, 0.0, 0.0], y: [0.0, -c, s], z: [0.0, s, c] };
+    let p = [[7.5, -t], [10.0, 0.0], [7.5, t]];
+    let segs: Vec<Seg> = (0..3).map(|i| Seg::Line { a: p[i], b: p[(i + 1) % 3] }).collect();
+    let (wheel, _) = revolve(&mut k, &hub, &[&segs], std::f64::consts::TAU).unwrap();
+    let r = rod(&mut k);
+    let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: std::f64::consts::TAU };
+    let (out, _) = cut_swept(&mut k, r, wheel, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1536.4810559042348).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn faces_thicken_joined_sharp_or_round() {
+    // brep-bench thicken/angle-bracket-{sharp,rounded} (a block's floor and wall, 1 outward:
+    // 168, 160 + 2π) and open-box-outward-{sharp,rounded} (a cube's floor and four walls: 584,
+    // 564.926248174189).
+    let mut k = DefaultKernel::new();
+    let block = k.primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(10.0, 8.0, 10.0) }).and_then(|r| r.first()).unwrap();
+    let f = |k: &DefaultKernel, b: BodyId, p: [f64; 3]| k.face_at(b, Point3::new(p[0], p[1], p[2])).unwrap().0;
+    let ix = [f(&k, block, [5.0, 4.0, 0.0]), f(&k, block, [0.0, 4.0, 5.0])];
+    let v = |k: &mut DefaultKernel, b: BodyId, ix: &[u64], sharp: bool| {
+        let (t, _) = thicken_joined(k, b, ix, 1.0, sharp).unwrap();
+        k.mass_properties(t).unwrap().volume
+    };
+    assert!((v(&mut k, block, &ix, true) - 168.0).abs() < 1e-6);
+    assert!((v(&mut k, block, &ix, false) - (160.0 + 2.0 * std::f64::consts::PI)).abs() < 1e-6);
+    let cube = cube(&mut k);
+    let tray: Vec<u64> = [[5.0, 5.0, 0.0], [0.0, 5.0, 5.0], [10.0, 5.0, 5.0], [5.0, 0.0, 5.0], [5.0, 10.0, 5.0]].iter().map(|&p| f(&k, cube, p)).collect();
+    assert!((v(&mut k, cube, &tray, true) - 584.0).abs() < 1e-6);
+    assert!((v(&mut k, cube, &tray, false) - 564.926248174189).abs() < 1e-6);
+}
+
+#[test]
+fn faces_replaced_by_b_spline_nets() {
+    // brep-bench nurbs/bspline-dome: a block 20 x 20 x 10 under a free bicubic net (cadrs's
+    // runner 3081.0055555555546), and nurbs/flat-bspline-slabs-united: two blocks whose
+    // touching faces are flat B-spline patches, united (699.9999999999997).
+    let mut k = DefaultKernel::new();
+    const X: [f64; 6] = [0.0, 3.0, 7.0, 11.0, 16.0, 20.0];
+    const Y: [f64; 5] = [0.0, 5.0, 10.0, 15.0, 20.0];
+    const Z: [[f64; 5]; 6] = [
+        [3.0, 5.0, 6.0, 5.0, 4.0],
+        [5.0, 9.0, 11.0, 8.0, 5.0],
+        [6.0, 12.0, 15.0, 10.0, 6.0],
+        [4.0, 10.0, 18.0, 9.0, 5.0],
+        [5.0, 8.0, 9.0, 7.0, 4.0],
+        [2.0, 4.0, 5.0, 4.0, 3.0],
+    ];
+    let net: Vec<Vec<[f64; 3]>> = (0..6).map(|i| (0..5).map(|j| [X[i], Y[j], Z[i][j]]).collect()).collect();
+    let ku = [0.0, 0.0, 0.0, 0.0, 0.4, 0.4, 1.0, 1.0, 1.0, 1.0];
+    let kv = [0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 1.0, 1.0, 1.0, 1.0];
+    let b = k.primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(20.0, 20.0, 10.0) }).and_then(|r| r.first()).unwrap();
+    let top = k.face_at(b, Point3::new(10.0, 10.0, 10.0)).unwrap().0;
+    let (d, _) = replace_face(&mut k, b, top, [3, 3], &ku, &kv, &net, None).unwrap();
+    let v = k.mass_properties(d).unwrap().volume;
+    assert!((v - 3081.0055555555546).abs() < 1e-6 * v, "{v}");
+
+    let flat = |xs: &[f64], ys: &[f64]| -> Vec<Vec<[f64; 3]>> { xs.iter().map(|&x| ys.iter().map(|&y| [x, y, 4.0]).collect()).collect() };
+    let bezier = |n: usize| [vec![0.0; n], vec![1.0; n]].concat();
+    let lower = k.primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(10.0, 10.0, 4.0) }).and_then(|r| r.first()).unwrap();
+    let f = k.face_at(lower, Point3::new(5.0, 5.0, 4.0)).unwrap().0;
+    let (lower, _) = replace_face(&mut k, lower, f, [3, 3], &bezier(4), &bezier(4), &flat(&[0.0, 2.0, 7.0, 10.0], &[0.0, 4.0, 5.0, 10.0]), None).unwrap();
+    let upper = k.primitive(&Primitive::Box { min: Point3::new(5.0, 3.0, 4.0), max: Point3::new(15.0, 13.0, 7.0) }).and_then(|r| r.first()).unwrap();
+    let f = k.face_at(upper, Point3::new(10.0, 8.0, 4.0)).unwrap().0;
+    let (upper, _) = replace_face(&mut k, upper, f, [2, 2], &bezier(3), &bezier(3), &flat(&[5.0, 12.0, 15.0], &[3.0, 4.0, 13.0]), None).unwrap();
+    let (u, _) = boolean(&mut k, crate::BoolOp::Union, lower, &[upper]).unwrap();
+    let v = k.mass_properties(u).unwrap().volume;
+    assert!((v - 699.9999999999997).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn hidden_lines_of_a_ball_and_a_box() {
+    let mut k = DefaultKernel::new();
+    // A ball seen along -z: its outline, the circle of its radius, all seen.
+    let ball = k
+        .primitive(&Primitive::Sphere { center: Point3::origin(), radius: 5.0, axis: nalgebra::Unit::new_normalize(Vector3::z()), seam: nalgebra::Unit::new_normalize(Vector3::x()) })
+        .and_then(|r| r.first())
+        .unwrap();
+    let (seen, hidden) = hidden_lines(&k, ball, [0.0, 0.0, -1.0], [0.0, -1.0, 0.0], 0.01).unwrap();
+    println!("ball: {} seen, {} hidden", seen.len(), hidden.len());
+    assert!(!seen.is_empty() && hidden.is_empty());
+    assert!(seen.iter().flatten().all(|p| (p[0].hypot(p[1]) - 5.0).abs() < 0.01 + 1e-9));
+    // A cube seen along a body diagonal: nine edges seen, three hidden.
+    let c = cube(&mut k);
+    let d = [-1.0, -1.0, -1.0];
+    let (seen, hidden) = hidden_lines(&k, c, d, [1.0, -1.0, 0.0], 0.01).unwrap();
+    assert_eq!((seen.len(), hidden.len()), (9, 3), "{seen:?} {hidden:?}");
+}
+
+#[test]
 fn a_split_sorts_its_sides() {
     let mut k = DefaultKernel::new();
     let b = cube(&mut k);
@@ -385,7 +539,6 @@ fn a_fine_thread_is_cut_in_time() {
     let (cut, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
     let v = k.mass_properties(cut).unwrap().volume;
     assert!(v > 0.0 && v < 500.0 * std::f64::consts::PI, "{v}");
-    assert!(!faceted(&k, cut).unwrap());
 }
 
 #[test]

@@ -178,6 +178,24 @@ pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle,
     firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::screw_tapered(op, frame, profile, rise, a, taper) }]))
 }
 
+/// `profile`, drawn in the frame's xy plane, carried along the polyline through `corners` (with
+/// `closed`, back to the first) and mitred at each corner: every run is cut by, and meets the
+/// next in, the plane through the corner bisecting it. The frame must sit on `corners[0]` with
+/// its z along the first run; an open path ends square to it.
+pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], closed: bool) -> Result<Solid> {
+    let op = "sweep_mitered";
+    let (&[a, b, ..], least) = (corners, if closed { 3 } else { 2 }) else {
+        return Err(Error::invalid(op, "corners", "a path needs two corners or more"));
+    };
+    if corners.len() < least {
+        return Err(Error::invalid(op, "corners", "a closed path needs three corners or more"));
+    }
+    if !frame.starts_run(a, b) {
+        return Err(Error::invalid(op, "frame", "frame must sit on corners[0] with z along the first run"));
+    }
+    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sweep_mitered(op, frame, profile, corners, closed) }]))
+}
+
 /// The solid(s) the `patches` bound once sewn edge to edge: every patch's face built, their
 /// shared rims joined; an open shell is refused.
 pub fn sewn(patches: &[Patch]) -> Result<Solid> {

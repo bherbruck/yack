@@ -6,5 +6,5 @@ pub fn build() -> Result<Solid> {
     let pen = Loop::starting_at([-10.0, 0.0]).line_to([0.0, 0.0]).arc_ccw_to([2.0, 2.0], [0.0, 2.0]);
     let s = extrude(&side, &Profile::new(pen.line_to([2.0, 12.0]).line_to([-10.0, 12.0]).close()?, vec![])?, 8.0)?;
     let r = 2f64.sqrt();
-    s.thicken(&[s.face_at([-5.0, 4.0, 0.0])?, s.face_at([r, 4.0, 2.0 - r])?, s.face_at([2.0, 4.0, 7.0])?], 1.0)
+    s.thicken(&s.faces_at(&[[-5.0, 4.0, 0.0], [r, 4.0, 2.0 - r], [2.0, 4.0, 7.0]])?, 1.0, Join::Round)
 }

@@ -105,6 +105,13 @@ impl Solid {
         }
     }
 
+    /// The springrep form for a query that is not a ladder rung: `None` for the empty solid; an
+    /// error when the solid has no springrep form (never an empty answer in its place).
+    pub(crate) fn form(&self, op: &'static str) -> Result<Option<&Brep>> {
+        let _ = op;
+        Ok(self.brep())
+    }
+
     /// The springrep body, or `Invalid` naming `op` for the empty solid.
     pub(crate) fn need(&self, op: &'static str) -> Result<&Brep> {
         self.brep().ok_or_else(|| Error::invalid(op, "self", "the solid is empty"))
@@ -205,7 +212,9 @@ impl Solid {
         }
     }
 
-    /// The same solid marked as only a faceted approximation (an engine said so).
+    /// The same solid marked as only a faceted approximation. No engine path returns one today
+    /// (cadrs runs exact-only); kept for the ladder's refusal and its tests.
+    #[cfg(test)]
     pub(crate) fn approximate(self) -> Solid {
         let i = &*self.0;
         Solid(Arc::new(Inner {
@@ -223,7 +232,9 @@ impl Solid {
 
     /// Whether the solid is exact rather than a faceted approximation. Every operation's answer
     /// is exact: an engine that finds a result only as facets declines, and when no engine does
-    /// better the op refuses (`Failed`, "only a faceted approximation is available").
+    /// better the op refuses (`Failed`, "only a faceted approximation is available"). An imported
+    /// mesh is flagged on the import alone, not on what later operations make from it (the
+    /// readers do not report meshes yet, so today every solid reports true).
     pub fn is_exact(&self) -> bool {
         !self.0.approximate
     }

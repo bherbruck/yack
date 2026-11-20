@@ -1,0 +1,15 @@
+# Conformance instances that fail for a reason outside yack, one per line: `seed<n> <case id>  # reason`.
+# A ledger that may only shrink: remove a line when the suite changes or the case passes.
+seed0 circle-contact-f9edad406462cc57  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed0 circle-contact-fcb3423424f28443  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed0 invalid-new-acts-93c69a1d031ed959  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md
+seed0 invalid-new-acts-9ec7c240890edaf3  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md
+seed0 seams-poles-f51f9af26ccd57c9  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed0 thread-runout-m12-on-the-cone-64f96d45ab98ef64  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed2 circle-contact-3e42312e743c6402  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed2 circle-contact-b71868e3245ac7fd  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed2 invalid-new-acts-9f0a5c330244b350  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md
+seed2 invalid-new-acts-f6db81a94b8b1b28  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md
+seed2 part-brackets-gusset-bf80d64fac83e0fb  # suite's volume ignores the hole breaking out of the wall top (0.69 mm³); see swarm/done/issue-suite-expectations.md
+seed2 separated-d8fce262a9f8a8b7  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
+seed3 invalid-new-acts-4b7383970fb1e256  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md

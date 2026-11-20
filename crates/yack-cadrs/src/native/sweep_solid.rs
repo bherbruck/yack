@@ -1,6 +1,6 @@
 // yack: The solid a body fills as it moves without end about an axis ([`crate::Kernel::sweep_....
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/sweep_solid.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: CADRS_* environment switches fixed at their unset defaults.
+// Changes: CADRS_* environment switches fixed at their unset defaults; no mesh under exact_only.
 //! The solid a body fills as it moves without end about an axis ([`crate::Kernel::sweep_solid`]):
 //! turned whole turns, or screwed along it.
 //!
@@ -5379,6 +5379,9 @@ fn meshed_within(
     place: &Place,
     within: Within,
 ) -> Result<OpResult> {
+    if k.tolerances().exact_only {
+        return Err(KernelError::Unsupported("cadrs makes this only as a mesh (exact_only)")); // yack: no mesh fallback
+    }
     let t0 = web_time::Instant::now();
     // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
     // motion that moves the body's box farther than a fiftieth of its reach between them.

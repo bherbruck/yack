@@ -5,7 +5,7 @@ use yack_springrep::facade::{api, edit as sr};
 
 use crate::{engine_cadrs, firewall, ladder};
 use crate::solid::engine_ids;
-use crate::{Affine, Angle, Error, FaceId, Motion, Point3, Result, Rigid, Similarity, Solid, Vec3, engine};
+use crate::{Affine, Angle, Error, FaceId, Join, Motion, Point3, Result, Rigid, Similarity, Solid, Vec3, engine};
 
 /// A springrep result refused because springrep would build it wrong (M1.10 guards); the ladder
 /// falls through past it.
@@ -37,11 +37,14 @@ impl Solid {
     /// Offsets every face by `distance` (positive grows).
     pub fn offset(&self, distance: f64) -> Result<Solid> {
         let op = "offset";
-        let Some(b) = self.brep() else { return Ok(Solid::empty()) };
+        if self.is_empty() {
+            return Ok(Solid::empty());
+        }
         firewall::run(op, || {
             ladder::two(
                 op,
                 &|| {
+                    let b = self.need(op)?;
                     let out = engine::made_from("offset", op, sr::offset(b, distance))?;
                     if api::radius_collapses(b, None, distance, false) {
                         return guard(out, "a round face would collapse at this distance (a hole closing, a rod vanishing)");
@@ -112,11 +115,19 @@ impl Solid {
             )
         })
     }
-    /// Thickens `faces` by `thickness` (positive grows outward) into a new solid.
-    pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> {
+    /// The sheet `faces` (one connected piece of this solid's boundary) thickened by `thickness`
+    /// along its outward normal (negative: inward) into a new solid, the sheet alone. Where two of
+    /// the faces part at a crease, `join` closes the gap; the sheet's free rims are swept square.
+    pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> {
         let op = "thicken";
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
+        let sharp = join == Join::Sharp;
+        let cadrs = || engine_cadrs::op(op, self, |k, id| glue::thicken_joined(k, id, &ix, thickness, sharp));
+        if sharp {
+            // springrep cannot be told how to join a crease: only cadrs mitres on request
+            return firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }]));
+        }
         firewall::run(op, || {
             ladder::two(
                 op,
@@ -128,7 +139,7 @@ impl Solid {
                     }
                     Ok(out)
                 },
-                &|| engine_cadrs::op(op, self, |k, id| glue::thicken(k, id, &ix, thickness)),
+                &cadrs,
             )
         })
     }
@@ -237,20 +248,24 @@ impl Solid {
     /// The image under a similarity (rigid, uniform scale, mirror).
     pub fn transform(&self, m: &Similarity) -> Result<Solid> {
         let op = "transform";
-        let Some(b) = self.brep() else { return Ok(Solid::empty()) };
+        if self.is_empty() {
+            return Ok(Solid::empty());
+        }
         let rows = m.rows();
         firewall::run(op, || {
-            ladder::two(op, &|| engine::solid(op, sr::transform(b, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
+            ladder::two(op, &|| engine::solid(op, sr::transform(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
         })
     }
 
     /// The image under an invertible affine map (protocol `affine`).
     pub fn transform_affine(&self, m: &Affine) -> Result<Solid> {
         let op = "transform_affine";
-        let Some(b) = self.brep() else { return Ok(Solid::empty()) };
+        if self.is_empty() {
+            return Ok(Solid::empty());
+        }
         let rows = m.rows();
         firewall::run(op, || {
-            ladder::two(op, &|| engine::solid(op, sr::affine(b, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
+            ladder::two(op, &|| engine::solid(op, sr::affine(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
         })
     }
 }

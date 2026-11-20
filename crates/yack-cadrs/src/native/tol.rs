@@ -1,6 +1,6 @@
 // yack: The kernel's tolerance model: the distances under which two things are taken as one,....
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/tol.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: none (verbatim).
+// Changes: Tolerances::exact_only (yack: refuse instead of meshing).
 //! The kernel's tolerance model: the distances under which two things are taken as one, named
 //! once here and carried explicitly (in [`Tolerances`], held by the kernel session) instead of
 //! as literals and globals.
@@ -118,6 +118,10 @@ pub struct Tolerances {
     pub retries: [f64; 2],
     /// The smallest tolerance an entity holds ([`CONFUSION`]).
     pub confusion: f64,
+    /// yack: refuse an answer cadrs would only approximate by a mesh (a moving solid's sweep it
+    /// cannot make exactly) at once, instead of meshing it: yack returns no faceted solid, and
+    /// the mesh took tens of seconds (brep-bench swept/coil-spring-pushed-aslant-through-plate).
+    pub exact_only: bool,
 }
 
 impl Default for Tolerances {
@@ -127,6 +131,7 @@ impl Default for Tolerances {
             point: POINT,
             retries: [LOOP_GAP, 1e-4],
             confusion: CONFUSION,
+            exact_only: false,
         }
     }
 }
@@ -144,6 +149,7 @@ impl Tolerances {
             point: at_least(d.point),
             retries: [at_least(d.retries[0]), at_least(d.retries[1])],
             confusion: d.confusion,
+            exact_only: d.exact_only,
         }
     }
 

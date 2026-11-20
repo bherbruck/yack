@@ -91,7 +91,6 @@ macro_rules! fields {
         }
     };
 }
-pub(crate) use fields;
 
 macro_rules! number {
     ($($t:ty),*) => {$(
@@ -425,6 +424,8 @@ pub(crate) fn digest(bytes: &[u8]) -> u64 {
     }
     h
 }
+
+mod topo;
 
 #[cfg(test)]
 mod tests;

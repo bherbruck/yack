@@ -3,5 +3,5 @@
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
     let ball = sphere(&Frame::WORLD, 5.0)?;
-    ball.thicken(&[ball.face_at([0.0, 3.0, 4.0])?], 1.0)
+    ball.thicken(&[ball.face_at([0.0, 3.0, 4.0])?], 1.0, Join::Round)
 }

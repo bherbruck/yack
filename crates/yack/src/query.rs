@@ -56,7 +56,7 @@ impl Solid {
     /// Where each point lies: `In`, `On` (within `tol::LINEAR`) or `Out`.
     pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> {
         let op = "classify";
-        let Some(b) = self.brep() else { return Ok(vec![Side::Out; pts_.len()]) };
+        let Some(b) = self.form(op)? else { return Ok(vec![Side::Out; pts_.len()]) };
         firewall::run(op, || {
             let caster = rays::Rays::new(b).map_err(|e| engine::error(op, e))?;
             Ok(pts(pts_)
@@ -74,7 +74,7 @@ impl Solid {
     /// nearest boundary point. Empty for the empty solid.
     pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> {
         let op = "closest";
-        let Some(b) = self.brep() else { return Ok(Vec::new()) };
+        let Some(b) = self.form(op)? else { return Ok(Vec::new()) };
         firewall::run(op, || {
             let nearest = distance::Nearest::solid(b).map_err(|e| engine::error(op, e))?;
             pts(pts_).map(|p| nearest.to(p).map(|c| engine::point(c.on_b)).map_err(|e| engine::error(op, e))).collect()
@@ -99,7 +99,7 @@ impl Solid {
     /// either is empty.
     pub fn distance(&self, other: &Solid) -> Result<f64> {
         let op = "distance";
-        let (Some(a), Some(b)) = (self.brep(), other.brep()) else { return Ok(f64::INFINITY) };
+        let (Some(a), Some(b)) = (self.form(op)?, other.form(op)?) else { return Ok(f64::INFINITY) };
         firewall::run(op, || {
             distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| c.distance)
@@ -113,7 +113,7 @@ impl Solid {
     pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> {
         let op = "nearest_face";
         let p = p.into();
-        let b = self.brep().ok_or_else(|| crate::Error::not_found(op, "self", "the solid is empty"))?;
+        let b = self.form(op)?.ok_or_else(|| crate::Error::not_found(op, "self", "the solid is empty"))?;
         firewall::run(op, || {
             let (f, d) = yack_springrep::facade::api::nearest_face(b, engine::p3(p))
                 .map_err(|e| engine::error(op, e))?
@@ -126,7 +126,7 @@ impl Solid {
     /// on other)`. `Invalid` if either solid is empty.
     pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> {
         let op = "closest_pair";
-        let (a, b) = (self.need(op)?, other.brep().ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
+        let (a, b) = (self.need(op)?, other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
         firewall::run(op, || {
             distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| (c.distance, engine::point(c.on_a), engine::point(c.on_b)))
@@ -136,7 +136,7 @@ impl Solid {
 
     /// The volume shared with `other` and the gap between them.
     pub fn interference(&self, other: &Solid) -> Result<Interference> {
-        let (Some(a), Some(b)) = (self.brep(), other.brep()) else {
+        let (Some(a), Some(b)) = (self.form("interference")?, other.form("interference")?) else {
             return Ok(Interference { volume: 0.0, gap: f64::INFINITY });
         };
         Ok(match overlap::between(a, b).map_err(|e| engine::error("interference", e))? {
@@ -148,7 +148,7 @@ impl Solid {
 
     /// The area of the solid's cross-section by `plane` (mm²).
     pub fn section_area(&self, plane: &Plane) -> Result<f64> {
-        let Some(b) = self.brep() else { return Ok(0.0) };
+        let Some(b) = self.form("section_area")? else { return Ok(0.0) };
         yack_springrep::boolean::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
             .map_err(|e| engine::error("section_area", e))
     }
@@ -156,7 +156,7 @@ impl Solid {
     /// The cross-section by `plane` as closed polylines (each ends on its first point) with chord
     /// error at most `chord`.
     pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> {
-        let Some(b) = self.brep() else { return Ok(Vec::new()) };
+        let Some(b) = self.form("section")? else { return Ok(Vec::new()) };
         let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), chord)
             .map_err(|e| engine::error("section", e))?;
         Ok(curves.into_iter().map(|c| c.iter().chain(c.first()).map(|&p| engine::point(p)).collect()).collect())
@@ -166,7 +166,7 @@ impl Solid {
     pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> {
         let d = direction.into();
         let (u, v) = yack_math::view_axes(d)?;
-        let Some(b) = self.brep() else { return Ok(Drawing::default()) };
+        let Some(b) = self.form("project")? else { return Ok(Drawing::default()) };
         let drawn = draw::hidden_lines(b, engine::v3(d), chord).map_err(|e| engine::error("project", e))?;
         let flat = |lines: Vec<Vec<yack_springrep::math::Vec3>>| {
             lines.into_iter().map(|l| l.into_iter().map(|p| yack_math::view_point(engine::point(p), u, v)).collect()).collect()
@@ -176,7 +176,7 @@ impl Solid {
 
     /// For each ray, the sorted distances at which it crosses the boundary.
     pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> {
-        let Some(b) = self.brep() else { return Ok(vec![Vec::new(); rays_.len()]) };
+        let Some(b) = self.form("raycast")? else { return Ok(vec![Vec::new(); rays_.len()]) };
         let caster = rays::Rays::new(b).map_err(|e| engine::error("raycast", e))?;
         rays_
             .iter()
@@ -191,7 +191,7 @@ impl Solid {
 
     /// A closed, outward, welded triangle mesh with chord error at most `chord`.
     pub fn mesh(&self, chord: f64) -> Result<Mesh> {
-        let Some(b) = self.brep() else { return Ok(Mesh::default()) };
+        let Some(b) = self.form("mesh")? else { return Ok(Mesh::default()) };
         let m = mesh::tessellate(b, &mesh::MeshOptions::within(chord)).map_err(|e| engine::error("mesh", e))?;
         Ok(Mesh { positions: m.positions.into_iter().map(engine::point).collect(), triangles: m.triangles })
     }

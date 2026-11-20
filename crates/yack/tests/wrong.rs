@@ -154,7 +154,7 @@ fn cone_frustum_thickened() {
     not(
         (|| {
             let c = cone(&Frame::WORLD, 6.0, 3.0, 4.0)?;
-            c.thicken(&[c.face_at([0.0, 4.5, 2.0])?], 1.0)
+            c.thicken(&[c.face_at([0.0, 4.5, 2.0])?], 1.0, Join::Round)
         })(),
         161.00662349647666,
     );
@@ -165,7 +165,7 @@ fn spherical_cap_thickened() {
     not(
         (|| {
             let cap = sphere(&Frame::WORLD, 10.0)?.split(&Plane::new([0.0, 0.0, 6.0], [0.0, 0.0, 1.0])?)?.front;
-            cap.thicken(&[cap.face_at([0.0, 6.0, 8.0])?], 2.0)
+            cap.thicken(&[cap.face_at([0.0, 6.0, 8.0])?], 2.0, Join::Round)
         })(),
         695.3391739945413,
     );
@@ -210,19 +210,19 @@ fn half_torus_outer_rim_round_deleted() {
     }
 }
 
-/// swept/square-on-a-planet-carrier: cadrs's faceted region (155.132, not 155.337) is refused.
+/// swept/square-on-a-planet-carrier: once a faceted 155.132; it must build exactly, 155.336678064.
 #[test]
-fn planet_carrier_sweep_is_not_answered_faceted() {
+fn planet_carrier_sweep_is_exact() {
     let bar = block(&Frame::at([4.0, -1.0, 0.0]), [2.0, 2.0, 2.0]).unwrap();
     let spin = Motion::turn(Point3::new(5.0, 0.0, 0.0), Dir3::Z, deg(0.0), deg(-1080.0));
     let carry = Motion::turn(Point3::ORIGIN, Dir3::Z, deg(0.0), deg(360.0));
-    not(bar.swept(&Motion::together(vec![spin, carry])), 155.132);
+    let s = bar.swept(&Motion::together(vec![spin, carry])).unwrap();
+    assert!(s.is_exact() && (s.volume() - 155.336678064).abs() < 1e-6 * 155.34, "{} ({})", s.volume(), s.strategy());
 }
 
-/// swept/rack-cut-tooth-space: the blank cut by a rack rolled along it is never a faceted cut
-/// (9042.5268, not 9042.5028).
+/// swept/rack-cut-tooth-space: once a faceted cut, 9042.5268; it must build exactly, 9042.502788700.
 #[test]
-fn rack_roll_is_not_answered_faceted() {
+fn rack_roll_is_exact() {
     let (d, a, b) = (-20.0 * std::f64::consts::FRAC_PI_3, 0.842856, 3.026666);
     let tooth = Profile::polygon(&[[d - a, 18.0], [d + a, 18.0], [d + b, 24.0], [d - b, 24.0]]).unwrap();
     let side = Frame::new([0.0, -2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).unwrap();
@@ -230,5 +230,6 @@ fn rack_roll_is_not_answered_faceted() {
     let turn = Motion::turn(Point3::ORIGIN, Dir3::Y, deg(-60.0), deg(60.0));
     let roll = Motion::together(vec![Motion::slide(Vec3::new(0.0, 0.0, -2.0 * d)), turn]);
     let blank = cylinder(&Frame::along([0.0; 3], [0.0, 1.0, 0.0]).unwrap(), 22.0, 6.0).unwrap();
-    not(blank.cut_swept(&rack, &roll), 9042.5268);
+    let s = blank.cut_swept(&rack, &roll).unwrap();
+    assert!(s.is_exact() && (s.volume() - 9042.502788700).abs() < 1e-6 * 9042.5, "{} ({})", s.volume(), s.strategy());
 }

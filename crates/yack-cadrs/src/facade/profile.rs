@@ -4,7 +4,7 @@
 //! it ([`super::names::Naming::segments`]). A periodic spline is clamped to its own domain by knot
 //! insertion (cadrs takes clamped splines): the same curve, any degree.
 
-use nalgebra::{Point2, Point3, Unit, Vector3};
+use nalgebra::{Matrix3, Point2, Point3, Unit, Vector3};
 
 use crate::yack_glue::Made;
 use crate::{
@@ -361,6 +361,119 @@ pub fn sewn(k: &mut DefaultKernel, patches: &[GluePatch]) -> Result<Made> {
     r
 }
 
+/// The profile in `frame`'s xy plane extruded `height` along frame z, its sides drafted by
+/// `angle` radians about the profile's plane (positive: leaning in as they rise, the top
+/// smaller; negative: out), and with `both` the same again down along −z (a prism drafted both
+/// ways from its section plane, creased there). cadrs's extrude then its draft of the sides,
+/// as cadrs's runner drafts parts/star-handle (its lofts of offset sections for drafted-slot and
+/// creased-bar are the same solids).
+pub fn extrude_drafted(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], height: f64, angle: f64, both: bool) -> Result<Made> {
+    if !(height > 0.0) || !angle.is_finite() || angle.abs() >= std::f64::consts::FRAC_PI_2 {
+        return Err(bad("a drafted extrude needs a positive height and a draft under 90 degrees"));
+    }
+    let z = Unit::try_new(v3(frame.z), 0.0).ok_or_else(|| bad("a drafted extrude's frame z is zero"))?;
+    let up = drafted_half(k, frame, loops, height, angle, z)?;
+    if !both {
+        return Ok(up);
+    }
+    let down = drafted_half(k, frame, loops, height, angle, -z);
+    let r = down.and_then(|(d, _)| {
+        let u = k.boolean(crate::BoolOp::Union, up.0, &[d]);
+        k.release(d);
+        u
+    });
+    k.release(up.0);
+    let r = r?;
+    Ok((r.first()?, r.history))
+}
+
+/// One way of [`extrude_drafted`]: along `dir` (frame z or −z).
+fn drafted_half(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], height: f64, angle: f64, dir: Unit<Vector3<f64>>) -> Result<Made> {
+    use crate::Pick;
+    let body = k.extrude_with(&profile(xy_plane(frame), loops)?, &crate::ExtrudeSpec::blind(dir, height))?.first()?;
+    let sides = k.faces_where(body, &|f| f.plane.is_none_or(|p| p.normal.dot(&dir).abs() < 0.5))?;
+    if angle == 0.0 {
+        return Ok((body, crate::History::default()));
+    }
+    let spec = crate::DraftSpec { faces: sides, angle, pull: dir, neutral: Point3::from(v3(frame.origin)), neutral_normal: None, tangent_propagation: true };
+    let r = k.draft(body, &spec);
+    k.release(body);
+    let r = r?;
+    Ok((r.first()?, r.history))
+}
+
+/// The solid ruled (lofted straight) from the profile in `bottom`'s xy plane to the one in
+/// `top`'s: each section in its own frame, so a top frame turned about the axis twists the
+/// rulings (cadrs's loft of two sections, as cadrs's runner rules geometry/hyperboloid-ruled).
+pub fn ruled(k: &mut DefaultKernel, bottom: &Place, bottom_loops: &[&[Seg]], top: &Place, top_loops: &[&[Seg]]) -> Result<Made> {
+    let spec = LoftSpec::through(vec![profile(xy_plane(bottom), bottom_loops)?, profile(xy_plane(top), top_loops)?]);
+    let r = k.loft_with(&spec)?;
+    Ok((r.first()?, r.history))
+}
+
+/// The solid under the patch filling the closed chain of `edges` (cadrs's fill: a Coons-like
+/// surface on the boundary), down to `frame`'s xy plane: each edge lies in a plane holding
+/// frame z, and its wall drops straight down from it to that floor (as cadrs's runner builds
+/// fill/coons-patch-of-four-parabolas: the fill, flat walls, a flat floor, sewn).
+pub fn fill_coons(k: &mut DefaultKernel, frame: &Place, edges: &[Spline]) -> Result<Made> {
+    if edges.len() < 2 {
+        return Err(bad("a fill needs a closed chain of two edges or more"));
+    }
+    let (o, z) = (v3(frame.origin), v3(frame.z));
+    let mut patch_curves = Vec::with_capacity(edges.len());
+    let mut walls = Vec::with_capacity(edges.len());
+    let mut floor = Vec::with_capacity(edges.len());
+    for e in edges {
+        let (Some(&a), Some(&b)) = (e.ctrl.first(), e.ctrl.last()) else {
+            return Err(bad("a fill edge with no control points"));
+        };
+        let (a, b) = (v3(a), v3(b));
+        // Its plane: along the edge's run seen from above, and frame z.
+        let run = (b - a) - z * (b - a).dot(&z);
+        let x = Unit::try_new(run, 0.0).ok_or_else(|| bad("a fill edge runs straight up"))?.into_inner();
+        let base = a - z * (a - o).dot(&z);
+        if e.ctrl.iter().any(|&c| (v3(c) - base).dot(&x.cross(&z)).abs() > crate::native::tol::POINT) {
+            return Err(bad("a fill edge does not lie in an upright plane"));
+        }
+        let plane = Plane::new(Point3::from(base), x, x.cross(&z));
+        let to2 = |p: Vector3<f64>| Point2::new((p - base).dot(&x), (p - base).dot(&z));
+        let curve = Curve2::Spline {
+            degree: e.degree,
+            knots: e.knots.to_vec(),
+            poles: e.ctrl.iter().map(|&c| to2(v3(c))).collect(),
+            weights: e.weights.map(<[f64]>::to_vec).unwrap_or_default(),
+            source: None,
+        };
+        let (pa, pb) = (to2(a), to2(b));
+        let line = |p: Point2<f64>, q: Point2<f64>| Curve2::Line { a: p, b: q, source: None };
+        let (fa, fb) = (Point2::new(pa.x, 0.0), Point2::new(pb.x, 0.0));
+        walls.push(vec![(plane, curve.clone()), (plane, line(pb, fb)), (plane, line(fb, fa)), (plane, line(fa, pa))]);
+        patch_curves.push((plane, curve));
+        floor.push(base);
+    }
+    let fp = Plane::new(Point3::from(o), v3(frame.x), z);
+    let fx = v3(frame.x);
+    let fy = z.cross(&fx);
+    let f2 = |p: Vector3<f64>| Point2::new((p - o).dot(&fx), (p - o).dot(&fy));
+    let n = floor.len();
+    let floor_curves: Vec<(Plane, Curve2)> =
+        (0..n).map(|i| (fp, Curve2::Line { a: f2(floor[i]), b: f2(floor[(i + 1) % n]), source: None })).collect();
+    let mut sheets = Vec::with_capacity(n + 2);
+    let r = (|| {
+        sheets.push(k.fill(&crate::FillSpec::sketched(&patch_curves))?.first()?);
+        for w in &walls {
+            sheets.push(k.fill(&crate::FillSpec::sketched(w))?.first()?);
+        }
+        sheets.push(k.fill(&crate::FillSpec::sketched(&floor_curves))?.first()?);
+        let r = k.sew_solid(&sheets, crate::native::tol::POINT)?;
+        Ok((r.first()?, r.history))
+    })();
+    for sh in sheets {
+        k.release(sh);
+    }
+    r
+}
+
 /// A guide (or any space curve) as yack's `Spline3`: a clamped NURBS curve.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spline<'a> {
@@ -548,6 +661,90 @@ pub enum Piece {
 /// `pieces` that starts at the frame's origin along its z, in the frame's xz plane (cadrs's sweep
 /// along sketch curves, mitred where pieces meet at a corner).
 pub fn sweep(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], pieces: &[Piece]) -> Result<Made> {
+    let path = pieces_path(frame, pieces)?;
+    let r = k.sweep_with(&profile(xy_plane(frame), loops)?, &SweepSpec::solid(path))?;
+    Ok((r.first()?, r.history))
+}
+
+/// [`sweep`], the profile turning `twist` radians about the path and scaling to `scale` times
+/// its size by the path's end, both evenly in the length travelled (cadrs's sweep law, as
+/// cadrs's runner narrows sweep/narrowing-bend's square round its bend).
+pub fn sweep_law(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], pieces: &[Piece], twist: f64, scale: f64) -> Result<Made> {
+    if !(scale > 0.0) || !twist.is_finite() {
+        return Err(bad("a sweep law needs a positive scale and a finite twist"));
+    }
+    let path = pieces_path(frame, pieces)?;
+    let law = SweepLaw { twist, scale, spiral: false };
+    let r = k.sweep_with_law(&profile(xy_plane(frame), loops)?, &SweepSpec::solid(path), &law)?;
+    Ok((r.first()?, r.history))
+}
+
+/// The profile in `frame`'s xy plane swept along the helix about the line through
+/// `axis_point` along `axis` that starts at the frame's origin, rising `pitch` a turn for
+/// `turns` turns (right-handed about `axis` when positive): cadrs's exact helix path (its
+/// pieces lie on the helix's cylinder), as cadrs's runner sweeps sweep/helical-pipe.
+pub fn sweep_helix(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], axis_point: [f64; 3], axis: [f64; 3], pitch: f64, turns: f64) -> Result<Made> {
+    let a = Unit::try_new(v3(axis), 0.0).ok_or_else(|| bad("a helix's axis is zero"))?;
+    let o = v3(frame.origin);
+    let foot = v3(axis_point) + a.into_inner() * (o - v3(axis_point)).dot(&a);
+    let radial = o - foot;
+    let x = Unit::try_new(radial, 0.0).ok_or_else(|| bad("a helix's start lies on its axis"))?;
+    if turns == 0.0 || !pitch.is_finite() {
+        return Err(bad("a helix needs turns and a finite pitch"));
+    }
+    let mut helix = crate::Helix::new(Axis { origin: Point3::from(foot), dir: a }, radial.norm(), pitch, 0.0, turns);
+    helix.x = x;
+    let r = k.sweep_with(&profile(xy_plane(frame), loops)?, &SweepSpec::solid(helix.path()))?;
+    Ok((r.first()?, r.history))
+}
+
+/// The conical helix about the line through `origin` along `axis`, its radius going from `r0`
+/// to `r1` as it rises `height`, from the angle `start` (radians, from `x`, square to the axis)
+/// over `turns` turns: as cadrs draws one on a cone (sixteen quintic pieces a turn, each
+/// matching the helix's points and first and second derivatives at its ends), here as one
+/// clamped quintic B-spline (each joint a knot of multiplicity five: the pieces as they are):
+/// knots, control points. A guide for
+/// [`loft_guided`] (cadrs's runner's loft/twisted-tapering-square).
+#[allow(clippy::too_many_arguments)]
+pub fn conical_helix(origin: [f64; 3], axis: [f64; 3], x: [f64; 3], r0: f64, r1: f64, height: f64, start: f64, turns: f64) -> Result<(Vec<f64>, Vec<[f64; 3]>)> {
+    let a = Unit::try_new(v3(axis), 0.0).ok_or_else(|| bad("a helix's axis is zero"))?;
+    let xs = v3(x) - a.into_inner() * v3(x).dot(&a);
+    let xs = Unit::try_new(xs, 0.0).ok_or_else(|| bad("a helix's x lies along its axis"))?;
+    if turns == 0.0 || !turns.is_finite() {
+        return Err(bad("a helix needs turns"));
+    }
+    let mut h = crate::Helix::conical(Axis { origin: Point3::from(v3(origin)), dir: a }, r0, r1, height, start, turns);
+    h.x = xs;
+    let n = ((turns.abs() * 16.0).ceil() as usize).max(1);
+    let mut ctrl: Vec<[f64; 3]> = Vec::with_capacity(5 * n + 1);
+    let mut knots = vec![0.0; 6];
+    for k in 0..n {
+        let (s0, s1) = (k as f64 / n as f64, (k + 1) as f64 / n as f64);
+        let d = s1 - s0;
+        let (p0, d0, a0) = h.at2(s0);
+        let (p5, d5, a5) = h.at2(s1);
+        let piece = [
+            p0,
+            p0 + d0 * (d / 5.0),
+            p0 + d0 * (2.0 * d / 5.0) + a0 * (d * d / 20.0),
+            p5 - d5 * (2.0 * d / 5.0) + a5 * (d * d / 20.0),
+            p5 - d5 * (d / 5.0),
+            p5,
+        ];
+        // Each piece's first point is the last one's end: one pole for both.
+        let from = if k == 0 { 0 } else { 1 };
+        ctrl.extend(piece[from..].iter().map(|p| [p.x, p.y, p.z]));
+        if k + 1 < n {
+            knots.extend([s1; 5]);
+        }
+    }
+    knots.extend([1.0; 6]);
+    Ok((knots, ctrl))
+}
+
+/// The path of `pieces` from `frame`'s origin along its z, in its xz plane (positive arcs
+/// turning toward its x): sketch curves.
+fn pieces_path(frame: &Place, pieces: &[Piece]) -> Result<Vec<PathCurve>> {
     if pieces.is_empty() {
         return Err(bad("a sweep along no path"));
     }
@@ -585,8 +782,83 @@ pub fn sweep(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], pieces: &[P
         };
         path.push(PathCurve::Sketch { plane, curve });
     }
-    let spec = SweepSpec::solid(path);
-    let r = k.sweep_with(&profile(xy_plane(frame), loops)?, &spec)?;
+    Ok(path)
+}
+
+/// The profile in `frame`'s xy plane swept along the polyline through `points` (in world
+/// coordinates; it starts at the first), mitred at each
+/// corner: each leg runs on to the plane bisecting the corner and is cut there, the section
+/// keeping its angle to the path (cadrs's sweep along sketch lines, as cadrs's runner sweeps
+/// sweep/mitered-*).
+pub fn sweep_mitered(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], points: &[[f64; 3]]) -> Result<Made> {
+    if points.len() < 2 {
+        return Err(bad("a mitred sweep needs a path of two points or more"));
+    }
+    mitred_run(k, frame, loops, points)
+}
+
+/// [`sweep_mitered`] round the closed polyline through `points`, back to the first and mitred
+/// there too.
+pub fn sweep_mitered_closed(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], points: &[[f64; 3]]) -> Result<Made> {
+    if points.len() < 3 {
+        return Err(bad("a closed mitred sweep needs three points or more"));
+    }
+    // Closed: as cadrs's runner sweeps a picture frame, two open halves from the middle of the
+    // first run and of the run halfway round, united: every corner mitred alike.
+    let n = points.len();
+    let h = n / 2;
+    let mid = |i: usize| {
+        let (a, b) = (v3(points[i]), v3(points[(i + 1) % n]));
+        let m = (a + b) / 2.0;
+        [m.x, m.y, m.z]
+    };
+    let first: Vec<[f64; 3]> = std::iter::once(mid(0)).chain(points[1..=h].iter().copied()).chain([mid(h)]).collect();
+    let second: Vec<[f64; 3]> = std::iter::once(mid(h)).chain(points[h + 1..].iter().copied()).chain([points[0], mid(0)]).collect();
+    // The section carried to each half's start: moved along the first run to its middle, then
+    // round the corners up to run h by the turn each corner makes (the least turn taking one
+    // run's direction to the next, as the sweep carries it).
+    let at = |f: &Place, by: Vector3<f64>| Place { origin: [f.origin[0] + by.x, f.origin[1] + by.y, f.origin[2] + by.z], ..*f };
+    let start = at(frame, v3(mid(0)) - v3(points[0]));
+    let mut r = Matrix3::identity();
+    for i in 1..=h {
+        let d0 = (v3(points[i]) - v3(points[i - 1])).normalize();
+        let d1 = (v3(points[(i + 1) % n]) - v3(points[i])).normalize();
+        let turn = nalgebra::Rotation3::rotation_between(&d0, &d1).ok_or_else(|| bad("a mitred sweep turns back on itself"))?;
+        r = turn.into_inner() * r;
+    }
+    let o = v3(mid(h)) + r * (v3(start.origin) - v3(mid(0)));
+    let rot = |v: [f64; 3]| {
+        let w = r * v3(v);
+        [w.x, w.y, w.z]
+    };
+    let half = Place { origin: [o.x, o.y, o.z], x: rot(start.x), y: rot(start.y), z: rot(start.z) };
+    let (a, _) = mitred_run(k, &start, loops, &first)?;
+    let b = mitred_run(k, &half, loops, &second);
+    let r = b.and_then(|(b, _)| {
+        let u = k.boolean(crate::BoolOp::Union, a, &[b]);
+        k.release(b);
+        u
+    });
+    k.release(a);
+    let r = r?;
+    Ok((r.first()?, r.history))
+}
+
+/// [`sweep_mitered`] along an open polyline.
+fn mitred_run(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], points: &[[f64; 3]]) -> Result<Made> {
+    let mut path = Vec::with_capacity(points.len() - 1);
+    for w in points.windows(2) {
+        let (a, b) = (v3(w[0]), v3(w[1]));
+        if (b - a).norm() == 0.0 {
+            return Err(bad("a mitred sweep's path has a leg of no length"));
+        }
+        // As a sketch line on a plane holding it (cadrs's runner draws its legs so).
+        let d = b - a;
+        let side = if d.x.abs() <= d.y.abs().max(d.z.abs()) { Vector3::x() } else { Vector3::y() };
+        let plane = Plane::new(Point3::from(a), d, d.cross(&side));
+        path.push(PathCurve::Sketch { plane, curve: Curve2::Line { a: Point2::new(0.0, 0.0), b: Point2::new(d.norm(), 0.0), source: None } });
+    }
+    let r = k.sweep_with(&profile(xy_plane(frame), loops)?, &SweepSpec::solid(path))?;
     Ok((r.first()?, r.history))
 }
 
@@ -684,6 +956,171 @@ mod tests {
         let v = k.mass_properties(cone).unwrap().volume;
         let want = std::f64::consts::PI * 25.0 * 10.0 / 3.0;
         assert!((v - want).abs() < 1e-6 * want, "{v} against {want}");
+    }
+
+    #[test]
+    fn drafted_extrudes_ruled_lofts_and_a_coons_fill() {
+        let mut k = DefaultKernel::new();
+        let sq = [
+            Seg::Line { a: [-5.0, -5.0], b: [5.0, -5.0] },
+            Seg::Line { a: [5.0, -5.0], b: [5.0, 5.0] },
+            Seg::Line { a: [5.0, 5.0], b: [-5.0, 5.0] },
+            Seg::Line { a: [-5.0, 5.0], b: [-5.0, -5.0] },
+        ];
+        // A square drafted 5° in over 5: the frustum.
+        let a = 5f64.to_radians();
+        let frustum = |top: f64| 5.0 / 3.0 * (100.0 + top * top + 10.0 * top);
+        let (d, _) = extrude_drafted(&mut k, &world(), &[&sq], 5.0, a, false).unwrap();
+        let v = k.mass_properties(d).unwrap().volume;
+        assert!((v - frustum(10.0 - 10.0 * a.tan())).abs() < 1e-6 * v, "{v}");
+        // Both ways: two frustums back to back.
+        let (d, _) = extrude_drafted(&mut k, &world(), &[&sq], 5.0, a, true).unwrap();
+        let v = k.mass_properties(d).unwrap().volume;
+        assert!((v - 2.0 * frustum(10.0 - 10.0 * a.tan())).abs() < 1e-6 * v, "{v}");
+        // brep-bench swept/drafted-slot-screwed-through-rod's bar: a slot growing 3° over 8, the
+        // runner's loft of its two offset sections.
+        let shrink = 8.0 * 3f64.to_radians().tan();
+        let slot = |r: f64| {
+            vec![
+                Seg::Line { a: [-1.5, -r], b: [1.5, -r] },
+                Seg::Arc { center: [1.5, 0.0], radius: r, start: -std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+                Seg::Line { a: [1.5, r], b: [-1.5, r] },
+                Seg::Arc { center: [-1.5, 0.0], radius: r, start: std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+            ]
+        };
+        let at = |c: f64| Place { origin: [c, 0.0, 0.0], x: [0.0, 1.0, 0.0], y: [0.0, 0.0, 1.0], z: [1.0, 0.0, 0.0] };
+        let (small, big) = (slot(1.0 - shrink), slot(1.0));
+        let (bar, _) = extrude_drafted(&mut k, &at(4.0), &[&small], 8.0, -3f64.to_radians(), false).unwrap();
+        let (lofted, _) = ruled(&mut k, &at(4.0), &[&small], &at(12.0), &[&big]).unwrap();
+        let (vb, vl) = (k.mass_properties(bar).unwrap().volume, k.mass_properties(lofted).unwrap().volume);
+        assert!((vb - vl).abs() < 1e-6 * vl, "{vb} against {vl}");
+        // brep-bench geometry/hyperboloid-ruled: two circles of 5, 10 apart, a quarter turn
+        // between their frames: 523.5987755982987 (cadrs's runner).
+        let rim = [
+            Seg::Arc { center: [0.0, 0.0], radius: 5.0, start: 0.0, sweep: std::f64::consts::PI },
+            Seg::Arc { center: [0.0, 0.0], radius: 5.0, start: std::f64::consts::PI, sweep: std::f64::consts::PI },
+        ];
+        let lower = Place { origin: [0.0, 0.0, -5.0], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+        let upper = Place { origin: [0.0, 0.0, 5.0], x: [0.0, 1.0, 0.0], y: [-1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
+        let (h, _) = ruled(&mut k, &lower, &[&rim], &upper, &[&rim]).unwrap();
+        let v = k.mass_properties(h).unwrap().volume;
+        assert!((v - 523.5987755982987).abs() < 1e-6 * v, "{v}");
+        // brep-bench fill/coons-patch-of-four-parabolas: 1000 (cadrs's runner).
+        let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let arcs = [
+            [[0.0, 0.0, 10.0], [5.0, 0.0, 14.0], [10.0, 0.0, 10.0]],
+            [[10.0, 0.0, 10.0], [10.0, 5.0, 6.0], [10.0, 10.0, 10.0]],
+            [[10.0, 10.0, 10.0], [5.0, 10.0, 6.0], [0.0, 10.0, 10.0]],
+            [[0.0, 10.0, 10.0], [0.0, 5.0, 14.0], [0.0, 0.0, 10.0]],
+        ];
+        let edges: Vec<Spline> = arcs.iter().map(|c| Spline { degree: 2, knots: &knots, ctrl: c, weights: None }).collect();
+        let (c, _) = fill_coons(&mut k, &world(), &edges).unwrap();
+        let v = k.mass_properties(c).unwrap().volume;
+        assert!((v - 1000.0).abs() < 1e-6 * v, "{v}");
+    }
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Seg<'static>> {
+        let c = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+        (0..4).map(|i| Seg::Line { a: c[i], b: c[(i + 1) % 4] }).collect()
+    }
+
+    #[test]
+    fn a_pipe_along_a_helix() {
+        // brep-bench sweep/helical-pipe: a circle of 1 along the helix of 10 rising 5 a turn,
+        // three turns: cadrs's runner 594.0483049737906.
+        let mut k = DefaultKernel::new();
+        let t = Vector3::new(0.0, 10.0, 5.0 / std::f64::consts::TAU).normalize();
+        let x = Vector3::z().cross(&t).normalize();
+        let y = t.cross(&x);
+        let at = Place { origin: [10.0, 0.0, 0.0], x: [x.x, x.y, x.z], y: [y.x, y.y, y.z], z: [t.x, t.y, t.z] };
+        let disc = [Seg::Arc { center: [0.0, 0.0], radius: 1.0, start: 0.0, sweep: std::f64::consts::TAU }];
+        let (p, _) = sweep_helix(&mut k, &at, &[&disc], [0.0; 3], [0.0, 0.0, 1.0], 5.0, 3.0).unwrap();
+        let v = k.mass_properties(p).unwrap().volume;
+        assert!((v - 594.0483049737906).abs() < 1e-6 * v, "{v}");
+    }
+
+    #[test]
+    fn a_square_narrowing_round_a_bend() {
+        // brep-bench sweep/narrowing-bend: a square narrowing from 18 to 12 round a quarter turn
+        // of radius 30, less one 4 narrower from -1 to 91 degrees: cadrs's runner
+        // 4900.884541078331.
+        let mut k = DefaultKernel::new();
+        let along = |k: &mut DefaultKernel, start: f64, end: f64, inset: f64| {
+            let h = |deg: f64| 9.0 - 3.0 * deg / 90.0 - inset;
+            let (s, c) = start.to_radians().sin_cos();
+            let at = Place { origin: [30.0 * c, 30.0 * s, 0.0], x: [-c, -s, 0.0], y: [0.0, 0.0, 1.0], z: [-s, c, 0.0] };
+            let hs = h(start);
+            let sq = rect(-hs, -hs, hs, hs);
+            sweep_law(k, &at, &[&sq], &[Piece::Arc { radius: 30.0, angle: (end - start).to_radians() }], 0.0, h(end) / hs).unwrap().0
+        };
+        let outside = along(&mut k, 0.0, 90.0, 0.0);
+        let hole = along(&mut k, -1.0, 91.0, 2.0);
+        let cut = k.boolean(crate::BoolOp::Subtract, outside, &[hole]).and_then(|r| r.first()).unwrap();
+        let v = k.mass_properties(cut).unwrap().volume;
+        assert!((v - 4900.884541078331).abs() < 1e-6 * v, "{v}");
+    }
+
+    #[test]
+    fn lofts_on_conical_helices_and_to_a_point() {
+        // brep-bench loft/twisted-tapering-square: a square of 30 lofted to one of 10, 40 up,
+        // along four conical helices through its corners, half a turn: cadrs's runner
+        // 17333.33208078546.
+        let mut k = DefaultKernel::new();
+        let r = 2f64.sqrt();
+        let guides: Vec<(Vec<f64>, Vec<[f64; 3]>)> = [45.0f64, 135.0, 225.0, 315.0]
+            .iter()
+            .map(|a| conical_helix([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], 15.0 * r, 5.0 * r, 40.0, a.to_radians(), 0.5).unwrap())
+            .collect();
+        let gs: Vec<Spline> = guides.iter().map(|(kn, c)| Spline { degree: 5, knots: kn, ctrl: c, weights: None }).collect();
+        let (foot, head) = (rect(-15.0, -15.0, 15.0, 15.0), rect(-5.0, -5.0, 5.0, 5.0));
+        let top = Place { origin: [0.0, 0.0, 40.0], ..world() };
+        let (l, _) = loft_guided(&mut k, &[(world(), &[&foot]), (top, &[&head])], &gs).unwrap();
+        let v = k.mass_properties(l).unwrap().volume;
+        assert!((v - 17333.33208078546).abs() < 1e-6 * v, "{v}");
+        // loft/square-spire-on-four-guides: a square of 18 to the apex (0, 0, 24) along four
+        // cubic ridges: cadrs's runner 9423.771428571437.
+        let apex = [0.0, 0.0, 24.0];
+        let ridges: Vec<[[f64; 3]; 4]> = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+            .iter()
+            .map(|&(sx, sy)| [[9.0 * sx, 9.0 * sy, 0.0], [15.0 * sx, 15.0 * sy, 8.0], [12.0 * sx, 12.0 * sy, 19.0], apex])
+            .collect();
+        let cubic = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let gs: Vec<Spline> = ridges.iter().map(|c| Spline { degree: 3, knots: &cubic, ctrl: c, weights: None }).collect();
+        let square = rect(-9.0, -9.0, 9.0, 9.0);
+        let (sp, _) = loft_guided_to(&mut k, &[Section::Profile(world(), &[&square]), Section::Point(apex)], &gs).unwrap();
+        let v = k.mass_properties(sp).unwrap().volume;
+        assert!((v - 9423.771428571437).abs() < 1e-6 * v, "{v}");
+    }
+
+    #[test]
+    fn mitred_sweeps_along_polylines() {
+        // brep-bench sweep/mitered-elbow (8000) and mitered-pipe-on-cube-edges (1130.97335529),
+        // cadrs's runner's values.
+        let mut k = DefaultKernel::new();
+        let sq = [
+            Seg::Line { a: [-5.0, -5.0], b: [5.0, -5.0] },
+            Seg::Line { a: [5.0, -5.0], b: [5.0, 5.0] },
+            Seg::Line { a: [5.0, 5.0], b: [-5.0, 5.0] },
+            Seg::Line { a: [-5.0, 5.0], b: [-5.0, -5.0] },
+        ];
+        // The yz plane at the origin: x along y, y along z, the path along x.
+        let yz = Place { origin: [0.0; 3], x: [0.0, 1.0, 0.0], y: [0.0, 0.0, 1.0], z: [1.0, 0.0, 0.0] };
+        let (e, _) = sweep_mitered(&mut k, &yz, &[&sq], &[[0.0; 3], [40.0, 0.0, 0.0], [20.0, 20.0 * 3f64.sqrt(), 0.0]]).unwrap();
+        let v = k.mass_properties(e).unwrap().volume;
+        assert!((v - 8000.0).abs() < 1e-6 * v, "{v}");
+        let ring = [Seg::Arc { center: [0.0, 0.0], radius: 2.0, start: 0.0, sweep: std::f64::consts::TAU }];
+        let (p, _) = sweep_mitered(&mut k, &yz, &[&ring], &[[0.0; 3], [30.0, 0.0, 0.0], [30.0, 30.0, 0.0], [30.0, 30.0, 30.0]]).unwrap();
+        let v = k.mass_properties(p).unwrap().volume;
+        assert!((v - 1130.9733552923235).abs() < 1e-6 * v, "{v}");
+        // mitered-picture-frame (9864): the rabbeted molding round the closed rectangle
+        // (±30, ±20), lying outward; its frame on the first corner, z along the first run.
+        let molding: Vec<[f64; 2]> = [(0.0, 2.0), (3.0, 2.0), (3.0, 0.0), (8.0, 0.0), (8.0, 6.0), (0.0, 6.0)].iter().map(|&(s, z)| [-s, z]).collect();
+        let segs: Vec<Seg> = (0..6).map(|i| Seg::Line { a: molding[i], b: molding[(i + 1) % 6] }).collect();
+        let at = Place { origin: [-30.0, -20.0, 0.0], x: [0.0, 1.0, 0.0], y: [0.0, 0.0, 1.0], z: [1.0, 0.0, 0.0] };
+        let corners = [[-30.0, -20.0, 0.0], [30.0, -20.0, 0.0], [30.0, 20.0, 0.0], [-30.0, 20.0, 0.0]];
+        let (f, _) = sweep_mitered_closed(&mut k, &at, &[&segs], &corners).unwrap();
+        let v = k.mass_properties(f).unwrap().volume;
+        assert!((v - 9864.0).abs() < 1e-6 * v, "{v}");
     }
 
     #[test]

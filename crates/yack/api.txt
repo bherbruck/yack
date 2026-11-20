@@ -6,7 +6,7 @@ yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
 yack: pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3}
 yack: pub use solid::Solid
-yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
+yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
 yack::bakeoff: enum Engine variant Both
@@ -48,7 +48,7 @@ yack::edit: impl Solid { pub fn shell_outward(&self, open: &[FaceId], thickness:
 yack::edit: impl Solid { pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
-yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
 yack::input: impl Lead { pub fn per_radian(mm: f64) -> Lead }
@@ -102,10 +102,11 @@ yack::make: pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v:
 yack::make: pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid>
 yack::make: pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid>
+yack::make: pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], closed: bool) -> Result<Solid>
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
-yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_path, torus,}
-yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
+yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus,}
+yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
 yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }

@@ -65,6 +65,13 @@ get the lead's approval.
   `together` results through. Reason: ladder9 graded two faceted sweeps as `wrong` (AGENTS rule 8).
   `Solid::is_exact()` stays public for imported solids.
 
+- **Lazy bridge (2026-11-20).** A solid built by cadrs stays in cadrs form; it is bridged to
+  springrep only when a springrep rung, guard or query needs it. step::write and volume/area use
+  the cadrs form directly. A cadrs-held answer must pass cadrs's Full check (rule 8). Digest: the
+  springrep digest when the bridge succeeds, otherwise a domain-tagged digest of cadrs's canonical
+  STEP. Reason: springrep can't carry cadrs's uv pcurves (9 tumbling-torus cases, w-m11 -82).
+  An explicit 2-D B-spline pcurve kind is the M3 yack-topo answer.
+
 ## Still open (not blocking)
 
 - **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M5.1. If

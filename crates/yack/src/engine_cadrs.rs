@@ -259,7 +259,7 @@ fn step(op: &'static str, m: &Motion) -> Result<cmotion::Step> {
 
 /// Everything `s` passes through during `m`, by cadrs's sweep of a solid (a sequence: each leg
 /// starting where the last left the solid, their sweeps united; legs together: cadrs's rigid
-/// motion, marked approximate when cadrs finds it only as facets).
+/// motion, run exact-only: cadrs refuses where it would only mesh).
 pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
     use crate::input::MotionKind as K;
     let op = "swept";
@@ -268,10 +268,10 @@ pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
     let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), ..Naming::default() };
     if let K::Together(legs) = &m.0 {
         let steps = legs.iter().map(|l| step(op, l)).collect::<Result<Vec<_>>>()?;
-        let t = cmotion::together(&mut lock(&c.session), c.id, &steps).map_err(|e| error(op, e))?;
-        let out = result(op, &feature, &c.session, Ok(t.made), &how)?;
-        // marked, and so declined by the ladder: a faceted region is near the swept volume, not it
-        return Ok(if t.faceted { out.approximate() } else { out });
+        // under exact_only: where cadrs would answer only by a mesh it refuses (a decline), so
+        // what comes back is exact, whichever path built it (polyhedron, by faces, rigid)
+        let t = yack_glue::exact(&mut lock(&c.session), |k| cmotion::together(k, c.id, &steps)).map_err(|e| error(op, e))?;
+        return result(op, &feature, &c.session, Ok(t.made), &how);
     }
     let legs: Vec<&Motion> = match &m.0 {
         K::Then(ms) => ms.iter().collect(),
@@ -628,4 +628,22 @@ pub(crate) fn write_step(op: &'static str, s: &Solid) -> Result<String> {
     let c = of(op, s)?;
     let bytes = lock(&c.session).export_step(&[c.id]).map_err(|e| error(op, e))?;
     String::from_utf8(bytes).map_err(|_| Error::failed(op, Stage::Check, "cadrs wrote a STEP file that is not UTF-8"))
+}
+
+/// `profile` (in the frame's xy) swept by cadrs along the polyline through `corners`, mitred at
+/// each corner by its bisecting plane.
+pub(crate) fn sweep_mitered(op: &'static str, f: &crate::Frame, p: &crate::Profile, corners: &[crate::Point3], closed: bool) -> Result<Solid> {
+    let ctrl = ctrl2(p);
+    let loops = segs(op, p, &ctrl)?;
+    let refs: Vec<&[Seg]> = loops.iter().map(Vec::as_slice).collect();
+    let points: Vec<[f64; 3]> = corners.iter().map(|c| c.to_array()).collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    // closed: two open halves from mid-run united, as cadrs's runner sweeps a closed path
+    let r = if closed {
+        cp::sweep_mitered_closed(&mut lock(&session), &place(f), &refs, &points)
+    } else {
+        cp::sweep_mitered(&mut lock(&session), &place(f), &refs, &points)
+    };
+    result(op, &feature, &session, r, &Naming { segments: engine::segment_parts(p), ..Naming::default() })
 }

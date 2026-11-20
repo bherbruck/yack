@@ -18,8 +18,11 @@ build || { echo "$TAG pre build failed"; exit 1; }
 snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 
 BK=$(mktemp -d); cp -a $SR/src $BK/src
-restore() { rm -rf $SR/src; cp -a $BK/src $SR/src; echo "$TAG restored yack-springrep"; }
-python3 $APPLY $SR || { restore; exit 1; }
+# Restore only the files this window's apply touched (never the whole crate: others edit it too).
+touched() { ( cd $SR/src && find . -type f; cd $BK/src && find . -type f ) | sort -u | while read -r f; do cmp -s "$SR/src/$f" "$BK/src/$f" || echo "$f"; done; }
+restore() { for f in $TOUCHED; do if [ -f "$BK/src/$f" ]; then cp -a "$BK/src/$f" "$SR/src/$f"; else rm -f "$SR/src/$f"; fi; done; echo "$TAG restored its own files:" $TOUCHED; }
+python3 $APPLY $SR; ARC=$?; TOUCHED=$(touched); echo "$TAG touched:" $TOUCHED
+[ $ARC -eq 0 ] || { restore; exit 1; }
 QFP=$(fp)
 build || { echo "$TAG post build failed"; restore; exit 1; }
 cargo test -p yack-springrep --no-run || { echo "$TAG springrep tests do not compile"; restore; exit 1; }
