@@ -25,13 +25,15 @@ fn digest_log() -> Option<&'static std::path::PathBuf> {
     PATH.get_or_init(|| std::env::var_os("YACK_DIGESTS").map(std::path::PathBuf::from)).as_ref()
 }
 
-/// Appends `digest <hex>` for `s` to the digest log, if one is set.
+/// Appends `digest <hex>` for `s` to the digest log, if one is set, then `strategy <rung>`: the
+/// ladder strategy that built it (M1.10). `xtask digest` reads only the `digest` lines.
 fn log_digest(s: &Solid) {
     use std::io::Write;
     let Some(path) = digest_log() else { return };
     let hex: String = s.digest().iter().map(|b| format!("{b:02x}")).collect();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "digest {hex}");
+        let _ = writeln!(f, "strategy {}", s.strategy());
         let _ = f.flush();
     }
 }
