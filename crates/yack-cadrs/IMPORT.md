@@ -22,6 +22,11 @@ Source: cadrs `crates/cadrs_kernel` at `eb5899efab2081c76e82f2401e1462d476189493
 - **`as_slice()` of a fixed-size vector** (27 lines of fingerprint.rs, sweep_cache.rs, tess.rs,
   topo.rs; listed in `import.py`) reads `to_array().as_slice()`: the shim's 2/3/4-vectors keep
   named fields so `v.x` works, and those can't be viewed as a slice without `unsafe`.
+- **Wall clock**: the shim's `web_time` clock stands still (elapsed is always 0), so no result
+  depends on timing. The only timing that decided anything was sweep_faces.rs's give-up after
+  `EFFORT_SECONDS` (4 s) at two sites (the face-splitting loop and the piece-by-piece union); both
+  now count rounds against `SWEEP_CHECKS` (4096) instead. Every other `Instant` only feeds debug
+  or profile output.
 - **Meshing** keeps `tess.rs`; spade's constrained Delaunay triangulation is replaced by the
   shim's own (`yack-shim/src/spade.rs`): same API, different (valid) meshes.
 - **Tests needing the SMLib corpus** (`tests/data/smlib`, Apache-2.0, not imported) are
@@ -89,7 +94,7 @@ Source: cadrs `crates/cadrs_kernel` at `eb5899efab2081c76e82f2401e1462d476189493
 | `CADRS_SSI_SEEDS` | native/ssi_numeric.rs:1567 | debug/trace/profile output off |
 | `CADRS_SWEEP_CLASSES` | native/sweep_moving.rs:3880 | debug/trace/profile output off |
 | `CADRS_SWEEP_DEBUG` | native/sweep_pipe.rs:464, native/heal_split.rs:582, native/sweep_faces.rs:99, native/sweep_faces.rs:698 (+56) | debug/trace/profile output off |
-| `CADRS_SWEEP_EFFORT` | native/sweep_faces.rs:168 | EFFORT_SECONDS; with the frozen clock (web-time shim) the budget never runs out |
+| `CADRS_SWEEP_EFFORT` | native/sweep_faces.rs:168 | EFFORT_SECONDS (unused now: SWEEP_CHECKS rounds replace the wall-clock budget) |
 | `CADRS_SWEEP_LEADS` | native/sweep_solid.rs:3607 | screw sweeps cut leads in one go |
 | `CADRS_SWEEP_SCREW` | native/sweep/frames.rs:514 | screw motions recognised |
 | `CADRS_SWEEP_SOLID_DEBUG` | native/sweep_solid.rs:862, native/sweep_solid.rs:984, native/sweep_solid.rs:2087, native/sweep_solid.rs:2736 (+6) | debug/trace/profile output off |

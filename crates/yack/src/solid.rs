@@ -1,9 +1,10 @@
 // yack: `Solid`, the immutable B-rep value (PLAN §4.2 rule 1). Its operations live in boolean.rs,
 // blend.rs, edit.rs, select.rs and query.rs.
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::engine::{self, Brep};
+use crate::engine_cadrs::CadrsRef;
 use crate::{EdgeId, Error, FaceId, History, Result, Tag, VertexId};
 
 /// A solid: an immutable, checked B-rep value, cheap to clone and share between threads.
@@ -38,6 +39,11 @@ struct Inner {
     tag: Option<Tag>,
     /// The engine feature name on the faces the operation that made this solid created.
     feature: Option<String>,
+    /// The ladder rung that built this solid (`"springrep"`, `"cadrs"`), if not its body's engine.
+    strategy: Option<&'static str>,
+    /// The same solid in the cadrs engine: set when cadrs built it, else converted on first use
+    /// (the error kept when the bridge cannot carry it).
+    cadrs: OnceLock<core::result::Result<CadrsRef, String>>,
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
@@ -49,7 +55,15 @@ pub(crate) enum Body {
 
 impl Solid {
     fn new(body: Body) -> Solid {
-        Solid(Arc::new(Inner { stamp: fresh_stamp(), body, history: History::default(), tag: None, feature: None }))
+        Solid(Arc::new(Inner {
+            stamp: fresh_stamp(),
+            body,
+            history: History::default(),
+            tag: None,
+            feature: None,
+            strategy: None,
+            cadrs: OnceLock::new(),
+        }))
     }
 
     /// The solid with no pieces.
@@ -157,6 +171,32 @@ impl Solid {
         }
     }
 
+    /// The same solid recording that the ladder rung `name` built it.
+    pub(crate) fn with_strategy(self, name: &'static str) -> Solid {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.strategy = Some(name);
+                Solid(Arc::new(inner))
+            }
+            Err(shared) => Solid(shared),
+        }
+    }
+
+    /// The same solid holding its cadrs form.
+    pub(crate) fn with_cadrs(self, c: CadrsRef) -> Solid {
+        let _ = self.0.cadrs.set(Ok(c));
+        self
+    }
+
+    /// This solid's cadrs form, converted through the bridge on first use.
+    pub(crate) fn cadrs_form(&self, convert: impl FnOnce(&Brep) -> core::result::Result<CadrsRef, String>) -> core::result::Result<&CadrsRef, &str> {
+        let r = self.0.cadrs.get_or_init(|| match self.brep() {
+            Some(b) => convert(b),
+            None => Err("the solid is empty".to_string()),
+        });
+        r.as_ref().map_err(String::as_str)
+    }
+
     /// This solid with `tag` as the feature name of every face the operation that made it
     /// created (a constructor: all its faces; a fillet: its rounds; a boolean makes none). Later
     /// operations keep the name on those faces; find them with
@@ -194,6 +234,8 @@ impl Solid {
             history: self.0.history.clone(),
             tag: Some(tag),
             feature: Some(name),
+            strategy: self.0.strategy,
+            cadrs: self.0.cadrs.clone(),
         }))
     }
 
@@ -202,11 +244,13 @@ impl Solid {
         self.0.tag.as_ref()
     }
 
-    /// Which strategy built this solid (PLAN §3.5): `"empty"` or the engine's name.
+    /// Which ladder rung built this solid (PLAN §3.5): `"springrep"`, `"cadrs"`, or `"empty"`.
+    /// The adapter and the bench runner log it per case.
     pub fn strategy(&self) -> &'static str {
-        match self.0.body {
-            Body::Empty => "empty",
-            Body::Springrep(_) => "springrep",
+        match (self.0.strategy, &self.0.body) {
+            (_, Body::Empty) => "empty",
+            (Some(name), _) => name,
+            (None, Body::Springrep(_)) => "springrep",
         }
     }
 }

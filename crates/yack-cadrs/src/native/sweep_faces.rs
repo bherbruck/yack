@@ -1,6 +1,7 @@
 // yack: What any solid passes through as it slides, turns or screws: the solid where it start....
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/sweep_faces.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: CADRS_* environment switches fixed at their unset defaults.
+// Changes: CADRS_* environment switches fixed at their unset defaults; the two wall-clock give-ups
+//   (EFFORT_SECONDS) replaced by a deterministic budget of SWEEP_CHECKS rounds.
 //! What any solid passes through as it slides, turns or screws: the solid where it starts, with
 //! what each of its *leading* faces sweeps.
 //!
@@ -162,6 +163,10 @@ fn quarter_turns(b: &mut Body, s1: f64) {
 
 /// How long (seconds) a sweep by faces may split and unite before it gives up.
 const EFFORT_SECONDS: f64 = 4.0;
+
+/// yack: the rounds a sweep by faces may split, or unite pieces, before it gives up
+/// (in place of [`EFFORT_SECONDS`] of wall clock: results never depend on timing).
+const SWEEP_CHECKS: usize = 4096;
 
 /// [`EFFORT_SECONDS`], or `CADRS_SWEEP_EFFORT` seconds (for debugging).
 fn effort() -> f64 {
@@ -1018,7 +1023,13 @@ fn prepared_rising(
     let mut body = start.clone();
     let mut iso_splits = 0;
     // (Work past a few seconds is a split that isn't converging: given up, for a meshed sweep.)
-    let over = || clock.elapsed().as_secs_f64() > effort();
+    // yack: a deterministic work budget in place of the wall clock (EFFORT_SECONDS):
+    // at most SWEEP_CHECKS rounds (splits here, unions of a piece below).
+    let checks = std::cell::Cell::new(0usize);
+    let over = || {
+        checks.set(checks.get() + 1);
+        checks.get() > SWEEP_CHECKS
+    };
     // The contact curves of every face that both leads and trails, traced side by side up front
     // (most of the work where many faces need them: a coil's). A curve split keeps the other
     // faces' numbers, so they stay good until a split of another kind renumbers the faces.
@@ -1525,7 +1536,13 @@ pub fn by_faces_or_pieces(
         }
     };
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
-    let over = || clock.elapsed().as_secs_f64() > effort();
+    // yack: a deterministic work budget in place of the wall clock (EFFORT_SECONDS):
+    // at most SWEEP_CHECKS rounds (splits here, unions of a piece below).
+    let checks = std::cell::Cell::new(0usize);
+    let over = || {
+        checks.set(checks.get() + 1);
+        checks.get() > SWEEP_CHECKS
+    };
     if pieces.is_empty() {
         let first = k.insert(start);
         return Ok(OpResult {

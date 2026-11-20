@@ -132,6 +132,12 @@ macro_rules! id {
             }
         }
 
+        impl From<$name> for u64 {
+            fn from(id: $name) -> u64 {
+                u64::from(id.index)
+            }
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "{}{}", $letter, self.index)

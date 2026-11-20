@@ -114,3 +114,22 @@ fn nearest_faces_edge_parameters_and_closest_with_insides() {
     let p = e.point(t0);
     assert!((p.x - e.ends()[0].x).abs() < 1e-12 && t1 > t0);
 }
+
+#[test]
+fn a_ball_grooves_a_plate_along_a_spline_through_cadrs() {
+    let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
+    let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
+    let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::Along { path, law: FrameLaw::Fixed }).unwrap();
+    assert_eq!(tool.strategy(), "cadrs");
+    assert!(tool.check().is_empty());
+    let cut = plate.difference(&tool).unwrap();
+    assert!(cut.check().is_empty());
+    assert!(cut.volume() < 42.0 * 32.0 * 8.0);
+}
+
+#[test]
+fn a_slid_block_is_a_longer_block() {
+    let s = cube([0.0; 3]).swept(&Motion::Slide { by: [3.0, 0.0, 0.0].into() }).unwrap();
+    close(s.volume(), 8.0 + 2.0 * 2.0 * 3.0);
+    assert_eq!(s.strategy(), "cadrs");
+}

@@ -217,6 +217,30 @@ def transform(rel, text):
     if rel == "src/native/smb.rs":
         names += tests_calling(text, "fixture(")
     text = ignore_tests(text, rel, names, IGNORE_SMLIB, changes)
+    if rel == "src/native/sweep_faces.rs":
+        # The wall-clock give-up (EFFORT_SECONDS) cannot fire under the shim's frozen clock: a
+        # deterministic budget of checks takes its place at both sites.
+        old = "    let over = || clock.elapsed().as_secs_f64() > effort();\n"
+        if text.count(old) != 2:
+            sys.exit("sweep_faces.rs: the two wall-clock budgets not found")
+        new = (
+            "    // yack: a deterministic work budget in place of the wall clock (EFFORT_SECONDS):\n"
+            "    // at most SWEEP_CHECKS rounds (splits here, unions of a piece below).\n"
+            "    let checks = std::cell::Cell::new(0usize);\n"
+            "    let over = || {\n"
+            "        checks.set(checks.get() + 1);\n"
+            "        checks.get() > SWEEP_CHECKS\n"
+            "    };\n"
+        )
+        text = text.replace(old, new)
+        old = "const EFFORT_SECONDS: f64 = 4.0;\n"
+        if old not in text:
+            sys.exit("sweep_faces.rs: EFFORT_SECONDS not found")
+        text = text.replace(old, old + (
+            "\n/// yack: the rounds a sweep by faces may split, or unite pieces, before it gives up\n"
+            "/// (in place of [`EFFORT_SECONDS`] of wall clock: results never depend on timing).\n"
+            "const SWEEP_CHECKS: usize = 4096;\n"))
+        changes.append("the two wall-clock give-ups (EFFORT_SECONDS) replaced by a deterministic budget of SWEEP_CHECKS rounds")
     if rel == "src/native/tess.rs":
         old = "use spade::handles::FixedVertexHandle;\n"
         if old not in text:
@@ -241,6 +265,12 @@ def transform(rel, text):
         body.append(line.rstrip().rstrip(",") + "};")
         text = text.replace(old, "\n".join(body) + "\n")
         changes.append("`pub use types::*` spelled out item by item (no glob re-exports)")
+        # yack's own glue module (src/yack_glue.rs, written by w-m03-api, not imported).
+        old = "pub mod types;\n"
+        if old not in text:
+            sys.exit("lib.rs: `pub mod types;` not found")
+        text = text.replace(old, old + "// yack: glue the yack facade calls (not cadrs code; owned by w-m03-api).\npub mod yack_glue;\n", 1)
+        changes.append("`pub mod yack_glue;` (yack's own facade glue) declared")
         text += (
             "\n"
             "// yack: the shim's other facades under their crates' names. yack-shim is one package,\n"

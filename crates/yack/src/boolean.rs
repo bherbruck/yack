@@ -2,7 +2,8 @@
 use yack_springrep::boolean as sr;
 
 use crate::engine::{self, Brep};
-use crate::firewall;
+use crate::{engine_cadrs, firewall, ladder};
+use yack_cadrs::BoolOp;
 use crate::{Plane, Result, Solid, Split};
 
 impl Solid {
@@ -20,7 +21,11 @@ impl Solid {
             match (self.brep(), other.brep()) {
                 (None, _) => Ok(other.clone()),
                 (_, None) => Ok(self.clone()),
-                (Some(a), Some(b)) => engine::solid("union", sr::union(a, b)),
+                (Some(a), Some(b)) => ladder::two(
+                    "union",
+                    &|| engine::solid("union", sr::union(a, b)),
+                    &|| engine_cadrs::boolean("union", BoolOp::Union, self, &[other]),
+                ),
             }
         })
     }
@@ -29,7 +34,11 @@ impl Solid {
     pub fn intersection(&self, other: &Solid) -> Result<Solid> {
         firewall::run("intersection", || {
             match (self.brep(), other.brep()) {
-                (Some(a), Some(b)) => engine::solid("intersection", sr::intersection(a, b)),
+                (Some(a), Some(b)) => ladder::two(
+                    "intersection",
+                    &|| engine::solid("intersection", sr::intersection(a, b)),
+                    &|| engine_cadrs::boolean("intersection", BoolOp::Intersect, self, &[other]),
+                ),
                 _ => Ok(Solid::empty()),
             }
         })
@@ -41,7 +50,11 @@ impl Solid {
             match (self.brep(), tool.brep()) {
                 (None, _) => Ok(Solid::empty()),
                 (_, None) => Ok(self.clone()),
-                (Some(a), Some(b)) => engine::solid("difference", sr::difference(a, b)),
+                (Some(a), Some(b)) => ladder::two(
+                    "difference",
+                    &|| engine::solid("difference", sr::difference(a, b)),
+                    &|| engine_cadrs::boolean("difference", BoolOp::Subtract, self, &[tool]),
+                ),
             }
         })
     }
@@ -55,7 +68,12 @@ impl Solid {
                 [one] => Ok((*one).clone()),
                 _ => {
                     let breps: Vec<&Brep> = parts.iter().filter_map(|s| s.brep()).collect();
-                    engine::solid("union_all", sr::union_all(&breps))
+                    let [first, rest @ ..] = parts.as_slice() else { return Ok(Solid::empty()) };
+                    ladder::two(
+                        "union_all",
+                        &|| engine::solid("union_all", sr::union_all(&breps)),
+                        &|| engine_cadrs::boolean("union_all", BoolOp::Union, first, rest),
+                    )
                 }
             }
         })
@@ -69,7 +87,12 @@ impl Solid {
             if breps.is_empty() {
                 return Ok(self.clone());
             }
-            engine::solid("difference_all", sr::difference_all(a, &breps))
+            let tools: Vec<&Solid> = tools.iter().filter(|s| !s.is_empty()).collect();
+            ladder::two(
+                "difference_all",
+                &|| engine::solid("difference_all", sr::difference_all(a, &breps)),
+                &|| engine_cadrs::boolean("difference_all", BoolOp::Subtract, self, &tools),
+            )
         })
     }
 
@@ -79,7 +102,17 @@ impl Solid {
             let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };
             let (front, back) = sr::split(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
                 .map_err(|e| engine::error("split", e))?;
-            Ok(Split { front: Solid::from_springrep(front), back: Solid::from_springrep(back) })
+            let (front, back) = (Solid::from_springrep(front), Solid::from_springrep(back));
+            if (front.is_empty() || back.is_empty())
+                && yack_springrep::facade::api::plane_cuts(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
+            {
+                return Err(crate::Error::failed(
+                    "split",
+                    crate::Stage::Split,
+                    "springrep lost one side of a plane that passes through the solid (a sliver it snapped away)",
+                ));
+            }
+            Ok(Split { front, back })
         })
     }
 }

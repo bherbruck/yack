@@ -830,9 +830,12 @@ impl<V: HasPosition<Scalar = f64>> ConstrainedDelaunayTriangulation<V> {
             debug_assert_eq!(c1, y);
             let o1 = orient(pa, pb, self.pos[c1]);
             let o2 = orient(pa, pb, self.pos[c2]);
+            // Strictly between a and b along the segment.
+            let len2 = (pb[0] - pa[0]).powi(2) + (pb[1] - pa[1]).powi(2);
             let ahead = |c: usize| {
                 let pc = self.pos[c];
-                (pc[0] - pa[0]) * (pb[0] - pa[0]) + (pc[1] - pa[1]) * (pb[1] - pa[1]) > 0.0
+                let s = (pc[0] - pa[0]) * (pb[0] - pa[0]) + (pc[1] - pa[1]) * (pb[1] - pa[1]);
+                s > 0.0 && s < len2
             };
             if o1 == 0.0 && ahead(c1) {
                 return Some(Err(c1));
@@ -849,6 +852,14 @@ impl<V: HasPosition<Scalar = f64>> ConstrainedDelaunayTriangulation<V> {
 
     /// Inserts the constraint a–b; false when it crosses a constraint already in (left out).
     fn insert_constraint(&mut self, a: usize, b: usize) -> Result<bool, InsertionError> {
+        self.insert_constraint_at(a, b, 0)
+    }
+
+    /// [`Self::insert_constraint`], `depth` pieces deep in a segment split at vertices on it.
+    fn insert_constraint_at(&mut self, a: usize, b: usize, depth: usize) -> Result<bool, InsertionError> {
+        if depth > 4096 {
+            return Err(InsertionError);
+        }
         if a == b || !self.used[a] || !self.used[b] {
             return Ok(a == b);
         }
@@ -863,7 +874,8 @@ impl<V: HasPosition<Scalar = f64>> ConstrainedDelaunayTriangulation<V> {
             None => return Err(InsertionError),
             Some(Err(c)) => {
                 // Through vertex c: a–c, then c–b.
-                return Ok(self.insert_constraint(a, c)? & self.insert_constraint(c, b)?);
+                return Ok(self.insert_constraint_at(a, c, depth + 1)?
+                    & self.insert_constraint_at(c, b, depth + 1)?);
             }
             Some(Ok(f)) => f,
         };
@@ -891,7 +903,7 @@ impl<V: HasPosition<Scalar = f64>> ConstrainedDelaunayTriangulation<V> {
             if ow == 0.0 {
                 // Through vertex w on the segment: a–w then w–b.
                 let ok = self.recover(a, w, crossed)?;
-                return Ok(ok & self.insert_constraint(w, b)?);
+                return Ok(ok & self.insert_constraint_at(w, b, depth + 1)?);
             }
             if ow < 0.0 {
                 x = w;

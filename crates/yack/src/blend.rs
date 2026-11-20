@@ -3,8 +3,9 @@
 use yack_springrep::blend as sr;
 
 use crate::engine;
-use crate::firewall;
-use crate::{Angle, EdgeId, Error, FaceId, Point3, Result, Solid};
+use crate::{engine_cadrs, firewall, ladder};
+use yack_cadrs::yack_glue as glue;
+use crate::{Angle, EdgeId, FaceId, Point3, Result, Solid};
 
 impl Solid {
     /// Rounds `edges` with a constant `radius` (mm).
@@ -22,7 +23,12 @@ impl Solid {
             let feature = engine::feature();
             let op = "fillet";
             let ids = self.sr_edges(op, "edges", edges)?;
-            engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))
+            let ix = crate::edit::indices(edges);
+            ladder::two(
+                op,
+                &|| engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature)),
+                &|| engine_cadrs::blend(op, self, &ix, "round", |k, id| glue::fillet(k, id, &ix, radius)),
+            )
         })
     }
 
@@ -116,7 +122,12 @@ impl Solid {
             let feature = engine::feature();
             let op = "chamfer";
             let ids = self.sr_edges(op, "edges", edges)?;
-            engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))
+            let ix = crate::edit::indices(edges);
+            ladder::two(
+                op,
+                &|| engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature)),
+                &|| engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance)),
+            )
         })
     }
 
@@ -128,7 +139,12 @@ impl Solid {
             let op = "chamfer_two";
             let e = self.sr_edge(op, "edge", edge)?;
             let f = self.sr_face(op, "face", face)?;
-            engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, d1, d2, &feature))
+            let (ei, fi) = (u64::from(edge), u64::from(face));
+            ladder::two(
+                op,
+                &|| engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, d1, d2, &feature)),
+                &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, d1, d2)),
+            )
         })
     }
 
@@ -142,13 +158,18 @@ impl Solid {
         })
     }
 
-    /// Bevels `edge` with setback `distance` along `face` (one of its two faces) and the bevel
-    /// at `angle` from that face.
+    /// Bevels `edge` with setback `distance` along `face` (one of its two faces), the bevel at
+    /// `angle` to that face (cadrs only).
     pub fn chamfer_angle(&self, edge: EdgeId, face: FaceId, distance: f64, angle: Angle) -> Result<Solid> {
         let op = "chamfer_angle";
         self.sr_edge(op, "edge", edge)?;
         self.sr_face(op, "face", face)?;
-        let _ = (distance, angle);
-        Err(Error::unsupported(op))
+        let (ei, fi, a) = (u64::from(edge), u64::from(face), angle.radians());
+        firewall::run(op, || {
+            ladder::ladder(
+                op,
+                &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_angle(k, id, ei, fi, distance, a)) }],
+            )
+        })
     }
 }

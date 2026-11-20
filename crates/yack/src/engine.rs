@@ -35,14 +35,18 @@ pub(crate) fn vec(v: SrVec3) -> Vec3 {
 }
 
 /// The same frame in springrep's terms.
+/// Built as springrep's own adapter builds it (`Frame::new(origin, z, x)`: z made unit, x squared
+/// against it, y = z × x), so a near-degenerate case reads the frame to the last bit alike.
 pub(crate) fn frame(f: &Frame) -> sr::math::Frame {
-    sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.y().vec()), z: v3(f.z().vec()) }
+    let copied = sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.y().vec()), z: v3(f.z().vec()) };
+    sr::math::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
 }
 
 /// The frame's xz plane as a sketch frame (x along the frame's x, sketch y along the frame's z),
 /// so a profile drawn in it revolves about the frame's z.
 pub(crate) fn meridian(f: &Frame) -> sr::math::Frame {
-    sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.z().vec()), z: v3(-f.y().vec()) }
+    let copied = sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.z().vec()), z: v3(-f.y().vec()) };
+    sr::math::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
 }
 
 /// springrep's refusal as yack's error, from `op`.
@@ -144,6 +148,11 @@ fn segment(op: &'static str, s: &Segment, scale: Option<f64>) -> Result<sr::prof
         }
         Segment::Arc { center, radius, start, sweep } => {
             S::Arc { center: at(*center, scale), radius: len(*radius), start: start.radians(), sweep: sweep.radians() }
+        }
+        // An ellipse's arc below weight 1; a parabola (1) or a hyperbola (above) as springrep's
+        // rational Bézier, exact for any weight.
+        Segment::Conic { a, apex, b, weight } if *weight >= 1.0 => {
+            S::Bezier { ctrl: vec![at(*a, scale), at(*apex, scale), at(*b, scale)], weights: vec![1.0, *weight, 1.0] }
         }
         Segment::Conic { a, apex, b, weight } => {
             S::conic(at(*a, scale), at(*apex, scale), at(*b, scale), *weight).map_err(|e| error(op, e))?
