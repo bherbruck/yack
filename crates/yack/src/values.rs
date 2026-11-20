@@ -277,8 +277,8 @@ impl EdgeRef<'_> {
     pub fn ends(&self) -> [Point3; 2] {
         self.ends
     }
-    /// `Some(true)` where the solid is convex across the edge; `None` otherwise (concave, tangent
-    /// or mixed; telling these apart is still to come).
+    /// Whether the solid is convex (`Some(true)`) or concave (`Some(false)`) across the edge at
+    /// its midpoint; `None` where its faces meet tangentially.
     pub fn convex(&self) -> Option<bool> {
         self.convex
     }

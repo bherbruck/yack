@@ -1,6 +1,7 @@
 // yack: `Solid`, the immutable B-rep value (PLAN §4.2 rule 1). Its operations live in boolean.rs,
 // blend.rs, edit.rs, select.rs and query.rs.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::engine::{self, Brep};
 use crate::{EdgeId, Error, FaceId, History, Result, Tag, VertexId};
@@ -20,11 +21,23 @@ use crate::{EdgeId, Error, FaceId, History, Result, Tag, VertexId};
 #[derive(Clone, Debug)]
 pub struct Solid(Arc<Inner>);
 
+/// The next solid's stamp. Process-wide state, allowed in the facade only (lead, M1.5): it keeps
+/// ids from one solid from ever passing on another, dropped or alive, and never affects geometry.
+static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
+
+/// A fresh process-wide number (solid stamps, per-operation feature names).
+pub(crate) fn fresh_stamp() -> u64 {
+    NEXT_STAMP.fetch_add(1, Ordering::Relaxed)
+}
+
 #[derive(Debug)]
 struct Inner {
+    stamp: u64,
     body: Body,
     history: History,
     tag: Option<Tag>,
+    /// The engine feature name on the faces the operation that made this solid created.
+    feature: Option<String>,
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
@@ -36,7 +49,7 @@ pub(crate) enum Body {
 
 impl Solid {
     fn new(body: Body) -> Solid {
-        Solid(Arc::new(Inner { body, history: History::default(), tag: None }))
+        Solid(Arc::new(Inner { stamp: fresh_stamp(), body, history: History::default(), tag: None, feature: None }))
     }
 
     /// The solid with no pieces.
@@ -66,9 +79,9 @@ impl Solid {
         self.brep().ok_or_else(|| Error::invalid(op, "self", "the solid is empty"))
     }
 
-    /// The stamp this solid's ids carry: unique among live solids.
+    /// The stamp this solid's ids carry: unique in the process.
     pub(crate) fn stamp(&self) -> u64 {
-        Arc::as_ptr(&self.0) as usize as u64
+        self.0.stamp
     }
 
     pub(crate) fn face_id(&self, f: engine_ids::Face) -> FaceId {
@@ -124,10 +137,55 @@ impl Solid {
         matches!(self.0.body, Body::Empty)
     }
 
-    /// This solid with `tag` recorded as its feature name. The result is a new solid: ids from
-    /// this one are foreign to it.
+    /// The same solid remembering that its new faces carry engine feature `feature`.
+    pub(crate) fn with_feature(self, feature: &str) -> Solid {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.feature = Some(feature.to_string());
+                Solid(Arc::new(inner))
+            }
+            Err(shared) => Solid(shared),
+        }
+    }
+
+    /// This solid with `tag` as the feature name of every face the operation that made it
+    /// created (a constructor: all its faces; a fillet: its rounds; a boolean makes none). Later
+    /// operations keep the name on those faces; find them with
+    /// [`faces_tagged`](Solid::faces_tagged). The result is a new solid: ids from this one are
+    /// foreign to it.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let r = b.fillet(&[b.edge_at([5.0, 0.0, 10.0])?], 2.0)?.named("round");
+    /// let r = r.union(&block(&Frame::at([20.0, 0.0, 0.0]), [1.0, 1.0, 1.0])?)?;
+    /// assert_eq!(r.faces_tagged("round").len(), 1);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn named(&self, tag: impl Into<Tag>) -> Solid {
-        Solid(Arc::new(Inner { body: self.0.body.clone(), history: self.0.history.clone(), tag: Some(tag.into()) }))
+        let tag = tag.into();
+        let name = tag.as_str().to_string();
+        let body = match (&self.0.body, &self.0.feature) {
+            (Body::Springrep(b), Some(f)) => {
+                let mut b = (**b).clone();
+                b.rename_faces(|n| {
+                    let mut n = n.clone();
+                    if n.feature == *f {
+                        n.feature.clone_from(&name);
+                    }
+                    Some(n)
+                });
+                Body::Springrep(Box::new(b))
+            }
+            (body, _) => body.clone(),
+        };
+        Solid(Arc::new(Inner {
+            stamp: fresh_stamp(),
+            body,
+            history: self.0.history.clone(),
+            tag: Some(tag),
+            feature: Some(name),
+        }))
     }
 
     /// The feature name given with [`named`](Solid::named), if any.

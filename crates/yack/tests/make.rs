@@ -137,3 +137,22 @@ fn codec_and_step_round_trip() {
     let text = yack::step::write(&b).unwrap();
     close(yack::step::read(&text).unwrap().volume(), 24.0);
 }
+
+#[test]
+fn an_extruded_ellipse_is_exact() {
+    let s = extrude(&Frame::WORLD, &Profile::ellipse([1.0, 2.0], 3.0, 2.0).unwrap(), 4.0).unwrap();
+    assert!(s.check().is_empty());
+    close(s.volume(), PI * 3.0 * 2.0 * 4.0);
+}
+
+#[test]
+fn named_faces_survive_later_operations() {
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0]).unwrap();
+    let r = b.fillet(&[b.edge_at([5.0, 0.0, 10.0]).unwrap()], 2.0).unwrap().named("round");
+    assert_eq!(r.faces_tagged("round").len(), 1);
+    let r = r.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 1.0, 12.0).unwrap()).unwrap();
+    assert_eq!(r.faces_tagged("round").len(), 1);
+    assert!(r.faces_tagged("nothing").is_empty());
+    let base = block(&Frame::WORLD, [1.0, 1.0, 1.0]).unwrap().named("base");
+    assert_eq!(base.faces_tagged("base").len(), 6);
+}

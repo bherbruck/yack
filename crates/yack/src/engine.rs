@@ -8,8 +8,11 @@ use crate::{Error, ErrorKind, Frame, Point2, Point3, Profile, Result, Segment, S
 
 pub(crate) use sr::topo::Brep;
 
-/// The feature name springrep stamps on the faces an operation makes.
-pub(crate) const FEATURE: &str = "yack";
+/// A fresh feature name for the faces one operation makes; [`made`] records it on the result so
+/// `Solid::named` can find exactly those faces.
+pub(crate) fn feature() -> String {
+    format!("yack#{}", crate::solid::fresh_stamp())
+}
 
 pub(crate) fn v3(v: Vec3) -> SrVec3 {
     SrVec3::new(v.x, v.y, v.z)
@@ -51,6 +54,11 @@ pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
         sr::Error::Numerical(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: None, detail },
         sr::Error::InvalidResult(_) => Error::failed(op, Stage::Check, detail),
     }
+}
+
+/// A springrep result whose new faces carry `feature`, as a solid that remembers it.
+pub(crate) fn made(feature: &str, op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
+    r.map(|b| Solid::from_springrep(b).with_feature(feature)).map_err(|e| error(op, e))
 }
 
 /// A springrep result as a solid.
@@ -127,11 +135,6 @@ pub(crate) fn spline(op: &'static str, s: &Spline3, place: impl Fn(Point3) -> Po
     let b = sr::geom::BSpline::new(degree, s.knots().to_vec(), ctrl).map_err(|e| error(op, e))?;
     let domain = b.domain();
     Ok((sr::geom::Curve::BSpline(b), domain))
-}
-
-/// The linear part and translation of 3×4 rows.
-pub(crate) fn split_rows(m: [[f64; 4]; 3]) -> ([[f64; 3]; 3], SrVec3) {
-    (m.map(|r| [r[0], r[1], r[2]]), SrVec3::new(m[0][3], m[1][3], m[2][3]))
 }
 
 /// A 32-byte digest of `bytes`: four FNV-1a lanes with different seeds.

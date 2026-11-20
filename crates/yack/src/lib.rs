@@ -21,13 +21,16 @@
 
 mod blend;
 mod boolean;
+pub mod codec;
 mod edit;
 mod engine;
+mod firewall;
 mod input;
 pub mod make;
 mod query;
 mod select;
 mod solid;
+pub mod step;
 mod values;
 
 pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline3};
@@ -60,49 +63,6 @@ pub mod prelude {
         Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
         rad,
     };
-}
-
-/// STEP exchange (AP214, exact B-rep; never faceted).
-pub mod step {
-    use crate::{Error, Result, Solid, engine};
-
-    /// The solid as an AP214 STEP file.
-    pub fn write(s: &Solid) -> Result<String> {
-        let b = s.brep().ok_or_else(|| Error::invalid("step::write", "s", "the solid is empty"))?;
-        yack_springrep::step::write(b, "yack").map_err(|e| engine::error("step::write", e))
-    }
-    /// The solid in a STEP file.
-    pub fn read(text: &str) -> Result<Solid> {
-        engine::solid("step::read", yack_springrep::step::read_part(text.as_bytes(), "step"))
-    }
-    /// The solid sewn from the faces in a STEP file, closing gaps up to `tolerance` mm.
-    pub fn sew(text: &str, tolerance: f64) -> Result<Solid> {
-        engine::solid("step::sew", yack_springrep::step::sew(text.as_bytes(), tolerance))
-    }
-}
-
-/// yack's own lossless binary format.
-pub mod codec {
-    use crate::{Error, ErrorKind, Result, Solid};
-
-    /// The solid as bytes that [`decode`] reads back exactly.
-    pub fn encode(s: &Solid) -> Vec<u8> {
-        match s.brep() {
-            None => yack_springrep::codec::to_bytes(&[]),
-            Some(b) => yack_springrep::codec::to_bytes(core::slice::from_ref(b)),
-        }
-    }
-    /// The solid encoded in `b`.
-    pub fn decode(b: &[u8]) -> Result<Solid> {
-        let op = "codec::decode";
-        let parts = yack_springrep::codec::from_bytes(b).ok_or_else(|| Error::invalid(op, "b", "not a yack codec stream"))?;
-        let mut parts = parts.into_iter();
-        match (parts.next(), parts.next()) {
-            (None, _) => Ok(Solid::empty()),
-            (Some(one), None) => Ok(Solid::from_springrep(one)),
-            _ => Err(Error::new(ErrorKind::Unsupported, op, "a stream of several solids")),
-        }
-    }
 }
 
 /// The model tolerances (mm).

@@ -331,6 +331,31 @@ impl Profile {
         Profile::new(outer, Vec::new())
     }
 
+    /// The axis-aligned ellipse about `center` with semi-axes `a` along x and `b` along y (exact:
+    /// four quarter conics).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let e = Profile::ellipse([0.0, 0.0], 3.0, 2.0)?;
+    /// assert_eq!(e.outer().segments().len(), 4);
+    /// assert!(Profile::ellipse([0.0, 0.0], 3.0, 0.0).is_err());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn ellipse(center: impl Into<Point2>, a: f64, b: f64) -> Result<Profile> {
+        let op = "Profile::ellipse";
+        let center = center.into();
+        for (arg, v) in [("a", a), ("b", b)] {
+            if !(v.is_finite() && v > yack_tol::LINEAR) {
+                return Err(Error::invalid(op, arg, format!("semi-axis {v} is not positive")));
+            }
+        }
+        let segments = planar::ellipse_quarters(center, a, b)
+            .into_iter()
+            .map(|(a, apex, b)| Segment::Conic { a, apex, b, weight: core::f64::consts::FRAC_1_SQRT_2 })
+            .collect();
+        Profile::new(Loop::labelled(op, segments, vec![None; 4])?, Vec::new())
+    }
+
     /// The polygon through `corners`, in either order (it is made counter-clockwise).
     pub fn polygon(corners: &[[f64; 2]]) -> Result<Profile> {
         let mut l = Loop::polygon(corners)?;

@@ -51,6 +51,11 @@ pub fn shell(b: &Brep, open: &[FaceId], thickness: f64) -> Result<Brep> {
     edit::shell(b, open, thickness, edit::Wall::Inward, "shell")
 }
 
+/// Wraps the solid in a wall of `thickness` outside it, removing `open`: the faces become the wall's inside.
+pub fn shell_outward(b: &Brep, open: &[FaceId], thickness: f64) -> Result<Brep> {
+    edit::shell(b, open, thickness, edit::Wall::Outward, "shell")
+}
+
 /// Drafts `faces` by `angle` radians about the neutral plane through `origin` normal to `pull`.
 pub fn draft(b: &Brep, faces: &[FaceId], origin: [f64; 3], pull: [f64; 3], angle: f64) -> Result<Brep> {
     let z = v3(pull);

@@ -1,12 +1,12 @@
 // yack: selection and topology walks on `Solid` (PLAN §4.2 rule 6), routed to springrep.
 use std::collections::BTreeSet;
 
-use yack_springrep::{geom, measure, pick};
+use yack_springrep::{facade::api, geom, measure};
 
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
 use crate::{
-    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, SurfaceKind, VertexId,
+    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, SurfaceKind, Tag, VertexId,
 };
 
 fn face_ref<'a>(s: &'a Solid, b: &Brep, f: engine_ids::Face) -> FaceRef<'a> {
@@ -35,7 +35,7 @@ fn face_ref<'a>(s: &'a Solid, b: &Brep, f: engine_ids::Face) -> FaceRef<'a> {
     )
 }
 
-fn edge_ref<'a>(s: &'a Solid, b: &Brep, e: engine_ids::Edge, convex: &BTreeSet<engine_ids::Edge>) -> Option<EdgeRef<'a>> {
+fn edge_ref<'a>(s: &'a Solid, b: &Brep, e: engine_ids::Edge) -> Option<EdgeRef<'a>> {
     let edge = b.edge(e);
     let curve = edge.curve.as_ref()?;
     let kind = match curve {
@@ -46,8 +46,7 @@ fn edge_ref<'a>(s: &'a Solid, b: &Brep, e: engine_ids::Edge, convex: &BTreeSet<e
     };
     let ends = [engine::point(b.vertex(edge.start).point), engine::point(b.vertex(edge.end).point)];
     let mid = engine::point(curve.eval(yack_math::mean(edge.range.0, edge.range.1)));
-    let convex = if convex.contains(&e) { Some(true) } else { None };
-    Some(EdgeRef::new(s.edge_id(e), kind, ends, convex, measure::edge_length(b, e), mid))
+    Some(EdgeRef::new(s.edge_id(e), kind, ends, api::convexity(b, e), measure::edge_length(b, e), mid))
 }
 
 impl Solid {
@@ -68,23 +67,35 @@ impl Solid {
         self.brep().map_or_else(Vec::new, |b| b.vertex_ids().map(|v| self.vertex_id(v)).collect())
     }
 
-    /// The face within `tol::PICK` of `p`; `NotFound` if none.
+    /// The one face within `tol::PICK` of `p`: `NotFound` if none, `Ambiguous` if several (a
+    /// point on an edge touches both its faces; yack never chooses).
     pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> {
+        let op = "face_at";
         let p = p.into();
-        let found = self.brep().and_then(|b| measure::face_at(b, engine::p3(p)));
-        match found {
-            Some((f, d)) if d <= yack_tol::PICK => Ok(self.face_id(f)),
-            _ => Err(Error::not_found("face_at", "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+        let found = match self.brep() {
+            None => Vec::new(),
+            Some(b) => api::faces_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+        };
+        match found.as_slice() {
+            [f] => Ok(self.face_id(*f)),
+            [] => Err(Error::not_found(op, "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            many => Err(Error::ambiguous(op, "p", format!("{} faces pass within tol::PICK of ({}, {}, {})", many.len(), p.x, p.y, p.z))),
         }
     }
 
-    /// The edge within `tol::PICK` of `p`; `NotFound` if none.
+    /// The one edge within `tol::PICK` of `p`: `NotFound` if none, `Ambiguous` if several (a
+    /// vertex touches all its edges).
     pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> {
+        let op = "edge_at";
         let p = p.into();
-        let found = self.brep().and_then(|b| measure::edge_at(b, engine::p3(p)));
-        match found {
-            Some((e, d)) if d <= yack_tol::PICK => Ok(self.edge_id(e)),
-            _ => Err(Error::not_found("edge_at", "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+        let found = match self.brep() {
+            None => Vec::new(),
+            Some(b) => api::edges_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+        };
+        match found.as_slice() {
+            [e] => Ok(self.edge_id(*e)),
+            [] => Err(Error::not_found(op, "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            many => Err(Error::ambiguous(op, "p", format!("{} edges pass within tol::PICK of ({}, {}, {})", many.len(), p.x, p.y, p.z))),
         }
     }
 
@@ -108,6 +119,16 @@ impl Solid {
         pts.iter().map(|&p| self.edge_at(p)).collect()
     }
 
+    /// The faces carrying feature name `tag`, given by [`named`](Solid::named).
+    pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> {
+        let tag = tag.into();
+        let Some(b) = self.brep() else { return Vec::new() };
+        b.face_ids()
+            .filter(|&f| b.face(f).names.iter().any(|n| n.feature == tag.as_str()))
+            .map(|f| self.face_id(f))
+            .collect()
+    }
+
     /// The faces for which `keep` is true.
     pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> {
         let Some(b) = self.brep() else { return Vec::new() };
@@ -117,8 +138,7 @@ impl Solid {
     /// The edges (poles aside) for which `keep` is true.
     pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> {
         let Some(b) = self.brep() else { return Vec::new() };
-        let convex: BTreeSet<engine_ids::Edge> = pick::convex_edges(b).unwrap_or_default().into_iter().collect();
-        b.edge_ids().filter_map(|e| edge_ref(self, b, e, &convex)).filter(|r| keep(r)).map(|r| r.id()).collect()
+        b.edge_ids().filter_map(|e| edge_ref(self, b, e)).filter(|r| keep(r)).map(|r| r.id()).collect()
     }
 
     /// A view of face `id`.
@@ -131,8 +151,7 @@ impl Solid {
     pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> {
         let e = self.sr_edge("edge", "id", id)?;
         let b = self.need("edge")?;
-        let convex: BTreeSet<engine_ids::Edge> = pick::convex_edges(b).unwrap_or_default().into_iter().collect();
-        edge_ref(self, b, e, &convex).ok_or_else(|| Error::not_found("edge", "id", format!("{id} is a pole")))
+        edge_ref(self, b, e).ok_or_else(|| Error::not_found("edge", "id", format!("{id} is a pole")))
     }
 
     fn sr_edges_of(b: &Brep, f: engine_ids::Face) -> BTreeSet<engine_ids::Edge> {

@@ -54,3 +54,35 @@ fn faces_meet_at_their_edge() {
     want.sort();
     assert_eq!(of, want);
 }
+
+#[test]
+fn a_dead_solids_ids_stay_foreign() {
+    let stale = {
+        let b = ten();
+        b.edge_at([5.0, 0.0, 10.0]).unwrap()
+    };
+    for _ in 0..50 {
+        let fresh = ten();
+        assert_eq!(fresh.fillet(&[stale], 1.0).unwrap_err().kind, ErrorKind::ForeignId);
+        assert_eq!(fresh.edge(stale).unwrap_err().kind, ErrorKind::ForeignId);
+    }
+}
+
+#[test]
+fn picks_on_shared_boundaries_are_ambiguous() {
+    let b = ten();
+    assert_eq!(b.edge_at([0.0, 0.0, 10.0]).unwrap_err().kind, ErrorKind::Ambiguous);
+    assert_eq!(b.face_at([5.0, 0.0, 10.0]).unwrap_err().kind, ErrorKind::Ambiguous);
+}
+
+#[test]
+fn convexity_tells_convex_concave_and_tangent() {
+    let b = ten();
+    assert!(b.edges_where(|e| e.convex() == Some(true)).len() == 12);
+    let l = b.union(&block(&Frame::WORLD, [20.0, 10.0, 5.0]).unwrap()).unwrap();
+    let concave = l.edges_where(|e| e.convex() == Some(false));
+    assert_eq!(concave.len(), 1, "{concave:?}");
+    let e = b.edge_at([5.0, 0.0, 10.0]).unwrap();
+    let r = b.fillet(&[e], 2.0).unwrap();
+    assert_eq!(r.edges_where(|e| e.convex().is_none()).len(), 2);
+}

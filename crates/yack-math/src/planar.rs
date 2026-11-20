@@ -57,6 +57,19 @@ pub fn coincident(a: Point2, b: Point2) -> bool {
     a.distance(b) <= yack_tol::LINEAR
 }
 
+/// The four quarters of the axis-aligned ellipse about `center` with semi-axes `a` (along x) and
+/// `b` (along y), counter-clockwise from `(center.x + a, center.y)`: each `(start, apex, end)` of a
+/// rational quadratic with apex weight `1/√2`.
+pub fn ellipse_quarters(center: Point2, a: f64, b: f64) -> [(Point2, Point2, Point2); 4] {
+    let at = |x: f64, y: f64| Point2::new(center.x + x, center.y + y);
+    [
+        (at(a, 0.0), at(a, b), at(0.0, b)),
+        (at(0.0, b), at(-a, b), at(-a, 0.0)),
+        (at(-a, 0.0), at(-a, -b), at(0.0, -b)),
+        (at(0.0, -b), at(a, -b), at(a, 0.0)),
+    ]
+}
+
 /// The two ends of an arc.
 pub fn arc_ends(center: Point2, radius: f64, start: Angle, sweep: Angle) -> [Point2; 2] {
     let at = |t: f64| {
