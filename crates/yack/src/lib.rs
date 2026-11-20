@@ -152,7 +152,7 @@ mod tests {
         let cw = Loop::polygon(&[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]]).unwrap();
         assert!(Profile::new(cw, vec![]).is_err());
         assert!(Profile::circle([0.0, 0.0], 0.0).is_err());
-        let e = Loop::starting_at([0.0, 0.0]).line_to([1.0, 0.0]).arc_to([0.0, 3.0], [0.0, 0.0]).close().unwrap_err();
+        let e = Loop::starting_at([0.0, 0.0]).line_to([1.0, 0.0]).arc_ccw_to([0.0, 3.0], [0.0, 0.0]).close().unwrap_err();
         assert_eq!(e.arg, Some("center"));
     }
 

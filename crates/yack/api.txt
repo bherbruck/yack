@@ -17,7 +17,8 @@ yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
 yack::input: impl Loop { pub fn polygon(corners: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Loop { pub fn segments(&self) -> &[Segment] }
 yack::input: impl Loop { pub fn starting_at(p: impl Into<Point2>) -> Pen }
-yack::input: impl Pen { pub fn arc_to(mut self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
+yack::input: impl Pen { pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
+yack::input: impl Pen { pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn close(self) -> Result<Loop> }
 yack::input: impl Pen { pub fn conic_to(self, end: impl Into<Point2>, apex: impl Into<Point2>, weight: f64) -> Pen }
 yack::input: impl Pen { pub fn label(mut self, l: impl Into<Tag>) -> Pen }

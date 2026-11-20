@@ -76,8 +76,12 @@ pub enum Segment {
 /// use yack::prelude::*;
 /// let square = Loop::polygon(&[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]).unwrap();
 /// assert!(square.is_ccw());
-/// let slot = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_to([10.0, 4.0], [10.0, 2.0])
-///     .line_to([0.0, 4.0]).arc_to([0.0, 0.0], [0.0, 2.0]).close().unwrap();
+/// let slot = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_ccw_to([10.0, 4.0], [10.0, 2.0])
+///     .line_to([0.0, 4.0]).arc_ccw_to([0.0, 0.0], [0.0, 2.0]).close().unwrap();
+/// // a clockwise (concave) bite out of the top edge
+/// let bitten = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).line_to([10.0, 6.0]).line_to([7.0, 6.0])
+///     .arc_cw_to([3.0, 6.0], [5.0, 6.0]).line_to([0.0, 6.0]).close().unwrap();
+/// assert!(bitten.is_ccw());
 /// assert_eq!(slot.segments().len(), 4);
 /// ```
 #[derive(Clone, Debug, PartialEq)]
@@ -236,17 +240,27 @@ impl Pen {
         self.push(Segment::Line { a, b }, b)
     }
 
-    /// A counter-clockwise arc from the current point to `end` about `center`. Both ends must
-    /// lie at the same distance from `center`.
-    pub fn arc_to(mut self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen {
-        let (end, center) = (end.into(), center.into());
-        match planar::arc_to("Pen::arc_to", self.at, end, center) {
+    fn arc(mut self, op: &'static str, end: Point2, center: Point2, ccw: bool) -> Pen {
+        match planar::arc_to(op, self.at, end, center, ccw) {
             Ok((radius, start, sweep)) => self.push(Segment::Arc { center, radius, start, sweep }, end),
             Err(e) => {
                 self.error.get_or_insert(e);
                 self
             }
         }
+    }
+
+    /// A counter-clockwise arc from the current point to `end` about `center`. Both ends must lie
+    /// at the same distance from `center` (within `tol::LINEAR`); `end` equal to the current point
+    /// draws a full circle.
+    pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen {
+        self.arc("Pen::arc_ccw_to", end.into(), center.into(), true)
+    }
+
+    /// A clockwise arc from the current point to `end` about `center`, as
+    /// [`arc_ccw_to`](Pen::arc_ccw_to) otherwise.
+    pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen {
+        self.arc("Pen::arc_cw_to", end.into(), center.into(), false)
     }
 
     /// A conic from the current point to `end`, tangent to the lines through `apex`, with apex
