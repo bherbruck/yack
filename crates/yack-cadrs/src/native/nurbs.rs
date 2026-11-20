@@ -1,6 +1,6 @@
 // yack: Rational B-spline curves and surfaces (Piegl & Tiller, "The NURBS Book").
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/nurbs.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: none (verbatim).
+// Changes: bezier_segments stops at knots that end short of a full clamp (was an index panic).
 //! Rational B-spline curves and surfaces (Piegl & Tiller, "The NURBS Book").
 //!
 //! Control points are stored homogeneous: `[w·x, w·y, w·z, w]`. 2D curves (p-curves) use z = 0.
@@ -1374,7 +1374,11 @@ impl NurbsCurve {
             if mult < p {
                 let numer = u[b] - u[a];
                 for j in (mult + 1..=p).rev() {
-                    alphas[j - mult - 1] = numer / (u[a + j] - u[a]);
+                    // yack: knots that end short of a full clamp: no more whole segments.
+                    let Some(&uj) = u.get(a + j) else {
+                        return out;
+                    };
+                    alphas[j - mult - 1] = numer / (uj - u[a]);
                 }
                 let r = p - mult;
                 for j in 1..=r {

@@ -547,6 +547,205 @@ pub fn cut_swept(k: &mut DefaultKernel, target: BodyId, tool: BodyId, moves: &[M
     r
 }
 
+// ---- booleans with tolerances scaled to the operands' smallest features ----
+
+/// The shortest edge of `bodies` (edges of no length, at poles and apexes, left out).
+fn shortest_edge(k: &DefaultKernel, bodies: &[BodyId]) -> Result<f64> {
+    let mut least = f64::INFINITY;
+    for &b in bodies {
+        for e in k.edges(b)? {
+            if e.length > 0.0 {
+                least = least.min(e.length);
+            }
+        }
+    }
+    Ok(least)
+}
+
+/// `a` combined with `tools` by `how`, cadrs's boolean. Its merge distances never reach a
+/// feature of the operands (D24): where an edge is shorter than a hundred times the session's
+/// widest retry, the session runs this boolean with every tolerance a hundredth of that edge
+/// and below (a saw cut a millionth wide stays a cut). An empty intersection of solids whose
+/// boundaries meet is refused, not answered (cadrs merges a lens thinner than its tolerance
+/// away).
+pub fn boolean(k: &mut DefaultKernel, how: crate::BoolOp, a: BodyId, tools: &[BodyId]) -> Result<Made> {
+    let mut all = vec![a];
+    all.extend_from_slice(tools);
+    let base = k.tolerances();
+    let least = shortest_edge(k, &all)?;
+    let scaled = least.is_finite() && least < 100.0 * base.retries[1];
+    if scaled {
+        let point = base.point.min(least / 100.0);
+        let tol = crate::native::tol::Tolerances {
+            confusion: base.confusion.min(point / 10.0),
+            point,
+            retries: [base.retries[0].min(least / 30.0).max(point), base.retries[1].min(least / 10.0).max(point)],
+        };
+        k.set_tolerances(tol)?;
+    }
+    let r = k.boolean(how, a, tools);
+    if scaled {
+        k.set_tolerances(base)?;
+    }
+    let r = match r {
+        Err(KernelError::EmptyResult(why)) if matches!(how, crate::BoolOp::Intersect) => {
+            // Nothing in common: right only where the solids stay apart.
+            for &t in tools {
+                let d = k.min_distance(&crate::DistanceTarget::Body(a), &crate::DistanceTarget::Body(t))?;
+                if d.distance <= base.point {
+                    return Err(KernelError::Unsupported(
+                        "an empty intersection of solids whose boundaries meet (thinner than cadrs's tolerance?)",
+                    ));
+                }
+            }
+            return Err(KernelError::EmptyResult(why));
+        }
+        r => r,
+    };
+    made(r)
+}
+
+// ---- slabs and transforms ----
+
+/// The degree of the clamped knots `knots` over `n` coefficients and their domain.
+fn clamped(knots: &[f64], n: usize) -> Result<(usize, (f64, f64))> {
+    let p = knots
+        .len()
+        .checked_sub(n + 1)
+        .filter(|&p| p >= 1)
+        .ok_or_else(|| KernelError::InvalidInput("a slab needs more knots than coefficients plus one each way".into()))?;
+    let (lo, hi) = (knots[p], knots[n]);
+    if knots[..=p].iter().any(|&k| k != lo) || knots[n..].iter().any(|&k| k != hi) || !(hi > lo) {
+        return Err(KernelError::InvalidInput("a slab's knots must be clamped at both ends".into()));
+    }
+    Ok((p, (lo, hi)))
+}
+
+/// The Greville abscissae of the clamped knots: where each coefficient sits so the spline
+/// reproduces a linear map.
+fn greville(knots: &[f64], p: usize, n: usize) -> Vec<f64> {
+    (0..n).map(|i| knots[i + 1..=i + p].iter().sum::<f64>() / p as f64).collect()
+}
+
+/// yack's slab, as cadrs's runner builds it (`domed_block`): the solid under
+/// `z = f(x / size[0], y / size[1])` in `frame`, `f` the B-spline on the knots with coefficients
+/// `heights[i][j]` at their Greville abscissae (so x and y run linearly with the parameters); a
+/// block over the rectangle, its top face replaced by the surface (Replace face).
+pub fn slab(
+    k: &mut DefaultKernel,
+    frame: &crate::facade::profile::Place,
+    size: [f64; 2],
+    knots_u: &[f64],
+    knots_v: &[f64],
+    heights: &[Vec<f64>],
+) -> Result<Made> {
+    let nu = heights.len();
+    let nv = heights.first().map_or(0, Vec::len);
+    if nu == 0 || nv == 0 || heights.iter().any(|r| r.len() != nv) {
+        return Err(KernelError::InvalidInput("a slab's heights must form a grid".into()));
+    }
+    if !(size[0] > 0.0 && size[1] > 0.0) || heights.iter().flatten().any(|&h| !(h > 0.0 && h.is_finite())) {
+        return Err(KernelError::InvalidInput("a slab's size and heights must be positive".into()));
+    }
+    let (pu, (u0, u1)) = clamped(knots_u, nu)?;
+    let (pv, (v0, v1)) = clamped(knots_v, nv)?;
+    let (gu, gv) = (greville(knots_u, pu, nu), greville(knots_v, pv, nv));
+    let [a, b] = size;
+    let (o, x, y, z) = (v3(frame.origin), v3(frame.x), v3(frame.y), v3(frame.z));
+    let world = |px: f64, py: f64, pz: f64| o + x * px + y * py + z * pz;
+    let points: Vec<Vec<[f64; 3]>> = (0..nu)
+        .map(|i| {
+            (0..nv)
+                .map(|j| {
+                    let w = world(a * gu[i], b * gv[j], heights[i][j]);
+                    [w.x, w.y, w.z]
+                })
+                .collect()
+        })
+        .collect();
+    let surface = crate::native::NurbsSurface::from_points(pu, pv, knots_u.to_vec(), knots_v.to_vec(), &points, None)?;
+    // The block over the rectangle, as high as the highest coefficient (the field lies within
+    // its control net's hull), its top then replaced.
+    let top = heights.iter().flatten().fold(0.0, |m: f64, &h| m.max(h));
+    let corner = world(a * u0, b * v0, 0.0);
+    let place = crate::facade::profile::Place { origin: [corner.x, corner.y, corner.z], ..*frame };
+    let (block, history) = primitive(k, &place, Prim::Block { size: [a * (u1 - u0), b * (v1 - v0), top] })?;
+    let lid = history
+        .generated
+        .iter()
+        .find(|(_, o)| matches!(o, Origin::EndCap { .. }))
+        .map(|(f, _)| *f)
+        .ok_or_else(|| KernelError::InvalidInput("the slab's block has no top".into()))?;
+    let r = k.replace_faces(
+        block,
+        &[crate::FaceReplacement { face: lid, surface: surface.into(), domain: Some(((u0, u1), (v0, v1))) }],
+    );
+    k.release(block);
+    made(r)
+}
+
+/// `body` mapped by the rows `[A | t]`: a rigid motion or a reflection exactly
+/// (cadrs's `transform_motion`), any other invertible map by cadrs's affine image.
+pub fn transform(k: &mut DefaultKernel, body: BodyId, m: [[f64; 4]; 3]) -> Result<Made> {
+    let linear = nalgebra::Matrix3::from_fn(|i, j| m[i][j]);
+    let translation = Vector3::new(m[0][3], m[1][3], m[2][3]);
+    if linear.determinant() == 0.0 || !linear.iter().chain(translation.iter()).all(|v| v.is_finite()) {
+        return Err(KernelError::InvalidInput("a transform must be finite and invertible".into()));
+    }
+    let orthonormal = (linear.transpose() * linear - nalgebra::Matrix3::identity()).amax() <= crate::native::tol::REL;
+    if orthonormal {
+        made(k.transform_motion(body, &Motion { linear, translation }))
+    } else {
+        made(k.transform_affine(body, linear, translation))
+    }
+}
+
+/// Edges `ix` blended by a conic of shoulder `rho` whose contacts lie `setback` from the edge on
+/// each face (cadrs's conic fillet keeps the contacts of the circle of radius
+/// `setback / tan(φ/2)`, φ the angle between the faces' normals). Straight edges between planes
+/// only, all at one angle.
+pub fn fillet_conic(k: &mut DefaultKernel, body: BodyId, ix: &[u64], setback: f64, rho: f64) -> Result<Made> {
+    use crate::native::surface::Surface;
+    if !(setback > 0.0 && rho > 0.0 && rho < 1.0) {
+        return Err(KernelError::InvalidInput("a conic blend needs a positive setback and 0 < rho < 1".into()));
+    }
+    let info = k.edges(body)?;
+    let b = k.get(body)?;
+    let normal = |f: FaceId| -> Option<Vector3<f64>> {
+        let face = b.faces.get(usize::try_from(f.0).ok()?)?;
+        match &face.surf {
+            Surface::Plane { f: fr } => Some(fr.z * if face.sense { 1.0 } else { -1.0 }),
+            _ => None,
+        }
+    };
+    let mut phi: Option<f64> = None;
+    for &e in ix {
+        let i = info.iter().find(|i| i.id.0 == e).ok_or_else(|| KernelError::InvalidInput("no such edge".into()))?;
+        let (Some(a), Some(c)) = (i.faces[0].and_then(normal), i.faces[1].and_then(normal)) else {
+            return Err(KernelError::Unsupported("a conic blend of an edge not between two planes"));
+        };
+        let angle = a.angle(&c);
+        if phi.is_some_and(|p| (p - angle).abs() > crate::native::tol::ANGULAR) {
+            return Err(KernelError::Unsupported("a conic blend of edges at different angles"));
+        }
+        phi = Some(angle);
+    }
+    let phi = phi.ok_or_else(|| KernelError::InvalidInput("a conic blend of no edge".into()))?;
+    let half = (phi / 2.0).tan();
+    if !(half > 0.0) {
+        return Err(KernelError::Unsupported("a conic blend of a flat edge"));
+    }
+    let spec = crate::FilletSpec {
+        profile: crate::FilletProfile::Conic { rho },
+        ..crate::FilletSpec::radius(setback / half)
+    };
+    made(k.fillet_with(body, &faces_to_edges(ix), &spec))
+}
+
+fn faces_to_edges(ix: &[u64]) -> Vec<EdgeId> {
+    ix.iter().map(|&e| EdgeId(e)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,4 +878,103 @@ mod tests {
         let v = k.mass_properties(cut).unwrap().volume;
         assert!((v - 53.843407424025).abs() < 1e-6, "{v}");
     }
+
+    #[test]
+    fn a_hairline_saw_cut_is_kept() {
+        let mut k = DefaultKernel::new();
+        let cube = cube(&mut k);
+        let saw = k
+            .primitive(&Primitive::Box { min: Point3::new(5.0, -1.0, 5.0), max: Point3::new(5.000001, 12.0, 12.0) })
+            .and_then(|r| r.first())
+            .unwrap();
+        let (cut, _) = boolean(&mut k, crate::BoolOp::Subtract, cube, &[saw]).unwrap();
+        // The cube's 600 and the slot's two walls, 5 × 10 each... less the top strip.
+        let area = k.mass_properties(cut).unwrap().surface_area;
+        assert!((area - 700.0).abs() < 1e-3, "{area}");
+        // The session's own tolerances are back.
+        assert_eq!(k.tolerances(), crate::native::tol::Tolerances::default());
+    }
+
+    #[test]
+    fn a_lens_thinner_than_the_tolerance_is_refused_not_empty() {
+        let mut k = DefaultKernel::new();
+        let ball = |k: &mut DefaultKernel, x: f64| {
+            k.primitive(&Primitive::Sphere {
+                center: Point3::new(x, 0.0, 0.0),
+                radius: 5.0,
+                axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+                seam: nalgebra::Unit::new_normalize(nalgebra::Vector3::x()),
+            })
+            .and_then(|r| r.first())
+            .unwrap()
+        };
+        let (a, b) = (ball(&mut k, 0.0), ball(&mut k, 9.999999));
+        match boolean(&mut k, crate::BoolOp::Intersect, a, &[b]) {
+            Ok((lens, _)) => {
+                let v = k.mass_properties(lens).unwrap().volume;
+                assert!(v > 0.0 && v < 1e-9, "{v}");
+            }
+            Err(KernelError::EmptyResult(_)) => panic!("an empty answer for solids that overlap"),
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn a_flat_slab_is_a_block_and_an_affine_map_stretches() {
+        let mut k = DefaultKernel::new();
+        let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+        // Every coefficient 2: a flat top at z = 2 over a 4 × 3 rectangle.
+        let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let heights = vec![vec![2.0; 3]; 3];
+        let (s, _) = slab(&mut k, &world, [4.0, 3.0], &knots, &knots, &heights).unwrap();
+        let v = k.mass_properties(s).unwrap().volume;
+        assert!((v - 24.0).abs() < 1e-6, "{v}");
+        let b = cube(&mut k);
+        let (t, _) = transform(&mut k, b, [[2.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+        assert!((k.mass_properties(t).unwrap().volume - 2000.0).abs() < 1e-6);
+        let (r, _) = transform(&mut k, b, [[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+        assert!((k.mass_properties(r).unwrap().center_of_mass - Point3::new(-5.0, 5.0, 5.0)).norm() < 1e-9);
+        // A mirror stays a valid solid of the same volume; a uniform scale cubes the volume.
+        let (m, _) = transform(&mut k, b, [[-1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+        assert!((k.mass_properties(m).unwrap().volume - 1000.0).abs() < 1e-6);
+        assert!(k.get(m).unwrap().check().is_empty());
+        let (u, _) = transform(&mut k, b, [[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]]).unwrap();
+        assert!((k.mass_properties(u).unwrap().volume - 8000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_conic_blend_of_a_square_edge() {
+        let mut k = DefaultKernel::new();
+        let b = k
+            .primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(20.0, 10.0, 10.0) })
+            .and_then(|r| r.first())
+            .unwrap();
+        let e = {
+            use crate::Pick;
+            k.edge_at(b, Point3::new(20.0, 5.0, 10.0)).unwrap().0
+        };
+        let (c, _) = fillet_conic(&mut k, b, &[e], 3.0, 0.5).unwrap();
+        // A parabola tangent to both faces at the contacts cuts a third of the corner's triangle
+        // (3 × 3 / 2) off the corner: 1.5 per unit length, 10 long.
+        let removed = 2000.0 - k.mass_properties(c).unwrap().volume;
+        assert!((removed - 15.0).abs() < 1e-6, "{removed}");
+    }
+
+    #[test]
+    fn a_conic_of_shoulder_root_two_less_one_is_a_quarter_circle() {
+        let mut k = DefaultKernel::new();
+        let b = k
+            .primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(20.0, 10.0, 10.0) })
+            .and_then(|r| r.first())
+            .unwrap();
+        let e = {
+            use crate::Pick;
+            k.edge_at(b, Point3::new(20.0, 5.0, 10.0)).unwrap().0
+        };
+        let (c, _) = fillet_conic(&mut k, b, &[e], 3.0, std::f64::consts::SQRT_2 - 1.0).unwrap();
+        let removed = 2000.0 - k.mass_properties(c).unwrap().volume;
+        let want = 9.0 * (1.0 - std::f64::consts::FRAC_PI_4) * 10.0;
+        assert!((removed - want).abs() < 1e-6, "{removed} {want}");
+    }
+
 }

@@ -1,6 +1,6 @@
 // yack: Booleans (union, subtract, intersect) of B-rep bodies.
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/boolean.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: none (verbatim).
+// Changes: span_boxes_of declines a curve with no whole Bézier segment (was an index panic).
 //! Booleans (union, subtract, intersect) of B-rep bodies.
 //!
 //! 1. Both bodies go into one pool of vertices and edges (coincident vertices and edges shared).
@@ -2315,6 +2315,10 @@ fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Spans> {
         return None;
     };
     let segs = n.bezier_segments();
+    // yack: no whole segment (knots short of a clamp): the edge's pieces as before.
+    if segs.is_empty() {
+        return None;
+    }
     let grow = tol.max(ed.tol);
     let mut k = 0;
     let boxes = ps

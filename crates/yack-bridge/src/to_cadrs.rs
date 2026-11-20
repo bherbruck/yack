@@ -20,6 +20,9 @@ use crate::{Error, Result};
 /// conversion is refused rather than trusted.
 const PCURVE_SLACK: f64 = 1e-6; // tol: uv agreement of two engines' pcurves of one exact edge
 
+/// Knots this close (relative) to an end of a B-spline's range are that end.
+const KNOT_SNAP: f64 = 1e-12; // tol: knot round-off
+
 /// A pcurve whose surface point stays this close to its edge needs no tolerance beyond cadrs's own.
 const GAP_TIGHT: f64 = 1e-8; // tol: well inside cadrs's CONFUSION (1e-7 mm)
 
@@ -55,7 +58,64 @@ fn nurbs_curve(degree: usize, knots: &[f64], ctrl: &[Vec3], weights: Option<&[f6
         })
         .collect();
     let n = CNurbsCurve::new(degree, knots.to_vec(), cps).map_err(|e| Error::Rejected(vec![e.to_string()]))?;
-    Ok(CCurve::nurbs(n))
+    Ok(CCurve::nurbs(clamp(n)?))
+}
+
+/// Whether `knots` start and end with `p + 1` equal knots.
+fn clamped(knots: &[f64], p: usize) -> bool {
+    let n = knots.len();
+    n >= 2 * (p + 1)
+        && knots.get(..=p).is_some_and(|k| k.iter().all(|&x| Some(&x) == knots.first()))
+        && knots.get(n - p - 1..).is_some_and(|k| k.iter().all(|&x| Some(&x) == knots.last()))
+}
+
+/// The same curve with its end knots repeated `degree + 1` times (cadrs's B-spline code assumes
+/// clamped ends): knots a rounding error from an end are made that end, then the end knot is
+/// inserted (Boehm, exact) until it is a C0 cut, and the curve outside its range is dropped.
+fn clamp(mut n: CNurbsCurve) -> Result<CNurbsCurve> {
+    let p = n.degree;
+    let (a, b) = n.range();
+    let near = |x: f64, k: f64| (x - k).abs() <= KNOT_SNAP * (1.0 + k.abs());
+    for k in &mut n.knots {
+        if near(*k, a) && *k != a && *k >= a {
+            *k = a;
+        } else if near(*k, b) && *k != b && *k <= b {
+            *k = b;
+        }
+    }
+    if clamped(&n.knots, p) {
+        return Ok(n);
+    }
+    let count = |n: &CNurbsCurve, x: f64| n.knots.iter().filter(|&&k| k == x).count();
+    let reject = || Error::Unsupported("a B-spline whose ends cannot be clamped".into());
+    if n.knots.first() != Some(&a) || count(&n, a) < p + 1 {
+        while count(&n, a) < p {
+            n = n.insert_knot(a);
+        }
+        let s = n.knots.iter().position(|&k| k == a).ok_or_else(reject)?;
+        if s >= 1 {
+            let mut knots = vec![a];
+            knots.extend_from_slice(n.knots.get(s..).ok_or_else(reject)?);
+            let cps = n.cps.get(s - 1..).ok_or_else(reject)?.to_vec();
+            n = CNurbsCurve { degree: p, knots, cps };
+        }
+    }
+    if n.knots.last() != Some(&b) || count(&n, b) < p + 1 {
+        while count(&n, b) < p {
+            n = n.insert_knot(b);
+        }
+        let e = n.knots.iter().rposition(|&k| k == b).ok_or_else(reject)?;
+        if e + 1 < n.knots.len() {
+            let mut knots = n.knots.get(..=e).ok_or_else(reject)?.to_vec();
+            knots.push(b);
+            let cps = n.cps.get(..=e.checked_sub(p).ok_or_else(reject)?).ok_or_else(reject)?.to_vec();
+            n = CNurbsCurve { degree: p, knots, cps };
+        }
+    }
+    if !clamped(&n.knots, p) || n.knots.len() != n.cps.len() + p + 1 {
+        return Err(reject());
+    }
+    Ok(n)
 }
 
 /// A springrep B-spline over `range` as a cadrs NURBS. A periodic one (unclamped knots with
@@ -139,7 +199,50 @@ fn curve(c: &SCurve, range: (f64, f64)) -> Result<(CCurve, f64)> {
     })
 }
 
-fn surface(s: &SSurface) -> Result<CSurface> {
+/// A range widened to hold `want` (a face's span of one parameter).
+fn widen(domain: (f64, f64), want: (f64, f64)) -> (f64, f64) {
+    (domain.0.min(want.0), domain.1.max(want.1))
+}
+
+/// A clamped closed net (its first and last rows along u coincide) repeated end to end so it spans
+/// `want` in u: springrep wraps a closed surface's parameter, cadrs evaluates only inside the knots.
+/// The copies meet with C0 knots; the surface is the same point set, parameter for parameter.
+fn unroll_u(p: usize, knots: Vec<f64>, rows: Vec<Vec<H>>, want: (f64, f64)) -> Result<(Vec<f64>, Vec<Vec<H>>)> {
+    let (Some(&a), Some(&b)) = (knots.first(), knots.last()) else {
+        return Err(Error::Unsupported("a B-spline net with no knots".into()));
+    };
+    let period = b - a;
+    if !(period > 0.0) || (want.0 >= a && want.1 <= b) {
+        return Ok((knots, rows));
+    }
+    let q0 = ((want.0 - a) / period).floor() as i64;
+    let q1 = ((want.1 - a) / period).ceil() as i64 - 1;
+    if q1 < q0 || q1 - q0 > 16 {
+        return Err(Error::Unsupported("a face spanning too many periods of a closed spline".into()));
+    }
+    let interior = knots.get(p + 1..knots.len().saturating_sub(p + 1)).unwrap_or(&[]).to_vec();
+    let shift = |q: i64| period * q as f64;
+    let mut k = vec![a + shift(q0); p + 1];
+    let mut out_rows = Vec::new();
+    for q in q0..=q1 {
+        if q > q0 {
+            k.extend(std::iter::repeat_n(a + shift(q), p));
+        }
+        k.extend(interior.iter().map(|x| x + shift(q)));
+        let skip = usize::from(q > q0);
+        out_rows.extend(rows.iter().skip(skip).cloned());
+    }
+    k.extend(std::iter::repeat_n(b + shift(q1), p + 1));
+    Ok((k, out_rows))
+}
+
+fn transpose(rows: Vec<Vec<H>>) -> Vec<Vec<H>> {
+    let n = rows.first().map_or(0, Vec::len);
+    (0..n).map(|j| rows.iter().filter_map(|r| r.get(j).copied()).collect()).collect()
+}
+
+/// The cadrs surface of `s` for a face spanning `uv` (u range, v range) of its parameters.
+fn surface(s: &SSurface, uv: ((f64, f64), (f64, f64))) -> Result<CSurface> {
     Ok(match s {
         SSurface::Plane(p) => CSurface::Plane { f: frame(&p.frame) },
         SSurface::Cylinder(c) => CSurface::Cylinder { f: frame(&c.frame), r: c.radius },
@@ -147,14 +250,14 @@ fn surface(s: &SSurface) -> Result<CSurface> {
         SSurface::Sphere(c) => CSurface::Sphere { f: frame(&c.frame), r: c.radius },
         SSurface::Torus(c) => CSurface::Torus { f: frame(&c.frame), rmaj: c.major, rmin: c.minor },
         SSurface::Extrusion(e) => {
-            let (c, gap) = curve(&e.curve, e.curve.domain())?;
+            let (c, gap) = curve(&e.curve, widen(e.curve.domain(), uv.0))?;
             if gap > 0.0 {
                 return Err(Error::Unsupported("an extrusion of an intersection curve".into()));
             }
             CSurface::Extrusion { c, d: v3(e.dir) }
         }
         SSurface::Revolution(r) => {
-            let (m, gap) = curve(&r.curve, r.curve.domain())?;
+            let (m, gap) = curve(&r.curve, widen(r.curve.domain(), uv.1))?;
             if gap > 0.0 {
                 return Err(Error::Unsupported("a revolution of an intersection curve".into()));
             }
@@ -167,6 +270,10 @@ fn surface(s: &SSurface) -> Result<CSurface> {
         SSurface::Nurbs(n) => {
             let (du, dv) = n.degrees();
             let (ku, kv) = n.knots();
+            // cadrs assumes clamped nets; springrep's are (a closed one closes by its boundary rows).
+            if !clamped(ku, du) || !clamped(kv, dv) {
+                return Err(Error::Unsupported("an unclamped B-spline surface".into()));
+            }
             let nu = ku.len().saturating_sub(du + 1);
             let nv = kv.len().saturating_sub(dv + 1);
             let ctrl = n.control_points();
@@ -182,7 +289,16 @@ fn surface(s: &SSurface) -> Result<CSurface> {
                 }
                 cps.push(row);
             }
-            let n = CNurbsSurface::new(du, dv, ku.to_vec(), kv.to_vec(), cps)
+            let (mut ku, mut kv) = (ku.to_vec(), kv.to_vec());
+            if n.u_period().is_some() {
+                (ku, cps) = unroll_u(du, ku, cps, uv.0)?;
+            }
+            if n.v_period().is_some() {
+                let (k, rows) = unroll_u(dv, kv, transpose(cps), uv.1)?;
+                kv = k;
+                cps = transpose(rows);
+            }
+            let n = CNurbsSurface::new(du, dv, ku, kv, cps)
                 .map_err(|e| Error::Rejected(vec![e.to_string()]))?;
             CSurface::Nurbs(std::sync::Arc::new(n))
         }
@@ -360,6 +476,54 @@ fn chain(surf: &CSurface, edges: &[CEdge], loop_: &mut [Coedge]) {
     }
 }
 
+/// The loop with a degenerate edge put in wherever it jumps in one parameter at a point where the
+/// surface does not depend on that parameter (a pole, an apex): springrep lets a loop's coedges
+/// meet a pole at different `u`, cadrs wants the jump carried by a degenerate edge. New edges go
+/// after every existing one, so no index moves.
+fn bridge_poles(surf: &CSurface, edges: &mut Vec<CEdge>, lp: Vec<Coedge>) -> Vec<Coedge> {
+    let ends = |c: &Coedge, edges: &[CEdge]| {
+        let t = edges.get(c.edge).map_or([0.0, 0.0], |e| e.t);
+        let (ts, te) = if c.fwd { (t[0], t[1]) } else { (t[1], t[0]) };
+        (c.pc.point(ts), c.pc.point(te))
+    };
+    let end_vertex = |c: &Coedge, edges: &[CEdge]| edges.get(c.edge).map(|e| if c.fwd { e.v[1] } else { e.v[0] });
+    let n = lp.len();
+    let mut out = Vec::with_capacity(n + 2);
+    for k in 0..n {
+        let Some(cur) = lp.get(k) else { continue };
+        out.push(cur.clone());
+        let Some(next) = lp.get((k + 1) % n) else { continue };
+        let (_, a) = ends(cur, edges);
+        let (b, _) = ends(next, edges);
+        let (du, dv) = (b.x - a.x, b.y - a.y);
+        // Which parameter jumps, and whether the surface ignores it there.
+        let ignores = |along_u: bool| {
+            let q = if along_u { surf.eval(a.x + 1.0, a.y) } else { surf.eval(a.x, a.y + 1.0) };
+            (q - surf.eval(a.x, a.y)).norm() <= POLE_SPAN
+        };
+        let jump = if du.abs() > PCURVE_SLACK && dv.abs() <= PCURVE_SLACK && ignores(true) {
+            Some((true, a.x, b.x, a.y))
+        } else if dv.abs() > PCURVE_SLACK && du.abs() <= PCURVE_SLACK && ignores(false) {
+            Some((false, a.y, b.y, a.x))
+        } else {
+            None
+        };
+        let (Some((along_u, from, to, fixed)), Some(v)) = (jump, end_vertex(cur, edges)) else { continue };
+        let Some(at) = edges.get(cur.edge).map(|e| if cur.fwd { e.curve.point(e.t[1]) } else { e.curve.point(e.t[0]) }) else {
+            continue;
+        };
+        let (t0, t1) = (from.min(to), from.max(to));
+        let (pa, pb) = if along_u { (Vec2::new(t0, fixed), Vec2::new(t1, fixed)) } else { (Vec2::new(fixed, t0), Vec2::new(fixed, t1)) };
+        let Ok(pc) = straight(pa, pb, t0, t1) else { continue };
+        edges.push(CEdge { curve: CCurve::Line { o: at, d: V3::zeros() }, t: [t0, t1], v: [v, v], degenerate: true, tol: CONFUSION });
+        out.push(Coedge { edge: edges.len() - 1, fwd: to > from, pc });
+    }
+    out
+}
+
+/// A surface whose points one unit of a parameter apart are this close does not depend on it there.
+const POLE_SPAN: f64 = 1e-9; // tol: a pole's span, mm
+
 /// The cadrs body of `b`, and each face's springrep names (by face index) to restore on the way
 /// back.
 pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
@@ -399,7 +563,17 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
         }
         // Pcurves are made in springrep's parametrisation (the same formula as cadrs's for this
         // surface), then carried onto the canonical one.
-        let surf = surface(&face.surface)?;
+        // The face's span of each parameter, from its loops (springrep's own branch).
+        let mut uv = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
+        for &lp in &face.loops {
+            for &c in &b.lp(lp).coedges {
+                let (t0, t1) = b.edge(b.coedge(c).edge).range;
+                for w in b.coedge_uvs(c, &params(t0, t1)) {
+                    uv = ((uv.0.0.min(w.x), uv.0.1.max(w.x)), (uv.1.0.min(w.y), uv.1.1.max(w.y)));
+                }
+            }
+        }
+        let surf = surface(&face.surface, uv)?;
         let (canon, flipped) = canonical(surf.clone());
         let mut loops = Vec::with_capacity(face.loops.len());
         for &lp in &face.loops {
@@ -424,6 +598,7 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                 coedges.push(Coedge { edge: co.edge.index(), fwd: !co.reversed, pc });
             }
             chain(&canon, &body.edges, &mut coedges);
+            let coedges = bridge_poles(&canon, &mut body.edges, coedges);
             loops.push(coedges);
         }
         body.faces.push(CFace { surf: canon, sense: face.reversed == flipped, loops });

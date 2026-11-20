@@ -9,7 +9,7 @@ use nalgebra::{Point2, Point3, Unit, Vector3};
 use crate::yack_glue::Made;
 use crate::{
     Axis, Bspline3, BsplineSurface, Curve2, DefaultKernel, Extent, Kernel, KernelError, LoftSection, LoftSpec, Loop,
-    PathCurve, Plane, Profile, Region, Result,
+    PathCurve, Plane, Profile, Region, Result, SweepLaw, SweepSpec,
 };
 
 /// One profile segment, as yack's `Segment` (angles in radians).
@@ -229,6 +229,28 @@ pub fn loft_guided(k: &mut DefaultKernel, sections: &[(Place, &[&[Seg]])], guide
     loft_guided_to(k, &sections, guides)
 }
 
+/// Whether the points lie in one plane (collinear ones do), within a relative rounding error.
+fn coplanar(ctrl: &[[f64; 3]]) -> bool {
+    let pts: Vec<Vector3<f64>> = ctrl.iter().map(|&c| v3(c)).collect();
+    let Some(&first) = pts.first() else { return true };
+    let spread = pts.iter().map(|p| (p - first).norm()).fold(0.0, f64::max);
+    let eps = crate::native::tol::REL * (1.0 + spread);
+    // The direction of the farthest point, then the one farthest from that line: the plane.
+    let Some(&far) = pts.iter().max_by(|a, b| (*a - first).norm().total_cmp(&(*b - first).norm())) else { return true };
+    let d = far - first;
+    if d.norm() <= eps {
+        return true;
+    }
+    let d = d.normalize();
+    let off = |p: &Vector3<f64>| (p - first) - d * (p - first).dot(&d);
+    let Some(side) = pts.iter().map(off).max_by(|a, b| a.norm().total_cmp(&b.norm())) else { return true };
+    if side.norm() <= eps {
+        return true;
+    }
+    let n = d.cross(&side.normalize());
+    pts.iter().all(|p| (p - first).dot(&n).abs() <= eps)
+}
+
 /// A guided loft's section: a profile (one loop) in a frame's xy plane, or a point (the first or
 /// the last section only: the loft runs to an apex there).
 #[derive(Clone, Copy, Debug)]
@@ -299,6 +321,111 @@ pub fn nurbs_solid(
     let r = k.sew_solid(&[sheet], crate::native::tol::CONFUSION);
     k.release(sheet);
     let r = r?;
+    Ok((r.first()?, r.history))
+}
+
+/// A piece of a path of lines and arcs (yack's `PathPiece`; angles in radians).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Piece {
+    /// Straight on for `length`.
+    #[allow(missing_docs)]
+    Line { length: f64 },
+    /// A circular turn of `radius` by `angle`, positive turning toward the frame's +x.
+    #[allow(missing_docs)]
+    Arc { radius: f64, angle: f64 },
+}
+
+/// The profile (one region: `loops[0]` and its holes) in `frame`'s xy plane swept along a path of
+/// `pieces` that starts at the frame's origin along its z, in the frame's xz plane (cadrs's sweep
+/// along sketch curves, mitred where pieces meet at a corner).
+pub fn sweep(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], pieces: &[Piece]) -> Result<Made> {
+    if pieces.is_empty() {
+        return Err(bad("a sweep along no path"));
+    }
+    // The path's plane: its 2-D x along the frame's z (the way the path starts), its 2-D y along
+    // the frame's x (where a positive arc turns): normal y × z = x, so normal = the frame's y.
+    let plane = Plane::new(Point3::from(v3(frame.origin)), v3(frame.z), v3(frame.y));
+    let (mut at, mut heading) = (Point2::new(0.0, 0.0), 0.0f64);
+    let mut path = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        let curve = match *p {
+            Piece::Line { length } => {
+                if !(length > 0.0) {
+                    return Err(bad("a path line must be longer than nothing"));
+                }
+                let to = at + nalgebra::Vector2::new(heading.cos(), heading.sin()) * length;
+                let c = Curve2::Line { a: at, b: to, source: None };
+                at = to;
+                c
+            }
+            Piece::Arc { radius, angle } => {
+                if !(radius > 0.0) || angle == 0.0 {
+                    return Err(bad("a path arc needs a positive radius and a turn"));
+                }
+                // The centre on the side it turns to; the start's angle seen from it.
+                let side = angle.signum();
+                let normal = nalgebra::Vector2::new(-heading.sin(), heading.cos()) * side;
+                let center = at + normal * radius;
+                let start_angle = heading - side * std::f64::consts::FRAC_PI_2;
+                let c = Curve2::Arc { center, radius, start_angle, sweep: angle, source: None };
+                let end = start_angle + angle;
+                at = center + nalgebra::Vector2::new(end.cos(), end.sin()) * radius;
+                heading += angle;
+                c
+            }
+        };
+        path.push(PathCurve::Sketch { plane, curve });
+    }
+    let spec = SweepSpec::solid(path);
+    let r = k.sweep_with(&profile(xy_plane(frame), loops)?, &spec)?;
+    Ok((r.first()?, r.history))
+}
+
+/// The profile in `frame`'s xy plane swept along `path` (in the frame's coordinates, starting at
+/// its origin along its z), as the protocol's `sweep_path`: the profile's axes follow the path's
+/// rotation-minimizing frame and turn `twist` radians more by the end, evenly in arc length
+/// (cadrs's sweep law). cadrs carries a profile by the path's principal normal (Frenet) where the
+/// path bends about evenly everywhere; on a planar path that is the rotation-minimizing frame,
+/// on a twisted one it is not, so a non-planar path is taken only for an untwisted round
+/// profile centred on it (whose sweep is the same either way), else declined.
+pub fn sweep_path(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], path: &Spline, twist: f64) -> Result<Made> {
+    let planar = coplanar(path.ctrl);
+    let round = matches!(loops, [[Seg::Arc { center: [cx, cy], sweep, .. }]] if *cx == 0.0 && *cy == 0.0 && sweep.abs() >= std::f64::consts::TAU);
+    if !planar && !(twist == 0.0 && round) {
+        return Err(KernelError::Unsupported(
+            "a sweep along a twisted path of a profile that is not a round one centred on it (cadrs may carry it by the path's Frenet frame)",
+        ));
+    }
+    let (o, x, y, z) = (v3(frame.origin), v3(frame.x), v3(frame.y), v3(frame.z));
+    let curve = PathCurve::Bspline(Bspline3 {
+        degree: path.degree,
+        knots: path.knots.to_vec(),
+        poles: path.ctrl.iter().map(|&c| Point3::from(o + x * c[0] + y * c[1] + z * c[2])).collect(),
+        weights: path.weights.map(<[f64]>::to_vec).unwrap_or_default(),
+    });
+    let spec = SweepSpec::solid(vec![curve]);
+    let section = profile(xy_plane(frame), loops)?;
+    let r = if twist == 0.0 {
+        k.sweep_with(&section, &spec)?
+    } else {
+        k.sweep_with_law(&section, &spec, &SweepLaw { twist, scale: 1.0, spiral: false })?
+    };
+    Ok((r.first()?, r.history))
+}
+
+/// The ruled loft from the profile in `frame`'s xy plane to `top` in the parallel plane `height`
+/// up its z (yack's loft: `top` arrives already scaled).
+pub fn loft(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], height: f64, top: &[&[Seg]]) -> Result<Made> {
+    let up = Place {
+        origin: [
+            frame.origin[0] + frame.z[0] * height,
+            frame.origin[1] + frame.z[1] * height,
+            frame.origin[2] + frame.z[2] * height,
+        ],
+        ..*frame
+    };
+    let spec = LoftSpec::through(vec![profile(xy_plane(frame), loops)?, profile(xy_plane(&up), top)?]);
+    let r = k.loft_with(&spec)?;
     Ok((r.first()?, r.history))
 }
 
@@ -438,4 +565,83 @@ mod tests {
         let v = k.mass_properties(b).unwrap().volume;
         assert!((v - 4.0).abs() < 1e-6, "{v}");
     }
+
+    #[test]
+    fn sweeps_along_pieces_and_a_spline_and_a_loft() {
+        let mut k = DefaultKernel::new();
+        let disc = [Seg::Arc { center: [0.0, 0.0], radius: 1.0, start: 0.0, sweep: std::f64::consts::TAU }];
+        let loops: [&[Seg]; 1] = [&disc];
+        // 10 straight, then a quarter turn of radius 5: π (10 + 5·π/2) by Pappus.
+        let pieces = [Piece::Line { length: 10.0 }, Piece::Arc { radius: 5.0, angle: std::f64::consts::FRAC_PI_2 }];
+        let (s, _) = sweep(&mut k, &world(), &loops, &pieces).unwrap();
+        let v = k.mass_properties(s).unwrap().volume;
+        let want = std::f64::consts::PI * (10.0 + 5.0 * std::f64::consts::FRAC_PI_2);
+        assert!((v - want).abs() < 1e-6, "{v} {want}");
+        // The arc turned toward +x: the path ends at x = 5, z = 15, heading along +x (the end
+        // cap in the plane x = 5, the tube 1 round the path).
+        let bb = k.bounding_box(s).unwrap();
+        assert!((bb.max.x - 5.0).abs() < 1e-6 && (bb.max.z - 16.0).abs() < 1e-6, "{bb:?}");
+        // Along a straight spline 7 up z: π · 7.
+        let ctrl = [[0.0, 0.0, 0.0], [0.0, 0.0, 7.0]];
+        let knots = [0.0, 0.0, 1.0, 1.0];
+        let line = Spline { degree: 1, knots: &knots, ctrl: &ctrl, weights: None };
+        let (p, _) = sweep_path(&mut k, &world(), &loops, &line, 0.0).unwrap();
+        assert!((k.mass_properties(p).unwrap().volume - 7.0 * std::f64::consts::PI).abs() < 1e-6);
+        // A 2 × 2 square lofted to a 1 × 1 one 3 up: a frustum of volume 3 (4 + 2 + 1) / 3 = 7.
+        let big = [
+            Seg::Line { a: [-1.0, -1.0], b: [1.0, -1.0] },
+            Seg::Line { a: [1.0, -1.0], b: [1.0, 1.0] },
+            Seg::Line { a: [1.0, 1.0], b: [-1.0, 1.0] },
+            Seg::Line { a: [-1.0, 1.0], b: [-1.0, -1.0] },
+        ];
+        let small = [
+            Seg::Line { a: [-0.5, -0.5], b: [0.5, -0.5] },
+            Seg::Line { a: [0.5, -0.5], b: [0.5, 0.5] },
+            Seg::Line { a: [0.5, 0.5], b: [-0.5, 0.5] },
+            Seg::Line { a: [-0.5, 0.5], b: [-0.5, -0.5] },
+        ];
+        let (l, _) = loft(&mut k, &world(), &[&big], 3.0, &[&small]).unwrap();
+        assert!((k.mass_properties(l).unwrap().volume - 7.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_twist_runs_evenly_in_arc_length() {
+        let mut k = DefaultKernel::new();
+        // A 4 × 0.4 bar swept 10 up z along a quadratic whose speed is far from even, a quarter
+        // turn of twist: halfway along its length (z = 5) the bar has turned 45°. (Evenly in the
+        // parameter it would have turned 61°, z = 5 being at t = 0.675.) A point 1.5 out at the
+        // angle a is in the bar there when |a − 45°| < asin(0.2 / 1.5) = 7.7°.
+        let bar = [
+            Seg::Line { a: [-2.0, -0.2], b: [2.0, -0.2] },
+            Seg::Line { a: [2.0, -0.2], b: [2.0, 0.2] },
+            Seg::Line { a: [2.0, 0.2], b: [-2.0, 0.2] },
+            Seg::Line { a: [-2.0, 0.2], b: [-2.0, -0.2] },
+        ];
+        let ctrl = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 10.0]];
+        let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let path = Spline { degree: 2, knots: &knots, ctrl: &ctrl, weights: None };
+        let (s, _) = sweep_path(&mut k, &world(), &[&bar], &path, std::f64::consts::FRAC_PI_2).unwrap();
+        let at = |a: f64| Point3::new(1.5 * a.to_radians().cos(), 1.5 * a.to_radians().sin(), 5.0);
+        assert_eq!(k.classify(s, at(45.0), 1e-9).unwrap(), crate::PointClass::Inside);
+        assert_eq!(k.classify(s, at(225.0), 1e-9).unwrap(), crate::PointClass::Inside);
+        assert_eq!(k.classify(s, at(61.0), 1e-9).unwrap(), crate::PointClass::Outside);
+        assert_eq!(k.classify(s, at(30.0), 1e-9).unwrap(), crate::PointClass::Outside);
+        assert_eq!(k.classify(s, at(75.0), 1e-9).unwrap(), crate::PointClass::Outside);
+        // The bar is untwisted volume 1.6 × 10.
+        assert!((k.mass_properties(s).unwrap().volume - 16.0).abs() < 1e-3);
+        // A square along a twisted cubic is declined; a disc along it is taken.
+        let twisted = [[0.0, 0.0, 0.0], [0.0, 0.0, 5.0], [5.0, 0.0, 8.0], [5.0, 5.0, 12.0]];
+        let k4 = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let tw = Spline { degree: 3, knots: &k4, ctrl: &twisted, weights: None };
+        let small = [
+            Seg::Line { a: [-0.5, -0.5], b: [0.5, -0.5] },
+            Seg::Line { a: [0.5, -0.5], b: [0.5, 0.5] },
+            Seg::Line { a: [0.5, 0.5], b: [-0.5, 0.5] },
+            Seg::Line { a: [-0.5, 0.5], b: [-0.5, -0.5] },
+        ];
+        assert!(matches!(sweep_path(&mut k, &world(), &[&small], &tw, 0.0), Err(KernelError::Unsupported(_))));
+        let disc = [Seg::Arc { center: [0.0, 0.0], radius: 0.5, start: 0.0, sweep: std::f64::consts::TAU }];
+        assert!(sweep_path(&mut k, &world(), &[&disc], &tw, 0.0).is_ok());
+    }
+
 }

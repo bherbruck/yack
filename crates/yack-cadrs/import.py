@@ -217,6 +217,29 @@ def transform(rel, text):
     if rel == "src/native/smb.rs":
         names += tests_calling(text, "fixture(")
     text = ignore_tests(text, rel, names, IGNORE_SMLIB, changes)
+    if rel == "src/native/nurbs.rs":
+        # A curve whose knots end short of a full clamp (one carried from another kernel) ran
+        # its Bézier decomposition past the knots: index out of bounds (conformance seed 1,
+        # random-chains, intersection). The segments found so far are returned instead.
+        old = "                    alphas[j - mult - 1] = numer / (u[a + j] - u[a]);\n"
+        new = (
+            "                    // yack: knots that end short of a full clamp: no more whole segments.\n"
+            "                    let Some(&uj) = u.get(a + j) else {\n"
+            "                        return out;\n"
+            "                    };\n"
+            "                    alphas[j - mult - 1] = numer / (uj - u[a]);\n"
+        )
+        if text.count(old) != 1:
+            sys.exit("nurbs.rs: the decomposition's knot read not found")
+        text = text.replace(old, new)
+        changes.append("bezier_segments stops at knots that end short of a full clamp (was an index panic)")
+    if rel == "src/native/boolean.rs":
+        old = "    let segs = n.bezier_segments();\n"
+        new = "    let segs = n.bezier_segments();\n    // yack: no whole segment (knots short of a clamp): the edge's pieces as before.\n    if segs.is_empty() {\n        return None;\n    }\n"
+        if text.count(old) != 1:
+            sys.exit("boolean.rs: span_boxes_of's segments not found")
+        text = text.replace(old, new)
+        changes.append("span_boxes_of declines a curve with no whole Bézier segment (was an index panic)")
     if rel == "src/native/sweep_faces.rs":
         # The wall-clock give-up (EFFORT_SECONDS) cannot fire under the shim's frozen clock: a
         # deterministic budget of checks takes its place at both sites.

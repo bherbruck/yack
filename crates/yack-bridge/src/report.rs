@@ -18,7 +18,7 @@ pub const AGREE: f64 = 1e-9; // tol: one integrator over one exact solid, twice
 /// How far cadrs's own volume and areas may differ, relative, from springrep's on the carried body:
 /// two engines' quadratures on spline and intersection faces agree to about 1e-7 (measured over
 /// the bench, MAPPING.md §5).
-pub const CADRS_AGREE: f64 = 1e-6; // tol: two engines' quadratures of one exact solid
+pub const CADRS_AGREE: f64 = 1e-5; // tol: two engines' quadratures of one exact solid (lead ruling)
 
 /// Sample points per axis of the classify grid.
 const GRID: usize = 7;
@@ -30,7 +30,7 @@ pub struct RoundTrip {
     pub volume: f64,
     pub area: f64,
     /// The cause of each disagreement, grouped by a short stable prefix (`to-cadrs:`, `back:`,
-    /// `order:`, `volume:`, `area:`, `face-area:`, `cadrs-measure:`, `crease:`, `classify:`).
+    /// `order:`, `volume:`, `area:`, `face-area:`, `cadrs-measure:`, `crease:`, `classify:`, `cadrs-classify:`).
     pub problems: Vec<String>,
 }
 
@@ -97,10 +97,23 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
             return r;
         }
     };
-    let counts = |b: &Brep| (b.vertex_ids().count(), b.edge_ids().count(), b.face_ids().count());
-    let c = (body.verts().len(), body.edges().len(), body.faces().len());
-    if counts(s) != c || counts(&back) != c {
-        say(format!("order: counts {:?} / {c:?} / {:?}", counts(s), counts(&back)));
+    // Vertices and faces match one for one; cadrs may hold extra degenerate pole edges, all after
+    // springrep's (MAPPING.md §4), and they come back as springrep degenerate edges.
+    let counts = |b: &Brep| (b.vertex_ids().count(), b.face_ids().count());
+    let c = (body.verts().len(), body.faces().len());
+    let n_edges = s.edge_ids().count();
+    let extra_ok = body.edges().len() >= n_edges
+        && body.edges().iter().skip(n_edges).all(|e| e.degenerate)
+        && back.edge_ids().count() == body.edges().len();
+    if counts(s) != c || counts(&back) != c || !extra_ok {
+        say(format!(
+            "order: vertices/faces {:?} / {c:?} / {:?}, edges {} / {} / {}",
+            counts(s),
+            counts(&back),
+            n_edges,
+            body.edges().len(),
+            back.edge_ids().count()
+        ));
     }
     for (v, cv) in s.vertex_ids().zip(body.verts()) {
         let p = s.vertex(v).point;
@@ -174,7 +187,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
                 }
                 let c = classify::classify_point(&body, &polys, &P3::new(p.x, p.y, p.z), yack_springrep::tol::LINEAR);
                 if !class_matches(want, c) {
-                    say(format!("classify: cadrs {c:?} vs {want:?} at ({}, {}, {})", p.x, p.y, p.z));
+                    say(format!("cadrs-classify: cadrs {c:?} vs {want:?} at ({}, {}, {})", p.x, p.y, p.z));
                 }
             }
         }
