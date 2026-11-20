@@ -2,3 +2,5 @@ bin/
 /target/
 *.swp
 swarm/
+swarm/
+.playwright-mcp/
