@@ -21,7 +21,7 @@ use crate::{
     topo::{Brep, FaceId, VertexId},
 };
 
-use super::{
+use crate::intersect::{
     csi::{Tracker, signed_distance},
     ssi::same_domain,
 };

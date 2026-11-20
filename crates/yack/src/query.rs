@@ -149,7 +149,7 @@ impl Solid {
     /// The area of the solid's cross-section by `plane` (mm²).
     pub fn section_area(&self, plane: &Plane) -> Result<f64> {
         let Some(b) = self.brep() else { return Ok(0.0) };
-        measure::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
+        yack_springrep::boolean::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
             .map_err(|e| engine::error("section_area", e))
     }
 
@@ -157,7 +157,7 @@ impl Solid {
     /// error at most `chord`.
     pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> {
         let Some(b) = self.brep() else { return Ok(Vec::new()) };
-        let curves = measure::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), chord)
+        let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), chord)
             .map_err(|e| engine::error("section", e))?;
         Ok(curves.into_iter().map(|c| c.iter().chain(c.first()).map(|&p| engine::point(p)).collect()).collect())
     }

@@ -1,15 +1,15 @@
 // yack: Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 // Adapted from springrep@a03e8a1 src/boolean/classify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/classify.rs to locate/classify.rs (M2.1, T1); paths only.
 //! Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 //! ray that passes through an edge, grazes a surface or starts on a face is ambiguous and the next
 //! direction is tried. A piece of face whose point lies on the solid's boundary, touching it, is
 //! decided by the contact instead, since no ray from there has a parity.
 
-use super::{
+use super::domain::{Domain, OnBoundary, Where};
+use crate::intersect::{
     contact,
     csi::{ray_surface, signed_distance},
-    domain::{Domain, OnBoundary, Where},
 };
 use crate::{
     geom::Surface,

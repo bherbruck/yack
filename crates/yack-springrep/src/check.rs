@@ -8,12 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::{
-    boolean::{
-        classify,
-        csi::{curve_surface, signed_distance},
-        domain::Domain,
-        face_domain,
-    },
+    intersect::csi::{curve_surface, signed_distance},
+    locate::{classify, domain::Domain, face_domain},
     geom::{Curve, Surface, distance_to},
     math::{Aabb, Point3, Vec2, Vec3},
     measure, tol,
@@ -501,7 +497,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         let inside = |f: FaceId, p: Point3| {
             matches!(
                 face_domain(b, f).locate(p),
-                crate::boolean::domain::Where::Inside(_)
+                crate::locate::domain::Where::Inside(_)
             )
         };
         // Whether some point inside face `f` lies inside face `g` too.
@@ -513,7 +509,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         let touching = |x: &Crossing| {
             b.face(x.a).shell != b.face(x.b).shell
                 && depth(b, x.a, x.b).max(depth(b, x.b, x.a)) <= tol::LINEAR
-                && !(crate::boolean::ssi::same_domain(&b.face(x.a).surface, &b.face(x.b).surface)
+                && !(crate::intersect::ssi::same_domain(&b.face(x.a).surface, &b.face(x.b).surface)
                     && (inside(x.a, x.at)
                         || inside(x.b, x.at)
                         || overlaps(x.a, x.b)

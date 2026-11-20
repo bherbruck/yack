@@ -1,6 +1,6 @@
 // yack: Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 // Adapted from springrep@a03e8a1 src/boolean/ssi.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/ssi.rs to intersect/ssi.rs (M2.1, T2); paths only.
 //! Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 //! revolution, parallel cylinders and equal crossing cylinders have closed forms; every other pair
 //! is traced by [`super::march`].
@@ -11,7 +11,7 @@
 
 use std::f64::consts::TAU;
 
-use super::{domain::Domain, march};
+use super::march;
 
 mod conic;
 mod sweep;
@@ -83,7 +83,7 @@ fn same_axis(a: Axis, b: Axis) -> bool {
 }
 
 /// Whether two surfaces are the same point set.
-pub fn same_domain(a: &Surface, b: &Surface) -> bool {
+pub(crate) fn same_domain(a: &Surface, b: &Surface) -> bool {
     let close = |x: f64, y: f64| (x - y).abs() <= tol::LINEAR;
     match (a, b) {
         (Surface::Plane(p), Surface::Plane(q)) => {
@@ -172,56 +172,6 @@ fn within(a: &Surface, b: &Surface) -> bool {
             let q = b.project(p);
             b.eval(q.x, q.y).dist(p) <= tol::LINEAR
                 && a.normal(u, v).cross(b.normal(q.x, q.y)).norm() <= tol::TANGENT
-        })
-    })
-}
-
-fn analytic(s: &Surface) -> bool {
-    matches!(
-        s,
-        Surface::Plane(_)
-            | Surface::Cylinder(_)
-            | Surface::Cone(_)
-            | Surface::Sphere(_)
-            | Surface::Torus(_)
-    )
-}
-
-/// Whether two faces' surfaces are the same point set where the faces are. Analytic pairs are
-/// decided in closed form by [`same_domain`]; any other pair (swept, ruled or spline surfaces in
-/// different frames or parameterisations, or one of them against an analytic surface) by checking
-/// that each face's parameter window lies on the other surface, with the same normal line, within
-/// the tolerance.
-pub(crate) fn same_domain_faces(a: &Domain, b: &Domain) -> bool {
-    if same_domain(&a.surface, &b.surface) {
-        return true;
-    }
-    // Two planes a hair off parallel are one plane over faces small enough that they stay within
-    // the tolerance of each other: a part placed by a rounded pose sits on its seat that way, and
-    // their meeting line, at the angle between them, would run anywhere along the band.
-    let planes = matches!(
-        (&a.surface, &b.surface),
-        (Surface::Plane(_), Surface::Plane(_))
-    );
-    if analytic(&a.surface) && analytic(&b.surface) && !planes {
-        return false;
-    }
-    let n = 6;
-    [(a, b), (b, a)].iter().all(|(from, to)| {
-        (0..=n).all(|i| {
-            (0..=n).all(|j| {
-                let u = from.lo.x + (from.hi.x - from.lo.x) * i as f64 / n as f64;
-                let v = from.lo.y + (from.hi.y - from.lo.y) * j as f64 / n as f64;
-                let p = from.surface.eval(u, v);
-                let q = to.surface.project(p);
-                to.surface.eval(q.x, q.y).dist(p) <= tol::LINEAR
-                    && from
-                        .surface
-                        .normal(u, v)
-                        .cross(to.surface.normal(q.x, q.y))
-                        .norm()
-                        <= tol::TANGENT
-            })
         })
     })
 }

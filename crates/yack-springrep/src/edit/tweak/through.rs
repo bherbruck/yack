@@ -243,13 +243,13 @@ fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> {
             if gone[f] || gone[g] || edge_set(&loops[f]) != edge_set(&loops[g]) {
                 continue;
             }
-            let dom = crate::boolean::face_domain(b, faces[f]);
+            let dom = crate::locate::face_domain(b, faces[f]);
             let Some(uv) = dom.interior_point() else {
                 continue;
             };
             let p = dom.surface.eval(uv.x, uv.y);
             let on = &b.face(faces[g]).surface;
-            if crate::boolean::csi::signed_distance(on, p).abs() <= eps {
+            if crate::intersect::csi::signed_distance(on, p).abs() <= eps {
                 gone[f] = true;
                 gone[g] = true;
             }

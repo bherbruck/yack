@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    boolean::{
+    locate::{
         classify,
         domain::{Domain, Where},
         face_domain,

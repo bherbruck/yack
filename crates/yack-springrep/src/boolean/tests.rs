@@ -5,6 +5,10 @@ use std::f64::consts::{PI, TAU};
 
 use super::*;
 use crate::{
+    intersect::march,
+    locate::{classify, face_domain},
+};
+use crate::{
     geom::Cylinder,
     math::{Frame, Transform},
     profile::{NamedSegment, Profile, ProfileLoop, Segment},

@@ -24,7 +24,8 @@ use super::{
 };
 use crate::{
     Error, Result,
-    boolean::{self, domain::Where, unify},
+    boolean::{self, unify},
+    locate::domain::Where,
     geom::{Circle, Curve, Line, NurbsCurve, Surface},
     math::{Frame, Point3, Vec3},
     tol,
@@ -118,7 +119,7 @@ pub(super) fn find(
         // built without it.
         let on = |k: usize, f: usize, pts: &[[f64; 3]]| {
             let face = picked[s.edges[k]].faces[f];
-            let dom = boolean::face_domain(body, face);
+            let dom = crate::locate::face_domain(body, face);
             pts.iter().all(|&q| dom.locate(s.at(q)) != Where::Outside)
         };
         let side_of = |k: usize, n: Vec3| {

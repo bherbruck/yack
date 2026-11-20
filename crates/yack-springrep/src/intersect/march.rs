@@ -1,6 +1,6 @@
 // yack: The general surface–surface intersector: from each seed point on both surfaces, march along
 // Adapted from springrep@a03e8a1 src/boolean/march.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/march.rs to intersect/march.rs (M2.1, T2); paths only.
 //! The general surface–surface intersector: from each seed point on both surfaces, march along
 //! `n_a × n_b` with Newton refinement onto both, until the branch closes, leaves the region, or
 //! reaches a point where the surfaces are tangent; then fit an intersection curve to the points.
@@ -581,7 +581,7 @@ fn lens_depth(a: &Surface, b: &Surface, br: &Branch) -> f64 {
 /// segment. Walks that stall in a band the surfaces share within the tolerance each end anywhere
 /// along it, so the branches through one crossing would miss each other; but two surfaces can hold
 /// one straight line and touch at two points of it, crossing along it in between.
-pub(super) fn same_crossing(a: &Surface, b: &Surface, p: Point3, q: Point3, h_max: f64) -> bool {
+pub(crate) fn same_crossing(a: &Surface, b: &Surface, p: Point3, q: Point3, h_max: f64) -> bool {
     let d = p.dist(q);
     if d <= tol::LINEAR {
         return true;
@@ -689,7 +689,7 @@ fn fit_branches(
 mod tests {
     use super::*;
     use crate::{
-        boolean::csi::signed_distance,
+        intersect::csi::signed_distance,
         geom::{Cylinder, Plane, Torus},
         loft::{Section, loft},
         math::{Frame, Vec2},

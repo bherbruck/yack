@@ -9,10 +9,12 @@
 use std::rc::Rc;
 
 use super::{
-    coedge_uv_at,
-    domain::{Trim, UvMap},
     sew::{self, OutFace, PieceGeom},
     solids_of,
+};
+use crate::locate::{
+    coedge_uv_at,
+    domain::{Trim, UvMap},
 };
 use crate::{
     Result,

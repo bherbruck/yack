@@ -1,6 +1,6 @@
 // yack: Where a plane cuts a solid: the cut's outline and its area.
 // Adapted from springrep@a03e8a1 src/measure/section.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from measure/section.rs to boolean/section.rs (M2.1, T10); paths only.
 //! Where a plane cuts a solid: the cut's outline and its area.
 
 use crate::{

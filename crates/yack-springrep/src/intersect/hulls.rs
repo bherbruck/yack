@@ -1,6 +1,6 @@
 // yack: Boxes that hold a spline curve piece by piece, from each knot span's control points, and a tree
 // Adapted from springrep@a03e8a1 src/boolean/hulls.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/hulls.rs to intersect/hulls.rs (M2.1, T2); paths only.
 //! Boxes that hold a spline curve piece by piece, from each knot span's control points, and a tree
 //! of them for finding which pieces of one curve come near another.
 //!

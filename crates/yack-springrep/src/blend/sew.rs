@@ -15,9 +15,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use super::{Ball, Picked, SIDES, run::Beyond};
 use crate::{
-    boolean::{
+    boolean::unify,
+    intersect::{
         csi::{curve_distance, signed_distance},
-        same_domain, unify,
+        ssi::same_domain,
     },
     check,
     geom::{Curve, Surface},

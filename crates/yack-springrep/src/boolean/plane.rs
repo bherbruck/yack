@@ -43,7 +43,7 @@ pub fn split(s: &Brep, origin: Point3, normal: Vec3) -> Result<(Brep, Brep)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::measure::section_area;
+    use crate::boolean::section_area;
 
     /// A prism on the polygon `pts`, `h` tall, its sides named `e0`, `e1`, … from the first edge.
     fn prism(pts: &[[f64; 2]], h: f64) -> Brep {

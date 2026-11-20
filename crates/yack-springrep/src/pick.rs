@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     blend::{self, EdgeName, has_name},
-    boolean,
+    intersect::ssi::same_domain,
     error::Result,
     math::Point3,
     topo::{Brep, EdgeId, FaceId},
@@ -25,7 +25,7 @@ pub fn faces_named(body: &Brep, name: &str) -> BTreeSet<FaceId> {
     body.face_ids()
         .filter(|&f| {
             carriers.iter().any(|&c| {
-                c == f || boolean::same_domain(&body.face(c).surface, &body.face(f).surface)
+                c == f || same_domain(&body.face(c).surface, &body.face(f).surface)
             })
         })
         .collect()

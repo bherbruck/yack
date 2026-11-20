@@ -15,7 +15,7 @@ use std::f64::consts::TAU;
 
 use crate::{
     Error, Result,
-    boolean::csi,
+    intersect::csi,
     check,
     error::invalid,
     geom::{Curve, Cylinder, NurbsCurve, NurbsSurface, Plane, Surface},

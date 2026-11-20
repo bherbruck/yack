@@ -7,7 +7,7 @@
 
 use std::f64::consts::TAU;
 
-use super::domain::{Domain, Trim, UvMap, direction_angle, polygon_area, wrap_angle};
+use crate::locate::domain::{Domain, Trim, UvMap, direction_angle, polygon_area, wrap_angle};
 use crate::{Error, Result, geom::Surface, math::Vec2};
 
 /// How far apart, in mm along the surface, two parameter-plane images of one vertex may be and
@@ -75,7 +75,7 @@ impl Graph<'_> {
             let t = m + h * x;
             let uv = tr.uv(self.surface, t, hint);
             hint = uv;
-            let rate = super::domain::uv_rate(self.surface, uv, c.d1(t).1);
+            let rate = crate::locate::domain::uv_rate(self.surface, uv, c.d1(t).1);
             let (p, d) = (self.oriented(uv), self.oriented(rate));
             sum += w * (p.x * d.y - p.y * d.x);
         }

@@ -9,7 +9,7 @@ use yack_springrep::{
     Error, check, edit,
     geom::{BSpline, Curve, Line},
     math::{Frame, Transform, Vec2, Vec3},
-    measure,
+    boolean, measure,
     mesh::{self, MeshOptions},
     primitive,
     profile::{Profile, Segment},
@@ -315,7 +315,7 @@ fn a_section_is_given_as_the_curves_it_runs_along() {
     use yack_springrep::geom::Curve;
     let rod = primitive::cylinder(&Frame::WORLD, 5.0, 8.0, "rod").unwrap();
     let origin = yack_springrep::math::Point3::new(0.0, 0.0, 3.0);
-    let outlines = measure::section_curves(&rod, origin, Vec3::Z).unwrap();
+    let outlines = boolean::section_curves(&rod, origin, Vec3::Z).unwrap();
     assert_eq!(outlines.len(), 1);
     assert!(!outlines[0].is_empty());
     let mut turned = 0.0;

@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use super::{MeshOptions, edge_params, tessellate};
 use crate::{
     Result,
-    boolean::same_domain,
+    intersect::ssi::same_domain,
     math::Point3,
     tol,
     topo::{Brep, EdgeId, FaceId},

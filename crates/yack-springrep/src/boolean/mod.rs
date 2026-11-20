@@ -18,33 +18,34 @@
 //!    result.
 
 mod arrange;
-pub(crate) mod classify;
-mod contact;
-pub(crate) mod csi;
-pub(crate) mod domain;
-mod hulls;
-mod march;
 mod near;
 mod plane;
 mod same;
+mod section;
 mod sew;
 mod simplify;
 mod snap;
-pub(crate) mod ssi;
 mod unify;
 
 pub use plane::{half_space, split};
-pub use ssi::same_domain;
+pub use section::{SectionEdge, section, section_area, section_curves};
 pub use unify::unify;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
 use std::rc::Rc;
 
-use self::{
-    domain::{Domain, Trim, UvMap, Where},
-    sew::{OutFace, PieceGeom},
-    ssi::Ssi,
+use self::sew::{OutFace, PieceGeom};
+use crate::{
+    intersect::{
+        contact, csi,
+        ssi::{self, Ssi},
+    },
+    locate::{
+        classify, coedge_trim_with, coedge_uv_at,
+        domain::{Domain, Trim, UvMap, Where},
+        same_domain_faces,
+    },
 };
 use crate::{
     Error, Result,
@@ -55,7 +56,7 @@ use crate::{
     mesh::bvh::Bvh,
     tol,
     topo::{
-        Brep, CoedgeId, CoedgeSpec, EdgeId, FaceId, FaceName, Facts, OnFace, PCurve, SolidId,
+        Brep, CoedgeId, CoedgeSpec, EdgeId, FaceId, FaceName, Facts, OnFace, SolidId,
         VertexId,
     },
 };
@@ -722,73 +723,6 @@ pub(crate) fn face_bbox(dom: &Domain) -> Aabb {
     padded(&bb, 1e-6 * (1.0 + bb.diagonal()))
 }
 
-/// A coedge's parameter-plane points at edge parameters `ts`, given in its direction; points in
-/// between are sampled so periodic parameters continue across wide gaps.
-fn coedge_uv_at(b: &Brep, c: CoedgeId, ts: &[f64]) -> Vec<Vec2> {
-    if let PCurve::Affine { origin, dir } = &b.coedge(c).pcurve {
-        return ts.iter().map(|&t| *origin + *dir * t).collect();
-    }
-    let s = &b.face(b.coedge_face(c)).surface;
-    // Only a periodic parameter needs the dense samples, to continue across a wide gap.
-    if s.u_period().is_none() && s.v_period().is_none() {
-        return b.coedge_uvs(c, ts);
-    }
-    let per = 16;
-    let mut dense = Vec::new();
-    for w in ts.windows(2) {
-        for k in 0..per {
-            dense.push(w[0] + (w[1] - w[0]) * k as f64 / per as f64);
-        }
-    }
-    dense.push(ts[ts.len() - 1]);
-    let uvs = b.coedge_uvs(c, &dense);
-    (0..ts.len()).map(|i| uvs[i * per]).collect()
-}
-
-/// A trim for coedge `c` over curve parameters `t0 → t1`, at `uv0 → uv1`, between vertices `v`.
-fn coedge_trim_with(
-    b: &Brep,
-    c: CoedgeId,
-    piece: usize,
-    curve: Option<Rc<Curve>>,
-    (t0, t1): (f64, f64),
-    (uv0, uv1): (Vec2, Vec2),
-    (v0, v1): (usize, usize),
-) -> Trim {
-    let co = b.coedge(c);
-    let edge = b.edge(co.edge);
-    let map = match &co.pcurve {
-        PCurve::Affine { origin, dir } => UvMap::Affine {
-            origin: *origin,
-            dir: *dir,
-        },
-        PCurve::Projected { .. } => UvMap::Projected,
-    };
-    Trim {
-        piece,
-        forward: !co.reversed,
-        curve,
-        pole: b.vertex(edge.start).point,
-        t0,
-        t1,
-        map: if edge.curve.is_none() {
-            match map {
-                UvMap::Projected => UvMap::Affine {
-                    origin: uv0,
-                    dir: Vec2::ZERO,
-                },
-                m => m,
-            }
-        } else {
-            map
-        },
-        uv0,
-        uv1,
-        v0,
-        v1,
-    }
-}
-
 /// Where a piece of curve through `[start, middle, end]` lies in a face: as its middle does,
 /// except that a piece not running along one trim is inside where the exact side puts its middle.
 /// Shorter than twice the tolerance, a piece leaving the boundary, or cutting across a corner, has
@@ -800,30 +734,6 @@ fn locate_piece(dom: &Domain, pts: [Point3; 3]) -> Where {
             .map_or(Where::Boundary, Where::Inside),
         w => w,
     }
-}
-
-/// Face `f`'s trimmed domain outside any boolean: its trims numbered by the arena's vertices.
-pub(crate) fn face_domain(b: &Brep, f: FaceId) -> Domain {
-    let face = b.face(f);
-    let loops = face
-        .loops
-        .iter()
-        .map(|&lp| {
-            b.lp(lp)
-                .coedges
-                .iter()
-                .map(|&c| {
-                    let ts = coedge_params(b, c, 16);
-                    let uvs = coedge_uv_at(b, c, &ts);
-                    let curve = b.edge(b.coedge(c).edge).curve.clone().map(Rc::new);
-                    let v = (b.coedge_start(c).index(), b.coedge_end(c).index());
-                    let (t, uv) = ((ts[0], ts[16]), (uvs[0], uvs[16]));
-                    coedge_trim_with(b, c, usize::MAX, curve, t, uv, v)
-                })
-                .collect()
-        })
-        .collect();
-    Domain::new(face.surface.clone(), face.reversed, loops)
 }
 
 impl<'a> Work<'a> {
@@ -1791,7 +1701,7 @@ impl<'a> Work<'a> {
         let owners = self.edge_faces();
         for (fa, fb) in pairs {
             let (sa, sb) = (&self.faces[fa].dom.surface, &self.faces[fb].dom.surface);
-            if ssi::same_domain_faces(&self.faces[fa].dom, &self.faces[fb].dom) {
+            if same_domain_faces(&self.faces[fa].dom, &self.faces[fb].dom) {
                 self.coincident.push((fa, fb));
                 continue;
             }

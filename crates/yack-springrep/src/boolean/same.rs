@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 
-use super::{csi, domain::Domain, face_domain, ssi::same_domain};
+use crate::{
+    intersect::{csi, ssi::same_domain},
+    locate::{domain::Domain, face_domain},
+};
 use crate::{
     tol,
     topo::{Brep, EdgeId, FaceId, VertexId},

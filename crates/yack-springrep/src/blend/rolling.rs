@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use super::{Picked, outward, run};
 use crate::{
     Error, Result,
-    boolean::{
+    locate::{
         domain::{Domain, Where},
         face_domain,
     },

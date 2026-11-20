@@ -1,6 +1,6 @@
 // yack: Curve–surface and curve–curve intersection, signed distance to a surface, and ray hits.
 // Adapted from springrep@a03e8a1 src/boolean/csi.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/csi.rs to intersect/csi.rs (M2.1, T2); paths only.
 //! Curve–surface and curve–curve intersection, signed distance to a surface, and ray hits.
 //!
 //! Two crossings closer than the linear tolerance are one touching point: a curve whose excursion

@@ -814,7 +814,7 @@ pub(crate) fn move_faces_pinned(
         let on: Vec<&Surface> = faces.iter().map(|&f| surface_of(f)).collect();
         let pinned = pins.get(&v).or(poles.get(&v)).copied().filter(|&q| {
             on.iter()
-                .all(|s| crate::boolean::csi::signed_distance(s, q).abs() <= 1e-2 * tol::LINEAR)
+                .all(|s| crate::intersect::csi::signed_distance(s, q).abs() <= 1e-2 * tol::LINEAR)
         });
         let Some(q) = pinned.or_else(|| settle(p, &on)) else {
             return unsupported("moving a corner whose faces' new surfaces do not meet near it");
@@ -848,7 +848,7 @@ pub(crate) fn move_faces_pinned(
             (1..8).all(|k| {
                 let p = c.eval(r.0 + (r.1 - r.0) * k as f64 / 8.0);
                 on.iter()
-                    .all(|sf| crate::boolean::csi::signed_distance(sf, p).abs() <= tol::LINEAR)
+                    .all(|sf| crate::intersect::csi::signed_distance(sf, p).abs() <= tol::LINEAR)
             })
         };
         let (a, z) = (out.vertex(s).point, out.vertex(t).point);
@@ -929,8 +929,8 @@ pub(crate) fn move_faces_pinned(
             min: region.min - pad,
             max: region.max + pad,
         };
-        let ssi = crate::boolean::ssi::intersect(on[0], on[1], &region, &mut || vec![mid])?;
-        let crate::boolean::ssi::Ssi::Curves { curves, .. } = ssi else {
+        let ssi = crate::intersect::ssi::intersect(on[0], on[1], &region, &mut || vec![mid])?;
+        let crate::intersect::ssi::Ssi::Curves { curves, .. } = ssi else {
             return unsupported("moving an edge between faces that come to coincide");
         };
         let Some(best) = curves

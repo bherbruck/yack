@@ -1,6 +1,6 @@
 // yack: How two surfaces meet at a point already known to lie on both: whether they touch there only.
 // Adapted from springrep@a03e8a1 src/boolean/contact.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from boolean/contact.rs to intersect/contact.rs (M2.1, T2); paths only.
 //! How two surfaces meet at a point already known to lie on both: whether they touch there only.
 //!
 //! Where the surfaces are tangent at the point, the gap between them is, to second order, the

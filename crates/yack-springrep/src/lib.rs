@@ -20,6 +20,8 @@ pub mod edit;
 pub mod facade;
 mod error;
 pub mod geom;
+pub(crate) mod intersect;
+pub(crate) mod locate;
 pub mod loft;
 pub mod math;
 pub mod measure;

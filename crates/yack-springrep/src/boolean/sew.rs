@@ -10,10 +10,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::{
-    classify,
-    domain::{Domain, Trim, UvMap, polygon_area},
-    ssi::{same_domain, same_domain_faces},
+use crate::{
+    intersect::ssi::same_domain,
+    locate::{
+        classify,
+        domain::{Domain, Trim, UvMap, polygon_area},
+        same_domain_faces,
+    },
 };
 use crate::{
     Error, Result, check,

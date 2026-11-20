@@ -1001,14 +1001,14 @@ fn shared_edges(a: &Brep, b: &Brep) -> Facts {
     for (side, own, other) in [(0, a, b), (1, b, a)] {
         for f in other.face_ids() {
             let s = &other.face(f).surface;
-            let dom = boolean::face_domain(other, f);
+            let dom = crate::locate::face_domain(other, f);
             for e in own.edge_ids() {
                 let x = own.edge(e);
                 let Some(c) = &x.curve else { continue };
                 let at = |k: usize| c.eval(x.range.0 + (x.range.1 - x.range.0) * k as f64 / 16.0);
                 let on = (0..=16)
-                    .all(|k| boolean::csi::signed_distance(s, at(k)).abs() <= 0.1 * tol::LINEAR);
-                if on && dom.locate(at(8)) != boolean::domain::Where::Outside {
+                    .all(|k| crate::intersect::csi::signed_distance(s, at(k)).abs() <= 0.1 * tol::LINEAR);
+                if on && dom.locate(at(8)) != crate::locate::domain::Where::Outside {
                     facts.on_face.push(OnFace {
                         side,
                         edge: e,
@@ -1071,18 +1071,18 @@ fn sides_on_body(mut tool: Brep, body: &Brep, picked: &[Picked], out: &Brep) -> 
             let wall = &body.face(w).surface;
             on.extend(
                 out.face_ids()
-                    .filter(|&g| boolean::same_domain(&out.face(g).surface, wall)),
+                    .filter(|&g| crate::intersect::ssi::same_domain(&out.face(g).surface, wall)),
             );
         }
         // Faces apart on one surface (two plates' rounds on one cylinder) each hold only their
         // own stretch of it: an edge lies on a face only where its middle lies inside it.
         for &face in &on {
-            let dom = boolean::face_domain(out, face);
+            let dom = crate::locate::face_domain(out, face);
             for &edge in &edges {
                 let x = tool.edge(edge);
                 let Some(c) = &x.curve else { continue };
                 if dom.locate(c.eval(0.5 * (x.range.0 + x.range.1)))
-                    == boolean::domain::Where::Outside
+                    == crate::locate::domain::Where::Outside
                 {
                     continue;
                 }
@@ -1971,7 +1971,7 @@ fn free_end(body: &Brep, pk: &Picked, o: &Outline, v: VertexId) -> Result<End> {
         .filter(|&f| {
             !pk.faces
                 .iter()
-                .any(|&g| boolean::same_domain(&body.face(f).surface, &body.face(g).surface))
+                .any(|&g| crate::intersect::ssi::same_domain(&body.face(f).surface, &body.face(g).surface))
         })
         .collect();
     let [f] = others.as_slice() else {
@@ -2412,7 +2412,7 @@ fn spilled(body: &Brep, mut tool: Brep, spills: &[Spill], feature: &str) -> Resu
         };
         let wall = &body.face(sp.face).surface;
         for f in tool.face_ids().collect::<Vec<_>>() {
-            if boolean::same_domain(&tool.face(f).surface, wall) {
+            if crate::intersect::ssi::same_domain(&tool.face(f).surface, wall) {
                 tool.face_mut(f).names =
                     BTreeSet::from([FaceName::new(SIDE_MARK, format!("r_{ix}"))]);
             }
@@ -2828,7 +2828,7 @@ fn matching_caps(a: &Brep, fa: FaceId, b: &Brep, fb: FaceId) -> Option<Vec<EdgeP
     let nb = if xb.reversed { -pb.frame.z } else { pb.frame.z };
     if xa.loops.len() != 1
         || xb.loops.len() != 1
-        || !boolean::same_domain(&xa.surface, &xb.surface)
+        || !crate::intersect::ssi::same_domain(&xa.surface, &xb.surface)
         || na.dot(nb) >= 0.0
     {
         return None;
@@ -3127,7 +3127,7 @@ fn corner_tool(ball: &Ball, feature: &str) -> Result<Brep> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boolean::csi::signed_distance;
+    use crate::intersect::csi::signed_distance;
     use crate::{check, measure, mesh};
 
     fn up(z: f64) -> Frame {

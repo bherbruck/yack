@@ -286,3 +286,11 @@ pub fn boxes_overlap(a: &Brep, b: &Brep) -> bool {
     let t = crate::tol::LINEAR;
     p.min.x + t < q.max.x && q.min.x + t < p.max.x && p.min.y + t < q.max.y && q.min.y + t < p.max.y && p.min.z + t < q.max.z && q.min.z + t < p.max.z
 }
+
+/// Whether an open face of a shell meets a concave edge (springrep's sharp shell of an L block open
+/// at its step face comes out wrong, inward and outward).
+pub fn open_at_concave_edge(b: &Brep, open: &[FaceId]) -> bool {
+    open.iter().any(|&f| {
+        b.face(f).loops.iter().any(|&l| b.lp(l).coedges.iter().any(|&c| convexity(b, b.coedge(c).edge) == Some(false)))
+    })
+}
