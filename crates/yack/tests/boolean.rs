@@ -119,7 +119,7 @@ fn nearest_faces_edge_parameters_and_closest_with_insides() {
 fn a_ball_grooves_a_plate_along_a_spline_through_cadrs() {
     let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
-    let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::Along { path, law: FrameLaw::Fixed }).unwrap();
+    let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::along(path, FrameLaw::Fixed)).unwrap();
     assert_eq!(tool.strategy(), "cadrs");
     assert!(tool.check().is_empty());
     let cut = plate.difference(&tool).unwrap();
@@ -129,7 +129,7 @@ fn a_ball_grooves_a_plate_along_a_spline_through_cadrs() {
 
 #[test]
 fn a_slid_block_is_a_longer_block() {
-    let s = cube([0.0; 3]).swept(&Motion::Slide { by: [3.0, 0.0, 0.0].into() }).unwrap();
+    let s = cube([0.0; 3]).swept(&Motion::slide([3.0, 0.0, 0.0])).unwrap();
     close(s.volume(), 8.0 + 2.0 * 2.0 * 3.0);
     assert_eq!(s.strategy(), "cadrs");
 }
@@ -139,7 +139,7 @@ fn the_same_program_twice_gives_the_same_digest() {
     let run = || {
         let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
         let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
-        let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::Along { path, law: FrameLaw::Fixed }).unwrap();
+        let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::along(path, FrameLaw::Fixed)).unwrap();
         let cut = plate.difference(&tool).unwrap();
         let e = cut.edge_at([36.0, 26.0, -4.0]).unwrap();
         cut.fillet(&[e], 1.0).unwrap().named("done").digest()
@@ -151,7 +151,7 @@ fn the_same_program_twice_gives_the_same_digest() {
 fn cut_swept_is_the_difference_with_the_swept_tool() {
     let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
-    let motion = Motion::Along { path, law: FrameLaw::Fixed };
+    let motion = Motion::along(path, FrameLaw::Fixed);
     let ball = sphere(&Frame::WORLD, 3.0).unwrap();
     let direct = plate.cut_swept(&ball, &motion).unwrap();
     let two_step = plate.difference(&ball.swept(&motion).unwrap()).unwrap();

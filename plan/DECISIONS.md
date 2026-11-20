@@ -59,6 +59,12 @@ get the lead's approval.
   crates, truck, the SMLib corpus) are allowed in crates marked `Apache-2.0`, with NOTICE
   entries. No separate corpus repo is needed.
 
+- **Faceted results refuse (2026-11-20).** An exact op never returns a faceted approximation:
+  a rung whose result has `is_exact()` false declines, and if no rung is exact the op fails with
+  "only a faceted approximation is available". This supersedes the round-4 rule that let faceted
+  `together` results through. Reason: ladder9 graded two faceted sweeps as `wrong` (AGENTS rule 8).
+  `Solid::is_exact()` stays public for imported solids.
+
 ## Still open (not blocking)
 
 - **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M5.1. If

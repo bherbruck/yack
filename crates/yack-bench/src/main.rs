@@ -9,6 +9,7 @@
 //! yack-bench --digests      (every case: `<id> <digest hex>` or `<id> refused`)
 //! yack-bench --strategy CASE  (`<Solid::strategy()>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
+//! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only)
 //! ```
 //!
 //! Builds the case `CASE` (`boolean/napkin-ring`) with its program,
@@ -20,6 +21,9 @@
 //! exits non-zero having built nothing. The runner never reads the case's description.
 // A tool crate: it reads brep-bench's BREP_BENCH_WARM switch (SPEC.md "A runner"), never a kernel.
 #![allow(clippy::disallowed_methods)]
+// Case programs copy their numbers verbatim from the brep-bench case texts (e.g. h = 0.7071 in the
+// tumbling-torus cases); swapping in a std constant would change the case's geometry bits.
+#![allow(clippy::approx_constant)]
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 use yack::{Solid, SurfaceKind};
@@ -254,8 +258,35 @@ fn roundtrip(_: Option<&str>) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// `--engine springrep|cadrs|both` ahead of the usual arguments (bake-off builds only): every op of
+/// the run is forced onto that engine's ladder rung (`yack::bakeoff::force`), on this thread.
+#[cfg(feature = "bakeoff")]
+fn force(name: &str) -> bool {
+    use yack::bakeoff::{Engine, force as set};
+    match name {
+        "springrep" => set(Engine::Springrep),
+        "cadrs" => set(Engine::Cadrs),
+        "both" => set(Engine::Both),
+        _ => return false,
+    }
+    true
+}
+
+#[cfg(not(feature = "bakeoff"))]
+fn force(_: &str) -> bool {
+    false
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--engine") {
+        let name = args.get(2).cloned().unwrap_or_default();
+        if !force(&name) {
+            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs or both");
+            return ExitCode::from(2);
+        }
+        args.drain(1..3);
+    }
     if args.get(1).map(String::as_str) == Some("--version") {
         println!("yack {} {}", yack::VERSION, yack::SOURCE);
         return ExitCode::SUCCESS;

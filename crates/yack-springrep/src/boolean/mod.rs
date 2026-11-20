@@ -2843,13 +2843,5 @@ fn choose(op: Op, side: usize, class: Class) -> Option<(bool, Option<usize>)> {
     }
 }
 
-crate::codec::fields!(FaceImages {
-    trims,
-    samples,
-    boxes,
-    bbox
-});
-crate::codec::fields!(TrimImage { t, uv, whole });
-
 #[cfg(test)]
 mod tests;

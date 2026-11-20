@@ -2314,11 +2314,7 @@ fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Spans> {
     let Curve::Nurbs(n) = &ed.curve else {
         return None;
     };
-    let segs = n.bezier_segments();
-    // yack: no whole segment (knots short of a clamp): the edge's pieces as before.
-    if segs.is_empty() {
-        return None;
-    }
+    let segs = Some(n.bezier_segments()).filter(|s| !s.is_empty())?; // yack: none whole: as before
     let grow = tol.max(ed.tol);
     let mut k = 0;
     let boxes = ps

@@ -9,13 +9,14 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use yack_cadrs::facade::motion as cmotion;
 use yack_cadrs::yack_glue::{self, Made, Move};
 use yack_cadrs::facade::names::{self as cnames, FaceRole, Wall};
 use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, InputFace, KernelError, Origin};
 use yack_springrep::topo::FaceName;
 
 use crate::engine::{self, Brep};
-use crate::{Error, ErrorKind, FrameLaw, Motion, Result, Solid, Stage, SurfaceKind};
+use crate::{Error, ErrorKind, FrameLaw, Motion, Result, Solid, Stage};
 
 /// A body in a cadrs session.
 #[derive(Clone)]
@@ -162,65 +163,133 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
         .with_strategy("cadrs"))
 }
 
-/// Whether every face of `s` lies on a sphere (a ball, whatever its frame).
-fn is_ball(s: &Solid) -> bool {
-    let faces = s.faces();
-    !faces.is_empty() && s.faces_where(|f| matches!(f.kind(), SurfaceKind::Sphere { .. })).len() == faces.len()
+/// A leg's Climb rise (polynomial in θ − `from`, mm), when the leg is a turn or screw that cadrs
+/// takes as a climb: a turn from a nonzero angle (no rise), a constant lead from a nonzero angle
+/// (`[c·from, c]`, c per radian), any polynomial lead (its coefficients). `None` otherwise.
+fn climb_rise(m: &Motion) -> Option<Vec<f64>> {
+    use crate::input::{LeadKind as L, MotionKind as K};
+    let per_radian = |l: &L| match l {
+        L::PerRadian(c) => Some(*c),
+        L::PerTurn(p) => Some(yack_math::per_radian_of(*p)),
+        L::Polynomial(_) => None,
+    };
+    match &m.0 {
+        K::Turn { from, .. } if from.radians() != 0.0 => Some(Vec::new()),
+        K::Screw { lead, .. } if matches!(lead.0, L::Polynomial(_)) => match &lead.0 {
+            L::Polynomial(c) => Some(c.clone()),
+            _ => None,
+        },
+        K::Screw { from, lead, .. } if from.radians() != 0.0 => {
+            let c = per_radian(&lead.0)?;
+            Some(vec![yack_math::scale_length(c, from.radians()), c])
+        }
+        _ => None,
+    }
 }
 
-/// One leg of a motion in cadrs's terms; `ctrl` holds an `Along` path's control points.
-fn leg<'a>(op: &'static str, s: &Solid, m: &'a Motion, ctrl: &'a [[f64; 3]]) -> Result<Move<'a>> {
-    Ok(match m {
-        Motion::Slide { by } => Move::Slide { by: by.to_array() },
-        Motion::Turn { axis_point, axis, angle } => {
-            Move::Turn { point: axis_point.to_array(), axis: axis.to_array(), angle: angle.radians() }
+/// A constant lead's rise per whole turn (cadrs's unit); `None` for a polynomial lead.
+fn per_turn(lead: &crate::input::Lead) -> Option<f64> {
+    use crate::input::LeadKind as L;
+    match &lead.0 {
+        L::PerTurn(p) => Some(*p),
+        L::PerRadian(c) => Some(yack_math::per_turn_of(*c)),
+        L::Polynomial(_) => None,
+    }
+}
+
+/// One leg of a motion in cadrs's terms, for `s` in session `c`; `ctrl` holds an along-path's
+/// control points.
+fn leg<'a>(op: &'static str, c: &CadrsRef, m: &'a Motion, ctrl: &'a [[f64; 3]], rise: Option<&'a [f64]>) -> Result<Move<'a>> {
+    use crate::input::MotionKind as K;
+    let starts_at_zero = |from: &crate::Angle| from.radians() == 0.0;
+    if let (Some(rise), K::Turn { axis_point, axis, from, to } | K::Screw { axis_point, axis, from, to, .. }) = (rise, &m.0) {
+        return Ok(Move::Climb { point: axis_point.to_array(), axis: axis.to_array(), from: from.radians(), to: to.radians(), rise });
+    }
+    Ok(match &m.0 {
+        K::Slide { by } => Move::Slide { by: by.to_array() },
+        K::Turn { axis_point, axis, from, to } if starts_at_zero(from) => {
+            Move::Turn { point: axis_point.to_array(), axis: axis.to_array(), angle: to.radians() }
         }
-        Motion::Screw { axis_point, axis, angle, rise_per_turn } => Move::Screw {
+        K::Screw { axis_point, axis, from, to, lead } if starts_at_zero(from) => Move::Screw {
             point: axis_point.to_array(),
             axis: axis.to_array(),
-            angle: angle.radians(),
-            rise_per_turn: *rise_per_turn,
+            angle: to.radians(),
+            rise_per_turn: per_turn(lead).ok_or_else(|| unsupported(op, "a screw of growing lead (not built yet)"))?,
         },
-        Motion::Along { path, law } => {
-            let up = match law {
-                FrameLaw::Fixed if is_ball(s) => [0.0, 0.0, 1.0],
-                FrameLaw::Fixed => return Err(unsupported(op, "a fixed-frame path sweep of a solid other than a ball")),
-                FrameLaw::RotationMinimising => yack_glue::plane_normal(ctrl, yack_tol::TANGENT)
-                    .ok_or_else(|| unsupported(op, "a rotation-minimising sweep along a path that is not planar"))?,
+        K::Turn { .. } | K::Screw { .. } => return Err(unsupported(op, "a turn cadrs cannot take")),
+        K::Along { path, law } => {
+            let fixed = match law {
+                FrameLaw::Fixed => true,
+                FrameLaw::RotationMinimising => false,
                 FrameLaw::Toward(_) => return Err(unsupported(op, "a path sweep facing a direction")),
             };
+            let up = yack_glue::along_up(&lock(&c.session), c.id, ctrl, fixed, yack_tol::TANGENT).map_err(|e| error(op, e))?;
             let degree = usize::try_from(path.degree()).unwrap_or(usize::MAX);
             Move::Along { degree, knots: path.knots(), ctrl, up }
         }
-        Motion::Then(_) => return Err(unsupported(op, "a sequence nested in a sequence")),
+        K::Then(_) | K::Together(_) => return Err(unsupported(op, "a sequence nested in a sequence")),
     })
 }
 
 fn control(m: &Motion) -> Vec<[f64; 3]> {
-    match m {
-        Motion::Along { path, .. } => path.ctrl().iter().map(|p| p.to_array()).collect(),
+    match &m.0 {
+        crate::input::MotionKind::Along { path, .. } => path.ctrl().iter().map(|p| p.to_array()).collect(),
         _ => Vec::new(),
     }
 }
 
+/// One leg of a [`Motion::together`] as cadrs's simultaneous step.
+fn step(op: &'static str, m: &Motion) -> Result<cmotion::Step> {
+    use crate::input::MotionKind as K;
+    Ok(match &m.0 {
+        K::Slide { by } => cmotion::Step::Slide { from: [0.0; 3], to: by.to_array() },
+        K::Turn { axis_point, axis, from, to } => {
+            cmotion::Step::Turn { point: axis_point.to_array(), axis: axis.to_array(), from: from.radians(), to: to.radians() }
+        }
+        K::Screw { axis_point, axis, from, to, lead } => cmotion::Step::Screw {
+            point: axis_point.to_array(),
+            axis: axis.to_array(),
+            from: from.radians(),
+            to: to.radians(),
+            rise_per_turn: per_turn(lead).ok_or_else(|| unsupported(op, "a screw of growing lead together with other motions"))?,
+        },
+        _ => return Err(unsupported(op, "a path or a sequence inside motions run together")),
+    })
+}
+
 /// Everything `s` passes through during `m`, by cadrs's sweep of a solid (a sequence: each leg
-/// starting where the last left the solid, their sweeps united).
+/// starting where the last left the solid, their sweeps united; legs together: cadrs's rigid
+/// motion, marked approximate when cadrs finds it only as facets).
 pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
+    use crate::input::MotionKind as K;
     let op = "swept";
-    let legs: Vec<&Motion> = match m {
-        Motion::Then(ms) => ms.iter().collect(),
-        one => vec![one],
-    };
-    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
-    let moves = legs.iter().zip(&ctrls).map(|(m, c)| leg(op, s, m, c)).collect::<Result<Vec<_>>>()?;
     let c = of(op, s)?;
     let feature = engine::feature();
+    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), ..Naming::default() };
+    if let K::Together(legs) = &m.0 {
+        let steps = legs.iter().map(|l| step(op, l)).collect::<Result<Vec<_>>>()?;
+        let t = cmotion::together(&mut lock(&c.session), c.id, &steps).map_err(|e| error(op, e))?;
+        let out = result(op, &feature, &c.session, Ok(t.made), &how)?;
+        // marked, and so declined by the ladder: a faceted region is near the swept volume, not it
+        return Ok(if t.faceted { out.approximate() } else { out });
+    }
+    let legs: Vec<&Motion> = match &m.0 {
+        K::Then(ms) => ms.iter().collect(),
+        _ => vec![m],
+    };
+    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
+    let rises: Vec<Option<Vec<f64>>> = legs.iter().map(|m| climb_rise(m)).collect();
+    let moves = legs
+        .iter()
+        .zip(&ctrls)
+        .zip(&rises)
+        .map(|((m, ct), r)| leg(op, &c, m, ct, r.as_deref()))
+        .collect::<Result<Vec<_>>>()?;
     let r = match moves.as_slice() {
         [] => return Ok(s.clone()),
         [one] => yack_glue::swept(&mut lock(&c.session), c.id, one),
-        many => yack_cadrs::facade::motion::swept_then(&mut lock(&c.session), c.id, many),
+        many => cmotion::swept_then(&mut lock(&c.session), c.id, many),
     };
-    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), ..Naming::default() };
     result(op, &feature, &c.session, r, &how)
 }
 
@@ -400,14 +469,22 @@ pub(crate) fn primitive(op: &'static str, f: &crate::Frame, p: yack_glue::Prim) 
 /// `target` less every point `tool` passes through along `m`, cut directly by cadrs.
 pub(crate) fn cut_swept(target: &Solid, tool: &Solid, m: &Motion) -> Result<Solid> {
     let op = "cut_swept";
-    let legs: Vec<&Motion> = match m {
-        Motion::Then(ms) => ms.iter().collect(),
-        one => vec![one],
+    let legs: Vec<&Motion> = match &m.0 {
+        crate::input::MotionKind::Then(ms) => ms.iter().collect(),
+        crate::input::MotionKind::Together(_) => return Err(unsupported(op, "motions run together (cut through difference(swept))")),
+        _ => vec![m],
     };
-    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
-    let moves = legs.iter().zip(&ctrls).map(|(m, c)| leg(op, tool, m, c)).collect::<Result<Vec<_>>>()?;
     let ct = of(op, target)?;
     let tool_id = into_session(op, &ct, &of(op, tool)?)?;
+    let tool_ref = CadrsRef { session: ct.session.clone(), id: tool_id };
+    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
+    let rises: Vec<Option<Vec<f64>>> = legs.iter().map(|m| climb_rise(m)).collect();
+    let moves = legs
+        .iter()
+        .zip(&ctrls)
+        .zip(&rises)
+        .map(|((m, c), r)| leg(op, &tool_ref, m, c, r.as_deref()))
+        .collect::<Result<Vec<_>>>()?;
     let feature = engine::feature();
     let r = yack_glue::cut_swept(&mut lock(&ct.session), ct.id, tool_id, &moves);
     let how = Naming { inputs: target.brep().map(|b| vec![(ct.id, b)]).unwrap_or_default(), ..Naming::default() };
@@ -489,4 +566,66 @@ pub(crate) fn loft(op: &'static str, f: &crate::Frame, p: &crate::Profile, heigh
     let feature = engine::feature();
     let r = cp::loft(&mut lock(&session), &place(f), &r0, height, &r1);
     result(op, &feature, &session, r, &Naming::default())
+}
+
+/// `profile` (drawn as for revolve) screwed by cadrs about the frame's z by `angle` radians,
+/// rising `rise` and moving out `taper` mm per radian.
+pub(crate) fn screw_tapered(op: &'static str, f: &crate::Frame, p: &crate::Profile, rise: f64, angle: f64, taper: f64) -> Result<Solid> {
+    let ctrl = ctrl2(p);
+    let loops = segs(op, p, &ctrl)?;
+    let refs: Vec<&[Seg]> = loops.iter().map(Vec::as_slice).collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::screw_tapered(&mut lock(&session), &place(f), &refs, rise, angle, taper);
+    result(op, &feature, &session, r, &Naming { segments: engine::segment_parts(p), ..Naming::default() })
+}
+
+/// The solid `patches` close, sewn by cadrs.
+pub(crate) fn sewn(op: &'static str, patches: &[crate::Patch]) -> Result<Solid> {
+    let nets: Vec<Vec<Vec<[f64; 3]>>> = patches
+        .iter()
+        .map(|p| match p {
+            crate::Patch::Bezier { ctrl } => ctrl.iter().map(|r| r.iter().map(|q| q.to_array()).collect()).collect(),
+            crate::Patch::PlanarFill { .. } => Vec::new(),
+        })
+        .collect();
+    let curves: Vec<Vec<Vec<[f64; 3]>>> = patches
+        .iter()
+        .map(|p| match p {
+            crate::Patch::PlanarFill { boundary } => boundary.iter().map(|s| s.ctrl().iter().map(|q| q.to_array()).collect()).collect(),
+            crate::Patch::Bezier { .. } => Vec::new(),
+        })
+        .collect();
+    let splines: Vec<Vec<cp::Spline>> = patches
+        .iter()
+        .zip(&curves)
+        .map(|(p, cs)| match p {
+            crate::Patch::PlanarFill { boundary } => boundary
+                .iter()
+                .zip(cs)
+                .map(|(s, c)| cp::Spline { degree: usize::try_from(s.degree()).unwrap_or(usize::MAX), knots: s.knots(), ctrl: c, weights: None })
+                .collect(),
+            crate::Patch::Bezier { .. } => Vec::new(),
+        })
+        .collect();
+    let glue: Vec<cp::GluePatch> = patches
+        .iter()
+        .zip(nets.iter().zip(&splines))
+        .map(|(p, (n, s))| match p {
+            crate::Patch::Bezier { .. } => cp::GluePatch::Bezier { ctrl: n },
+            crate::Patch::PlanarFill { .. } => cp::GluePatch::PlanarFill { boundary: s },
+        })
+        .collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::sewn(&mut lock(&session), &glue);
+    result(op, &feature, &session, r, &Naming::default())
+}
+
+/// `s` as an AP214 STEP file, by cadrs's writer.
+pub(crate) fn write_step(op: &'static str, s: &Solid) -> Result<String> {
+    use yack_cadrs::Kernel as _;
+    let c = of(op, s)?;
+    let bytes = lock(&c.session).export_step(&[c.id]).map_err(|e| error(op, e))?;
+    String::from_utf8(bytes).map_err(|_| Error::failed(op, Stage::Check, "cadrs wrote a STEP file that is not UTF-8"))
 }

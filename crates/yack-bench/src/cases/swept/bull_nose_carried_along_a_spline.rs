@@ -8,5 +8,5 @@ pub fn build() -> Result<Solid> {
     let mill = mill.fillet(&[mill.edge_at([0.0, 2.0, -1.0])?], 0.5)?;
     let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0])?;
     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]])?;
-    plate.difference(&mill.swept(&Motion::Along { path, law: FrameLaw::RotationMinimising })?)
+    plate.cut_swept(&mill, &Motion::along(path, FrameLaw::RotationMinimising))
 }

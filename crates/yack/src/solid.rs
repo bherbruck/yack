@@ -56,6 +56,9 @@ struct Inner {
     /// Why a guard doubts this result (springrep may have built it wrong): the ladder tries the
     /// next rung and keeps this answer only if every later rung fails.
     suspect: Option<String>,
+    /// Whether this is only a faceted approximation of the solid (the ladder refuses one as an
+    /// op's answer; [`Solid::is_exact`] reports it).
+    approximate: bool,
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
@@ -76,6 +79,7 @@ impl Solid {
             strategy: None,
             cadrs: OnceLock::new(),
             suspect: None,
+            approximate: false,
         }))
     }
 
@@ -201,6 +205,29 @@ impl Solid {
         }
     }
 
+    /// The same solid marked as only a faceted approximation (an engine said so).
+    pub(crate) fn approximate(self) -> Solid {
+        let i = &*self.0;
+        Solid(Arc::new(Inner {
+            stamp: i.stamp,
+            body: i.body.clone(),
+            history: i.history.clone(),
+            tag: i.tag.clone(),
+            feature: i.feature.clone(),
+            strategy: i.strategy,
+            cadrs: i.cadrs.clone(),
+            suspect: i.suspect.clone(),
+            approximate: true,
+        }))
+    }
+
+    /// Whether the solid is exact rather than a faceted approximation. Every operation's answer
+    /// is exact: an engine that finds a result only as facets declines, and when no engine does
+    /// better the op refuses (`Failed`, "only a faceted approximation is available").
+    pub fn is_exact(&self) -> bool {
+        !self.0.approximate
+    }
+
     /// The same solid flagged as doubted by a guard, for `why`.
     pub(crate) fn suspect(self, why: &str) -> Solid {
         match Arc::try_unwrap(self.0) {
@@ -299,6 +326,7 @@ impl Solid {
             strategy: self.0.strategy,
             cadrs: self.0.cadrs.clone(),
             suspect: None,
+            approximate: self.0.approximate,
         }))
     }
 

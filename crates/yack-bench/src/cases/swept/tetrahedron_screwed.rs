@@ -8,5 +8,5 @@ pub fn build() -> Result<Solid> {
         s.split(&Plane::new([4.0 + a / 3.0, b / 3.0, c / 3.0], [a, b, c])?).map(|p| p.back)
     })?;
     let (o, z) = (Point3::from([0.0; 3]), Vec3::from([0.0, 0.0, 1.0]));
-    tet.swept(&Motion::Screw { axis_point: o, axis: z, angle: deg(540.0), rise_per_turn: 5.0 })
+    tet.swept(&Motion::screw(o, z, rad(0.0), deg(540.0), Lead::per_turn(5.0)))
 }

@@ -1,13 +1,12 @@
 // yack: A compact binary encoding of built geometry, for build states kept on disk. Numbers are written
 // Adapted from springrep@a03e8a1 src/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: the Writer and Reader no longer carry face memos (M2.2 T4b).
 //! A compact binary encoding of built geometry, for build states kept on disk. Numbers are written
 //! as their bits, so a decoded solid is the encoded one exactly. A struct is encoded field by field
 //! through `fields!`, which names every field without `..`: a field added to the struct and not
 //! to its encoding does not compile.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     geom::{
@@ -15,7 +14,7 @@ use crate::{
         NurbsCurve, NurbsSurface, Plane, Revolution, Ruled, Sphere, Surface, Torus,
     },
     math::{Aabb, Frame, Vec2, Vec3},
-    topo::{Brep, FaceMemo},
+    topo::Brep,
 };
 
 /// The solids as bytes that read back as the same solids to the last bit. Faces that share a memo
@@ -41,22 +40,17 @@ pub fn from_bytes(bytes: &[u8]) -> Option<Vec<Brep>> {
     (r.remaining() == 0).then_some(solids)
 }
 
-/// The bytes written so far, and the face memos among them by where each lives, so faces that
-/// share a memo share it again when read back.
+/// The bytes written so far.
 #[derive(Default)]
-pub(crate) struct Writer(pub Vec<u8>, pub HashMap<usize, u32>);
+pub(crate) struct Writer(pub Vec<u8>);
 
 pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
-    pub memos: Vec<Arc<FaceMemo>>,
 }
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Reader<'a> {
-        Reader {
-            bytes,
-            memos: Vec::new(),
-        }
+        Reader { bytes }
     }
 
     pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {

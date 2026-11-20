@@ -6,5 +6,5 @@ pub fn build() -> Result<Solid> {
     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [30.0, 20.0, 0.0], [-10.0, 20.0, 0.0], [20.0, 0.0, 0.0]])?;
     let mill = cylinder(&Frame::at([0.0, 0.0, -1.5]), 2.0, 6.5)?;
     let mill = mill.fillet(&[mill.edge_at([0.0, 2.0, -1.5])?], 0.5)?;
-    plate.difference(&mill.swept(&Motion::Along { path, law: FrameLaw::Fixed })?)
+    plate.cut_swept(&mill, &Motion::along(path, FrameLaw::Fixed))
 }

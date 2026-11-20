@@ -17,6 +17,12 @@ fn valid(b: &Solid) {
     assert!(issues.is_empty(), "{issues:?}");
 }
 
+fn face_through(b: &Solid, p: [f64; 3]) -> FaceId {
+    let (f, d) = b.nearest_face(p).unwrap();
+    assert!(d < 1e-9, "no face through {p:?}: {d}");
+    f
+}
+
 fn invalid<T>(r: &Result<T>) -> bool {
     matches!(r, Err(e) if matches!(e.kind, ErrorKind::Invalid))
 }
@@ -99,8 +105,8 @@ fn a_path_sweep_along_a_straight_path_is_a_prism_or_a_twisted_one() {
         let v = twisted.volume();
         assert!((v - 12.0).abs() < 1e-7, "{v}");
         // Its top is the rectangle turned: 1 wide along x and 2 along y.
-        let top = twisted.face_at([0.0, 0.9, 6.0]).unwrap();
-        assert!(twisted.face_at([0.9, 0.0, 6.0]).map_or(true, |f| f != top));
+        let top = face_through(&twisted, [0.0, 0.9, 6.0]);
+        assert!(twisted.nearest_face([0.9, 0.0, 6.0]).map_or(true, |(f, d)| f != top || d > 1e-6));
     }
 }
 
@@ -109,7 +115,7 @@ fn a_shell_open_at_the_top_keeps_walls_of_its_thickness() {
     // A 10 × 8 × 6 block hollowed to 1 mm walls, open at the top: the block less a 8 × 6 × 5
     // pocket.
     let blk = block(&Frame::WORLD, [10.0, 8.0, 6.0]).unwrap();
-    let top = blk.face_at([5.0, 4.0, 6.0]).unwrap();
+    let top = face_through(&blk, [5.0, 4.0, 6.0]);
     let b = blk.shell(&[top], 1.0).unwrap();
     valid(&b);
     let v = b.volume();
@@ -122,7 +128,7 @@ fn a_shell_open_at_the_top_keeps_walls_of_its_thickness() {
 fn faces_moved_by_a_motion_go_where_it_takes_them() {
     // The top of a 10 × 8 × 6 block lifted 2 mm: a 10 × 8 × 8 block.
     let blk = block(&Frame::WORLD, [10.0, 8.0, 6.0]).unwrap();
-    let top = blk.face_at([5.0, 4.0, 6.0]).unwrap();
+    let top = face_through(&blk, [5.0, 4.0, 6.0]);
     let lift = Rigid::translation([0.0, 0.0, 2.0]);
     let b = blk.move_faces(&[top], &lift).unwrap();
     valid(&b);

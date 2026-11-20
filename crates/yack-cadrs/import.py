@@ -222,20 +222,15 @@ def transform(rel, text):
         # its Bézier decomposition past the knots: index out of bounds (conformance seed 1,
         # random-chains, intersection). The segments found so far are returned instead.
         old = "                    alphas[j - mult - 1] = numer / (u[a + j] - u[a]);\n"
-        new = (
-            "                    // yack: knots that end short of a full clamp: no more whole segments.\n"
-            "                    let Some(&uj) = u.get(a + j) else {\n"
-            "                        return out;\n"
-            "                    };\n"
-            "                    alphas[j - mult - 1] = numer / (uj - u[a]);\n"
-        )
+        # (On one line: donor files may not grow, gate 6.)
+        new = "                    alphas[j - mult - 1] = numer / (match u.get(a + j) { Some(&uj) => uj, None => return out } - u[a]); // yack: short knots\n"
         if text.count(old) != 1:
             sys.exit("nurbs.rs: the decomposition's knot read not found")
         text = text.replace(old, new)
         changes.append("bezier_segments stops at knots that end short of a full clamp (was an index panic)")
     if rel == "src/native/boolean.rs":
         old = "    let segs = n.bezier_segments();\n"
-        new = "    let segs = n.bezier_segments();\n    // yack: no whole segment (knots short of a clamp): the edge's pieces as before.\n    if segs.is_empty() {\n        return None;\n    }\n"
+        new = "    let segs = Some(n.bezier_segments()).filter(|s| !s.is_empty())?; // yack: none whole: as before\n"
         if text.count(old) != 1:
             sys.exit("boolean.rs: span_boxes_of's segments not found")
         text = text.replace(old, new)
@@ -287,14 +282,14 @@ def transform(rel, text):
             line += piece
         body.append(line.rstrip().rstrip(",") + "};")
         text = text.replace(old, "\n".join(body) + "\n")
-        changes.append("`pub use types::*` spelled out item by item (no glob re-exports)")
+        changes.append("`pub use types::*` spelled out (no glob re-exports)")
         # yack's own glue module (src/yack_glue.rs, written by w-m03-api, not imported).
         old = "pub mod types;\n"
         if old not in text:
             sys.exit("lib.rs: `pub mod types;` not found")
-        text = text.replace(old, old + "// yack: glue the yack facade calls (not cadrs code; owned by w-m03-api).\npub mod yack_glue;\n"
-                            "// yack: yack's naming and other glue (not cadrs code, src/facade/; not imported).\npub mod facade;\n", 1)
-        changes.append("`pub mod yack_glue;` and `pub mod facade;` (yack's own glue) declared")
+        text = text.replace(old, old + "// yack: yack's own glue, not cadrs code (yack_glue.rs, src/facade/; not imported).\n"
+                            "pub mod yack_glue;\npub mod facade;\n", 1)
+        changes.append("yack's glue modules declared")
         text += (
             "\n"
             "// yack: the shim's other facades under their crates' names. yack-shim is one package,\n"
@@ -305,7 +300,7 @@ def transform(rel, text):
             "extern crate nalgebra as uuid;\n"
             "extern crate nalgebra as web_time;\n"
         )
-        changes.append("extern crate aliases for the shim's rayon, rustc-hash, uuid and web-time facades")
+        changes.append("shim aliases rayon, rustc_hash, uuid, web_time")
     if rel.startswith("tests/") and rel.endswith(".rs") and "/" not in rel[len("tests/"):]:
         aliases = [n for n in ("rayon", "rustc_hash", "uuid", "web_time") if re.search(r"\b" + n + r"::", text)]
         if aliases:

@@ -353,6 +353,43 @@ fn unroll_u(p: usize, knots: Vec<f64>, rows: Vec<Vec<H>>, want: (f64, f64)) -> R
     Ok((k, out_rows))
 }
 
+/// `s`, a closed B-spline surface, unrolled over the uv span the face's loops reach; any other
+/// surface as it is.
+fn cover_loops(s: CSurface, edges: &[CEdge], loops: &[Vec<Coedge>], extra: [Option<f64>; 2]) -> Result<CSurface> {
+    let CSurface::Nurbs(n) = &s else { return Ok(s) };
+    let base = closed_periods(&s);
+    let periods = [base[0].or(extra[0]), base[1].or(extra[1])];
+    if periods.iter().all(Option::is_none) {
+        return Ok(s);
+    }
+    let mut span = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
+    for co in loops.iter().flatten() {
+        let Some(e) = edges.get(co.edge) else { continue };
+        for t in spaced(e.t[0], e.t[1], SAMPLES) {
+            let w = co.pc.point(t);
+            span = ((span.0.0.min(w.x), span.0.1.max(w.x)), (span.1.0.min(w.y), span.1.1.max(w.y)));
+        }
+    }
+    let ((u0, u1), (v0, v1)) = n.range();
+    let slack = PCURVE_SLACK;
+    let inside_u = span.0.0 >= u0 - slack && span.0.1 <= u1 + slack;
+    let inside_v = span.1.0 >= v0 - slack && span.1.1 <= v1 + slack;
+    if inside_u && inside_v {
+        return Ok(s);
+    }
+    let (mut ku, mut kv, mut cps) = (n.ku.clone(), n.kv.clone(), n.cps.clone());
+    if !inside_u && periods[0].is_some() {
+        (ku, cps) = unroll_u(n.du, ku, cps, span.0)?;
+    }
+    if !inside_v && periods[1].is_some() {
+        let (k, rows) = unroll_u(n.dv, kv, transpose(cps), span.1)?;
+        kv = k;
+        cps = transpose(rows);
+    }
+    let m = CNurbsSurface::new(n.du, n.dv, ku, kv, cps).map_err(|e| Error::Rejected(vec![e.to_string()]))?;
+    Ok(CSurface::Nurbs(std::sync::Arc::new(m)))
+}
+
 fn transpose(rows: Vec<Vec<H>>) -> Vec<Vec<H>> {
     let n = rows.first().map_or(0, Vec::len);
     (0..n).map(|j| rows.iter().filter_map(|r| r.get(j).copied()).collect()).collect()
@@ -441,14 +478,44 @@ fn surface(s: &SSurface, uv: ((f64, f64), (f64, f64))) -> Result<CSurface> {
 /// ops assume an analytic surface's natural normal points away from its axis; springrep may give
 /// a cone a half-angle past ±90° (v running toward the apex), whose natural normal points in, and
 /// reverse the face. That cone is the same set of points with v → −v and a → a ∓ π.
-fn canonical(s: CSurface) -> (CSurface, bool) {
-    match s {
+fn canonical(s: CSurface) -> (CSurface, bool, f64) {
+    let (s, flipped) = match s {
         CSurface::Cone { f, r, a } if a.cos() < 0.0 => {
             let a = if a > 0.0 { a - std::f64::consts::PI } else { a + std::f64::consts::PI };
             (CSurface::Cone { f, r, a }, true)
         }
         other => (other, false),
-    }
+    };
+    // cadrs's ops place their seams by the frame's x, which its constructors take from the axis
+    // alone (`Frame::from_z`); a springrep frame turned about the axis from that one gives cadrs a
+    // seam where its own sweeps and booleans would not put it (bench swept/ring-pushed-in-past-its-
+    // fold: the cut came out with a face its STEP reads as another region). The same surface in
+    // cadrs's frame is the old one at u − φ.
+    let turn = |f: CFrame| -> (CFrame, f64) {
+        let native = CFrame::from_z(f.o, f.z);
+        let phi = native.x.dot(&f.y).atan2(native.x.dot(&f.x));
+        (CFrame { o: f.o, x: native.x, y: f.z.cross(&native.x), z: f.z }, phi)
+    };
+    let (s, du) = match s {
+        CSurface::Cylinder { f, r } => {
+            let (f, phi) = turn(f);
+            (CSurface::Cylinder { f, r }, -phi)
+        }
+        CSurface::Cone { f, r, a } => {
+            let (f, phi) = turn(f);
+            (CSurface::Cone { f, r, a }, -phi)
+        }
+        CSurface::Sphere { f, r } => {
+            let (f, phi) = turn(f);
+            (CSurface::Sphere { f, r }, -phi)
+        }
+        CSurface::Torus { f, rmaj, rmin } => {
+            let (f, phi) = turn(f);
+            (CSurface::Torus { f, rmaj, rmin }, -phi)
+        }
+        other => (other, 0.0),
+    };
+    (s, flipped, du)
 }
 
 /// The pcurve with its v negated (for a surface [`canonical`] flipped).
@@ -724,7 +791,17 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
         }
         let surf = surface(&face.surface, uv)?;
         let fresh_face = reparametrised(&face.surface);
-        let (canon, flipped) = canonical(surf.clone());
+        let (canon, flipped, turned_u) = canonical(surf.clone());
+        // Periods cadrs may not see for itself. A whole swept ellipse re-parametrised onto
+        // s ∈ [0, 1] closes with period 1 there; springrep knows when its spline surface closes (to
+        // its tolerance).
+        let closes = |span: (f64, f64)| span.1 - span.0 >= std::f64::consts::TAU - PCURVE_SLACK;
+        let extra_periods = match &face.surface {
+            SSurface::Extrusion(_) if fresh_face && closes(uv.0) => [Some(1.0), None],
+            SSurface::Revolution(_) if fresh_face && closes(uv.1) => [None, Some(1.0)],
+            SSurface::Nurbs(n) => [n.u_period(), n.v_period()],
+            _ => [None, None],
+        };
         let mut loops = Vec::with_capacity(face.loops.len());
         for &lp in &face.loops {
             let mut coedges = Vec::new();
@@ -763,19 +840,16 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                     }
                 }
                 let pc = if flipped { flip_v(pc) } else { pc };
+                let pc = if turned_u != 0.0 { pc.transformed(&Affine::translation(V3::new(turned_u, 0.0, 0.0))) } else { pc };
                 coedges.push(Coedge { edge: co.edge.index(), fwd: !co.reversed, pc });
             }
-            // A whole swept ellipse re-parametrised onto s ∈ [0, 1] closes with period 1 there.
-            let closes = |span: (f64, f64)| span.1 - span.0 >= std::f64::consts::TAU - PCURVE_SLACK;
-            let extra = match &face.surface {
-                SSurface::Extrusion(_) if fresh_face && closes(uv.0) => [Some(1.0), None],
-                SSurface::Revolution(_) if fresh_face && closes(uv.1) => [None, Some(1.0)],
-                _ => [None, None],
-            };
-            chain(&canon, &body.edges, &mut coedges, extra);
+            chain(&canon, &body.edges, &mut coedges, extra_periods);
             let coedges = bridge_poles(&canon, &mut body.edges, coedges);
             loops.push(coedges);
         }
+        // A closed spline surface the chained loops now run past (springrep's loop jumps a period
+        // at the seam; cadrs's runs on): unroll it over where they go, so they stay on it.
+        let canon = cover_loops(canon, &body.edges, &loops, extra_periods)?;
         body.faces.push(CFace { surf: canon, sense: face.reversed == flipped, loops });
         names.push(face.names.clone());
     }
@@ -806,7 +880,16 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                     .flat_map(|&lp| b.lp(lp).coedges.iter())
                     .map(|&c| b.edge(b.coedge(c).edge).curve.as_ref().map_or("pole", |k| k.kind()))
                     .collect();
-                issues.push(format!("(face {f} was springrep {}; its edges {})", face.surface.kind(), kinds.join(",")));
+                let periods = match &face.surface {
+                    SSurface::Nurbs(n) => format!(" periods u {:?} v {:?} domain {:?}", n.u_period(), n.v_period(), n.domain()),
+                    _ => String::new(),
+                };
+                let cadrs_periods = body.faces.get(f).map(|cf| format!(" cadrs periods {:?}", closed_periods(&cf.surf))).unwrap_or_default();
+                issues.push(format!(
+                    "(face {f} was springrep {}{periods}{cadrs_periods}; its edges {})",
+                    face.surface.kind(),
+                    kinds.join(",")
+                ));
             }
         }
         return Err(Error::Rejected(issues));

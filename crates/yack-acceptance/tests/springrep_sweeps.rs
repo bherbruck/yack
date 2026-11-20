@@ -4,8 +4,10 @@
 // world z with the profile on the frame (z = −y, x = x) is make::revolve on Frame::WORLD (the
 // protocol draws the profile in the frame's xz plane and turns it about z); springrep's
 // Profile::circle takes a diameter, yack's a radius; MeshOptions { linear: 0.05 } is chord 0.05;
-// springrep's PeriodicSpline points profile is Loop::through; face-name checks dropped and one
-// test omitted (API GAP below).
+// springrep's PeriodicSpline points profile is Loop::through; springrep face names "<id>.<face>"
+// are yack (tag, Role): start/end are Role::Start/End and rect sides v_min, u_max, v_max, u_min
+// are Profile::rectangle's segments s0..s3; the negative extrusion dropped and one test omitted
+// (API GAP below).
 
 //! Swept solids against closed-form volume, area and box, each checked valid and watertight.
 
@@ -61,10 +63,13 @@ fn one_loop(segments: Vec<Segment>) -> Profile {
 
 #[test]
 fn box_extrusion_is_exact_and_named() {
-    let b = extrude(&Frame::WORLD, &rect(5.0, 2.0, 10.0, 4.0), 3.0).unwrap();
+    let b = extrude(&Frame::WORLD, &rect(5.0, 2.0, 10.0, 4.0), 3.0).unwrap().named("blk");
     assert_solid(&b, 120.0, 2.0 * (40.0 + 30.0 + 12.0), [0.0, 0.0, 0.0], [10.0, 4.0, 3.0], 1e-12);
-    // API GAP: springrep names each face once ("blk.start", "blk.end", "blk.v_min", "blk.u_max",
-    // "blk.v_max", "blk.u_min"); §4.3 has `named(tag)` but no way to read a face's names back.
+    // "blk.start", "blk.end", "blk.v_min", "blk.u_max", "blk.v_max", "blk.u_min".
+    let side = |s: &str| Role::Side(s.into());
+    for role in [Role::Start, Role::End, side("s0"), side("s1"), side("s2"), side("s3")] {
+        assert_eq!(b.faces_by("blk", role.clone()).len(), 1, "{role:?}");
+    }
 }
 
 #[test]
@@ -80,8 +85,8 @@ fn plate_with_a_hole_either_way_along_its_normal() {
     let a = 2.0 * (60.0 - PI) + 2.0 * 32.0 + 2.0 * PI * 2.0;
     assert_solid(&b, v, a, [-5.0, -3.0, -2.0], [5.0, 3.0, 0.0], 1e-12);
     // API GAP: springrep also extrudes height −2 on the world frame (same solid, same checks) and
-    // checks it names its start face once ("p.start"); the protocol's extrude takes a positive
-    // height only, and §4.3 cannot read face names back.
+    // checks it names its start face once ("p.start"); yack's extrude refuses a negative height
+    // (the protocol takes a positive one only).
 }
 
 #[test]
@@ -123,11 +128,20 @@ fn periodic_spline_disc_matches_its_ellipse() {
 #[test]
 fn partial_revolve_of_a_square() {
     let p = Profile::polygon(&[[10.0, 0.0], [20.0, 0.0], [20.0, 10.0], [10.0, 10.0]]).unwrap();
-    let b = revolve(&Frame::WORLD, &p, rad(PI / 2.0)).unwrap();
+    let b = revolve(&Frame::WORLD, &p, rad(PI / 2.0)).unwrap().named("rv");
     let v = PI * 300.0 * 10.0 / 4.0;
     let a = 200.0 + 2.0 * PI * 300.0 / 4.0 + 2.0 * PI * 200.0 / 4.0 + 2.0 * PI * 100.0 / 4.0;
     assert_solid(&b, v, a, [0.0, 0.0, 0.0], [20.0, 20.0, 10.0], 1e-12);
-    // API GAP: springrep checks six distinct face names; §4.3 cannot read face names back.
+    // Six distinct face names: the four sides, the start and the end.
+    let mut roles = std::collections::BTreeSet::new();
+    for f in b.faces() {
+        for (t, r) in b.face(f).unwrap().roles() {
+            if t.as_str() == "rv" {
+                roles.insert(r.clone());
+            }
+        }
+    }
+    assert_eq!(roles.len(), 6);
 }
 
 #[test]

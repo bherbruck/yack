@@ -223,8 +223,9 @@ impl Solid {
     }
     /// Every point the solid passes through during `motion` (cadrs's sweep of a solid; springrep
     /// has none). A `Fixed` path sweep is taken for a ball only, a `RotationMinimising` one along a
-    /// planar path; a `Then` sequence leg by leg (its legs not sequences); `Toward` is not supported
-    /// yet.
+    /// planar path (or a ball / a body of revolution about the path's normal for `Fixed`); a `then`
+    /// sequence leg by leg; legs `together` as cadrs's rigid motion ([`Solid::is_exact`] false when
+    /// faceted); `Toward` is not supported yet.
     pub fn swept(&self, motion: &Motion) -> Result<Solid> {
         let op = "swept";
         if self.is_empty() {

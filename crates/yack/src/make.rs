@@ -11,7 +11,8 @@ use std::collections::BTreeSet;
 
 use crate::engine;
 use crate::{engine_cadrs, firewall, ladder};
-use crate::{Angle, Error, Frame, PathPiece, Point3, Profile, Result, Solid, Spline3};
+use crate::input::LeadKind;
+use crate::{Angle, Error, Frame, Lead, PathPiece, Patch, Point3, Profile, Result, Solid, Spline3};
 
 /// A box with one corner at the frame origin, extending `size` along the frame's x, y, z
 /// (protocol `box`).
@@ -144,9 +145,14 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
     })
 }
 
-/// `profile` (drawn as for [`revolve`]) screwed about the frame's z axis by `angle` while rising
-/// `rise` mm per radian.
-pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Result<Solid> {
+/// `profile` (drawn as for [`revolve`]) screwed about the frame's z axis by `angle` while rising by
+/// `lead` ([`Lead::per_turn`], [`Lead::per_radian`]; a polynomial lead is not built yet).
+pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Result<Solid> {
+    let rise = match &lead.0 {
+        LeadKind::PerRadian(c) => *c,
+        LeadKind::PerTurn(p) => yack_math::per_radian_of(*p),
+        LeadKind::Polynomial(_) => return Err(Error::new(crate::ErrorKind::Unsupported, "screw", "a screw of growing lead is not built yet")),
+    };
     ladder::springrep_only("screw", || {
         let feature = engine::feature();
         let op = "screw";
@@ -154,6 +160,32 @@ pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Resul
         let motion = sweep::Helix { origin: engine::p3(frame.origin()), axis: engine::v3(frame.z().vec()), rise, sign: 1.0 };
         engine::made(&feature, op, sweep::helix(&sketch, &engine::meridian(frame), &motion, angle.radians(), &feature))
     })
+}
+
+/// As [`screw`], the profile also moving out from the axis by `taper` mm each radian turned (a
+/// conical thread, a spiroid worm).
+pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle, taper: f64) -> Result<Solid> {
+    let op = "screw_tapered";
+    let rise = match &lead.0 {
+        LeadKind::PerRadian(c) => *c,
+        LeadKind::PerTurn(p) => yack_math::per_radian_of(*p),
+        LeadKind::Polynomial(_) => return Err(Error::new(crate::ErrorKind::Unsupported, op, "a tapered screw of growing lead is not built yet")),
+    };
+    if !taper.is_finite() {
+        return Err(Error::invalid(op, "taper", "not finite"));
+    }
+    let a = angle.radians();
+    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::screw_tapered(op, frame, profile, rise, a, taper) }]))
+}
+
+/// The solid(s) the `patches` bound once sewn edge to edge: every patch's face built, their
+/// shared rims joined; an open shell is refused.
+pub fn sewn(patches: &[Patch]) -> Result<Solid> {
+    let op = "sewn";
+    if patches.is_empty() {
+        return Err(Error::invalid(op, "patches", "no patches"));
+    }
+    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sewn(op, patches) }]))
 }
 
 /// A ruled loft from `profile` at z = 0 to `top` at z = `height`. As in the protocol, `top` is

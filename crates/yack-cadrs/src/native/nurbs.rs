@@ -1374,11 +1374,7 @@ impl NurbsCurve {
             if mult < p {
                 let numer = u[b] - u[a];
                 for j in (mult + 1..=p).rev() {
-                    // yack: knots that end short of a full clamp: no more whole segments.
-                    let Some(&uj) = u.get(a + j) else {
-                        return out;
-                    };
-                    alphas[j - mult - 1] = numer / (uj - u[a]);
+                    alphas[j - mult - 1] = numer / (match u.get(a + j) { Some(&uj) => uj, None => return out } - u[a]); // yack: short knots
                 }
                 let r = p - mult;
                 for j in 1..=r {

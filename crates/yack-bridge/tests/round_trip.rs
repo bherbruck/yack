@@ -193,3 +193,39 @@ fn bridged_elliptic_cylinder_offsets_on_cadrs() {
     // cadrs natively gives 896.4591175 too: 2e-8 relative from the bench value.
     assert!((v - 896.45909906955167).abs() < 1e-6 * v, "\nFAILED offset volume {v}");
 }
+
+/// A cadrs edge 1.9e-5 mm off its faces (as cadrs's blends on a spline dome leave one) is carried
+/// with that tolerance; one 2e-4 mm off is refused.
+#[test]
+fn a_cadrs_edge_off_its_faces_is_carried_with_its_gap_or_refused() {
+    use yack_cadrs::native::{Curve, P3};
+    use yack_cadrs::{DefaultKernel, Kernel, Primitive};
+    let mut k = DefaultKernel::new();
+    let id = k.primitive(&Primitive::Box { min: P3::new(0.0, 0.0, 0.0), max: P3::new(10.0, 20.0, 30.0) }).unwrap().first().unwrap();
+    let base = (**k.get(id).unwrap()).clone();
+    let moved = |by: f64| {
+        let mut b = base.clone();
+        let e = b.edges.iter_mut().find(|e| matches!(e.curve, Curve::Line { .. })).unwrap();
+        if let Curve::Line { o, d } = e.curve {
+            // Off the edge, square to it.
+            let n = if d.x.abs() < 0.9 { yack_cadrs::native::V3::new(1.0, 0.0, 0.0) } else { yack_cadrs::native::V3::new(0.0, 1.0, 0.0) };
+            let n = (n - d * n.dot(&d)).normalize();
+            e.curve = Curve::Line { o: o + n * by, d };
+        }
+        b
+    };
+    let near = yack_bridge::to_springrep(&moved(1.9e-5), &[]).unwrap_or_else(|e| panic!("\nFAILED 1.9e-5: {e}"));
+    assert!(yack_springrep::check::check(&near).is_empty(), "\nFAILED 1.9e-5 check: {:?}", yack_springrep::check::check(&near));
+    assert!(yack_bridge::to_springrep(&moved(2e-4), &[]).is_err(), "\nFAILED 2e-4 was carried");
+}
+
+/// The STEP-write backstop: a written block reads back as itself; told another volume, it refuses.
+#[test]
+fn a_written_step_is_checked_by_reading_it_back() {
+    use yack_springrep::facade::exchange::{check_written, write_step};
+    let b = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap();
+    let text = write_step(&b).unwrap();
+    assert!(check_written(&text, 6000.0, 2200.0).is_ok());
+    assert!(check_written(&text, 6100.0, 2200.0).is_err());
+    assert!(check_written("not a step file", 6000.0, 2200.0).is_err());
+}

@@ -88,6 +88,45 @@ fn insert(p: usize, knots: &mut Vec<f64>, ctrl: &mut Vec<[f64; 2]>, u: f64) -> R
     Ok(())
 }
 
+/// A periodic B-spline (the protocol's convention: `n` control points then the first `p` again,
+/// `n + 2p + 1` knots whose spacing repeats every `n`) with its points and knot spacings turned
+/// round so its seam (where [`clamp_periodic`] opens it) lies at the control point farthest from
+/// their centroid, the lowest such index on a tie: the same curve, its seam put where it doesn't
+/// depend on where the loop's list starts. A loop's start is no part of its shape, but cadrs's
+/// cut by a moving solid gives up where a seam lies on the line the cut's envelope touches
+/// (brep-bench swept/spline-bar-screwed-through-rod: its list starts at the point nearest the
+/// screw's axis). Knots that don't repeat are left as they are.
+fn reseat_periodic(p: usize, knots: &[f64], ctrl: &[[f64; 2]]) -> (Vec<f64>, Vec<[f64; 2]>) {
+    let as_given = (knots.to_vec(), ctrl.to_vec());
+    if p == 0 || ctrl.len() <= 2 * p || knots.len() != ctrl.len() + p + 1 {
+        return as_given;
+    }
+    let n = ctrl.len() - p;
+    let d: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
+    let scale = d.iter().fold(0.0, |m: f64, x| m.max(x.abs()));
+    if (n..d.len()).any(|i| (d[i] - d[i - n]).abs() > crate::native::tol::REL * scale) {
+        return as_given;
+    }
+    let base = &ctrl[..n];
+    let c = base.iter().fold([0.0, 0.0], |a, q| [a[0] + q[0] / n as f64, a[1] + q[1] / n as f64]);
+    let dist = |q: &[f64; 2]| (q[0] - c[0]).hypot(q[1] - c[1]);
+    let mut far = 0;
+    for (i, q) in base.iter().enumerate() {
+        if dist(q) > dist(&base[far]) {
+            far = i;
+        }
+    }
+    // The opened curve starts over the points from s on, nearest the (s + p/2)th.
+    let s = (far + n - p / 2) % n;
+    let ctrl: Vec<[f64; 2]> = (0..n + p).map(|i| base[(i + s) % n]).collect();
+    let mut out = vec![knots[0]];
+    for i in 0..d.len() {
+        let last = out.last().copied().unwrap_or(knots[0]);
+        out.push(last + d[(i + s) % n]);
+    }
+    (out, ctrl)
+}
+
 /// The periodic spline as the clamped one with the same points on its domain
 /// `[knots[p], knots[n + p]]`: knots, control points.
 pub fn clamp_periodic(p: usize, knots: &[f64], ctrl: &[[f64; 2]]) -> Result<(Vec<f64>, Vec<[f64; 2]>)> {
@@ -153,7 +192,8 @@ fn curve(s: &Seg, n: u64) -> Result<Curve2> {
             source,
         },
         Seg::Periodic { degree, knots, ctrl } => {
-            let (knots, ctrl) = clamp_periodic(degree, knots, ctrl)?;
+            let (knots, ctrl) = reseat_periodic(degree, knots, ctrl);
+            let (knots, ctrl) = clamp_periodic(degree, &knots, &ctrl)?;
             Curve2::Spline { degree, knots, poles: ctrl.into_iter().map(p2).collect(), weights: Vec::new(), source }
         }
     })
@@ -201,6 +241,124 @@ pub fn revolve(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], angle: f6
     let axis = Axis { origin: Point3::from(v3(frame.origin)), dir: z };
     let r = k.revolve(&profile(plane, loops)?, axis, angle)?;
     Ok((r.first()?, r.history))
+}
+
+/// A point on a segment (its start), in the profile's coordinates.
+fn seg_start(s: &Seg) -> Option<[f64; 2]> {
+    match *s {
+        Seg::Line { a, .. } | Seg::Conic { a, .. } => Some(a),
+        Seg::Arc { center, radius, start, .. } => Some([center[0] + radius * start.cos(), center[1] + radius * start.sin()]),
+        Seg::Nurbs { ctrl, .. } | Seg::Periodic { ctrl, .. } => ctrl.first().copied(),
+    }
+}
+
+/// The profile drawn as for [`revolve`] (frame xz, x out from frame z) screwed about frame z by
+/// `angle` radians, rising `rise` along z and moving `taper` out from it per radian turned (a
+/// thread on a cone; `taper` 0 is a straight screw). cadrs's sweep along the spiral
+/// ([`crate::Helix::conical`]) by its screw: the section stays in a plane through the axis.
+pub fn screw_tapered(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], rise: f64, angle: f64, taper: f64) -> Result<Made> {
+    if angle == 0.0 || !angle.is_finite() || !rise.is_finite() || !taper.is_finite() {
+        return Err(bad("a screw needs a finite, nonzero turn"));
+    }
+    let plane = Plane::new(Point3::from(v3(frame.origin)), v3(frame.x), -v3(frame.y));
+    let z = Unit::try_new(v3(frame.z), 0.0).ok_or_else(|| bad("a screw's axis is zero"))?;
+    let x = Unit::try_new(v3(frame.x), 0.0).ok_or_else(|| bad("a screw's frame x is zero"))?;
+    // The spiral through the profile's first point: where the path crosses the profile's plane.
+    let [r0, h0] = loops.first().and_then(|l| l.first()).and_then(seg_start).ok_or_else(|| bad("a screw of no profile"))?;
+    let r1 = r0 + taper * angle;
+    if !(r0 > 0.0 && r1 > 0.0) {
+        return Err(bad("a screw's profile must lie off its axis all the way"));
+    }
+    let origin = Point3::from(v3(frame.origin) + z.into_inner() * h0);
+    let mut helix = crate::Helix::conical(Axis { origin, dir: z }, r0, r1, rise * angle, 0.0, angle / std::f64::consts::TAU);
+    helix.x = x;
+    let spec = SweepSpec { path: helix.path(), control: crate::SweepControl::Helix(helix), ..SweepSpec::solid(Vec::new()) };
+    let r = k.sweep_with(&profile(plane, loops)?, &spec)?;
+    Ok((r.first()?, r.history))
+}
+
+/// One patch of a solid [`sewn`] from patches.
+#[derive(Clone, Copy, Debug)]
+pub enum GluePatch<'a> {
+    /// A Bézier patch: its control net, rows along u (any degree each way: one less than the
+    /// number of rows, one less than each row's length).
+    Bezier {
+        #[allow(missing_docs)]
+        ctrl: &'a [Vec<[f64; 3]>],
+    },
+    /// The flat face filling a closed chain of curves lying in one plane.
+    PlanarFill {
+        #[allow(missing_docs)]
+        boundary: &'a [Spline<'a>],
+    },
+}
+
+/// The solid the `patches` close, sewn where their edges meet (cadrs's B-spline face, fill and
+/// sew). Patches that leave the shell open are refused.
+pub fn sewn(k: &mut DefaultKernel, patches: &[GluePatch]) -> Result<Made> {
+    let mut sheets: Vec<crate::BodyId> = Vec::with_capacity(patches.len());
+    let r = (|| {
+        for p in patches {
+            let sheet = match *p {
+                GluePatch::Bezier { ctrl } => {
+                    let nv = ctrl.first().map_or(0, Vec::len);
+                    if ctrl.len() < 2 || nv < 2 || ctrl.iter().any(|r| r.len() != nv) {
+                        return Err(bad("a Bézier patch needs a grid of at least 2 by 2 control points"));
+                    }
+                    let bezier = |n: usize| [vec![0.0; n], vec![1.0; n]].concat();
+                    let surface = crate::BsplineSurface {
+                        degree_u: ctrl.len() - 1,
+                        degree_v: nv - 1,
+                        knots_u: bezier(ctrl.len()),
+                        knots_v: bezier(nv),
+                        poles: ctrl.iter().map(|r| r.iter().map(|&c| Point3::from(v3(c))).collect()).collect(),
+                        weights: Vec::new(),
+                    };
+                    k.bspline_face(&surface, None)?.first()?
+                }
+                GluePatch::PlanarFill { boundary } => {
+                    let pts: Vec<[f64; 3]> = boundary.iter().flat_map(|c| c.ctrl.iter().copied()).collect();
+                    let n = crate::yack_glue::plane_normal(&pts, crate::native::tol::REL)
+                        .ok_or_else(|| bad("a fill's boundary does not lie in one plane"))?;
+                    let (o, n) = (v3(pts[0]), v3(n));
+                    let far = pts.iter().map(|&p| v3(p) - o).max_by(|a, b| a.norm().total_cmp(&b.norm())).unwrap_or_default();
+                    let x = Unit::try_new(far - n * far.dot(&n), 0.0).ok_or_else(|| bad("a fill's boundary is a point"))?.into_inner();
+                    let y = n.cross(&x);
+                    let plane = Plane::new(Point3::from(o), x, n);
+                    let to2 = |c: [f64; 3]| {
+                        let d = v3(c) - o;
+                        Point2::new(d.dot(&x), d.dot(&y))
+                    };
+                    let curves = boundary
+                        .iter()
+                        .map(|c| crate::FillCurve::Sketch {
+                            plane,
+                            curve: Curve2::Spline {
+                                degree: c.degree,
+                                knots: c.knots.to_vec(),
+                                poles: c.ctrl.iter().map(|&p| to2(p)).collect(),
+                                weights: c.weights.map(<[f64]>::to_vec).unwrap_or_default(),
+                                source: None,
+                            },
+                        })
+                        .collect();
+                    k.fill(&crate::FillSpec { curves, source: 0 })?.first()?
+                }
+            };
+            sheets.push(sheet);
+        }
+        let r = k.sew_solid(&sheets, crate::native::tol::POINT)?;
+        let out = r.first()?;
+        if k.body_class(out)? != crate::BodyClass::Solid {
+            k.release(out);
+            return Err(KernelError::InvalidInput("the patches do not close a solid".into()));
+        }
+        Ok((out, r.history))
+    })();
+    for s in sheets {
+        k.release(s);
+    }
+    r
 }
 
 /// A guide (or any space curve) as yack's `Spline3`: a clamped NURBS curve.
@@ -318,10 +476,61 @@ pub fn nurbs_solid(
         weights: weights.map(<[Vec<f64>]>::to_vec).unwrap_or_default(),
     };
     let sheet = k.bspline_face(&surface, None)?.first()?;
-    let r = k.sew_solid(&[sheet], crate::native::tol::CONFUSION);
-    k.release(sheet);
+    let mut pieces = vec![sheet];
+    pieces.extend(flat_caps(k, sheet).unwrap_or_default());
+    let r = k.sew_solid(&pieces, crate::native::tol::CONFUSION);
+    for p in pieces {
+        k.release(p);
+    }
     let r = r?;
     Ok((r.first()?, r.history))
+}
+
+/// The flat faces filling each open rim of `sheet` that lies in one plane (a cone's base: cadrs's
+/// runner fills it the same way), each a sheet of its own; an error for a rim it cannot fill.
+fn flat_caps(k: &mut DefaultKernel, sheet: crate::BodyId) -> Result<Vec<crate::BodyId>> {
+    let free: Vec<crate::EdgeInfo> = k
+        .edges(sheet)?
+        .into_iter()
+        .filter(|e| e.faces.iter().filter(|f| f.is_some()).count() == 1 && e.length > 0.0)
+        .collect();
+    // The rims: chains of free edges joined end to end.
+    let near = |a: &Point3<f64>, b: &Point3<f64>| (a - b).norm() <= crate::native::tol::POINT;
+    let mut rim_of: Vec<usize> = (0..free.len()).collect();
+    for i in 0..free.len() {
+        for j in 0..i {
+            let (a, b) = (&free[i], &free[j]);
+            if [a.start, a.end].iter().any(|p| near(p, &b.start) || near(p, &b.end)) {
+                let (ri, rj) = (rim_of[i], rim_of[j]);
+                rim_of.iter_mut().filter(|r| **r == ri).for_each(|r| *r = rj);
+            }
+        }
+    }
+    let mut caps = Vec::new();
+    let mut rims: Vec<usize> = rim_of.clone();
+    rims.sort_unstable();
+    rims.dedup();
+    for rim in rims {
+        let edges: Vec<&crate::EdgeInfo> = free.iter().zip(&rim_of).filter(|(_, r)| **r == rim).map(|(e, _)| e).collect();
+        // Its ends, middles and the lines along its ends (a whole circle has one point twice).
+        let pts: Vec<[f64; 3]> = edges
+            .iter()
+            .flat_map(|e| [e.start, e.mid, e.end, e.start + e.start_tangent, e.end + e.end_tangent])
+            .map(|p| [p.x, p.y, p.z])
+            .collect();
+        if crate::yack_glue::plane_normal(&pts, crate::native::tol::REL).is_none() {
+            continue;
+        }
+        let curves = edges.iter().map(|e| crate::FillCurve::Edge { body: sheet, edge: e.id }).collect();
+        let cap = k.fill(&crate::FillSpec { curves, source: 1 })?.first()?;
+        // Only a flat cap: a rim that only looked flat is left open (and the sew refuses it).
+        if k.get(cap)?.faces.iter().all(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })) {
+            caps.push(cap);
+        } else {
+            k.release(cap);
+        }
+    }
+    Ok(caps)
 }
 
 /// A piece of a path of lines and arcs (yack's `PathPiece`; angles in radians).
@@ -435,6 +644,67 @@ mod tests {
 
     fn world() -> Place {
         Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] }
+    }
+
+    #[test]
+    fn patches_sew_into_a_cube_and_an_open_set_is_refused() {
+        let mut k = DefaultKernel::new();
+        let c = |x: f64, y: f64, z: f64| [x, y, z];
+        let quad = |a: [f64; 3], b: [f64; 3], d: [f64; 3], e: [f64; 3]| vec![vec![a, b], vec![d, e]];
+        let sides = [
+            quad(c(0.0, 0.0, 1.0), c(1.0, 0.0, 1.0), c(0.0, 1.0, 1.0), c(1.0, 1.0, 1.0)),
+            quad(c(0.0, 0.0, 0.0), c(1.0, 0.0, 0.0), c(0.0, 0.0, 1.0), c(1.0, 0.0, 1.0)),
+            quad(c(0.0, 1.0, 0.0), c(1.0, 1.0, 0.0), c(0.0, 1.0, 1.0), c(1.0, 1.0, 1.0)),
+            quad(c(0.0, 0.0, 0.0), c(0.0, 1.0, 0.0), c(0.0, 0.0, 1.0), c(0.0, 1.0, 1.0)),
+            quad(c(1.0, 0.0, 0.0), c(1.0, 1.0, 0.0), c(1.0, 0.0, 1.0), c(1.0, 1.0, 1.0)),
+        ];
+        let mut patches: Vec<GluePatch> = sides.iter().map(|q| GluePatch::Bezier { ctrl: q }).collect();
+        assert!(sewn(&mut k, &patches).is_err());
+        // The floor as a fill of its four edges.
+        let line = [0.0, 0.0, 1.0, 1.0];
+        let corners = [c(0.0, 0.0, 0.0), c(1.0, 0.0, 0.0), c(1.0, 1.0, 0.0), c(0.0, 1.0, 0.0)];
+        let legs: Vec<[[f64; 3]; 2]> = (0..4).map(|i| [corners[i], corners[(i + 1) % 4]]).collect();
+        let edges: Vec<Spline> = legs.iter().map(|l| Spline { degree: 1, knots: &line, ctrl: l, weights: None }).collect();
+        patches.push(GluePatch::PlanarFill { boundary: &edges });
+        let (b, _) = sewn(&mut k, &patches).unwrap();
+        let v = k.mass_properties(b).unwrap().volume;
+        assert!((v - 1.0).abs() < 1e-9, "{v}");
+    }
+
+    #[test]
+    fn a_nurbs_cone_gets_its_flat_base() {
+        // brep-bench geometry/nurbs-cone: a rational circle of radius 5 ruled to an apex 10 up.
+        let mut k = DefaultKernel::new();
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let around = [0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0];
+        let circle = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (1.0, 0.0)];
+        let ctrl: Vec<Vec<[f64; 3]>> = circle.iter().map(|&(x, y)| vec![[5.0 * x, 5.0 * y, 0.0], [0.0, 0.0, 10.0]]).collect();
+        let weights: Vec<Vec<f64>> = (0..9).map(|i| if i % 2 == 1 { vec![h, h] } else { vec![1.0, 1.0] }).collect();
+        let (cone, _) = nurbs_solid(&mut k, &world(), [2, 1], [&around, &[0.0, 0.0, 1.0, 1.0]], &ctrl, Some(&weights)).unwrap();
+        let v = k.mass_properties(cone).unwrap().volume;
+        let want = std::f64::consts::PI * 25.0 * 10.0 / 3.0;
+        assert!((v - want).abs() < 1e-6 * want, "{v} against {want}");
+    }
+
+    #[test]
+    fn a_tapered_screw_sweeps_its_section_by_pappus() {
+        // In-plane motion sweeps nothing: V = A (x̄ θ + taper θ² / 2).
+        let mut k = DefaultKernel::new();
+        let sq = [
+            Seg::Line { a: [2.0, 0.0], b: [3.0, 0.0] },
+            Seg::Line { a: [3.0, 0.0], b: [3.0, 0.5] },
+            Seg::Line { a: [3.0, 0.5], b: [2.0, 0.5] },
+            Seg::Line { a: [2.0, 0.5], b: [2.0, 0.0] },
+        ];
+        let tau = std::f64::consts::TAU;
+        let (angle, rise, taper) = (2.0 * tau, 1.0 / tau, 0.1 / tau);
+        let (b, _) = screw_tapered(&mut k, &world(), &[&sq], rise, angle, taper).unwrap();
+        let want = 0.5 * (2.5 * angle + taper * angle * angle / 2.0);
+        let v = k.mass_properties(b).unwrap().volume;
+        assert!((v - want).abs() < 1e-6 * want, "{v} against {want}");
+        let (b, _) = screw_tapered(&mut k, &world(), &[&sq], rise, angle, 0.0).unwrap();
+        let v = k.mass_properties(b).unwrap().volume;
+        assert!((v - 0.5 * 2.5 * angle).abs() < 1e-6 * v, "{v}");
     }
 
     fn de_boor(p: usize, knots: &[f64], ctrl: &[[f64; 2]], u: f64) -> [f64; 2] {

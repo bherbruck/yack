@@ -1,12 +1,13 @@
 // yack: [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 // Adapted from springrep@a03e8a1 src/topo/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: face memos are no longer encoded (M2.2 T4b): a decoded arena starts with fresh memos,
+// so the bytes, and the digest, no longer depend on what was asked of a solid before.
 //! [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 //! reference into it holds; one whose ids point outside its own arrays is refused.
 
 use std::sync::Arc;
 
-use super::memo::{FaceMemo, Memos};
+use super::memo::Memos;
 use super::*;
 use crate::codec::{Codec, Reader, Writer, fields};
 
@@ -78,67 +79,6 @@ impl Codec for PCurve {
     }
 }
 
-/// What a face's memo has worked out that holds in any process: its volume share, its box, that
-/// its loops are clean, and what a boolean reads from its trims. A boolean takes those trims from
-/// the memo rather than working them out again, so a state read back must carry them, and share
-/// each memo among the faces that shared it, to build what the state in memory would have. What
-/// names other memos by their process-local ids is left out: it only spares the checker work.
-fn put_memo(m: &Arc<FaceMemo>, w: &mut Writer) {
-    let at = Arc::as_ptr(m) as usize;
-    if let Some(&i) = w.1.get(&at) {
-        1u8.put(w);
-        i.put(w);
-        return;
-    }
-    let n = u32::try_from(w.1.len()).expect("fewer than 2³² memos");
-    w.1.insert(at, n);
-    0u8.put(w);
-    m.volume
-        .get()
-        .map(|v| (v.anchor, (v.volume, v.vector_area)))
-        .put(w);
-    m.loose_box.get().copied().put(w);
-    m.clean.get().is_some().put(w);
-    match m.images.get() {
-        None => 0u8.put(w),
-        Some(i) => {
-            1u8.put(w);
-            i.put(w);
-        }
-    }
-}
-
-fn get_memo(r: &mut Reader) -> Option<Arc<FaceMemo>> {
-    if bool::get(r)? {
-        let i = u32::get(r)? as usize;
-        return r.memos.get(i).cloned();
-    }
-    let volume: Option<(Point3, (f64, crate::math::Vec3))> = Codec::get(r)?;
-    let loose_box: Option<crate::math::Aabb> = Codec::get(r)?;
-    let clean = bool::get(r)?;
-    let images: Option<crate::boolean::FaceImages> = Codec::get(r)?;
-    let m = FaceMemo::default();
-    if let Some((anchor, (volume, vector_area))) = volume {
-        let _ = m.volume.set(super::FaceVolume {
-            anchor,
-            volume,
-            vector_area,
-        });
-    }
-    if let Some(b) = loose_box {
-        let _ = m.loose_box.set(b);
-    }
-    if clean {
-        let _ = m.clean.set(());
-    }
-    if let Some(i) = images {
-        let _ = m.images.set(i);
-    }
-    let m = Arc::new(m);
-    r.memos.push(m.clone());
-    Some(m)
-}
-
 impl Codec for Brep {
     fn put(&self, w: &mut Writer) {
         let Brep {
@@ -149,7 +89,7 @@ impl Codec for Brep {
             faces,
             shells,
             solids,
-            memos,
+            memos: _,
             tolerances,
             partners,
             beside,
@@ -162,9 +102,6 @@ impl Codec for Brep {
         faces.put(w);
         shells.put(w);
         solids.put(w);
-        for m in &memos.0 {
-            put_memo(m, w);
-        }
         tolerances.put(w);
         partners.put(w);
         beside.put(w);
@@ -178,9 +115,8 @@ impl Codec for Brep {
         let faces: Vec<Face> = Codec::get(r)?;
         let shells: Vec<Shell> = Codec::get(r)?;
         let solids: Vec<Solid> = Codec::get(r)?;
-        let memos = (0..faces.len())
-            .map(|_| get_memo(r))
-            .collect::<Option<Vec<_>>>()?;
+        // Memos are what a process has worked out about the faces: they start empty.
+        let memos = (0..faces.len()).map(|_| Arc::default()).collect();
         let tolerances: Box<Tolerances> = Codec::get(r)?;
         let partners: BTreeMap<CoedgeId, CoedgeId> = Codec::get(r)?;
         let beside: BTreeMap<CoedgeId, CoedgeId> = Codec::get(r)?;

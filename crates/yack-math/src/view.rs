@@ -43,3 +43,13 @@ pub fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
         .sum::<f64>()
         / 6.0
 }
+
+/// A rise per radian as the rise per whole turn.
+pub fn per_turn_of(per_radian: f64) -> f64 {
+    per_radian * core::f64::consts::TAU
+}
+
+/// A rise per whole turn as the rise per radian.
+pub fn per_radian_of(per_turn: f64) -> f64 {
+    per_turn / core::f64::consts::TAU
+}

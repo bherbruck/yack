@@ -8,5 +8,5 @@ pub fn build() -> Result<Solid> {
     let (t, r) = (Rigid::rotation([10.0, 0.0, 0.0], [s, 0.0, c], deg(5.0))?, Rigid::rotation(o, z, deg(-140.0))?);
     let end = Frame::new([10.0, 0.0, 0.0], [c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c])?.moved(&t).moved(&r);
     let bar = extrude(&end, &Profile::rectangle([0.0, -2.0], [3.0, 2.0])?, 3.0)?;
-    sector.difference(&bar.swept(&Motion::Turn { axis_point: o, axis: z, angle: deg(280.0) })?)
+    sector.cut_swept(&bar, &Motion::turn(o, z, rad(0.0), deg(280.0)))
 }

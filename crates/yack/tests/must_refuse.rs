@@ -32,7 +32,7 @@ fn constructors() {
     refused("extrude of height zero", extrude(&Frame::WORLD, &sq, 0.0));
     let across = Profile::rectangle([-1.0, 0.0], [1.0, 1.0]).unwrap();
     refused("revolve across the axis", revolve(&Frame::WORLD, &across, deg(180.0)));
-    refused("screw turns that meet", screw(&Frame::WORLD, &sq, 0.01, deg(720.0)));
+    refused("screw turns that meet", screw(&Frame::WORLD, &sq, Lead::per_radian(0.01), deg(720.0)));
     refused("loft heights that do not rise", loft_through(&Frame::WORLD, &[(1.0, sq.clone()), (0.0, sq)]));
 }
 

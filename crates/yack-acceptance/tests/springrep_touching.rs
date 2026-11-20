@@ -2,7 +2,8 @@
 // Adapted from springrep@a03e8a1 tests/touching.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); springrep `Frame::from_axis` written as
 // yack `Frame::new(o, x, y, z)` with the same axes; the revolved ball and cone helpers are yack's `sphere` and
-// `cone`; named faces and edges are picked by point (`face_at`/`edge_at`); a solid count is `betti()[0]`.
+// `cone`; springrep's named faces "a.u_max".. are `face_by("a", Role::Side("x_max"))`.. on an input tagged
+// with `Solid::named`, and an edge named by its two faces is `edges_between`; a solid count is `betti()[0]`.
 
 use std::f64::consts::PI;
 
@@ -324,29 +325,31 @@ fn refused_as_touching(r: Result<Solid>) {
 #[test]
 fn a_blend_along_a_contact_is_refused() {
     // The edge the cubes share is the contact: a round there would cut into the other cube.
-    let a = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
+    let a = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]).named("a");
     let b = bx([10.0, 10.0, 0.0], [20.0, 20.0, 10.0]);
     let u = a.union(&b).unwrap();
-    // springrep's edge between "a.u_max" (x = 10) and "a.v_max" (y = 10).
-    let contact = u.edge_at([10.0, 10.0, 5.0]).unwrap();
-    refused_as_touching(u.fillet(&[contact], 1.0));
-    refused_as_touching(u.chamfer(&[contact], 1.0));
-    // An edge away from the contact still blends: "a.u_min" (x = 0) against "a.v_min" (y = 0).
-    let away = u.edge_at([0.0, 0.0, 5.0]).unwrap();
-    let f = u.fillet(&[away], 1.0).unwrap();
+    let edge = |p: &str, q: &str| {
+        let f = |n: &str| u.face_by("a", Role::Side(n.into())).unwrap();
+        u.edges_between(f(p), f(q)).unwrap()
+    };
+    // springrep's ("a.u_max", "a.v_max") and ("a.u_min", "a.v_min").
+    let contact = edge("x_max", "y_max");
+    refused_as_touching(u.fillet(&contact, 1.0));
+    refused_as_touching(u.chamfer(&contact, 1.0));
+    // An edge away from the contact still blends.
+    let f = u.fillet(&edge("x_min", "y_min"), 1.0).unwrap();
     assert!(f.check().is_empty());
 }
 
 #[test]
 fn moving_a_face_at_a_contact_is_refused() {
     // a.u_max is the face x = 10, which ends at the contact: moving it opens or overlaps it.
-    let a = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
+    let a = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]).named("a");
     let b = bx([10.0, 10.0, 0.0], [20.0, 20.0, 10.0]);
     let u = a.union(&b).unwrap();
-    let u_max = u.face_at([10.0, 5.0, 5.0]).unwrap();
-    let u_min = u.face_at([0.0, 5.0, 5.0]).unwrap();
-    refused_as_touching(u.offset_faces(&[u_max], 1.0));
-    let moved = u.offset_faces(&[u_min], 1.0).unwrap();
+    let face = |name: &str| u.face_by("a", Role::Side(name.into())).unwrap();
+    refused_as_touching(u.offset_faces(&[face("x_max")], 1.0));
+    let moved = u.offset_faces(&[face("x_min")], 1.0).unwrap();
     assert!(moved.check().is_empty());
     assert!((moved.volume() - 2100.0).abs() < 1e-9);
 }

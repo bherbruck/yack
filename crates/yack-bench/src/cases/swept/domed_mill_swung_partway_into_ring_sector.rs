@@ -7,5 +7,5 @@ pub fn build() -> Result<Solid> {
     let side = Loop::starting_at([0.0, -0.8]).arc_ccw_to([1.0, 1.2 - 3f64.sqrt()], [0.0, 1.2]).line_to([1.0, 3.0]);
     let start = Frame::at([10.0, 0.0, 0.0]).moved(&Rigid::rotation([0.0; 3], z, deg(-140.0))?);
     let mill = revolve(&start, &Profile::new(side.line_to([0.0, 3.0]).close()?, vec![])?, deg(360.0))?;
-    sector.difference(&mill.swept(&Motion::Turn { axis_point: [0.0; 3].into(), axis: z.into(), angle: deg(170.0) })?)
+    sector.cut_swept(&mill, &Motion::turn([0.0; 3], z, rad(0.0), deg(170.0)))
 }

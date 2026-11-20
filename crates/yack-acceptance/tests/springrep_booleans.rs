@@ -4,12 +4,13 @@
 // `Frame::from_axis` written as yack `Frame::new(o, x, y, z)` with the same axes; `Profile::circle` takes a
 // radius (springrep took a diameter); solids moved by `Transform` are built in frames moved by the same
 // `Rigid`; a solid count is `betti()[0]` and a void shell `betti()[2]`; springrep's face names "f.part" are
-// the faces tagged `f` (`Solid::named`) picked out by the part's geometry (its cap plane or cylindrical side).
+// `faces_by(f, role)` on inputs tagged `f` (`Solid::named`): start/end are `Role::Start`/`End`, a block's
+// u_min/u_max/v_min/v_max are `Role::Side("x_min")`.. and a rod's side `Role::Side("side")`.
 
 use std::f64::consts::{PI, TAU};
 
 use yack::prelude::*;
-use yack::{EdgeId, FaceRef};
+use yack::EdgeId;
 
 /// The original's `MeshOptions { linear: 0.2, .. }`.
 const COARSE: f64 = 0.2;
@@ -67,26 +68,13 @@ fn four_face_edges(b: &Solid) -> Vec<EdgeId> {
     b.edges().into_iter().filter(|&e| b.edge(e).unwrap().uses() == 4).collect()
 }
 
-/// A face's plane is `coordinate[axis] = at` (springrep's cap names: a block's start/end/u_*/v_*, a
-/// rod's start/end).
-fn plane_at(f: &FaceRef, axis: usize, at: f64) -> bool {
-    match f.kind() {
-        SurfaceKind::Plane { normal } => {
-            let (n, c) = ([normal.x, normal.y, normal.z], f.centroid());
-            n[axis].abs() > 1.0 - 1e-9 && ([c.x, c.y, c.z][axis] - at).abs() < 1e-6
-        }
-        _ => false,
-    }
-}
-
-/// A rod's "side": its cylindrical face.
-fn side(f: &FaceRef) -> bool {
-    matches!(f.kind(), SurfaceKind::Cylinder { .. })
+fn side(name: &str) -> Role {
+    Role::Side(name.into())
 }
 
 /// springrep's `names(b, "tag.part")`: how many faces carry that name.
-fn names(b: &Solid, tag: &str, part: impl Fn(&FaceRef) -> bool) -> usize {
-    b.faces_where(|f| f.tags().iter().any(|t| t.as_str() == tag) && part(f)).len()
+fn names(b: &Solid, tag: &str, role: Role) -> usize {
+    b.faces_by(tag, role).len()
 }
 
 #[test]
@@ -98,23 +86,20 @@ fn overlapping_blocks_unite_intersect_and_subtract() {
     assert_eq!(u.faces().len(), 12);
     let i = a.intersection(&b).unwrap();
     assert_solid(&i, 125.0, 150.0);
-    // "a.end", "a.u_max", "a.v_max", "b.start", "b.u_min", "b.v_min".
-    for (n, tag, axis, at) in [
-        ("a.end", "a", 2, 10.0),
-        ("a.u_max", "a", 0, 10.0),
-        ("a.v_max", "a", 1, 10.0),
-        ("b.start", "b", 2, 5.0),
-        ("b.u_min", "b", 0, 5.0),
-        ("b.v_min", "b", 1, 5.0),
+    for (n, tag, role) in [
+        ("a.end", "a", Role::End),
+        ("a.u_max", "a", side("x_max")),
+        ("a.v_max", "a", side("y_max")),
+        ("b.start", "b", Role::Start),
+        ("b.u_min", "b", side("x_min")),
+        ("b.v_min", "b", side("y_min")),
     ] {
-        assert_eq!(names(&i, tag, |f| plane_at(f, axis, at)), 1, "{n}");
+        assert_eq!(names(&i, tag, role), 1, "{n}");
     }
-    // "a.start" + "b.end".
-    assert_eq!(names(&i, "a", |f| plane_at(f, 2, 0.0)) + names(&i, "b", |f| plane_at(f, 2, 15.0)), 0);
+    assert_eq!(names(&i, "a", Role::Start) + names(&i, "b", Role::End), 0);
     let d = a.difference(&b).unwrap();
     assert_solid(&d, 875.0, 600.0);
-    // "b.start".
-    assert_eq!(names(&d, "b", |f| plane_at(f, 2, 5.0)), 1);
+    assert_eq!(names(&d, "b", Role::Start), 1);
 }
 
 #[test]
@@ -149,11 +134,11 @@ fn a_rod_through_a_block_is_a_hole() {
     let h = named_rod("h", [2.0, 1.0, -3.0], [0.0, 0.0, 1.0], 3.0, 20.0);
     let d = a.difference(&h).unwrap();
     assert_solid(&d, 2000.0 - 45.0 * PI, 2.0 * (400.0 - 9.0 * PI) + 400.0 + 30.0 * PI);
-    assert_eq!(names(&d, "h", side), 1);
+    assert_eq!(names(&d, "h", side("side")), 1);
     let u = a.union(&h).unwrap();
     // The rod's caps replace the discs it takes from the block's faces.
     assert_solid(&u, 2000.0 + 15.0 * 9.0 * PI, 1200.0 + 6.0 * PI * 15.0);
-    assert_eq!(names(&u, "h", side), 2);
+    assert_eq!(names(&u, "h", side("side")), 2);
 }
 
 #[test]
@@ -173,10 +158,9 @@ fn coplanar_faces_merge_and_carry_both_names() {
     let u = a.union(&b).unwrap();
     assert_solid(&u, 2000.0, 1000.0);
     assert_eq!(u.faces().len(), 6);
-    // "a.end" once, and that face also carries "b.end".
-    assert_eq!(names(&u, "a", |f| plane_at(f, 2, 10.0)), 1);
-    let top = u.faces_where(|f| f.tags().iter().any(|t| t.as_str() == "a") && plane_at(f, 2, 10.0))[0];
-    assert!(u.face(top).unwrap().tags().iter().any(|t| t.as_str() == "b"));
+    assert_eq!(names(&u, "a", Role::End), 1);
+    let top = u.face_by("a", Role::End).unwrap();
+    assert_eq!(u.face(top).unwrap().role("b"), Some(Role::End));
 }
 
 /// The volume two cylinders of radii `a ≥ b` share when their axes cross at right angles.
@@ -199,8 +183,8 @@ fn equal_crossing_holes_split_each_other_at_the_touching_points() {
     let steinmetz = 16.0 * 64.0 / 3.0;
     let area = 6.0 * 400.0 - 4.0 * 16.0 * PI + 2.0 * 8.0 * PI * 20.0 - 16.0 * 16.0;
     assert_solid(&two, 8000.0 - 2.0 * 16.0 * PI * 20.0 + steinmetz, area);
-    assert_eq!(names(&two, "hx", side), 2);
-    assert_eq!(names(&two, "hy", side), 2);
+    assert_eq!(names(&two, "hx", side("side")), 2);
+    assert_eq!(names(&two, "hy", side("side")), 2);
 }
 
 #[test]
@@ -228,8 +212,7 @@ fn coaxial_cut_with_coincident_caps_leaves_a_tube() {
     let bore = named_rod("b", [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 5.0, 15.0);
     let t = outer.difference(&bore).unwrap();
     assert_solid(&t, PI * 75.0 * 15.0, 2.0 * PI * 75.0 + 2.0 * PI * 15.0 * 15.0);
-    // "b.start" + "b.end".
-    assert_eq!(names(&t, "b", |f| plane_at(f, 2, 0.0)) + names(&t, "b", |f| plane_at(f, 2, 15.0)), 0);
+    assert_eq!(names(&t, "b", Role::Start) + names(&t, "b", Role::End), 0);
     assert_eq!(t.faces().len(), 4);
 }
 
@@ -242,7 +225,7 @@ fn coaxial_rods_unite_into_one_side_across_their_seams() {
     let u = a.union(&b).unwrap();
     assert_solid(&u, PI * 25.0 * 15.0, 2.0 * PI * 25.0 + 10.0 * PI * 15.0);
     assert_eq!(u.faces().len(), 3);
-    assert_eq!(names(&u, "a", side) + names(&u, "b", side), 2);
+    assert_eq!(names(&u, "a", side("side")) + names(&u, "b", side("side")), 2);
 }
 
 #[test]
@@ -276,13 +259,11 @@ fn a_counterbore_and_a_boss_share_caps_with_the_plate() {
         16000.0 - 250.0 * PI - 4.0 * 39.0 * PI,
         2.0 * 1600.0 + 1600.0 - 64.0 * PI - 25.0 * PI + 39.0 * PI + 16.0 * PI * 4.0 + 10.0 * PI * 6.0,
     );
-    // "cb.end": the rod's far cap, at z = 10 − 4.
-    assert_eq!(names(&bored, "cb", |f| plane_at(f, 2, 6.0)), 1);
+    assert_eq!(names(&bored, "cb", Role::End), 1);
     let boss = named_rod("b", [20.0, 20.0, 10.0], [0.0, 0.0, 1.0], 5.0, 8.0);
     let u = plate.union(&boss).unwrap();
     assert_solid(&u, 16000.0 + 200.0 * PI, 2.0 * 1600.0 + 1600.0 + 10.0 * PI * 8.0);
-    // "b.start": the boss's base cap, at z = 10.
-    assert_eq!(names(&u, "b", |f| plane_at(f, 2, 10.0)), 0);
+    assert_eq!(names(&u, "b", Role::Start), 0);
 }
 
 /// The circle where two balls meet bounds both sphere faces, whose meshes refine against it.
@@ -561,7 +542,7 @@ fn a_thread_and_a_rod_biting_into_it_intersect_either_way_round() {
     // the origin, right-handed, rising 0.25338… per radian, through 3.19165… rad: yack's screw in
     // the world frame.
     let profile = Profile::circle([8.013653159337178, 0.5917483297087343], 0.37382307626072764).unwrap();
-    let thread = screw(&Frame::WORLD, &profile, 0.25338470539470814, rad(3.1916513479467015)).unwrap();
+    let thread = screw(&Frame::WORLD, &profile, yack::Lead::per_radian(0.25338470539470814), rad(3.1916513479467015)).unwrap();
     let rod = rod([0.0, 0.0, -1.0], [0.0, 0.0, 1.0], 7.932446399148578, 3.9922122959395665);
     let ab = thread.intersection(&rod).unwrap();
     let ba = rod.intersection(&thread).unwrap();

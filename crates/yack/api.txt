@@ -4,7 +4,7 @@ yack: pub const SUPPORTS: &[&str]
 yack: pub const VERSION: &str
 yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
-yack: pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline3}
+yack: pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3}
 yack: pub use solid::Solid
 yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
@@ -51,6 +51,9 @@ yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
+yack::input: impl Lead { pub fn per_radian(mm: f64) -> Lead }
+yack::input: impl Lead { pub fn per_turn(mm: f64) -> Lead }
+yack::input: impl Lead { pub fn polynomial(coefficients: Vec<f64>) -> Lead }
 yack::input: impl Loop { pub fn is_ccw(&self) -> bool }
 yack::input: impl Loop { pub fn labels(&self) -> &[Option<Tag>] }
 yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
@@ -58,6 +61,12 @@ yack::input: impl Loop { pub fn polygon(corners: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Loop { pub fn segments(&self) -> &[Segment] }
 yack::input: impl Loop { pub fn starting_at(p: impl Into<Point2>) -> Pen }
 yack::input: impl Loop { pub fn through(points: &[[f64; 2]]) -> Result<Loop> }
+yack::input: impl Motion { pub fn along(path: Spline3, law: FrameLaw) -> Motion }
+yack::input: impl Motion { pub fn screw(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle, lead: Lead) -> Motion }
+yack::input: impl Motion { pub fn slide(by: impl Into<Vec3>) -> Motion }
+yack::input: impl Motion { pub fn then(legs: Vec<Motion>) -> Motion }
+yack::input: impl Motion { pub fn together(legs: Vec<Motion>) -> Motion }
+yack::input: impl Motion { pub fn turn(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle) -> Motion }
 yack::input: impl Pen { pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn close(self) -> Result<Loop> }
@@ -86,15 +95,17 @@ yack::make: pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]
 yack::make: pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
 yack::make: pub fn nurbs_solid(frame: &Frame, degree: [u32; 2], knots: [&[f64]; 2], ctrl: &[Vec<Point3>], weights: Option<&[Vec<f64>]>,) -> Result<Solid>
 yack::make: pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid>
-yack::make: pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Result<Solid>
+yack::make: pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Result<Solid>
+yack::make: pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle, taper: f64) -> Result<Solid>
+yack::make: pub fn sewn(patches: &[Patch]) -> Result<Solid>
 yack::make: pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid>
 yack::make: pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid>
 yack::make: pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid>
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
-yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sphere, spindle_torus, sweep, sweep_path, torus,}
-yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
+yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_path, torus,}
+yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
 yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
@@ -137,6 +148,7 @@ yack::select: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
 yack::solid: impl Solid { pub fn digest(&self) -> [u8; 32] }
 yack::solid: impl Solid { pub fn history(&self) -> &History }
 yack::solid: impl Solid { pub fn is_empty(&self) -> bool }
+yack::solid: impl Solid { pub fn is_exact(&self) -> bool }
 yack::solid: impl Solid { pub fn named(&self, tag: impl Into<Tag>) -> Solid }
 yack::solid: impl Solid { pub fn strategy(&self) -> &'static str }
 yack::solid: impl Solid { pub fn tag(&self) -> Option<&Tag> }

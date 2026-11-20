@@ -7,6 +7,7 @@ use yack::prelude::*;
 /// The case must refuse, or give a volume other than `wrong`.
 fn not(got: Result<Solid>, wrong: f64) {
     if let Ok(s) = got {
+        assert!(s.is_exact(), "a faceted answer (strategy {})", s.strategy());
         let v = s.volume();
         assert!((v - wrong).abs() > 1e-6 * wrong.abs().max(1.0), "still the wrong volume {v} (strategy {})", s.strategy());
     }
@@ -207,4 +208,27 @@ fn half_torus_outer_rim_round_deleted() {
         let rounds = r.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus) && f.area() < 100.0);
         assert!(rounds.len() <= 1, "{} small toroidal rounds (strategy {})", rounds.len(), r.strategy());
     }
+}
+
+/// swept/square-on-a-planet-carrier: cadrs's faceted region (155.132, not 155.337) is refused.
+#[test]
+fn planet_carrier_sweep_is_not_answered_faceted() {
+    let bar = block(&Frame::at([4.0, -1.0, 0.0]), [2.0, 2.0, 2.0]).unwrap();
+    let spin = Motion::turn(Point3::new(5.0, 0.0, 0.0), Dir3::Z, deg(0.0), deg(-1080.0));
+    let carry = Motion::turn(Point3::ORIGIN, Dir3::Z, deg(0.0), deg(360.0));
+    not(bar.swept(&Motion::together(vec![spin, carry])), 155.132);
+}
+
+/// swept/rack-cut-tooth-space: the blank cut by a rack rolled along it is never a faceted cut
+/// (9042.5268, not 9042.5028).
+#[test]
+fn rack_roll_is_not_answered_faceted() {
+    let (d, a, b) = (-20.0 * std::f64::consts::FRAC_PI_3, 0.842856, 3.026666);
+    let tooth = Profile::polygon(&[[d - a, 18.0], [d + a, 18.0], [d + b, 24.0], [d - b, 24.0]]).unwrap();
+    let side = Frame::new([0.0, -2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).unwrap();
+    let rack = extrude(&side, &tooth, 10.0).unwrap();
+    let turn = Motion::turn(Point3::ORIGIN, Dir3::Y, deg(-60.0), deg(60.0));
+    let roll = Motion::together(vec![Motion::slide(Vec3::new(0.0, 0.0, -2.0 * d)), turn]);
+    let blank = cylinder(&Frame::along([0.0; 3], [0.0, 1.0, 0.0]).unwrap(), 22.0, 6.0).unwrap();
+    not(blank.cut_swept(&rack, &roll), 9042.5268);
 }

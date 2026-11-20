@@ -22,8 +22,10 @@ const SEAM_SLACK: f64 = 1e-9; // tol: parameter round-off on a seam, relative to
 /// springrep's `BSpline` stops at cubics; higher degrees go to its `NurbsCurve` (up to 15).
 const BSPLINE_MAX_DEGREE: usize = 3;
 
-/// The widest gap between an edge and its faces carried into springrep (cadrs's LOOP_GAP).
-const GAP_CAP: f64 = 1e-5; // tol: cadrs's LOOP_GAP, mm
+/// The widest gap between an edge and its faces carried into springrep, as that edge's own
+/// tolerance (springrep's checker then judges it): cadrs's own retry tolerance, which its blends on
+/// spline faces reach (~2e-5 mm, bench fillet/bezier-dome-one-edge). Wider is refused.
+const GAP_CAP: f64 = 1e-4; // tol: cadrs's widest boolean retry tolerance, mm (lead ruling)
 
 /// Samples per coedge when measuring how far cadrs's pcurves, curves and vertices stray apart.
 const GAP_SAMPLES: usize = 9;
@@ -205,6 +207,59 @@ fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) {
     }
 }
 
+/// The face's surface with its frame turned about its axis so that u = 0 is the lowest u its loops
+/// reach (springrep's place for a seam), and by how much u moved (the pcurves move by it too).
+fn seam_frame(s: &CSurface, body: &Body, f: &yack_cadrs::native::Face) -> (CSurface, f64) {
+    // The seam: an edge the face uses twice, at one u; its lower u becomes 0.
+    let seam = || {
+        let mut seen = BTreeMap::new();
+        for co in f.loops.iter().flatten() {
+            *seen.entry(co.edge).or_insert(0usize) += 1;
+        }
+        f.loops
+            .iter()
+            .flatten()
+            .filter(|co| seen.get(&co.edge).copied() == Some(2))
+            .filter_map(|co| {
+                let t = body.edges().get(co.edge)?.t;
+                let (a, b) = (co.pc.point(t[0]).x, co.pc.point(t[1]).x);
+                ((a - b).abs() <= SEAM_SLACK * std::f64::consts::TAU).then_some(a)
+            })
+            .fold(None, |m: Option<f64>, u| Some(m.map_or(u, |m| m.min(u))))
+    };
+    let low = || {
+        if let Some(u) = seam() {
+            return u;
+        }
+        f.loops
+            .iter()
+            .flatten()
+            .flat_map(|co| {
+                let t = body.edges().get(co.edge).map_or([0.0, 0.0], |e| e.t);
+                [t[0], 0.5 * (t[0] + t[1]), t[1]].map(|x| co.pc.point(x).x)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let turn = |fr: &CFrame| -> Option<(CFrame, f64)> {
+        let l = low();
+        if !l.is_finite() || l == 0.0 {
+            return None;
+        }
+        let (sn, cs) = l.sin_cos();
+        let x = fr.x * cs + fr.y * sn;
+        Some((CFrame { o: fr.o, x, y: fr.z.cross(&x), z: fr.z }, l))
+    };
+    match s {
+        CSurface::Cylinder { f: fr, r } => turn(fr).map_or((s.clone(), 0.0), |(f, l)| (CSurface::Cylinder { f, r: *r }, l)),
+        CSurface::Cone { f: fr, r, a } => turn(fr).map_or((s.clone(), 0.0), |(f, l)| (CSurface::Cone { f, r: *r, a: *a }, l)),
+        CSurface::Sphere { f: fr, r } => turn(fr).map_or((s.clone(), 0.0), |(f, l)| (CSurface::Sphere { f, r: *r }, l)),
+        CSurface::Torus { f: fr, rmaj, rmin } => {
+            turn(fr).map_or((s.clone(), 0.0), |(f, l)| (CSurface::Torus { f, rmaj: *rmaj, rmin: *rmin }, l))
+        }
+        other => (other.clone(), 0.0),
+    }
+}
+
 /// The springrep `Brep` of `body`, giving face `i` the names `names[i]` (none past its end).
 /// Vertices, edges and faces keep their indices. A body with an edge no face uses is refused
 /// here, since dropping it would renumber the edges after it; [`to_springrep_mapped`] takes it.
@@ -337,7 +392,10 @@ fn assemble(
     let mut faces = Vec::with_capacity(body.faces().len());
     let mut loops: Loops = Vec::with_capacity(body.faces().len());
     for (i, f) in body.faces().iter().enumerate() {
-        let id = bb.face(surface(&f.surf)?, !f.sense, names.get(i).cloned().unwrap_or_default().into_iter().collect());
+        // springrep keeps a revolved surface's seam at u = 0 of its frame (its ray caster relies on
+        // it); cadrs's frame may sit anywhere about the axis. Turn the frame to the face's lowest u.
+        let (surf, turn) = seam_frame(&f.surf, body, f);
+        let id = bb.face(surface(&surf)?, !f.sense, names.get(i).cloned().unwrap_or_default().into_iter().collect());
         let periods = closed_periods(&f.surf);
         let mut face_loops = Vec::with_capacity(f.loops.len());
         for (li, lp) in f.loops.iter().enumerate() {
@@ -355,7 +413,15 @@ fn assemble(
                     let p = co.pc.point(x);
                     Vec2::new(p.x, p.y)
                 };
-                uses.push(Uses { pc: pcurve(&co.pc, t, co.fwd), start: uv(ts), mid: uv(0.5 * (ts + te)), end: uv(te) });
+                let at = |x: f64| {
+                    let w = uv(x);
+                    Vec2::new(w.x - turn, w.y)
+                };
+                let pc = match pcurve(&co.pc, t, co.fwd) {
+                    PCurve::Affine { origin, dir } => PCurve::Affine { origin: Vec2::new(origin.x - turn, origin.y), dir },
+                    PCurve::Projected { seed } => PCurve::Projected { seed: Vec2::new(seed.x - turn, seed.y) },
+                };
+                uses.push(Uses { pc, start: at(ts), mid: at(0.5 * (ts + te)), end: at(te) });
                 ids.push((edge, !co.fwd));
             }
             normalise(&mut uses, periods);

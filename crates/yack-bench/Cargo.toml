@@ -18,8 +18,7 @@ yack = { path = "../yack" }
 
 [features]
 # `--roundtrip`: the engine-bridge round trip of each case (yack's tool-only `bakeoff` API, M1.9).
-# Becomes ["yack/bakeoff"] once yack declares that feature.
-bakeoff = []
+bakeoff = ["yack/bakeoff"]
 
 [lints]
 workspace = true

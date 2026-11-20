@@ -10,7 +10,7 @@
 //! fn build() -> Result<Solid> {
 //!     let block = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0])?;
 //!     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]])?;
-//!     block.difference(&sphere(&Frame::WORLD, 3.0)?.swept(&Motion::Along { path, law: FrameLaw::Fixed })?)
+//!     block.difference(&sphere(&Frame::WORLD, 3.0)?.swept(&Motion::along(path, FrameLaw::Fixed))?)
 //! }
 //! let grooved = build()?;
 //! assert!(grooved.volume() < 42.0 * 32.0 * 8.0);
@@ -37,7 +37,7 @@ mod solid;
 pub mod step;
 mod values;
 
-pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline3};
+pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3};
 pub use solid::Solid;
 pub use values::{
     CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh,
@@ -60,10 +60,10 @@ pub fn rad(r: f64) -> Angle {
 pub mod prelude {
     pub use crate::make::{
         block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab,
-        sphere, spindle_torus, sweep, sweep_path, torus,
+        sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_path, torus,
     };
     pub use crate::{
-        Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2,
+        Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2,
         Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
         rad,
     };

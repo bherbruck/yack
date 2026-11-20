@@ -160,8 +160,28 @@ pub fn crate_loc(ctx: &Ctx, krate: &str) -> Option<usize> {
     )
 }
 
+/// Non-blank Rust lines under `prefix`.
+fn loc_under(ctx: &Ctx, prefix: &str) -> usize {
+    ctx.tree
+        .files
+        .iter()
+        .filter(|(k, _)| k.starts_with(prefix) && k.ends_with(".rs"))
+        .map(|(_, t)| t.lines().filter(|l| !l.trim().is_empty()).count())
+        .sum()
+}
+
+/// The imported cadrs (`src/native/**`), which may only shrink: the ratcheted count.
+pub const CADRS_NATIVE: &str = "yack-cadrs/native";
+/// The facade glue (`src/facade/**` + `src/yack_glue.rs`), reported but allowed to grow until M4.
+pub const CADRS_GLUE: &str = "yack-cadrs/glue";
+
+/// yack-cadrs lines, split into the imported cadrs and the glue.
 pub fn cadrs_loc(ctx: &Ctx) -> BTreeMap<String, usize> {
-    crate_loc(ctx, "yack-cadrs").map(|n| ("yack-cadrs".to_string(), n)).into_iter().collect()
+    let Some(p) = ctx.tree.package("yack-cadrs") else { return BTreeMap::new() };
+    let src = format!("{}/src/", p.dir);
+    let native = loc_under(ctx, &format!("{src}native/"));
+    let glue = loc_under(ctx, &format!("{src}facade/")) + loc_under(ctx, &format!("{src}yack_glue.rs"));
+    BTreeMap::from([(CADRS_NATIVE.to_string(), native), (CADRS_GLUE.to_string(), glue)])
 }
 
 /// Gate 12: temporaries die by their milestone, and only the right crates lean on them.
@@ -188,12 +208,19 @@ pub fn temporaries(ctx: &Ctx, out: &mut Out) {
             }
         }
     }
+    // only the imported cadrs is ratcheted; the glue may grow until M4 and is reported
     let allowed = ctx.ratchet("cadrs-loc.txt");
-    for (k, now) in cadrs_loc(ctx) {
-        if let Some(&max) = allowed.get(&k)
-            && now > max
-        {
-            out.fail(format!("`{k}` grew to {now} lines; scores/cadrs-loc.txt allows {max}"));
+    let now = cadrs_loc(ctx);
+    if let Some(&n) = now.get(CADRS_NATIVE) {
+        match allowed.get(CADRS_NATIVE) {
+            Some(&max) if n > max => {
+                out.fail(format!("`{CADRS_NATIVE}` grew to {n} lines; scores/cadrs-loc.txt allows {max} (it may only shrink)"));
+            }
+            Some(&max) => out.note(format!("`{CADRS_NATIVE}`: {n} lines (ratchet {max})")),
+            None => out.note(format!("`{CADRS_NATIVE}`: {n} lines (no ratchet yet; `gate --bless` records it)")),
         }
+    }
+    if let Some(&g) = now.get(CADRS_GLUE) {
+        out.note(format!("`{CADRS_GLUE}`: {g} lines (not ratcheted until M4)"));
     }
 }

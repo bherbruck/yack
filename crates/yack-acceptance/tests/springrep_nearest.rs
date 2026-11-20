@@ -1,10 +1,11 @@
 // yack: the point of a solid's boundary nearest a point, against closed forms.
 // Adapted from springrep@a03e8a1 tests/nearest.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: springrep API replaced by the yack public API (PLAN §4.3); Nearest::boundary(..).to(p)
-// becomes Solid::closest(&[p]) (the nearest boundary point, as yack documents it), with the distance
-// read as |closest − p|; edit::affine is Solid::transform_affine(&Affine::from_rows(..)) and the
-// map's own point images are computed from its rows; Nearest::solid and a face-restricted
-// Nearest::of are API gaps.
+// Changes: springrep API replaced by the yack public API (PLAN §4.3); Nearest::boundary(..).to(p) is
+// Solid::nearest_face(p) (the distance) then FaceRef::closest(p) on that face (the point);
+// Nearest::solid(..).to(p) is Solid::closest(&[p]) (insides counted), its distance read as
+// |closest − p|; Nearest::of(Selection::face(f)) is FaceRef::closest; edit::affine is
+// Solid::transform_affine(&Affine::from_rows(..)) and the map's own point images are computed from
+// its rows.
 
 use yack::prelude::*;
 
@@ -30,9 +31,16 @@ fn assert_near(got: f64, want: f64, what: &str) {
     assert!((got - want).abs() <= 1e-9 * (1.0 + want), "{what}: {got} against {want}");
 }
 
-/// The boundary point of `b` nearest `p`.
-fn nearest(b: &Solid, p: Point3) -> Point3 {
-    b.closest(&[p]).unwrap()[0]
+/// The boundary of `b` nearest `p`: `(distance, point)`.
+fn boundary(b: &Solid, p: Point3) -> (f64, Point3) {
+    let (face, distance) = b.nearest_face(p).unwrap();
+    (distance, b.face(face).unwrap().closest(p).unwrap())
+}
+
+/// The solid `b`, insides counted, nearest `p`: `(distance, point)`.
+fn solid(b: &Solid, p: Point3) -> (f64, Point3) {
+    let on = b.closest(&[p]).unwrap()[0];
+    (on.distance(p), on)
 }
 
 #[test]
@@ -46,15 +54,15 @@ fn the_nearest_point_of_a_ball_lies_along_the_radius() {
         if from_centre < 1e-3 {
             continue;
         }
-        let on_b = nearest(&b, p);
-        assert_near(on_b.distance(p), (from_centre - 2.0).abs(), "distance");
+        let (distance, on_b) = boundary(&b, p);
+        assert_near(distance, (from_centre - 2.0).abs(), "distance");
         let foot = c + (p - c) * (2.0 / from_centre);
         assert!(on_b.distance(foot) < 1e-7, "{p:?}: {on_b:?}");
     }
     // Along the ball's own axis, through its poles.
     for z in [3.0, 2.5, 1.0, -1.0, -3.5] {
         let p = c + Vec3::new(0.0, 0.0, 1.0) * z;
-        assert_near(nearest(&b, p).distance(p), (z.abs() - 2.0).abs(), "on the axis");
+        assert_near(boundary(&b, p).0, (z.abs() - 2.0).abs(), "on the axis");
     }
 }
 
@@ -75,9 +83,8 @@ fn the_nearest_point_of_a_block_is_on_a_face_an_edge_or_a_corner() {
             let clamped = [0, 1, 2].map(|k| q[k].clamp(0.0, size[k]));
             p.distance(Point3::from(clamped))
         };
-        let on_b = nearest(&b, p);
-        // yack gives the point and the distance is read from it, so the original's two checks
-        // (the distance, and the point given that far away) are this one.
+        let (distance, on_b) = boundary(&b, p);
+        assert_near(distance, want, "distance");
         assert_near(on_b.distance(p), want, "the point given");
     }
 }
@@ -92,7 +99,7 @@ fn the_nearest_point_of_a_cylinder_is_on_its_side_an_end_or_a_rim() {
         let rho = p.x.hypot(p.y);
         let (dr, dz) = (rho - r, (-p.z).max(p.z - h));
         let want = if dr <= 0.0 && dz <= 0.0 { (-dr).min(-dz) } else { dr.max(0.0).hypot(dz.max(0.0)) };
-        assert_near(nearest(&b, p).distance(p), want, "distance");
+        assert_near(boundary(&b, p).0, want, "distance");
     }
 }
 
@@ -104,7 +111,7 @@ fn the_nearest_point_of_a_torus_is_on_its_tube() {
     for _ in 0..300 {
         let p = Point3::ORIGIN + seq.within([-5.0, -5.0, -2.0], [5.0, 5.0, 2.0]);
         let from_tube = (p.x.hypot(p.y) - major).hypot(p.z);
-        assert_near(nearest(&b, p).distance(p), (from_tube - minor).abs(), "distance");
+        assert_near(boundary(&b, p).0, (from_tube - minor).abs(), "distance");
     }
 }
 
@@ -124,7 +131,7 @@ fn the_nearest_point_of_a_cone_is_on_its_side_its_base_or_its_rim() {
         let p = Point3::ORIGIN + seq.within([-3.0, -3.0, -1.0], [3.0, 3.0, 4.0]);
         let rho = p.x.hypot(p.y);
         let want = to_segment(rho, p.z, (0.0, 0.0), (r, 0.0)).min(to_segment(rho, p.z, (r, 0.0), (0.0, h)));
-        assert_near(nearest(&b, p).distance(p), want, "distance");
+        assert_near(boundary(&b, p).0, want, "distance");
     }
 }
 
@@ -146,7 +153,7 @@ fn the_nearest_point_of_a_stretched_ball_is_found_at_its_poles_as_elsewhere() {
             let (la, lo) = (lat.to_radians(), lon.to_radians());
             let local = Vec3::new(la.cos() * lo.cos(), la.cos() * lo.sin(), la.sin());
             let on = image(c + local * r);
-            let d = nearest(&b, on).distance(on);
+            let d = boundary(&b, on).0;
             assert!(d < 1e-9, "lat {lat} lon {lon}: {d}");
         }
     }
@@ -156,11 +163,15 @@ fn the_nearest_point_of_a_stretched_ball_is_found_at_its_poles_as_elsewhere() {
 fn the_nearest_point_of_a_solid_to_a_point_it_holds_is_the_point() {
     let b = block(&Frame::WORLD, [4.0, 3.0, 2.0]).unwrap();
     let inside = Point3::new(1.0, 2.0, 0.5);
-    // API GAP: no nearest-point-of-the-solid query (insides counted, springrep Nearest::solid);
-    // the checks that the point held is its own nearest at distance 0, and that (6, 1, 1) is 2 from
-    // (4, 1, 1), are dropped.
+    let (distance, on_b) = solid(&b, inside);
+    assert!(distance == 0.0 && on_b.distance(inside) < 1e-12);
+    // Outside, the solid's nearest point is its boundary's.
+    let out = Point3::new(6.0, 1.0, 1.0);
+    let (distance, on_b) = solid(&b, out);
+    assert_near(distance, 2.0, "outside");
+    assert!(on_b.distance(Point3::new(4.0, 1.0, 1.0)) < 1e-9);
     // The boundary alone is half a millimetre from the point inside.
-    assert_near(nearest(&b, inside).distance(inside), 0.5, "to the boundary");
+    assert_near(boundary(&b, inside).0, 0.5, "to the boundary");
 }
 
 #[test]
@@ -169,18 +180,29 @@ fn the_nearest_point_of_a_rim_is_found_either_side_of_where_the_rim_closes() {
     // the cylinder a hair to either side of that point are nearest the rim just past it.
     let (r, h) = (2.0, 5.0);
     let b = cylinder(&Frame::WORLD, r, h).unwrap();
-    // API GAP: the original runs this for Nearest::boundary and Nearest::solid; only the boundary
-    // query exists in §4.3.
-    for y in [0.021, -0.021, 0.3, -0.3, 1e-4, -1e-4, 0.0] {
-        let q = Point3::new(3.2, y, 7.2);
-        let rho = q.x.hypot(q.y);
-        let on_b = nearest(&b, q);
-        assert_near(on_b.distance(q), (rho - r).hypot(q.z - h), "distance");
-        let foot = Point3::new(r * q.x / rho, r * q.y / rho, h);
-        assert!(on_b.distance(foot) < 1e-7, "y {y}: {on_b:?}");
+    for nearest in [boundary as fn(&Solid, Point3) -> (f64, Point3), solid] {
+        for y in [0.021, -0.021, 0.3, -0.3, 1e-4, -1e-4, 0.0] {
+            let q = Point3::new(3.2, y, 7.2);
+            let rho = q.x.hypot(q.y);
+            let (distance, on_b) = nearest(&b, q);
+            assert_near(distance, (rho - r).hypot(q.z - h), "distance");
+            let foot = Point3::new(r * q.x / rho, r * q.y / rho, h);
+            assert!(on_b.distance(foot) < 1e-7, "y {y}: {on_b:?}");
+        }
     }
 }
 
-// API GAP (test the_nearest_point_of_one_face_ignores_the_rest_of_the_solid omitted): the nearest
-// point of one face of a solid needs a face-restricted closest (springrep Nearest::of with
-// Selection::face); Solid::closest covers the whole boundary.
+#[test]
+fn the_nearest_point_of_one_face_ignores_the_rest_of_the_solid() {
+    // A 20 × 20 × 10 block with a corner at the origin. From (25, 10, 12), 5 past its side and 2
+    // above it,
+    // the top face's nearest point is on its edge, √29 away; the bottom face's is √(25 + 144).
+    let b = block(&Frame::WORLD, [20.0, 20.0, 10.0]).unwrap();
+    let face = |z: f64| b.faces_where(|f| (f.centroid().z - z).abs() < 1e-9)[0];
+    let p = Point3::new(25.0, 10.0, 12.0);
+    for (z, want) in [(10.0, 29f64.sqrt()), (0.0, 169f64.sqrt())] {
+        let on_b = b.face(face(z)).unwrap().closest(p).unwrap();
+        assert_near(on_b.distance(p), want, "one face");
+        assert_near(on_b.z, z, "on that face");
+    }
+}

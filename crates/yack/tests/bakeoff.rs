@@ -13,7 +13,7 @@ fn a_forced_engine_holds_through_an_op_that_fans_out() {
     assert_eq!(a.union(&b).unwrap().strategy(), "cadrs");
     assert_eq!(a.difference(&b).unwrap().strategy(), "cadrs");
     force(Engine::Springrep);
-    assert_eq!(a.swept(&Motion::Slide { by: [1.0, 0.0, 0.0].into() }).unwrap_err().kind, ErrorKind::Unsupported);
+    assert_eq!(a.swept(&Motion::slide([1.0, 0.0, 0.0])).unwrap_err().kind, ErrorKind::Unsupported);
     assert_eq!(a.union(&b).unwrap().strategy(), "springrep");
     force(Engine::Both);
 }

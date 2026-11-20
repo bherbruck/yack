@@ -20,6 +20,10 @@ pub const AGREE: f64 = 1e-9; // tol: one integrator over one exact solid, twice
 /// the bench, MAPPING.md §5).
 pub const CADRS_AGREE: f64 = 1e-5; // tol: two engines' quadratures of one exact solid (lead ruling)
 
+/// How far, relative, an edge's ends may move across the bridge (a conic re-parametrised still
+/// starts and ends at the same points, to rounding).
+const ENDS_AGREE: f64 = 1e-9; // tol: the same point evaluated by two curve forms
+
 /// Sample points per axis of the classify grid.
 const GRID: usize = 7;
 
@@ -129,7 +133,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
         let (ca, cb) = (ce.curve.point(ce.t[0]), ce.curve.point(ce.t[1]));
         let off = (a.x - ca.x).abs().max((a.y - ca.y).abs()).max((a.z - ca.z).abs())
             .max((b.x - cb.x).abs().max((b.y - cb.y).abs()).max((b.z - cb.z).abs()));
-        if !(off <= 1e-9 * (1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs()))) {
+        if !(off <= ENDS_AGREE * (1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs()))) {
             say(format!("order: edge {} ends moved by {off:.1e}", e.index()));
         }
     }

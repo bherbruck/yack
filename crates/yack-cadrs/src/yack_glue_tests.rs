@@ -1,0 +1,511 @@
+// yack: tests of the glue the yack facade calls (yack_glue.rs).
+use super::*;
+use crate::Pick;
+use nalgebra::Point3;
+
+fn cube(k: &mut DefaultKernel) -> BodyId {
+    k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(10.0, 10.0, 10.0) })
+        .and_then(|r| r.first())
+        .unwrap()
+}
+
+/// A plate drilled through with a hole of radius `rad` at `c`, and its top rim's edges.
+fn drilled(k: &mut DefaultKernel, size: [f64; 3], c: [f64; 2], rad: f64) -> (BodyId, Vec<u64>) {
+    let plate = k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(size[0], size[1], size[2]) }).and_then(|r| r.first()).unwrap();
+    let hole = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(c[0], c[1], -1.0),
+            axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+            radius: rad,
+            height: size[2] + 2.0,
+        })
+        .and_then(|r| r.first())
+        .unwrap();
+    let (d, _) = boolean(k, crate::BoolOp::Subtract, plate, &[hole]).unwrap();
+    let rim = k
+        .edges(d)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.mid.z - size[2]).abs() < 1e-9 && ((e.mid.x - c[0]).hypot(e.mid.y - c[1]) - rad).abs() < 1e-6)
+        .map(|e| e.id.0)
+        .collect();
+    (d, rim)
+}
+
+#[test]
+fn a_rim_round_that_runs_off_the_plate_is_declined() {
+    // brep-conformance seed 2 chain-rim-after-cut-2ee7ef: the round's outer edge (radius 4.75
+    // about (4.73, 4.32)) crosses the plate's sides x = 0 and y = 0.
+    let mut k = DefaultKernel::new();
+    let size = [10.875072829244813, 10.544234942431189, 5.669455797435571];
+    let (d, rim) = drilled(&mut k, size, [4.726518256981529, 4.317994990440217], 3.428784132901775);
+    assert!(!rim.is_empty());
+    assert!(fillet(&mut k, d, &rim[..1], 1.3217145850745369).is_err());
+    assert!(chamfer(&mut k, d, &rim[..1], 1.3217145850745369).is_err());
+    // One that stays on the top: Pappus (section (1 - pi/4) r^2, its centroid at
+    // rad + r (10 - 3 pi) / (12 - 3 pi) from the axis).
+    let (r, rad) = (0.5, 3.428784132901775);
+    let (f, _) = fillet(&mut k, d, &rim[..1], r).unwrap();
+    let v0 = k.mass_properties(d).unwrap().volume;
+    let pi = std::f64::consts::PI;
+    let cut = 2.0 * pi * (rad + r * (10.0 - 3.0 * pi) / (12.0 - 3.0 * pi)) * (1.0 - pi / 4.0) * r * r;
+    assert!((k.mass_properties(f).unwrap().volume - (v0 - cut)).abs() < 1e-6);
+    assert!(chamfer(&mut k, d, &rim[..1], r).is_ok());
+}
+
+#[test]
+fn edge_rounds_meeting_their_end_faces_fit() {
+    let mut k = DefaultKernel::new();
+    let b = cube(&mut k);
+    assert!(fillet(&mut k, b, &[0], 2.0).is_ok());
+    let all: Vec<u64> = (0..k.edges(b).unwrap().len() as u64).collect();
+    assert!(fillet(&mut k, b, &all, 2.0).is_ok());
+    assert!(chamfer(&mut k, b, &[0], 2.0).is_ok());
+}
+
+#[test]
+fn a_ball_screwed_three_turns_is_a_round_ended_pipe() {
+    // brep-bench sweep/helical-pipe-round-ends: pi r^2 L + 4/3 pi r^3 with L the helix's length.
+    let mut k = DefaultKernel::new();
+    let ball = k.primitive(&Primitive::Sphere { center: Point3::new(10.0, 0.0, 0.0), radius: 1.0, axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), seam: nalgebra::Unit::new_normalize(Vector3::new(1.0, 0.0, 0.0)) }).and_then(|r| r.first()).unwrap();
+    let tau = std::f64::consts::TAU;
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 3.0 * tau, rise_per_turn: 5.0 };
+    let (s, _) = swept(&mut k, ball, &m).unwrap();
+    let pi = std::f64::consts::PI;
+    let len = 3.0 * (tau * 10.0).hypot(5.0);
+    let want = pi * len + 4.0 / 3.0 * pi;
+    let v = k.mass_properties(s).unwrap().volume;
+    assert!((v - want).abs() < 1e-6 * want, "{v} against {want}");
+}
+
+#[test]
+fn a_screwed_torus_cuts_whole_and_exactly() {
+    // brep-bench swept/torus-screwed-through-rod: cadrs's runner 1460.6300023677913 (4 faces).
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(0.0, 0.0, 0.0),
+            axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+            radius: 5.0,
+            height: 20.0,
+        })
+        .and_then(|r| r.first())
+        .unwrap();
+    let h = (std::f64::consts::TAU * 5.5 / 30.0).atan();
+    let (s, c) = (-108f64).to_radians().sin_cos();
+    let rot = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
+    let centre = rot([11.5, 0.0, 0.0]);
+    let (wheel, _) = torus(&mut k, [centre[0], centre[1], -9.0], rot([0.0, h.cos(), -h.sin()]), 6.0, 2.0).unwrap();
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 456f64.to_radians(), rise_per_turn: 30.0 };
+    let (out, _) = cut_swept(&mut k, rod, wheel, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1460.6300023677913).abs() < 1e-6 * v, "{v}");
+    assert!(k.get(out).unwrap().faces.len() <= 10);
+}
+
+#[test]
+fn a_v_wheel_screwed_through_a_rod_cuts_exactly() {
+    // brep-bench swept/v-wheel-screwed-through-rod: cadrs's runner 1554.3809661193923.
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(0.0, 0.0, 0.0),
+            axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+            radius: 5.0,
+            height: 20.0,
+        })
+        .and_then(|r| r.first())
+        .unwrap();
+    let h = (std::f64::consts::TAU * 4.5 / 30.0).atan();
+    let along = Vector3::new(0.0, h.cos(), -h.sin());
+    let centre = Point3::new(14.0, 0.0, 0.0);
+    let x = Vector3::new(-1.0, 0.0, 0.0);
+    let on = crate::Plane::new(centre, x, x.cross(&along));
+    let w = 2.5 * 30f64.to_radians().tan();
+    let section = crate::Profile::of(on, vec![crate::Loop::polygon(&[[10.0, 0.0], [7.5, w], [7.5, -w]])]);
+    let wheel = k.revolve(&section, Axis::new(centre, along), std::f64::consts::TAU).and_then(|r| r.first()).unwrap();
+    // cadrs's runner turns it from -144 degrees: placed there first.
+    let start = crate::facade::motion::end_motion(&Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: (-144f64).to_radians(), rise_per_turn: 30.0 }).unwrap();
+    let wheel = k.transform_motion(wheel, &start).and_then(|r| r.first()).unwrap();
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 528f64.to_radians(), rise_per_turn: 30.0 };
+    let (out, _) = cut_swept(&mut k, rod, wheel, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1554.3809661193923).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_key_carried_along_an_s_shaped_spline() {
+    // brep-bench swept/key-carried-along-a-spline: cadrs's runner 10652.879989210425. The
+    // S-shaped control polygon encloses no area, yet the path is planar.
+    let mut k = DefaultKernel::new();
+    let ctrl = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]];
+    assert_eq!(plane_normal(&ctrl, 1e-9), Some([0.0, 0.0, 1.0]));
+    let block = |k: &mut DefaultKernel, a: [f64; 3], b: [f64; 3]| {
+        k.primitive(&Primitive::Box { min: p3(a), max: p3(b) }).and_then(|r| r.first()).unwrap()
+    };
+    let plate = block(&mut k, [-6.0, -6.0, -8.0], [36.0, 26.0, 0.0]);
+    let key = block(&mut k, [-1.5, -0.8, -1.5], [1.5, 0.8, 2.5]);
+    assert!(along_up(&k, key, &ctrl, true, 1e-9).is_err());
+    let up = along_up(&k, key, &ctrl, false, 1e-9).unwrap();
+    let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+    let m = Move::Along { degree: 3, knots: &knots, ctrl: &ctrl, up };
+    let (out, _) = cut_swept(&mut k, plate, key, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 10652.879989210425).abs() < 1e-6 * v, "{v}");
+    // A post on its own axis at the path's start: a fixed frame is the same motion.
+    let post = k
+        .primitive(&Primitive::Cylinder { base: Point3::new(0.0, 0.0, -1.5), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), radius: 1.0, height: 3.0 })
+        .and_then(|r| r.first())
+        .unwrap();
+    assert_eq!(along_up(&k, post, &ctrl, true, 1e-9).unwrap(), [0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn a_square_thread_at_a_growing_lead() {
+    // brep-bench swept/square-thread-at-a-growing-lead: cadrs's runner 1324.4782675300098,
+    // its rise 6/(2 pi) θ + 0.3/(4 pi^2) θ^2 in the absolute angle, from -90 to 1260 degrees.
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::Cylinder { base: Point3::new(0.0, 0.0, 0.0), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), radius: 5.0, height: 20.0 })
+        .and_then(|r| r.first())
+        .unwrap();
+    let bar = k.primitive(&Primitive::Box { min: Point3::new(4.0, -8.0, -1.0), max: Point3::new(12.0, 8.0, 1.0) }).and_then(|r| r.first()).unwrap();
+    let pi = std::f64::consts::PI;
+    let (a1, a2, f) = (6.0 / (2.0 * pi), 0.3 / (4.0 * pi * pi), (-90f64).to_radians());
+    // The same rise in θ - from.
+    let rise = [a1 * f + a2 * f * f, a1 + 2.0 * a2 * f, a2];
+    assert!((absolute_rise(&rise, f)[1] - a1).abs() < 1e-12 && (absolute_rise(&rise, f)[2] - a2).abs() < 1e-12);
+    assert!(absolute_rise(&rise, f)[0].abs() < 1e-12);
+    let m = Move::Climb { point: [0.0; 3], axis: [0.0, 0.0, 1.0], from: f, to: 1260f64.to_radians(), rise: &rise };
+    let (out, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1324.4782675300098).abs() < 1e-6 * v, "{v}");
+    // A constant lead from a nonzero angle is a screw: the same cut as Move::Screw placed there.
+    let screw = |k: &mut DefaultKernel, m: &Move| {
+        let bar = k.primitive(&Primitive::Box { min: Point3::new(4.0, -1.0, -1.0), max: Point3::new(12.0, 1.0, 1.0) }).and_then(|r| r.first()).unwrap();
+        let (o, _) = cut_swept(k, rod, bar, std::slice::from_ref(m)).unwrap();
+        k.mass_properties(o).unwrap().volume
+    };
+    let steady = [a1 * f, a1];
+    let v1 = screw(&mut k, &Move::Climb { point: [0.0; 3], axis: [0.0, 0.0, 1.0], from: f, to: 2.0 * pi, rise: &steady });
+    assert!(v1 > 0.0 && v1 < 500.0 * pi);
+}
+
+#[test]
+fn a_ball_end_mill_raster_is_cut_a_row_at_a_time() {
+    // brep-bench cnc/ball-end-surface-raster: 944 slides; cadrs's runner 119999.9438120307.
+    use crate::facade::profile::{revolve, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let pi = std::f64::consts::PI;
+    let f = |x: f64, y: f64| -5.0 + 4.0 * (pi * x / 50.0).sin() * (pi * y / 40.0).sin();
+    let mut points = vec![[-5.0, 0.0, 5.0]];
+    for j in 0..=40 {
+        let y = 2.0 * f64::from(j);
+        let along: Vec<i32> = if j % 2 == 0 { (0..=22).collect() } else { (0..=22).rev().collect() };
+        points.extend(along.into_iter().map(|i| [-5.0 + 5.0 * f64::from(i), y, f(-5.0 + 5.0 * f64::from(i), y)]));
+    }
+    points.push([-5.0, 80.0, 5.0]);
+    let moves: Vec<Move> = points.windows(2).map(|w| Move::Slide { by: [w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]] }).collect();
+    let side = [
+        Seg::Arc { center: [0.0, 3.0], radius: 3.0, start: -pi / 2.0, sweep: pi / 2.0 },
+        Seg::Line { a: [3.0, 3.0], b: [3.0, 30.0] },
+        Seg::Line { a: [3.0, 30.0], b: [0.0, 30.0] },
+        Seg::Line { a: [0.0, 30.0], b: [0.0, 0.0] },
+    ];
+    let at = Place { origin: [-5.0, 0.0, 5.0], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (mill, _) = revolve(&mut k, &at, &[&side], 2.0 * pi).unwrap();
+    let stock = k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, -20.0), max: Point3::new(100.0, 80.0, 0.0) }).and_then(|r| r.first()).unwrap();
+    let (out, _) = cut_swept(&mut k, stock, mill, &moves).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 119999.9438120307).abs() < 1e-6 * v, "{v}");
+}
+
+/// The L-block of brep-bench's `*/l-block-inside-consumed` (its inside corner edge along x at
+/// (·, 3, 3)) and that edge.
+fn l_block(k: &mut DefaultKernel) -> (BodyId, u64) {
+    use crate::facade::profile::{extrude, Place, Seg};
+    let p = [[0.0, 0.0], [10.0, 0.0], [10.0, 3.0], [3.0, 3.0], [3.0, 10.0], [0.0, 10.0]];
+    let segs: Vec<Seg> = (0..6).map(|i| Seg::Line { a: p[i], b: p[(i + 1) % 6] }).collect();
+    let at = Place { origin: [0.0; 3], x: [0.0, 0.0, 1.0], y: [1.0, 0.0, 0.0], z: [0.0, 1.0, 0.0] };
+    let (b, _) = extrude(k, &at, &[&segs], 10.0).unwrap();
+    let e = k.edge_at(b, Point3::new(3.0, 5.0, 3.0)).unwrap();
+    (b, e.0)
+}
+
+#[test]
+fn a_blend_that_swallows_a_face_fits() {
+    // brep-bench chamfer/ and fillet/l-block-inside-consumed: the 7 mm blend of the inside
+    // corner swallows the 3 mm walls beside it and meets the faces past them (cadrs's 755 and
+    // 615.1549, as bakeoff7).
+    let mut k = DefaultKernel::new();
+    let (b, e) = l_block(&mut k);
+    let (c, _) = chamfer(&mut k, b, &[e], 7.0).unwrap();
+    assert!((k.mass_properties(c).unwrap().volume - 755.0).abs() < 1e-6);
+    let (f, _) = fillet(&mut k, b, &[e], 7.0).unwrap();
+    assert!((k.mass_properties(f).unwrap().volume - 615.1549).abs() < 1e-3);
+}
+
+#[test]
+fn an_octahedron_chamfered_edge_by_edge_fits() {
+    // brep-bench chamfer/octahedron-all-edges-mitered: each bevel's ends run past the short
+    // edges a truncated corner leaves, onto the faces there (cadrs's 981.33, as bakeoff7).
+    use crate::facade::profile::{extrude, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let d = [[10.0, 0.0], [0.0, 10.0], [-10.0, 0.0], [0.0, -10.0]];
+    let segs: Vec<Seg> = (0..4).map(|i| Seg::Line { a: d[i], b: d[(i + 1) % 4] }).collect();
+    let at = Place { origin: [0.0, 0.0, -10.0], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (mut b, _) = extrude(&mut k, &at, &[&segs], 20.0).unwrap();
+    for i in 0..8 {
+        let n = [1, 2, 4].map(|bit| if i & bit == 0 { 1.0 } else { -1.0 });
+        b = split(&mut k, b, n.map(|c| c * 10.0 / 3.0), n).unwrap().1.unwrap().0;
+    }
+    let mids: Vec<Point3<f64>> = k.edges(b).unwrap().iter().map(|e| e.mid).collect();
+    for p in mids {
+        let e = k.edge_at(b, p).unwrap();
+        b = chamfer(&mut k, b, &[e.0], 6f64.sqrt()).unwrap().0;
+    }
+    let v = k.mass_properties(b).unwrap().volume;
+    assert!((v - 981.33).abs() < 5e-3, "{v}");
+}
+
+#[test]
+fn a_spline_bar_screwed_through_a_rod_cuts_exactly() {
+    // brep-bench swept/spline-bar-screwed-through-rod (yack's case, its loop starting at the
+    // point nearest the screw's axis): cadrs's runner 1335.3195911687133. The loop's seam is
+    // put at its farthest point, which the trim takes away.
+    use crate::facade::profile::{extrude, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::Cylinder { base: Point3::new(0.0, 0.0, 0.0), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), radius: 5.0, height: 20.0 })
+        .and_then(|r| r.first())
+        .unwrap();
+    let c = [[3.5, 0.0], [4.5, -1.5], [8.0, -1.5], [12.0, -1.0], [12.0, 1.0], [8.0, 1.5], [4.5, 1.5]];
+    let ctrl: Vec<[f64; 2]> = c.iter().chain(c.iter().take(3)).copied().collect();
+    let knots: Vec<f64> = (0..14).map(f64::from).collect();
+    let seg = [Seg::Periodic { degree: 3, knots: &knots, ctrl: &ctrl }];
+    let at = Place { origin: [8.0, 0.0, -1.5], x: [0.0, -1.0, 0.0], y: [0.0, 0.0, 1.0], z: [-1.0, 0.0, 0.0] };
+    let (bar, _) = extrude(&mut k, &at, &[&seg], 16.0).unwrap();
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 1440f64.to_radians(), rise_per_turn: 6.0 };
+    let (out, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 1335.3195911687133).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_split_sorts_its_sides() {
+    let mut k = DefaultKernel::new();
+    let b = cube(&mut k);
+    let (front, back) = split(&mut k, b, [0.0, 0.0, 4.0], [0.0, 0.0, 1.0]).unwrap();
+    let v = |k: &DefaultKernel, m: Option<Made>| k.mass_properties(m.unwrap().0).unwrap().volume;
+    assert!((v(&k, front) - 600.0).abs() < 1e-9);
+    assert!((v(&k, back) - 400.0).abs() < 1e-9);
+    let (front, back) = split(&mut k, b, [0.0, 0.0, 20.0], [0.0, 0.0, 1.0]).unwrap_or((None, None));
+    assert!(front.is_none() || back.is_none());
+}
+
+#[test]
+fn a_chamfer_of_every_edge_cuts_its_corners_flat() {
+    let mut k = DefaultKernel::new();
+    let b = cube(&mut k);
+    let all: Vec<u64> = (0..k.edges(b).unwrap().len() as u64).collect();
+    let (c, _) = chamfer(&mut k, b, &all, 1.0).unwrap();
+    // 6 faces, 12 bevels, 8 flat corner triangles (as cadrs's runner's Flat corners).
+    assert_eq!(k.get(c).unwrap().faces.len(), 26);
+}
+
+#[test]
+fn a_shell_is_sharp_and_a_rounded_shell_rounds() {
+    let mut k = DefaultKernel::new();
+    let b = cube(&mut k);
+    let top = k.face_at(b, Point3::new(5.0, 5.0, 10.0)).unwrap().0;
+    let (s, _) = shell(&mut k, b, &[top], 1.0, true).unwrap();
+    // Sharp outward: the 12 × 12 × 11 box less the 10 × 10 × 10 cavity, open at the top.
+    let v = k.mass_properties(s).unwrap().volume;
+    assert!((v - (12.0 * 12.0 * 11.0 - 1000.0)).abs() < 1e-6, "{v}");
+    let (r, _) = shell_rounded(&mut k, b, &[top], 1.0, true).unwrap();
+    assert!(k.mass_properties(r).unwrap().volume < v);
+}
+
+#[test]
+fn a_fillet_takes_the_whole_tangent_chain() {
+    let mut k = DefaultKernel::new();
+    let b = k
+        .primitive(&Primitive::cylinder(Point3::origin(), nalgebra::Vector3::z(), 5.0, 10.0))
+        .and_then(|r| r.first())
+        .unwrap();
+    let rim = k.edge_at(b, Point3::new(5.0, 0.0, 10.0)).unwrap().0;
+    let chain = chained(&k, b, &[rim]).unwrap();
+    assert!(chain.iter().all(|&(_, n)| n == 0) && chain.iter().any(|&(e, _)| e == rim));
+    assert!(fillet(&mut k, b, &[rim], 1.0).is_ok());
+}
+
+#[test]
+fn primitives_land_in_their_frame_with_caps_named() {
+    let mut k = DefaultKernel::new();
+    // A frame at (10, 0, 0) turned a quarter about z: its x is world y.
+    let frame = &crate::facade::profile::Place { origin: [10.0, 0.0, 0.0], x: [0.0, 1.0, 0.0], y: [-1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (b, h) = primitive(&mut k, frame, Prim::Block { size: [4.0, 2.0, 3.0] }).unwrap();
+    let m = k.mass_properties(b).unwrap();
+    assert!((m.volume - 24.0).abs() < 1e-9);
+    // Centre: origin + 2 x + 1 y + 1.5 z = (10 - 1, 2, 1.5).
+    assert!((m.center_of_mass - Point3::new(9.0, 2.0, 1.5)).norm() < 1e-9, "{:?}", m.center_of_mass);
+    let caps = |h: &History| {
+        (
+            h.generated.iter().filter(|(_, o)| matches!(o, Origin::StartCap { .. })).count(),
+            h.generated.iter().filter(|(_, o)| matches!(o, Origin::EndCap { .. })).count(),
+        )
+    };
+    assert_eq!(caps(&h), (1, 1));
+    assert_eq!(h.generated.len(), 6);
+    let (c, h) = primitive(&mut k, frame, Prim::Cone { bottom: 3.0, top: 1.0, height: 2.0 }).unwrap();
+    let v = k.mass_properties(c).unwrap().volume;
+    assert!((v - std::f64::consts::PI * 2.0 / 3.0 * (9.0 + 3.0 + 1.0)).abs() < 1e-9, "{v}");
+    assert_eq!(caps(&h), (1, 1));
+    let (s, h) = primitive(&mut k, frame, Prim::Sphere { radius: 2.0 }).unwrap();
+    assert!((k.mass_properties(s).unwrap().center_of_mass - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-9);
+    assert!(h.generated.iter().all(|(_, o)| matches!(o, Origin::ProfileCurve { curve: 5, .. })));
+    let (cy, h) = primitive(&mut k, frame, Prim::Cylinder { radius: 1.0, height: 5.0 }).unwrap();
+    assert!((k.mass_properties(cy).unwrap().volume - 5.0 * std::f64::consts::PI).abs() < 1e-9);
+    assert_eq!(caps(&h), (1, 1));
+}
+
+#[test]
+fn a_fine_thread_is_cut_in_time() {
+    let mut k = DefaultKernel::new();
+    let rod = k
+        .primitive(&Primitive::cylinder(Point3::origin(), nalgebra::Vector3::z(), 5.0, 20.0))
+        .and_then(|r| r.first())
+        .unwrap();
+    let bar = k
+        .primitive(&Primitive::Box { min: Point3::new(4.5, -8.0, -0.45), max: Point3::new(12.0, 8.0, 0.45) })
+        .and_then(|r| r.first())
+        .unwrap();
+    // Three turns (the bench case's 21 take seconds; this test stays quick).
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 3.0 * std::f64::consts::TAU, rise_per_turn: 1.0 };
+    let (cut, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!(v > 0.0 && v < 500.0 * std::f64::consts::PI, "{v}");
+    assert!(!faceted(&k, cut).unwrap());
+}
+
+#[test]
+fn a_pin_swung_through_a_ring_sector_cuts_exactly() {
+    let mut k = DefaultKernel::new();
+    let spec = crate::CylindricalBox {
+        frame: crate::Plane::new(Point3::new(0.0, 0.0, -1.0), nalgebra::Vector3::x(), nalgebra::Vector3::z()),
+        length: 2.0,
+        inner_radius: 8.0,
+        outer_radius: 12.0,
+        start_angle: 0.0,
+        end_angle: 60f64.to_radians(),
+    };
+    let block = k.cylindrical_box(&spec).and_then(|r| r.first()).unwrap();
+    let pin = k
+        .primitive(&Primitive::cylinder(Point3::new(6.0, 0.0, 0.0), nalgebra::Vector3::x(), 0.5, 5.0))
+        .and_then(|r| r.first())
+        .unwrap();
+    let start = k.transform_motion(pin, &Motion::rotation(&Axis::new(Point3::origin(), nalgebra::Vector3::z()), (-140f64).to_radians())).and_then(|r| r.first()).unwrap();
+    let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 280f64.to_radians() };
+    let (cut, _) = cut_swept(&mut k, block, start, &[m]).unwrap();
+    // cadrs's runner's (sweep, then cut) volume; cadrs's own cut_swept gives 53.931 here.
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - 53.843407424025).abs() < 1e-6, "{v}");
+}
+
+#[test]
+fn a_hairline_saw_cut_is_kept() {
+    let mut k = DefaultKernel::new();
+    let cube = cube(&mut k);
+    let saw = k
+        .primitive(&Primitive::Box { min: Point3::new(5.0, -1.0, 5.0), max: Point3::new(5.000001, 12.0, 12.0) })
+        .and_then(|r| r.first())
+        .unwrap();
+    let (cut, _) = boolean(&mut k, crate::BoolOp::Subtract, cube, &[saw]).unwrap();
+    // The cube's 600 and the slot's two walls, 5 × 10 each... less the top strip.
+    let area = k.mass_properties(cut).unwrap().surface_area;
+    assert!((area - 700.0).abs() < 1e-3, "{area}");
+    // The session's own tolerances are back.
+    assert_eq!(k.tolerances(), crate::native::tol::Tolerances::default());
+}
+
+#[test]
+fn a_lens_thinner_than_the_tolerance_is_refused_not_empty() {
+    let mut k = DefaultKernel::new();
+    let ball = |k: &mut DefaultKernel, x: f64| {
+        k.primitive(&Primitive::Sphere {
+            center: Point3::new(x, 0.0, 0.0),
+            radius: 5.0,
+            axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+            seam: nalgebra::Unit::new_normalize(nalgebra::Vector3::x()),
+        })
+        .and_then(|r| r.first())
+        .unwrap()
+    };
+    let (a, b) = (ball(&mut k, 0.0), ball(&mut k, 9.999999));
+    match boolean(&mut k, crate::BoolOp::Intersect, a, &[b]) {
+        Ok((lens, _)) => {
+            let v = k.mass_properties(lens).unwrap().volume;
+            assert!(v > 0.0 && v < 1e-9, "{v}");
+        }
+        Err(KernelError::EmptyResult(_)) => panic!("an empty answer for solids that overlap"),
+        Err(_) => {}
+    }
+}
+
+#[test]
+fn a_flat_slab_is_a_block_and_an_affine_map_stretches() {
+    let mut k = DefaultKernel::new();
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    // Every coefficient 2: a flat top at z = 2 over a 4 × 3 rectangle.
+    let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let heights = vec![vec![2.0; 3]; 3];
+    let (s, _) = slab(&mut k, &world, [4.0, 3.0], &knots, &knots, &heights).unwrap();
+    let v = k.mass_properties(s).unwrap().volume;
+    assert!((v - 24.0).abs() < 1e-6, "{v}");
+    let b = cube(&mut k);
+    let (t, _) = transform(&mut k, b, [[2.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+    assert!((k.mass_properties(t).unwrap().volume - 2000.0).abs() < 1e-6);
+    let (r, _) = transform(&mut k, b, [[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+    assert!((k.mass_properties(r).unwrap().center_of_mass - Point3::new(-5.0, 5.0, 5.0)).norm() < 1e-9);
+    // A mirror stays a valid solid of the same volume; a uniform scale cubes the volume.
+    let (m, _) = transform(&mut k, b, [[-1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+    assert!((k.mass_properties(m).unwrap().volume - 1000.0).abs() < 1e-6);
+    assert!(k.get(m).unwrap().check().is_empty());
+    let (u, _) = transform(&mut k, b, [[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]]).unwrap();
+    assert!((k.mass_properties(u).unwrap().volume - 8000.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_conic_blend_of_a_square_edge() {
+    let mut k = DefaultKernel::new();
+    let b = k
+        .primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(20.0, 10.0, 10.0) })
+        .and_then(|r| r.first())
+        .unwrap();
+    let e = {
+        use crate::Pick;
+        k.edge_at(b, Point3::new(20.0, 5.0, 10.0)).unwrap().0
+    };
+    let (c, _) = fillet_conic(&mut k, b, &[e], 3.0, 0.5).unwrap();
+    // A parabola tangent to both faces at the contacts cuts a third of the corner's triangle
+    // (3 × 3 / 2) off the corner: 1.5 per unit length, 10 long.
+    let removed = 2000.0 - k.mass_properties(c).unwrap().volume;
+    assert!((removed - 15.0).abs() < 1e-6, "{removed}");
+}
+
+#[test]
+fn a_conic_of_shoulder_root_two_less_one_is_a_quarter_circle() {
+    let mut k = DefaultKernel::new();
+    let b = k
+        .primitive(&Primitive::Box { min: Point3::origin(), max: Point3::new(20.0, 10.0, 10.0) })
+        .and_then(|r| r.first())
+        .unwrap();
+    let e = {
+        use crate::Pick;
+        k.edge_at(b, Point3::new(20.0, 5.0, 10.0)).unwrap().0
+    };
+    let (c, _) = fillet_conic(&mut k, b, &[e], 3.0, std::f64::consts::SQRT_2 - 1.0).unwrap();
+    let removed = 2000.0 - k.mass_properties(c).unwrap().volume;
+    let want = 9.0 * (1.0 - std::f64::consts::FRAC_PI_4) * 10.0;
+    assert!((removed - want).abs() < 1e-6, "{removed} {want}");
+}

@@ -1,7 +1,10 @@
 // yack: fillets over existing rounds and fillets meeting at corners, measured against hand-worked volumes.
 // Adapted from springrep@a03e8a1 tests/fillets_over_rounds.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); edges named by face-name pairs are
-// selected with `face_at` + `edges_between` (fillets follow the tangent chain, as springrep's do);
+// selected by role: springrep's `feature.face` is `faces_by(feature, role)` on a solid `named(feature)`,
+// `start`/`end` are `Role::Start`/`Role::End` and a profile's n-th side is `Role::Side("s{n}")` (a
+// rectangle's v_min, u_max, v_max, u_min are s0..s3, an outline's sides are numbered in the original's
+// order; the comments give springrep's names); fillets follow the tangent chain, as springrep's do;
 // springrep's centred `Profile::rect` is written as `Profile::rectangle(min, max)`; `unify` has no §4.3
 // counterpart and is dropped (it only preceded checks and measures); `Surface::Nurbs` is read as
 // `SurfaceKind::Spline`; "watertight" is `Mesh::is_watertight` at chord 0.01; the tangency walk visits
@@ -14,31 +17,59 @@
 
 use std::f64::consts::{PI, TAU};
 
-use yack::SurfaceKind;
 use yack::prelude::*;
 
-/// Points on the block's four upright edges: (u_min, v_min), (v_min, u_max), (u_max, v_max),
-/// (v_max, u_min).
-const UPRIGHT_EDGES: [[f64; 3]; 4] = [
-    [-10.0, -10.0, 5.0],
-    [10.0, -10.0, 5.0],
-    [10.0, 10.0, 5.0],
-    [-10.0, 10.0, 5.0],
-];
+/// The side swept from a profile's n-th segment.
+fn side(n: u32) -> Role {
+    Role::Side(format!("s{n}").into())
+}
+
+/// A rectangle's sides as springrep names them.
+fn v_min() -> Role {
+    side(0)
+}
+fn u_max() -> Role {
+    side(1)
+}
+fn v_max() -> Role {
+    side(2)
+}
+fn u_min() -> Role {
+    side(3)
+}
+
+type Name<'a> = (&'a str, Role);
+
+/// Every edge where a face named `a` meets one named `b`, for each `(a, b)` of `pairs`.
+fn edges_named(b: &Solid, pairs: &[(Name, Name)]) -> Vec<EdgeId> {
+    let mut out = Vec::new();
+    for ((ta, ra), (tb, rb)) in pairs {
+        for fa in b.faces_by(*ta, ra.clone()) {
+            for fb in b.faces_by(*tb, rb.clone()) {
+                for e in b.edges_between(fa, fb).unwrap() {
+                    if !out.contains(&e) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+    }
+    assert!(!out.is_empty(), "no edge named {pairs:?}");
+    out
+}
+
+fn upright_edges() -> [(Name<'static>, Name<'static>); 4] {
+    [
+        (("block", u_min()), ("block", v_min())),
+        (("block", v_min()), ("block", u_max())),
+        (("block", u_max()), ("block", v_max())),
+        (("block", v_max()), ("block", u_min())),
+    ]
+}
 
 /// The 20 × 20 × 10 block on the xy plane, centred on the origin.
 fn block() -> Solid {
-    extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap()
-}
-
-/// The edges through `points`.
-fn edges_at(b: &Solid, points: &[[f64; 3]]) -> Vec<EdgeId> {
-    points.iter().map(|&p| b.edge_at(p).unwrap()).collect()
-}
-
-/// Every edge between the face through `p` and the face through `q`.
-fn between(b: &Solid, p: [f64; 3], q: [f64; 3]) -> Vec<EdgeId> {
-    b.edges_between(b.face_at(p).unwrap(), b.face_at(q).unwrap()).unwrap()
+    extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap().named("block")
 }
 
 fn line(a: (f64, f64), b: (f64, f64)) -> Segment {
@@ -54,11 +85,11 @@ fn outline(segments: Vec<Segment>) -> Profile {
 }
 
 /// `profile` as a boss 4 tall on the block's top, or with `cut` a pocket 4 deep in it.
-fn on_block(profile: &Profile, cut: bool) -> Solid {
+fn on_block(profile: &Profile, cut: bool, id: &str) -> Solid {
     if cut {
-        block().difference(&extrude(&Frame::at([0.0, 0.0, 6.0]), profile, 4.0).unwrap()).unwrap()
+        block().difference(&extrude(&Frame::at([0.0, 0.0, 6.0]), profile, 4.0).unwrap().named(id)).unwrap()
     } else {
-        block().union(&extrude(&Frame::at([0.0, 0.0, 10.0]), profile, 4.0).unwrap()).unwrap()
+        block().union(&extrude(&Frame::at([0.0, 0.0, 10.0]), profile, 4.0).unwrap().named(id)).unwrap()
     }
 }
 
@@ -100,10 +131,9 @@ fn assert_tangent_all_round(b: &Solid, patches: &[FaceId]) {
 /// `start`, the bottom) `big`.
 fn rounded_then_filleted(small: f64, big: f64, face: &str) -> Solid {
     let b0 = block();
-    let b = b0.fillet(&edges_at(&b0, &UPRIGHT_EDGES), small).unwrap();
-    let z = if face == "end" { 10.0 } else { 0.0 };
-    // (block.<face>, block.u_min)
-    b.fillet(&between(&b, [0.0, 0.0, z], [-10.0, 0.0, 5.0]), big).unwrap()
+    let b = b0.fillet(&edges_named(&b0, &upright_edges()), small).unwrap();
+    let rim = if face == "end" { Role::End } else { Role::Start };
+    b.fillet(&edges_named(&b, &[(("block", rim), ("block", u_min()))]), big).unwrap()
 }
 
 #[test]
@@ -116,10 +146,9 @@ fn a_fillet_round_large_and_small_rounds_rolls_round_one_and_patches_the_other()
     //   V = 8.5·A₀ + ∫ (17 + 3k)² − (1 − π/4)(2(4.5 + 1.5k)² + 2(0.5k)²) dz.
     let (r, big, small) = (1.5, 6.0, 0.5);
     let b0 = block();
-    let b = b0.fillet(&edges_at(&b0, &UPRIGHT_EDGES[..2]), big).unwrap();
-    let b = b.fillet(&edges_at(&b, &UPRIGHT_EDGES[2..]), small).unwrap();
-    // (block.end, block.u_min)
-    let b = b.fillet(&between(&b, [0.0, 0.0, 10.0], [-10.0, 0.0, 5.0]), r).unwrap();
+    let b = b0.fillet(&edges_named(&b0, &upright_edges()[..2]), big).unwrap();
+    let b = b.fillet(&edges_named(&b, &upright_edges()[2..]), small).unwrap();
+    let b = b.fillet(&edges_named(&b, &[(("block", Role::End), ("block", u_min()))]), r).unwrap();
     assert!(b.check().is_empty());
     let cut = 1.0 - PI / 4.0;
     let (i1, ik, ik2) = (r, r * PI / 4.0, r * 2.0 / 3.0);
@@ -168,10 +197,14 @@ fn exact_corner_patches(face: &str) {
 /// The 20 × 20 × 10 block with a 10 × 10 pocket 4 deep in its top, the pocket's corners rounded
 /// R0.5.
 fn rounded_pocket() -> Solid {
-    let pocket = on_block(&Profile::rectangle([-5.0, -5.0], [5.0, 5.0]).unwrap(), true);
-    // (pocket.u_min, pocket.v_min), (v_min, u_max), (u_max, v_max), (v_max, u_min)
-    let corners = [[-5.0, -5.0, 8.0], [5.0, -5.0, 8.0], [5.0, 5.0, 8.0], [-5.0, 5.0, 8.0]];
-    pocket.fillet(&edges_at(&pocket, &corners), 0.5).unwrap()
+    let pocket = on_block(&Profile::rectangle([-5.0, -5.0], [5.0, 5.0]).unwrap(), true, "pocket");
+    let corners = [
+        (("pocket", u_min()), ("pocket", v_min())),
+        (("pocket", v_min()), ("pocket", u_max())),
+        (("pocket", u_max()), ("pocket", v_max())),
+        (("pocket", v_max()), ("pocket", u_min())),
+    ];
+    pocket.fillet(&edges_named(&pocket, &corners), 0.5).unwrap()
 }
 
 #[test]
@@ -184,8 +217,7 @@ fn a_pocket_floor_fillet_over_smaller_corner_rounds_closes_each_corner_with_a_pa
     // ∫k dh = 1.5·π/4 and ∫k² dh = 1.5·2/3 over the bottom 1.5.
     let (r, rho) = (1.5, 0.5);
     let p = rounded_pocket();
-    // (pocket.start, pocket.u_min)
-    let b = p.fillet(&between(&p, [0.0, 0.0, 6.0], [-5.0, 0.0, 8.0]), r).unwrap();
+    let b = p.fillet(&edges_named(&p, &[(("pocket", Role::Start), ("pocket", u_min()))]), r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
     let delta = 4.0 * (1.0 - PI / 4.0) * rho * rho;
@@ -204,8 +236,7 @@ fn a_pocket_rim_fillet_rolls_round_corner_rounds_bent_the_other_way() {
     // widened by 1.5(1 − k) all round: side 13 − 3k, corners 2 − 1.5k.
     let (r, rho) = (1.5, 0.5);
     let p = rounded_pocket();
-    // (block.end, pocket.u_min)
-    let b = p.fillet(&between(&p, [-8.0, 0.0, 10.0], [-5.0, 0.0, 8.0]), r).unwrap();
+    let b = p.fillet(&edges_named(&p, &[(("block", Role::End), ("pocket", u_min()))]), r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
     let cut = 1.0 - PI / 4.0;
@@ -228,13 +259,8 @@ fn fillet_section(r: f64) -> (f64, f64) {
 /// inner corner between e2 (y = 0) and e3 (x = 0).
 fn l_block() -> Solid {
     let points = [[-10.0, -10.0], [10.0, -10.0], [10.0, 0.0], [0.0, 0.0], [0.0, 10.0], [-10.0, 10.0]];
-    extrude(&Frame::WORLD, &Profile::polygon(&points).unwrap(), 10.0).unwrap()
+    extrude(&Frame::WORLD, &Profile::polygon(&points).unwrap(), 10.0).unwrap().named("l")
 }
-
-/// Points on the L's top (l.end) and its inner walls l.e2 and l.e3.
-const L_END: [f64; 3] = [-5.0, -5.0, 10.0];
-const L_E2: [f64; 3] = [5.0, 0.0, 5.0];
-const L_E3: [f64; 3] = [0.0, 5.0, 5.0];
 
 #[test]
 fn convex_fillets_meeting_at_an_inner_corner_swing_round_it() {
@@ -247,7 +273,7 @@ fn convex_fillets_meeting_at_an_inner_corner_swing_round_it() {
     // r − √(r² − s²) about the edge, not the square, and keeps (1 − π/4)·r³(5/3 − π/2) of that.
     let r = 1.5;
     let l = l_block();
-    let edges = [between(&l, L_END, L_E2), between(&l, L_END, L_E3)].concat();
+    let edges = edges_named(&l, &[(("l", Role::End), ("l", side(2))), (("l", Role::End), ("l", side(3)))]);
     let b = l.fillet(&edges, r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
@@ -267,7 +293,10 @@ fn a_mixed_corner_fillets_its_concave_edge_first_and_rolls_the_rim_round_it() {
     // centroid lies 1.5 plus its distance from the edge out from the axis.
     let r = 1.5;
     let l = l_block();
-    let edges = [between(&l, L_END, L_E2), between(&l, L_END, L_E3), between(&l, L_E2, L_E3)].concat();
+    let edges = edges_named(
+        &l,
+        &[(("l", Role::End), ("l", side(2))), (("l", Role::End), ("l", side(3))), (("l", side(2)), ("l", side(3)))],
+    );
     let b = l.fillet(&edges, r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
@@ -283,10 +312,9 @@ fn concave_fillets_meeting_at_a_boss_s_sharp_corner_cross_in_a_crease() {
     // which stays sharp. Each run is 10 long; past the corner the material goes only where both
     // add it, r³(5/3 − π/2) as at an inner corner.
     let r = 1.5;
-    let boss = on_block(&Profile::rectangle([-5.0, -5.0], [5.0, 5.0]).unwrap(), false);
-    // (block.end, boss.u_max), (block.end, boss.v_max)
-    let top = [-8.0, 0.0, 10.0];
-    let edges = [between(&boss, top, [5.0, 0.0, 12.0]), between(&boss, top, [0.0, 5.0, 12.0])].concat();
+    let boss = on_block(&Profile::rectangle([-5.0, -5.0], [5.0, 5.0]).unwrap(), false, "boss");
+    let edges =
+        edges_named(&boss, &[(("block", Role::End), ("boss", u_max())), (("block", Role::End), ("boss", v_max()))]);
     let b = boss.fillet(&edges, r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
@@ -308,10 +336,8 @@ fn a_larger_fillet_into_a_smaller_one_at_a_corner_closes_with_a_patch() {
     // with ∫d = r²(1 − π/4), ∫d² = r³(5/3 − π/2) and ∫k² = 2r/3 over the top r.
     for (rho, r) in [(1.0, 1.5), (1.5, 2.0), (0.5, 1.5)] {
         let b0 = block();
-        // (block.end, block.u_max)
-        let b = b0.fillet(&between(&b0, [0.0, 0.0, 10.0], [10.0, 0.0, 5.0]), rho).unwrap();
-        // (block.end, block.v_max)
-        let b = b.fillet(&between(&b, [0.0, 0.0, 10.0], [0.0, 10.0, 5.0]), r).unwrap();
+        let b = b0.fillet(&edges_named(&b0, &[(("block", Role::End), ("block", u_max()))]), rho).unwrap();
+        let b = b.fillet(&edges_named(&b, &[(("block", Role::End), ("block", v_max()))]), r).unwrap();
         assert!(b.check().is_empty());
         assert!(watertight(&b));
         let cut = 1.0 - PI / 4.0;
@@ -335,13 +361,11 @@ fn a_fillet_no_larger_than_the_round_runs_round_it_as_before() {
 /// `cut` a pocket 4 deep in it. The corners where the back meets the arc are rounded R0.5.
 fn d_on_block(cut: bool) -> Solid {
     let d = outline(vec![
-        arc((0.0, 0.0), 5.0, PI / 2.0, PI), // round_side
-        line((0.0, -5.0), (0.0, 5.0)),      // back_u_min
+        arc((0.0, 0.0), 5.0, PI / 2.0, PI), // s0: round_side
+        line((0.0, -5.0), (0.0, 5.0)),      // s1: back_u_min
     ]);
-    let s = on_block(&d, cut);
-    let z = if cut { 8.0 } else { 12.0 };
-    // (d.round_side, d.back_u_min)
-    s.fillet(&between(&s, [-5.0, 0.0, z], [0.0, 0.0, z]), 0.5).unwrap()
+    let s = on_block(&d, cut, "d");
+    s.fillet(&edges_named(&s, &[(("d", side(0)), ("d", side(1)))]), 0.5).unwrap()
 }
 
 #[test]
@@ -356,8 +380,7 @@ fn a_fillet_over_a_smaller_round_beside_a_curved_wall_closes_with_an_exact_patch
     // three values of k, and the top 1.5 holds αr + βr·π/4 + γ·2r/3.
     let (big, rho, r) = (5.0f64, 0.5f64, 1.5f64);
     let d = d_on_block(false);
-    // (d.end, d.round_side)
-    let b = d.fillet(&between(&d, [-2.0, 0.0, 14.0], [-5.0, 0.0, 12.0]), r).unwrap();
+    let b = d.fillet(&edges_named(&d, &[(("d", Role::End), ("d", side(0)))]), r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
     type P = (f64, f64);
@@ -404,8 +427,7 @@ fn a_fillet_over_a_smaller_round_beside_a_curved_wall_closes_with_an_exact_patch
     // The same D cut 4 deep into the block with its floor filleted is the boss's mirror image:
     // the pocket's hollow is the boss's material, so the block keeps 4000 less the boss's share.
     let dp = d_on_block(true);
-    // (d.start, d.round_side)
-    let pocket = dp.fillet(&between(&dp, [-2.0, 0.0, 6.0], [-5.0, 0.0, 8.0]), r).unwrap();
+    let pocket = dp.fillet(&edges_named(&dp, &[(("d", Role::Start), ("d", side(0)))]), r).unwrap();
     assert!(pocket.check().is_empty());
     assert!(watertight(&pocket));
     let got = pocket.volume();
@@ -419,12 +441,11 @@ fn a_fillet_over_a_smaller_round_beside_a_curved_wall_closes_with_an_exact_patch
 fn lens_boss() -> Solid {
     let half = 4f64.atan2(3.0);
     let lens = outline(vec![
-        arc((-3.0, 0.0), 5.0, -half, 2.0 * half),     // a_side
-        arc((3.0, 0.0), 5.0, PI - half, 2.0 * half), // b_side
+        arc((-3.0, 0.0), 5.0, -half, 2.0 * half),    // s0: a_side
+        arc((3.0, 0.0), 5.0, PI - half, 2.0 * half), // s1: b_side
     ]);
-    let s = on_block(&lens, false);
-    // (l.a_side, l.b_side)
-    s.fillet(&between(&s, [2.0, 0.0, 12.0], [-2.0, 0.0, 12.0]), 0.5).unwrap()
+    let s = on_block(&lens, false, "l");
+    s.fillet(&edges_named(&s, &[(("l", side(0)), ("l", side(1)))]), 0.5).unwrap()
 }
 
 #[test]
@@ -437,8 +458,7 @@ fn a_fillet_over_smaller_rounds_between_two_curved_walls_closes_with_exact_patch
     // about its corner axis, its area α + βk + γk².
     let (big, rho, r, h) = (5.0f64, 0.5f64, 1.5f64, 3.0f64);
     let lens = lens_boss();
-    // (l.end, l.a_side)
-    let b = lens.fillet(&between(&lens, [0.0, 0.0, 14.0], [2.0, 0.0, 12.0]), r).unwrap();
+    let b = lens.fillet(&edges_named(&lens, &[(("l", Role::End), ("l", side(0)))]), r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
     type P = (f64, f64);
@@ -506,19 +526,16 @@ fn a_fillet_over_smaller_rounds_between_two_curved_walls_closes_with_exact_patch
 fn bitten(cut: bool) -> Solid {
     let half = 3f64.atan2(4.0);
     let square = outline(vec![
-        line((-5.0, -5.0), (5.0, -5.0)),                 // box_v_min
-        line((5.0, -5.0), (5.0, -3.0)),                  // box_u_max
-        arc((9.0, 0.0), 5.0, half - PI, -2.0 * half), // bite_side
-        line((5.0, 3.0), (5.0, 5.0)),                    // box_u_max
-        line((5.0, 5.0), (-5.0, 5.0)),                   // box_v_max
-        line((-5.0, 5.0), (-5.0, -5.0)),                 // box_u_min
+        line((-5.0, -5.0), (5.0, -5.0)),              // s0: box_v_min
+        line((5.0, -5.0), (5.0, -3.0)),               // s1: box_u_max
+        arc((9.0, 0.0), 5.0, half - PI, -2.0 * half), // s2: bite_side
+        line((5.0, 3.0), (5.0, 5.0)),                 // s3: box_u_max
+        line((5.0, 5.0), (-5.0, 5.0)),                // s4: box_v_max
+        line((-5.0, 5.0), (-5.0, -5.0)),              // s5: box_u_min
     ]);
-    let s = on_block(&square, cut);
-    let z = if cut { 8.0 } else { 12.0 };
+    let s = on_block(&square, cut, "b");
     // (b.box_u_max, b.bite_side): box_u_max names both short sides.
-    let bite = [4.0, 0.0, z];
-    let edges = [between(&s, [5.0, -4.0, z], bite), between(&s, [5.0, 4.0, z], bite)].concat();
-    s.fillet(&edges, 0.5).unwrap()
+    s.fillet(&edges_named(&s, &[(("b", side(1)), ("b", side(2))), (("b", side(3)), ("b", side(2)))]), 0.5).unwrap()
 }
 
 #[test]
@@ -531,21 +548,24 @@ fn a_fillet_over_smaller_rounds_beside_a_concave_wall_closes_with_exact_patches(
     // 1.5(1 − k), creased at its sharp corners, the bite grown to 5 + 1.5(1 − k) between the
     // corners, and each corner's base scaled by k about its axis: area α + βk + γk², as for the D.
     let (big, rho, r) = (5.0f64, 0.5f64, 1.5f64);
-    // (face, b.box_u_min), (face, b.box_v_min), (face, b.box_v_max), (face, b.box_u_max) ×2,
-    // (face, b.bite_side); `face` is b.end (z = 14) or b.start (z = 6), the walls' mid height `zm`.
-    let rim = |s: &Solid, face: [f64; 3], zm: f64| {
-        [
-            between(s, face, [-5.0, 0.0, zm]),
-            between(s, face, [0.0, -5.0, zm]),
-            between(s, face, [0.0, 5.0, zm]),
-            between(s, face, [5.0, -4.5, zm]),
-            between(s, face, [5.0, 4.5, zm]),
-            between(s, face, [4.0, 0.0, zm]),
-        ]
-        .concat()
+    // (face, b.box_u_min), (face, b.box_v_min), (face, b.box_v_max), (face, b.box_u_max) (both
+    // sides of that name), (face, b.bite_side).
+    let rim = |s: &Solid, face: Role| {
+        let f = || ("b", face.clone());
+        edges_named(
+            s,
+            &[
+                (f(), ("b", side(5))),
+                (f(), ("b", side(0))),
+                (f(), ("b", side(4))),
+                (f(), ("b", side(1))),
+                (f(), ("b", side(3))),
+                (f(), ("b", side(2))),
+            ],
+        )
     };
     let boss = bitten(false);
-    let b = boss.fillet(&rim(&boss, [0.0, 0.0, 14.0], 12.0), r).unwrap();
+    let b = boss.fillet(&rim(&boss, Role::End), r).unwrap();
     assert!(b.check().is_empty());
     assert!(watertight(&b));
     type P = (f64, f64);
@@ -606,7 +626,7 @@ fn a_fillet_over_smaller_rounds_beside_a_concave_wall_closes_with_exact_patches(
     // Cut as a pocket with its floor filleted, it is the boss's mirror image, its wall now bulging
     // into the hollow.
     let cut = bitten(true);
-    let pocket = cut.fillet(&rim(&cut, [0.0, 0.0, 6.0], 8.0), r).unwrap();
+    let pocket = cut.fillet(&rim(&cut, Role::Start), r).unwrap();
     assert!(pocket.check().is_empty());
     assert!(watertight(&pocket));
     let got = pocket.volume();

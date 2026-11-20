@@ -4,8 +4,8 @@
 // becomes Solid::classify == In / Out and Rays::side becomes Solid::classify (Inside/Outside/On are
 // In/Out/On), points classified in one call per solid; edit::affine is
 // Solid::transform_affine(&Affine::from_rows(..)) with the map's point images computed from its rows;
-// Brep::default() is make::empty(); the pole-projection test uses Solid::closest in place of the
-// face surface's project/eval (API gap noted there).
+// Brep::default() is make::empty(); the skin's Surface::project then eval is FaceRef::closest on
+// the solid's one face (the face is the whole surface).
 
 use yack::prelude::*;
 
@@ -138,9 +138,9 @@ fn stretched_ball() -> (Solid, impl Fn(Point3) -> Point3, Point3, f64) {
 
 #[test]
 fn a_point_near_a_stretched_balls_pole_projects_onto_its_skin_there() {
-    // API GAP: §4.3 has no face-surface projection (springrep Surface::project / eval); the foot is
-    // the solid's closest boundary point instead, which on this one-face solid is the skin's.
     let (b, map, c, r) = stretched_ball();
+    let face = b.faces()[0];
+    let s = b.face(face).unwrap();
     for lat in [80.0f64, 85.0, 88.0, 89.5, 89.99, -85.0, -89.5] {
         for lon in [10.0f64, 100.0, 200.0, 300.0] {
             let (la, lo) = (lat.to_radians(), lon.to_radians());
@@ -148,7 +148,7 @@ fn a_point_near_a_stretched_balls_pole_projects_onto_its_skin_there() {
             // On the skin, and a way off it along the ball's radius, inside and out.
             for scale in [1.0, 0.97, 1.03] {
                 let p = map(c + local * (r * scale));
-                let foot = b.closest(&[p]).unwrap()[0];
+                let foot = s.closest(p).unwrap();
                 if scale == 1.0 {
                     let off = foot.distance(p);
                     assert!(off < 1e-9, "lat {lat} lon {lon}: {off} off");

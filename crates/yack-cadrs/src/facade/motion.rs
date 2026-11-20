@@ -46,6 +46,11 @@ pub fn end_motion(m: &Move) -> Result<Motion> {
             let rise = a.into_inner() * (rise_per_turn * angle / TAU);
             turned(point, &a, angle, rise)
         }
+        Move::Climb { point, axis, to, from, rise } => {
+            let a = unit(axis, "a screw's axis")?;
+            let up = a.into_inner() * crate::yack_glue::climb_rise(rise, from, to);
+            turned(point, &a, to, up)
+        }
         Move::Along { degree, ctrl, up, .. } => {
             // A clamped B-spline starts at its first control point and ends at its last, along
             // the first and last legs of its control polygon.
@@ -116,6 +121,52 @@ pub enum Step {
     Screw { point: [f64; 3], axis: [f64; 3], from: f64, to: f64, rise_per_turn: f64 },
 }
 
+/// `steps` as cadrs's planar motion when they all lie in one plane: every turn about a line
+/// along one normal (either way round), every slide square to it, no screw's rise; `None` when
+/// they don't (or there is no turn to fix the plane: slides alone are exact as they are).
+fn planar_steps(steps: &[Step]) -> Result<Option<crate::SolidMotion>> {
+    use crate::{PlanarStep, SolidMotion};
+    let tol = crate::native::tol::ANGULAR;
+    let normal = steps.iter().find_map(|s| match *s {
+        Step::Turn { axis, .. } => Some(axis),
+        _ => None,
+    });
+    let Some(normal) = normal else { return Ok(None) };
+    let n = unit(normal, "a turn's axis")?;
+    let mut out = Vec::with_capacity(steps.len());
+    for s in steps {
+        match *s {
+            Step::Turn { point, axis, from, to } => {
+                let a = unit(axis, "a turn's axis")?;
+                let c = a.dot(&n);
+                if (c.abs() - 1.0).abs() > tol {
+                    return Ok(None);
+                }
+                let sign = c.signum();
+                out.push(PlanarStep::Turn { about: nalgebra::Point3::from(v3(point)), from: sign * from, to: sign * to });
+            }
+            Step::Slide { from, to } => {
+                let (f, t) = (v3(from), v3(to));
+                let reach = f.norm().max(t.norm());
+                if f.dot(&n).abs() > tol * reach || t.dot(&n).abs() > tol * reach {
+                    return Ok(None);
+                }
+                out.push(PlanarStep::Slide { from: f, to: t });
+            }
+            Step::Screw { rise_per_turn, .. } if rise_per_turn != 0.0 => return Ok(None),
+            Step::Screw { point, axis, from, to, .. } => {
+                let a = unit(axis, "a screw's axis")?;
+                let c = a.dot(&n);
+                if (c.abs() - 1.0).abs() > tol {
+                    return Ok(None);
+                }
+                out.push(PlanarStep::Turn { about: nalgebra::Point3::from(v3(point)), from: c.signum() * from, to: c.signum() * to });
+            }
+        }
+    }
+    Ok(Some(SolidMotion::Planar { normal: n, steps: out }))
+}
+
 /// What [`together`] made: the solid, and whether it is only an approximation (cadrs sweeps one
 /// slide, one turn or one screw exactly; any other set of steps it finds as the region the body
 /// fills, bounded by a contoured mesh: a valid closed solid near the exact one, never the exact
@@ -152,12 +203,19 @@ pub fn together(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<T
             }
         }
     }
-    let r = k.sweep_solid(body, &SolidMotion::rigid(rigid))?;
+    // Steps all in one plane (slides in it, turns about lines square to it): cadrs's planar
+    // motion, which it sweeps exactly (as cadrs's runner cuts a rack's tooth space or a planet
+    // carrier's square); else the rigid motion.
+    let planar = planar_steps(steps)?;
+    let r = match &planar {
+        Some(m) => k.sweep_solid(body, m)?,
+        None => k.sweep_solid(body, &SolidMotion::rigid(rigid))?,
+    };
     let out = r.first()?;
     let b = k.get(out)?;
-    // Exact only for one slide, one turn or one screw (types.rs, SolidMotion::Rigid); else cadrs
-    // contours the region on a grid.
-    let exact_kind = matches!(steps, [Step::Slide { .. }] | [Step::Turn { .. }] | [Step::Screw { .. }]);
+    // A rigid motion is exact only for one slide, one turn or one screw (types.rs,
+    // SolidMotion::Rigid); else cadrs contours the region on a grid.
+    let exact_kind = planar.is_some() || matches!(steps, [Step::Slide { .. }] | [Step::Turn { .. }] | [Step::Screw { .. }]);
     let flat = b.faces.iter().filter(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })).count();
     let faceted = !exact_kind || (flat == b.faces.len() && flat > 1000);
     if faceted && !(b.is_solid() && b.check_with(crate::native::topo::CheckLevel::Full).is_empty()) {
@@ -172,6 +230,39 @@ mod tests {
     use super::*;
     use crate::Primitive;
     use nalgebra::Point3;
+
+    #[test]
+    fn planar_steps_sweep_exactly() {
+        // brep-bench swept/square-on-a-planet-carrier and swept/rack-cut-tooth-space: cadrs's
+        // runner 155.33667806397608 and 9042.502788700229, by its planar motion.
+        let mut k = DefaultKernel::new();
+        let bar = k.primitive(&Primitive::Box { min: Point3::new(4.0, -1.0, 0.0), max: Point3::new(6.0, 1.0, 2.0) }).and_then(|r| r.first()).unwrap();
+        let z = [0.0, 0.0, 1.0];
+        let spin = Step::Turn { point: [5.0, 0.0, 0.0], axis: z, from: 0.0, to: -3.0 * TAU };
+        let carry = Step::Turn { point: [0.0; 3], axis: z, from: 0.0, to: TAU };
+        let t = together(&mut k, bar, &[spin, carry]).unwrap();
+        assert!(!t.faceted);
+        let v = k.mass_properties(t.made.0).unwrap().volume;
+        assert!((v - 155.33667806397608).abs() < 1e-6 * v, "{v}");
+
+        let d = -20.0 * std::f64::consts::FRAC_PI_3;
+        let (a, b) = (0.842856, 3.026666);
+        let tooth = [[d - a, 18.0], [d + a, 18.0], [d + b, 24.0], [d - b, 24.0]];
+        let segs: Vec<crate::facade::profile::Seg> = (0..4).map(|i| crate::facade::profile::Seg::Line { a: tooth[i], b: tooth[(i + 1) % 4] }).collect();
+        let side = crate::facade::profile::Place { origin: [0.0, -2.0, 0.0], x: [0.0, 0.0, 1.0], y: [1.0, 0.0, 0.0], z: [0.0, 1.0, 0.0] };
+        let (rack, _) = crate::facade::profile::extrude(&mut k, &side, &[&segs], 10.0).unwrap();
+        let slide = Step::Slide { from: [0.0; 3], to: [0.0, 0.0, -2.0 * d] };
+        let turn = Step::Turn { point: [0.0; 3], axis: [0.0, 1.0, 0.0], from: -std::f64::consts::FRAC_PI_3, to: std::f64::consts::FRAC_PI_3 };
+        let t = together(&mut k, rack, &[slide, turn]).unwrap();
+        assert!(!t.faceted);
+        let blank = k
+            .primitive(&Primitive::Cylinder { base: Point3::new(0.0, 0.0, 0.0), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 1.0, 0.0)), radius: 22.0, height: 6.0 })
+            .and_then(|r| r.first())
+            .unwrap();
+        let cut = k.boolean(crate::BoolOp::Subtract, blank, &[t.made.0]).and_then(|r| r.first()).unwrap();
+        let v = k.mass_properties(cut).unwrap().volume;
+        assert!((v - 9042.502788700229).abs() < 1e-6 * v, "{v}");
+    }
 
     fn cube(k: &mut DefaultKernel) -> BodyId {
         k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(1.0, 1.0, 1.0) })

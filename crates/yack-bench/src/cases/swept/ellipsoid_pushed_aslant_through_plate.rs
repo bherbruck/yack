@@ -5,5 +5,5 @@ pub fn build() -> Result<Solid> {
     let stretch = Affine::from_rows([[3.0, 0.0, 0.0, -2.0], [0.0, 2.0, 0.0, -1.5], [0.0, 0.0, 1.5, -4.0]])?;
     let egg = sphere(&Frame::WORLD, 1.0)?.transform_affine(&stretch)?;
     let plate = block(&Frame::at([-15.0, -15.0, 0.0]), [30.0, 30.0, 4.0])?;
-    plate.difference(&egg.swept(&Motion::Slide { by: [4.0, 3.0, 12.0].into() })?)
+    plate.cut_swept(&egg, &Motion::slide([4.0, 3.0, 12.0]))
 }

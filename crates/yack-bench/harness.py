@@ -35,16 +35,18 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 DEFAULT_REF = os.path.join(os.path.dirname(REPO), "yack-ref", "brep-bench")
 
 
-def entry(runner):
-    """yack's kernels.json entry, local to this run."""
+def entry(runner, engine=None):
+    """yack's kernels.json entry, local to this run; with `engine`, every op forced onto that
+    engine's ladder rung (`yack-bench --engine`, a bake-off build)."""
+    forced = ["--engine", engine] if engine else []
     return {
-        "name": "yack",
+        "name": f"yack-{engine}" if engine else "yack",
         "kernel": "https://github.com/bherbruck/yack",
         "license": "MIT OR Apache-2.0",
         "backend": "Rust",
         "frontend": "Rust",
         "build": ["cargo", "build", "--release", "-p", "yack-bench"],
-        "command": [runner],
+        "command": [runner, *forced],
         "version": [runner, "--version"],
         "source": os.path.join(HERE, "src", "cases", "{category}", "{name_snake}.rs"),
         "step": True,
@@ -67,7 +69,7 @@ def loc(path):
         return None
 
 
-def strategies(runner, rows, timeout):
+def strategies(k_command, rows, timeout):
     """Which ladder strategy built each case's solid, for the cases that built one: `yack-bench
     --strategy CASE`, one process per case (untimed, niced), each given `timeout` seconds."""
     import subprocess
@@ -76,7 +78,7 @@ def strategies(runner, rows, timeout):
         if r["outcome"] not in ("pass", "built", "wrong"):
             continue
         try:
-            p = subprocess.run(["nice", runner, "--strategy", r["case"]], capture_output=True, text=True,
+            p = subprocess.run(["nice", *k_command, "--strategy", r["case"]], capture_output=True, text=True,
                                timeout=timeout)
             out[r["case"]] = p.stdout.strip() or None
         except subprocess.TimeoutExpired:
@@ -175,6 +177,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=None)
     ap.add_argument("--scores", help="the ratchet baseline, e.g. scores/bench.json")
     ap.add_argument("--bless", action="store_true", help="write the baseline instead of failing")
+    ap.add_argument("--engine", choices=["springrep", "cadrs", "both"],
+                    help="force one engine (a `--features bakeoff` build of the runner)")
     args = ap.parse_args()
 
     runner = os.path.abspath(args.runner)
@@ -190,7 +194,7 @@ def main():
     run.MASS_BIN = mass
     run.mass_command = lambda: [mass] if os.access(mass, os.X_OK) else f"{mass} is not built"
 
-    k = entry(runner)
+    k = entry(runner, args.engine)
     chosen = run.cases(args.case)
     if not chosen:
         sys.exit(f"no case id starts with {args.case!r}")
@@ -199,7 +203,7 @@ def main():
     start, size = run.overhead(k, args.timeout, None) if whole else (None, run.binary(k))
     rows = run.run_kernel(k, chosen, args.timeout, None, run.MASS_TIMEOUT,
                           args.jobs or run.JOBS)
-    built = strategies(runner, rows, args.timeout)
+    built = strategies(k["command"], rows, args.timeout)
     for r in rows:
         r["strategy"] = built.get(r["case"])
     result = {"kernel": k["name"], "version": run.version(k), "measured": "exact",

@@ -1,0 +1,12 @@
+[package]
+name = "yack-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+yack = { path = "../yack" }
+
+[lints]
+workspace = true

@@ -1,7 +1,10 @@
 // yack: rounds that end on a slanted cut cross in a crease; a concave round past a short edge is trimmed by a ramp.
 // Adapted from springrep@a03e8a1 tests/creased_rounds.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); edges named by face-name pairs are
-// selected with `face_at` + `edges_between`; springrep's centred `Profile::rect` is written as
+// selected by role: springrep's `feature.face` is `faces_by(feature, role)` on a solid `named(feature)`
+// (`end` is `Role::End`, a profile's n-th side `Role::Side("s{n}")`: a rectangle's v_min, u_max, v_max,
+// u_min are s0..s3, a corner cut's `wall` is s0), and a loft's `side` is any `Role::Side` of its feature;
+// springrep's centred `Profile::rect` is written as
 // `Profile::rectangle(min, max)`; the ruled two-section loft `wedge` (two rectangles of equal depth) is the
 // same prism built by `extrude` of its trapezoid section along y; `unify` has no §4.3 counterpart and is
 // dropped (it only preceded checks and measures); the wall-face walk reads a plane's offset from its
@@ -10,7 +13,6 @@
 //! they cross in a crease, and a concave round that runs past a short edge is trimmed by the ramp
 //! beyond it.
 
-use yack::SurfaceKind;
 use yack::prelude::*;
 
 /// A wedge ruled between two rectangles 30 deep (y from −15 to 15), each from `x0` to `x1` on the
@@ -23,37 +25,54 @@ fn wedge(sections: [(f64, f64, f64); 2]) -> Solid {
     extrude(&xz, &section, 30.0).unwrap()
 }
 
-/// Every edge between the face through `p` and the face through `q`.
-fn between(b: &Solid, p: [f64; 3], q: [f64; 3]) -> Vec<EdgeId> {
-    b.edges_between(b.face_at(p).unwrap(), b.face_at(q).unwrap()).unwrap()
+/// The side swept from a profile's n-th segment.
+fn side(n: u32) -> Role {
+    Role::Side(format!("s{n}").into())
+}
+
+/// springrep's `<id>.side` of a ruled loft: every side face of `id`.
+fn loft_side(b: &Solid, id: &str) -> Vec<FaceId> {
+    b.faces_where(|f| matches!(f.role(id), Some(Role::Side(_))))
+}
+
+/// Every edge where a face of `a` meets a face of `b`, for each `(a, b)` of `pairs`.
+fn edges_named(b: &Solid, pairs: &[(Vec<FaceId>, Vec<FaceId>)]) -> Vec<EdgeId> {
+    let mut out = Vec::new();
+    for (fa, fb) in pairs {
+        for &x in fa {
+            for &y in fb {
+                for e in b.edges_between(x, y).unwrap() {
+                    if !out.contains(&e) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+    }
+    assert!(!out.is_empty(), "no edge named");
+    out
 }
 
 /// The 20 × 20 × 10 block with its +x top edge cut back along x + z = 15, a 135° edge on the top.
 fn leaning_block() -> Solid {
-    let block = extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap();
-    let lean = wedge([(5.0, 10.0, 11.0), (11.0, 4.0, 11.0)]);
+    let block =
+        extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap().named("block");
+    let lean = wedge([(5.0, 10.0, 11.0), (11.0, 4.0, 11.0)]).named("lean");
     block.difference(&lean).unwrap()
 }
 
-/// A triangular prism 10 tall on the xy plane whose first side (`wall`) runs from `points[0]` to
-/// `points[1]`.
-fn corner_cut(points: [[f64; 2]; 3]) -> Solid {
-    extrude(&Frame::WORLD, &Profile::polygon(&points).unwrap(), 10.0).unwrap()
+/// A triangular prism 10 tall on the xy plane whose first side (`wall`, s0) runs from `points[0]` to
+/// `points[1]` (the points run anticlockwise).
+fn corner_cut(id: &str, points: [[f64; 2]; 3]) -> Solid {
+    extrude(&Frame::WORLD, &Profile::polygon(&points).unwrap(), 10.0).unwrap().named(id)
 }
-
-/// Points on the leaning block's top (block.end), its +y side (block.v_max) and the slant
-/// (lean.side).
-const END: [f64; 3] = [1.0, 0.0, 10.0];
-const V_MAX: [f64; 3] = [0.0, 10.0, 5.0];
-const LEAN: [f64; 3] = [7.5, 0.0, 7.5];
-/// A point on diag.wall, the plane y = x + 2, clear of any round at its ends.
-const DIAG_WALL: [f64; 3] = [2.0, 4.0, 5.0];
 
 #[test]
 fn rounds_on_a_square_and_a_leaning_edge_meet_in_a_crease() {
     let lb = leaning_block();
-    // (block.end, block.v_max), (block.end, lean.side)
-    let edges = [between(&lb, END, V_MAX), between(&lb, END, LEAN)].concat();
+    let end = lb.faces_by("block", Role::End);
+    let edges =
+        edges_named(&lb, &[(end.clone(), lb.faces_by("block", side(2))), (end, loft_side(&lb, "lean"))]);
     let b = lb.fillet(&edges, 1.5).unwrap();
     assert!(b.check().is_empty());
 }
@@ -61,10 +80,12 @@ fn rounds_on_a_square_and_a_leaning_edge_meet_in_a_crease() {
 #[test]
 fn rounds_on_a_diagonal_and_a_leaning_edge_meet_in_a_crease() {
     // A vertical wall along y = x + 2 cuts the block's +y corner, meeting the leaning edge at 45°.
-    let diag = corner_cut([[-15.0, -13.0], [15.0, 17.0], [-15.0, 17.0]]);
+    let diag = corner_cut("diag", [[-15.0, -13.0], [15.0, 17.0], [-15.0, 17.0]]);
     let cut = leaning_block().difference(&diag).unwrap();
     // (block.end, diag.wall), (block.end, lean.side)
-    let edges = [between(&cut, END, DIAG_WALL), between(&cut, END, LEAN)].concat();
+    let end = cut.faces_by("block", Role::End);
+    let edges =
+        edges_named(&cut, &[(end.clone(), cut.faces_by("diag", side(0))), (end, loft_side(&cut, "lean"))]);
     let b = cut.fillet(&edges, 1.5).unwrap();
     assert!(b.check().is_empty());
 }
@@ -73,13 +94,14 @@ fn rounds_on_a_diagonal_and_a_leaning_edge_meet_in_a_crease() {
 fn a_leaning_edges_round_creases_into_diagonal_rounds_at_both_ends() {
     // Walls along y = ±(x + 2) cut both of the block's +x corners, so both ends of the
     // leaning edge's round crease into a diagonal round.
-    let diag = corner_cut([[-15.0, -13.0], [15.0, 17.0], [-15.0, 17.0]]);
-    let diag2 = corner_cut([[15.0, -17.0], [-15.0, 13.0], [-15.0, -17.0]]);
+    let diag = corner_cut("diag", [[-15.0, -13.0], [15.0, 17.0], [-15.0, 17.0]]);
+    let diag2 = corner_cut("diag2", [[15.0, -17.0], [-15.0, 13.0], [-15.0, -17.0]]);
     let b = leaning_block().difference(&diag).unwrap().difference(&diag2).unwrap();
-    // (diag.wall, diag2.wall): diag2.wall is the plane y = −x − 2.
-    let b = b.fillet(&between(&b, DIAG_WALL, [0.0, -2.0, 5.0]), 3.0).unwrap();
+    // (diag.wall, diag2.wall)
+    let b = b.fillet(&edges_named(&b, &[(b.faces_by("diag", side(0)), b.faces_by("diag2", side(0)))]), 3.0).unwrap();
     // (block.end, diag.wall), (block.end, lean.side)
-    let edges = [between(&b, END, DIAG_WALL), between(&b, END, LEAN)].concat();
+    let end = b.faces_by("block", Role::End);
+    let edges = edges_named(&b, &[(end.clone(), b.faces_by("diag", side(0))), (end, loft_side(&b, "lean"))]);
     let b = b.fillet(&edges, 1.5).unwrap();
     assert!(b.check().is_empty());
 }
@@ -89,18 +111,21 @@ fn a_concave_round_past_a_short_edge_is_trimmed_by_the_ramp_beyond_it() {
     // A strut 10 × 10 × 10 (x 0–10, y ±5) against a block (x 10–15, y ±15, z 0–15), its top cut
     // back above z = x + 1, which leaves a 1 mm edge of its top at the block. The R2 rounds where
     // its walls meet the block run up to the top; past that 1 mm edge the ramp crosses their strip.
-    let rect = |cx: f64, w: f64, h: f64, d: f64| {
+    let rect = |id: &str, cx: f64, w: f64, h: f64, d: f64| {
         let profile = Profile::rectangle([cx - w / 2.0, -h / 2.0], [cx + w / 2.0, h / 2.0]).unwrap();
-        extrude(&Frame::WORLD, &profile, d).unwrap()
+        extrude(&Frame::WORLD, &profile, d).unwrap().named(id)
     };
     let r = 2.0;
-    let block = rect(12.5, 5.0, 30.0, 15.0);
-    let strut = rect(5.0, 10.0, 10.0, 10.0);
+    let block = rect("block", 12.5, 5.0, 30.0, 15.0);
+    let strut = rect("strut", 5.0, 10.0, 10.0, 10.0);
     let ramp = wedge([(1.0, -1.0, 0.0), (10.5, -1.0, 9.5)]);
     let b = block.union(&strut).unwrap().difference(&ramp).unwrap();
     // (strut.v_min, block.u_min), (strut.v_max, block.u_min)
-    let block_u_min = [10.0, 10.0, 5.0];
-    let edges = [between(&b, [5.0, -5.0, 2.0], block_u_min), between(&b, [5.0, 5.0, 2.0], block_u_min)].concat();
+    let block_u_min = b.faces_by("block", side(3));
+    let edges = edges_named(
+        &b,
+        &[(b.faces_by("strut", side(0)), block_u_min.clone()), (b.faces_by("strut", side(2)), block_u_min)],
+    );
     let b = b.fillet(&edges, r).unwrap();
     assert!(b.check().is_empty());
     // Each round's section is the R2 spandrel: at distance u from the block it is

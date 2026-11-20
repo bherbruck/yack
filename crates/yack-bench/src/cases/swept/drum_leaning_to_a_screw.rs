@@ -7,6 +7,6 @@ pub fn build() -> Result<Solid> {
     let sector = revolve(&Frame::WORLD, &Profile::rectangle([8.0, -1.0], [12.0, 1.0])?, deg(60.0))?;
     let foot = Frame::new([10.0, -1.5 * s, -1.5 * c], [1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c])?;
     let start = foot.moved(&Rigid::rotation(o, z, deg(-140.0))?).moved(&Rigid::translation([0.0, 0.0, -140.0 / 360.0]));
-    let screw = Motion::Screw { axis_point: o, axis: z, angle: deg(280.0), rise_per_turn: 1.0 };
-    sector.difference(&cylinder(&start, 0.8, 3.0)?.swept(&screw)?)
+    let screw = Motion::screw(o, z, rad(0.0), deg(280.0), Lead::per_turn(1.0));
+    sector.cut_swept(&cylinder(&start, 0.8, 3.0)?, &screw)
 }

@@ -472,41 +472,114 @@ pub enum FrameLaw {
     Toward(Vec3),
 }
 
-/// A motion of a solid through space, for [`Solid::swept`](crate::Solid::swept).
+/// How a screw rises along its axis as it turns. Built only by its constructors, which name their
+/// unit; one screw concept for [`Motion::screw`], [`make::screw`](crate::make::screw) and
+/// [`make::screw_tapered`](crate::make::screw_tapered).
+///
+/// ```
+/// use yack::prelude::*;
+/// let thread = Lead::per_turn(1.5);          // 1.5 mm a turn
+/// let same = Lead::per_radian(1.5 / (2.0 * std::f64::consts::PI));
+/// let growing = Lead::polynomial(vec![0.0, 0.2, 0.01]); // rise = 0.2 θ + 0.01 θ², θ in radians
+/// # let _ = (thread, same, growing);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
-pub enum Motion {
-    /// A straight translation by `by`.
-    Slide {
-        /// The displacement.
-        by: Vec3,
-    },
-    /// A rotation about an axis.
-    Turn {
-        /// A point on the axis.
-        axis_point: Point3,
-        /// The axis direction.
-        axis: Vec3,
-        /// The angle turned (counter-clockwise looking down `axis`).
-        angle: Angle,
-    },
-    /// A screw: rotation about an axis while rising along it.
-    Screw {
-        /// A point on the axis.
-        axis_point: Point3,
-        /// The axis direction.
-        axis: Vec3,
-        /// The angle turned.
-        angle: Angle,
-        /// Rise along the axis per full turn (mm).
-        rise_per_turn: f64,
-    },
-    /// Along a spline path, with the frame following `law`.
-    Along {
-        /// The path, starting at the solid's current position.
-        path: Spline3,
-        /// How the solid turns along the path.
-        law: FrameLaw,
-    },
-    /// These motions one after another.
+pub struct Lead(pub(crate) LeadKind);
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LeadKind {
+    PerTurn(f64),
+    PerRadian(f64),
+    Polynomial(Vec<f64>),
+}
+
+impl Lead {
+    /// A constant rise of `mm` along the axis each whole turn.
+    pub fn per_turn(mm: f64) -> Lead {
+        Lead(LeadKind::PerTurn(mm))
+    }
+    /// A constant rise of `mm` along the axis each radian turned.
+    pub fn per_radian(mm: f64) -> Lead {
+        Lead(LeadKind::PerRadian(mm))
+    }
+    /// A rise that is a polynomial in the angle turned: `rise = Σ cₖ θᵏ`, θ in radians measured from
+    /// the motion's start (`from`), `coefficients[k] = cₖ`. A lead that grows as a thread climbs.
+    pub fn polynomial(coefficients: Vec<f64>) -> Lead {
+        Lead(LeadKind::Polynomial(coefficients))
+    }
+}
+
+/// A motion of a solid through space, for [`Solid::swept`](crate::Solid::swept) and
+/// [`Solid::cut_swept`](crate::Solid::cut_swept). Built only by its constructors.
+///
+/// Every axis and direction takes a [`Dir3`](crate::Dir3), a [`Vec3`](crate::Vec3) or an array
+/// as it is (`Dir3::Z`, never `Dir3::Z.into()`); a zero axis is refused when the motion is used.
+///
+/// ```
+/// use yack::prelude::*;
+/// let spin = Motion::turn([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], deg(0.0), deg(90.0));
+/// let tilt = Motion::turn(Point3::ORIGIN, Dir3::X, deg(0.0), deg(30.0));
+/// let rack = Motion::together(vec![Motion::slide([10.0, 0.0, 0.0]), Motion::turn([0.0; 3], [0.0, 0.0, 1.0], deg(0.0), deg(45.0))]);
+/// let screw = Motion::screw([0.0; 3], [0.0, 0.0, 1.0], deg(0.0), deg(720.0), Lead::per_turn(2.0));
+/// # let _ = (spin, tilt, rack, screw);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Motion(pub(crate) MotionKind);
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum MotionKind {
+    Slide { by: Vec3 },
+    Turn { axis_point: Point3, axis: Vec3, from: Angle, to: Angle },
+    Screw { axis_point: Point3, axis: Vec3, from: Angle, to: Angle, lead: Lead },
+    Along { path: Spline3, law: FrameLaw },
     Then(Vec<Motion>),
+    Together(Vec<Motion>),
+}
+
+impl Motion {
+    /// A straight slide by `by`.
+    pub fn slide(by: impl Into<Vec3>) -> Motion {
+        Motion(MotionKind::Slide { by: by.into() })
+    }
+    /// A turn about the line through `axis_point` along `axis`, from the angle `from` to `to`
+    /// (counter-clockwise looking down `axis`). The solid is as given at angle 0.
+    pub fn turn(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle) -> Motion {
+        Motion(MotionKind::Turn { axis_point: axis_point.into(), axis: axis.into(), from, to })
+    }
+    /// A turn as [`turn`](Motion::turn) while rising along the axis by `lead`. The solid is as
+    /// given at angle 0 (a constant lead rises from there; a polynomial one from `from`).
+    pub fn screw(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle, lead: Lead) -> Motion {
+        Motion(MotionKind::Screw { axis_point: axis_point.into(), axis: axis.into(), from, to, lead })
+    }
+    /// Along a spline path that starts at the solid's position, its frame following `law`.
+    pub fn along(path: Spline3, law: FrameLaw) -> Motion {
+        Motion(MotionKind::Along { path, law })
+    }
+    /// These motions one after another, each starting where the last left the solid.
+    pub fn then(legs: Vec<Motion>) -> Motion {
+        Motion(MotionKind::Then(legs))
+    }
+    /// These motions all at once: one parameter `t` runs 0 → 1, each leg is at fraction `t` of
+    /// itself, applied in order at each instant (a rack's slide and its pinion's turn). Such a
+    /// sweep comes out as a valid closed solid that may be faceted: [`Solid::is_exact`] is false
+    /// then (never claimed exact).
+    pub fn together(legs: Vec<Motion>) -> Motion {
+        Motion(MotionKind::Together(legs))
+    }
+}
+
+/// A surface patch for [`make::sewn`](crate::make::sewn).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Patch {
+    /// A Bézier patch on the control net `ctrl` (rows along u; degree rows − 1 by columns − 1).
+    Bezier {
+        /// The control net.
+        ctrl: Vec<Vec<Point3>>,
+    },
+    /// The flat face filling a closed chain of curves in one plane, laid end to end (usually other
+    /// patches' rims).
+    PlanarFill {
+        /// The boundary curves.
+        boundary: Vec<Spline3>,
+    },
 }

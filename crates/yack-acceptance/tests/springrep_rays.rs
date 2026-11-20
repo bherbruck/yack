@@ -5,7 +5,7 @@
 // take a diameter); Rays::cast becomes Solid::raycast, which has no range, so every cast here is
 // unbounded (the originals' ranges hold every crossing except where noted); the hit normal is read
 // with Solid::normal_at at the hit point; the outline spline through 24 points is Loop::through and
-// its curve is sampled with EdgeRef::points (no evaluation at a parameter: API gap noted there).
+// its curve is evaluated with EdgeRef::range / point.
 
 use std::f64::consts::{PI, TAU};
 
@@ -197,21 +197,27 @@ fn a_ray_across_a_spline_extrusion_crosses_where_the_outline_does() {
     let disc = extrude(&Frame::WORLD, &p, 10.0).unwrap();
     let outline =
         disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. }))[0];
-    let side = |q: Point3| q.y - 9.0;
+    let c = disc.edge(outline).unwrap();
+    let [t0, t1] = c.range();
+    let side = |t: f64| c.point(t).y - 9.0;
+    let n = 20_000;
+    let at = |i: usize| t0 + (t1 - t0) * i as f64 / n as f64;
     let o = Point3::new(-40.0, 9.0, 5.0);
-    // API GAP: EdgeRef cannot be evaluated at a parameter, so the original's 20 000 intervals each
-    // bisected 200 times are replaced by 2 000 000 intervals of EdgeRef::points (evenly in the
-    // parameter, ends included), the crossing interpolated linearly within its interval.
-    let n = 2_000_000;
-    let samples = disc.edge(outline).unwrap().points(n + 1);
     let mut want = Vec::new();
-    for w in samples.windows(2) {
-        let (lo, hi) = (w[0], w[1]);
+    for i in 0..n {
+        let (mut lo, mut hi) = (at(i), at(i + 1));
         if side(lo).signum() == side(hi).signum() {
             continue;
         }
-        let f = side(lo) / (side(lo) - side(hi));
-        want.push(lo.x + (hi.x - lo.x) * f - o.x);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if side(mid).signum() == side(lo).signum() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        want.push(c.point(0.5 * (lo + hi)).x - o.x);
     }
     want.sort_by(f64::total_cmp);
     assert!(want.len() >= 2, "{want:?}");

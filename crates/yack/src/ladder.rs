@@ -59,6 +59,11 @@ fn is_final(e: &Error) -> bool {
     matches!(e.kind, ErrorKind::Invalid | ErrorKind::Internal | ErrorKind::NotFound | ErrorKind::Ambiguous | ErrorKind::ForeignId)
 }
 
+/// A rung's faceted answer, as the decline it counts as (AGENTS rule 8: never answered).
+fn faceted(op: &'static str) -> Error {
+    Error::failed(op, crate::Stage::Check, "only a faceted approximation is available")
+}
+
 /// Runs `rungs` in order (see the module comment). Each rung runs behind its own panic
 /// firewall. A result a guard doubts ([`Solid::suspected`]) is held while the later rungs run:
 /// the first clean result wins; if every later rung fails (or panics), the held result is the
@@ -73,6 +78,7 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
             continue;
         }
         match crate::firewall::run(op, rung.run) {
+            Ok(s) if !s.is_exact() => declined.push((rung.name, faceted(op))),
             Ok(s) if s.suspected().is_some() && held.is_none() => held = Some(s.with_strategy(rung.name)),
             Ok(s) if s.suspected().is_some() => {}
             Ok(s) => return Ok(s.with_strategy(rung.name)),
@@ -118,4 +124,34 @@ pub(crate) fn allowed(op: &'static str, name: &'static str) -> Result<()> {
     }
     let _ = (op, name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn cube(size: f64) -> Result<Solid> {
+        crate::make::block(&crate::Frame::WORLD, [size, size, size])
+    }
+
+    #[test]
+    fn a_faceted_rung_declines_to_the_next() {
+        let facets = || cube(1.0).map(Solid::approximate);
+        let exact = || cube(2.0);
+        let s = ladder("op", &[Rung { name: "cadrs", run: &facets }, Rung { name: "springrep", run: &exact }]).unwrap();
+        assert!(s.is_exact());
+        assert_eq!(s.strategy(), "springrep");
+    }
+
+    #[test]
+    fn only_facets_refuse_as_failed() {
+        let facets = || cube(1.0).map(Solid::approximate);
+        let none = || Err(Error::new(ErrorKind::Unsupported, "op", "no"));
+        let e = ladder("op", &[Rung { name: "springrep", run: &none }, Rung { name: "cadrs", run: &facets }]).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Failed);
+        assert!(e.detail.contains("only a faceted approximation is available"), "{e}");
+        let e = ladder("op", &[Rung { name: "cadrs", run: &facets }]).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Failed);
+    }
 }

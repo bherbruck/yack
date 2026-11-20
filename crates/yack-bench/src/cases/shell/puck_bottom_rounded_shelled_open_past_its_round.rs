@@ -4,5 +4,5 @@ use yack::prelude::*;
 pub fn build() -> Result<Solid> {
     let p = cylinder(&Frame::WORLD, 6.0, 10.0)?;
     let p = p.fillet(&[p.edge_at([0.0, -6.0, 0.0])?], 2.0)?;
-    p.shell(&[p.face_at([1.0, 1.0, 10.0])?], 3.0)
+    p.shell_rounded(&[p.face_at([1.0, 1.0, 10.0])?], 3.0)
 }

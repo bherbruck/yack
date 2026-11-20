@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use brep_protocol::{Display, DisplayFace, Kernel, Meeting, Mesh, Projection, Refusal, model};
 use brep_protocol::{model::Primitive, profile};
 use convert::{edges, faces, frame, pairs, path, r, sketch, spline};
-use yack::{Affine, Plane, Ray, Rigid, Side, Similarity, Solid, make, rad};
+use yack::{Affine, Lead, Plane, Ray, Rigid, Side, Similarity, Solid, make, rad};
 
 type V = model::Vec3;
 type Res<T> = Result<T, Refusal>;
@@ -98,7 +98,7 @@ impl Kernel for Yack {
                     make::revolve(f, &sketch(profile)?, rad(*a))
                 }
                 Primitive::Screw { profile, rise, angle: a, .. } => {
-                    make::screw(f, &sketch(profile)?, *rise, rad(*a))
+                    make::screw(f, &sketch(profile)?, Lead::per_radian(*rise), rad(*a))
                 }
                 Primitive::Sweep { profile, path: p, .. } => {
                     make::sweep(f, &sketch(profile)?, &path(p))

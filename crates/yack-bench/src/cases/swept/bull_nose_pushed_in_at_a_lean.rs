@@ -6,6 +6,6 @@ pub fn build() -> Result<Solid> {
     let lean = Frame::new([0.0, 0.0, 4.0], [c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c])?;
     let mill = cylinder(&lean, 2.0, 3.0)?;
     let mill = mill.fillet(&[mill.edge_at([0.0, 2.0, 4.0])?], 0.5)?;
-    let hole = mill.swept(&Motion::Slide { by: [0.0, 0.0, -8.0].into() })?;
+    let hole = mill.swept(&Motion::slide([0.0, 0.0, -8.0]))?;
     block(&Frame::at([-8.0, -8.0, -8.0]), [16.0, 16.0, 8.0])?.difference(&hole)
 }

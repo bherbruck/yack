@@ -60,3 +60,10 @@ owner = "api-owner"
 deps = ["yack"]
 external = ["brep-protocol"]
 license = "MIT OR Apache-2.0"
+
+[crate.yack-bench]
+layer = 4
+kind = "tool"
+owner = "api-owner"
+deps = ["yack"]
+license = "MIT OR Apache-2.0"

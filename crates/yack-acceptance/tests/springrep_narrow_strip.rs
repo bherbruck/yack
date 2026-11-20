@@ -1,7 +1,8 @@
 // yack: a face 90 tolerances wide is kept as a face, measured, and has the area it should.
 // Adapted from springrep@a03e8a1 tests/narrow_strip.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); the named outline is a `Loop` of
-// `Segment`s; the strip face (springrep's "x.body_u_min") is picked as the one plane facing −x; `unify`
+// `Segment`s; springrep's face "x.body_u_min" is `faces_by("x", Role::Side("s4"))` (the outline's fifth
+// segment) on the extrusion `named("x")`; `unify`
 // has no §4.3 counterpart: the call after extrusion is dropped and the re-unify face count is an API gap.
 //! A face a hundred times narrower than a tolerance of 1e-5 mm, but wider than this kernel's
 //! 1e-7 mm, is kept as a face: swept from an outline edge 90 tolerances long, measured, and left alone when faces are
@@ -9,7 +10,6 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use yack::SurfaceKind;
 use yack::prelude::*;
 
 /// A 3 by 1 + `step` mm rect on a circle of radius 4 at the origin, extruded 6 mm: the rect's
@@ -25,14 +25,14 @@ fn rect_past_a_circle(step: f64) -> Solid {
             radius: 4.0,
             start: rad(FRAC_PI_2),
             sweep: rad(TAU - (FRAC_PI_2 - 3f64.atan2(r7))),
-        }, // floor_side
-        line((r7, 3.0), (3.0, 3.0)),   // body_v_min
-        line((3.0, 3.0), (3.0, top)),  // body_u_max
-        line((3.0, top), (0.0, top)),  // body_v_max
-        line((0.0, top), (0.0, 4.0)),  // body_u_min
+        }, // s0: floor_side
+        line((r7, 3.0), (3.0, 3.0)),   // s1: body_v_min
+        line((3.0, 3.0), (3.0, top)),  // s2: body_u_max
+        line((3.0, top), (0.0, top)),  // s3: body_v_max
+        line((0.0, top), (0.0, 4.0)),  // s4: body_u_min
     ];
     let outline = Profile::new(Loop::new(segments).unwrap(), vec![]).unwrap();
-    extrude(&Frame::WORLD, &outline, 6.0).unwrap()
+    extrude(&Frame::WORLD, &outline, 6.0).unwrap().named("x")
 }
 
 #[test]
@@ -49,8 +49,8 @@ fn a_strip_90_tolerances_wide_stays_a_face() {
     let want = 6.0 * (16.0 * PI + outside);
     assert!((b.volume() - want).abs() < 1e-9 * want);
     assert_eq!(b.faces().len(), 7);
-    // body_u_min, the segment on x = 0, is the outline's only side facing −x.
-    let strip = b.faces_where(|f| matches!(f.kind(), SurfaceKind::Plane { normal } if normal.x < -0.5));
+    // x.body_u_min
+    let strip = b.faces_by("x", Role::Side("s4".into()));
     assert_eq!(strip.len(), 1);
     assert!((b.face(strip[0]).unwrap().area() - 6.0 * s).abs() < 1e-9);
     // API GAP: unify(&b).face_count() == 7 needs an op that merges faces lying on one surface.

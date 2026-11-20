@@ -8,6 +8,6 @@ pub fn build() -> Result<Solid> {
     // Semi-axes 6, 6, 1.5 about (10.5, 0, 0), as placed turned -90° about z and lowered 7.5.
     let a = Affine::from_rows([[0.0, 6.0 * s, 1.5 * c, 0.0], [-6.0, 0.0, 0.0, -10.5], [0.0, 6.0 * c, -1.5 * s, -7.5]])?;
     let wheel = sphere(&Frame::WORLD, 1.0)?.transform_affine(&a)?;
-    let screw = Motion::Screw { axis_point: o, axis: z, angle: deg(420.0), rise_per_turn: 30.0 };
-    cylinder(&Frame::WORLD, 5.0, 20.0)?.difference(&wheel.swept(&screw)?)
+    let screw = Motion::screw(o, z, rad(0.0), deg(420.0), Lead::per_turn(30.0));
+    cylinder(&Frame::WORLD, 5.0, 20.0)?.cut_swept(&wheel, &screw)
 }

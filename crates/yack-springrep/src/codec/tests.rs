@@ -1,6 +1,7 @@
 // yack: springrep module src/codec/tests.rs
 // Adapted from springrep@a03e8a1 src/codec/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: memos are no longer encoded (M2.2 T4b): the two memo tests become one that the bytes do
+// not depend on what was asked of the solid.
 use std::collections::BTreeSet;
 use std::f64::consts::FRAC_1_SQRT_2;
 
@@ -216,39 +217,32 @@ fn at_z(z: f64) -> Frame {
 }
 
 #[test]
-fn a_built_solid_reads_back_with_its_ids_names_and_memos() {
+fn a_built_solid_reads_back_with_its_ids_and_names() {
     let b = drilled_and_rounded();
     let volume = measure::volume(&b);
     let back: Brep = back(&bytes(&b)).unwrap();
     assert_eq!(back, b);
     assert_eq!(bytes(&back), bytes(&b));
-    // The volume each face's memo holds came across, and gives the same total to the last bit.
-    assert!(back.face_ids().all(|f| back.memo(f).volume.get().is_some()));
+    // Measured again from its read-back geometry, it has the same volume to the last bit.
     assert_eq!(measure::volume(&back).to_bits(), volume.to_bits());
 }
 
 #[test]
-fn memos_come_back_shared_as_they_were_with_the_trims_a_boolean_read() {
-    // A cut reads the trims of the faces it meets into their memos; a later boolean takes those
-    // instead of working them out again. Here a 4 mm square post through the block's corner.
+fn the_bytes_do_not_depend_on_what_was_asked_of_the_solid() {
+    // Queries fill a face's memo (its volume share, its box, the trims a boolean reads); none of
+    // that is written, so a solid encodes the same before and after them.
     let b = drilled_and_rounded();
+    let before = bytes(&b);
+    measure::volume(&b);
+    measure::area(&b);
+    let rays = crate::rays::Rays::new(&b).unwrap();
+    rays.side(p(5.0, 5.0, 5.0));
     let square = Profile::rect(Vec2::new(10.0, 10.0), 4.0, 4.0);
     let post = extrude(&square, &at_z(-5.0), 20.0, "post").unwrap();
     difference(&b, &post).unwrap();
-    let read: Vec<_> = b
-        .face_ids()
-        .filter(|&f| b.memo(f).images.get().is_some())
-        .collect();
-    assert!(!read.is_empty());
+    assert_eq!(bytes(&b), before);
     let pair = vec![b.clone(), b];
     let back: Vec<Brep> = back(&bytes(&pair)).unwrap();
-    for &f in &read {
-        assert!(back[0].memo(f).images.get().is_some());
-        assert!(Arc::ptr_eq(
-            &back[0].shared_memo(f),
-            &back[1].shared_memo(f)
-        ));
-    }
     assert_eq!(bytes(&back), bytes(&pair));
 }
 

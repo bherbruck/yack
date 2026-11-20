@@ -78,7 +78,7 @@ fn is_text(rel: &str) -> bool {
     name == "NOTICE"
         || name == ".gitignore"
         || name == "Cargo.lock"
-        || [".rs", ".toml", ".txt"].iter().any(|e| name.ends_with(e))
+        || [".rs", ".toml", ".txt", ".md"].iter().any(|e| name.ends_with(e))
 }
 
 /// Loads the real workspace at `root`.

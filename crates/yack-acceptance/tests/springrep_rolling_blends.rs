@@ -1,7 +1,10 @@
 // yack: rolling-ball fillets round a rod, a slot, a D and a bitten boss standing through a sloping plane.
 // Adapted from springrep@a03e8a1 tests/rolling_blends.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); edges named by face-name pairs are
-// selected with `face_at` + `edges_between`; springrep's centred `Profile::rect` is written as
+// selected by role: springrep's `feature.face` is `faces_by(feature, role)` on a solid `named(feature)`,
+// a profile's n-th side is `Role::Side("s{n}")` (a circle's `side`, the slot's `mid_v_min` and the
+// round walls are each s0), and the loft's `side` is any `Role::Side` of its feature; springrep's centred
+// `Profile::rect` is written as
 // `Profile::rectangle(min, max)` and its `Profile::circle(c, diameter)` as `Profile::circle(c, radius)`;
 // the ruled two-section loft `slope` (two rectangles of equal depth) is the same prism built by `extrude`
 // of its trapezoid section along y; `unify` has no §4.3 counterpart and is dropped (it only preceded checks
@@ -62,28 +65,35 @@ fn outline(segments: Vec<Segment>) -> Profile {
     Profile::new(Loop::new(segments).unwrap(), vec![]).unwrap()
 }
 
-/// Every edge between the face through `p` and the face through `q`.
-fn between(b: &Solid, p: [f64; 3], q: [f64; 3]) -> Vec<EdgeId> {
-    b.edges_between(b.face_at(p).unwrap(), b.face_at(q).unwrap()).unwrap()
+/// Every edge where `id`'s first side (s0) meets slope.side (any side face of the loft `slope`).
+fn foot_edges(b: &Solid, id: &str) -> Vec<EdgeId> {
+    let wall = b.faces_by(id, Role::Side("s0".into()));
+    let slope = b.faces_where(|f| matches!(f.role("slope"), Some(Role::Side(_))));
+    let mut out = Vec::new();
+    for &x in &wall {
+        for &y in &slope {
+            out.extend(b.edges_between(x, y).unwrap());
+        }
+    }
+    assert!(!out.is_empty(), "no edge between {id}.s0 and slope.side");
+    out
 }
-
-/// A point on slope.side, the plane z = 7.5 − x/4, clear of everything standing through it.
-const SLOPE: [f64; 3] = [-8.0, 0.0, 9.5];
 
 /// A 20 × 20 block, its top cut to the plane z = 7.5 − x/4.
 fn sloped_block() -> Solid {
-    let block = extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap();
+    let block =
+        extrude(&Frame::WORLD, &Profile::rectangle([-10.0, -10.0], [10.0, 10.0]).unwrap(), 10.0).unwrap().named("block");
     // The loft between (z 4, x 14–16) and (z 11, x −14–16), 30 deep: its section in the xz plane,
     // pushed from y = 15 to y = −15.
     let [(za, x0a, x1a), (zb, x0b, x1b)] = [(4.0, 14.0, 16.0), (11.0, -14.0, 16.0)];
     let xz = Frame::new([0.0, 15.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]).unwrap();
     let section = Profile::polygon(&[[x0a, za], [x1a, za], [x1b, zb], [x0b, zb]]).unwrap();
-    block.difference(&extrude(&xz, &section, 30.0).unwrap()).unwrap()
+    block.difference(&extrude(&xz, &section, 30.0).unwrap().named("slope")).unwrap()
 }
 
 /// `profile` standing 14 high from the xy plane through the sloped block's top.
-fn standing(profile: &Profile) -> Solid {
-    sloped_block().union(&extrude(&Frame::WORLD, profile, 14.0).unwrap()).unwrap()
+fn standing(profile: &Profile, id: &str) -> Solid {
+    sloped_block().union(&extrude(&Frame::WORLD, profile, 14.0).unwrap().named(id)).unwrap()
 }
 
 /// The sloped block with a ⌀6 hole up z through the slope, or a ⌀6 boss 14 high standing through
@@ -91,9 +101,9 @@ fn standing(profile: &Profile) -> Solid {
 fn sloped_rod(boss: bool) -> Solid {
     let circle = Profile::circle([0.0, 0.0], 3.0).unwrap();
     if boss {
-        standing(&circle)
+        standing(&circle, "rod")
     } else {
-        let rod = extrude(&Frame::WORLD, &circle, 12.0).unwrap();
+        let rod = extrude(&Frame::WORLD, &circle, 12.0).unwrap().named("rod");
         sloped_block().difference(&rod).unwrap()
     }
 }
@@ -108,9 +118,8 @@ fn a_rolling_ball_rounds_a_rod_through_a_slope() {
     let lean = (1.0f64 + 1.0 / 16.0).sqrt();
     for boss in [false, true] {
         let s = sloped_rod(boss);
-        // (rod.side, slope.side): the rod's wall below the slope round the hole, above it round the boss.
-        let rod_side = if boss { [0.0, 3.0, 10.0] } else { [0.0, 3.0, 3.0] };
-        let b = s.fillet(&between(&s, rod_side, SLOPE), r).unwrap().named("rim");
+        // (rod.side, slope.side)
+        let b = s.fillet(&foot_edges(&s, "rod"), r).unwrap().named("rim");
         assert!(b.check().is_empty());
         let plain = sloped_rod(boss).volume();
         let filled = b.volume();
@@ -136,12 +145,12 @@ fn a_rolling_ball_rounds_a_rod_through_a_slope() {
 /// and round ends of radius 3 about (±4, 0).
 fn sloped_slot() -> Solid {
     let slot = outline(vec![
-        line((-4.0, -3.0), (4.0, -3.0)),          // mid_v_min
-        arc((4.0, 0.0), 3.0, -FRAC_PI_2, PI),     // e2_side
-        line((4.0, 3.0), (-4.0, 3.0)),            // mid_v_max
-        arc((-4.0, 0.0), 3.0, FRAC_PI_2, PI),     // e1_side
+        line((-4.0, -3.0), (4.0, -3.0)),          // s0: mid_v_min
+        arc((4.0, 0.0), 3.0, -FRAC_PI_2, PI),     // s1: e2_side
+        line((4.0, 3.0), (-4.0, 3.0)),            // s2: mid_v_max
+        arc((-4.0, 0.0), 3.0, FRAC_PI_2, PI),     // s3: e1_side
     ]);
-    standing(&slot)
+    standing(&slot, "slot")
 }
 
 #[test]
@@ -154,7 +163,7 @@ fn a_rolling_ball_rounds_a_slot_through_a_slope_across_its_tangent_faces() {
     let s = sloped_slot();
     // (slot.mid_v_min, slope.side)
     let lean = (1.0f64 + 1.0 / 16.0).sqrt();
-    let b = s.fillet(&between(&s, [0.0, -3.0, 10.0], SLOPE), r).unwrap().named("foot");
+    let b = s.fillet(&foot_edges(&s, "slot"), r).unwrap().named("foot");
     assert!(b.check().is_empty());
     let plain = sloped_slot().volume();
     assert!(b.volume() > plain);
@@ -207,10 +216,10 @@ fn a_rolling_ball_rounds_a_slot_through_a_slope_across_its_tangent_faces() {
 /// its round wall meets a flat back on the plane x = 0.
 fn sloped_d() -> Solid {
     let d = outline(vec![
-        arc((0.0, 0.0), 3.0, FRAC_PI_2, PI), // round_side
-        line((0.0, -3.0), (0.0, 3.0)),       // back_u_min
+        arc((0.0, 0.0), 3.0, FRAC_PI_2, PI), // s0: round_side
+        line((0.0, -3.0), (0.0, 3.0)),       // s1: back_u_min
     ]);
-    standing(&d)
+    standing(&d, "d")
 }
 
 #[test]
@@ -223,7 +232,7 @@ fn a_rolling_ball_round_an_open_curved_edge_is_trimmed_by_the_face_at_each_end()
     let s = sloped_d();
     // (d.round_side, slope.side)
     let lean = (1.0f64 + 1.0 / 16.0).sqrt();
-    let b = s.fillet(&between(&s, [-3.0, 0.0, 10.0], SLOPE), r).unwrap().named("foot");
+    let b = s.fillet(&foot_edges(&s, "d"), r).unwrap().named("foot");
     assert!(b.check().is_empty());
     let plain = sloped_d().volume();
     assert!(b.volume() > plain);
@@ -262,10 +271,10 @@ fn a_rolling_ball_round_an_open_curved_edge_is_trimmed_by_the_face_at_each_end()
 fn sloped_bitten() -> Solid {
     let (round, bite) = (2.4f64.atan2(1.8), 2.4f64.atan2(3.2));
     let boss = outline(vec![
-        arc((0.0, 0.0), 3.0, round, TAU - 2.0 * round), // round_side
-        arc((5.0, 0.0), 4.0, bite - PI, -2.0 * bite),   // bite_side
+        arc((0.0, 0.0), 3.0, round, TAU - 2.0 * round), // s0: round_side
+        arc((5.0, 0.0), 4.0, bite - PI, -2.0 * bite),   // s1: bite_side
     ]);
-    standing(&boss)
+    standing(&boss, "boss")
 }
 
 #[test]
@@ -277,7 +286,7 @@ fn a_rolling_ball_round_an_open_curved_edge_ends_on_a_cylinder() {
     let s = sloped_bitten();
     // (boss.round_side, slope.side)
     let lean = (1.0f64 + 1.0 / 16.0).sqrt();
-    let b = s.fillet(&between(&s, [-3.0, 0.0, 10.0], SLOPE), r).unwrap().named("foot");
+    let b = s.fillet(&foot_edges(&s, "boss"), r).unwrap().named("foot");
     assert!(b.check().is_empty());
     let plain = sloped_bitten().volume();
     assert!(b.volume() > plain);

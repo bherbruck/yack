@@ -1,14 +1,13 @@
 // yack: chamfers and fillets on small swept solids against closed-form volume and area.
 // Adapted from springrep@a03e8a1 tests/blends.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: springrep API replaced by the yack public API (PLAN §4.3); edges named by face-name
-// pairs ("box.end", "box.v_min") are picked with edge_at on the edge, circular edges by a
-// CurveKind::Circle predicate, and a tangent rim springrep reaches from one or two picks is
-// selected whole (edges_of the top face, or a predicate), since §4.3 does not say whether a
-// blend follows tangent chains; springrep's Profile::circle takes a diameter, yack's a radius;
-// MeshOptions { linear: 0.2 } is chord 0.2, checked watertight; springrep's per-face blend
-// names ("f.round_0", "f.corner", "ch.bevel_0", ...) are the op's feature tag (`named("f")`),
-// counted with faces_tagged, so a count is the number of faces carrying any of the op's names;
-// checks on names of single input faces ("box.end") dropped (API GAP below).
+// Changes: springrep API replaced by the yack public API; each solid is tagged with springrep's
+// feature id (`named("box")`), and springrep face names "<id>.<face>" are yack (tag, Role):
+// "end"/"start" are Role::End/Start, "round_n"/"bevel_n"/"corner" are Round(n)/Bevel(n)/Corner,
+// and a profile side is Role::Side of its segment: springrep's rect sides v_min, u_max, v_max,
+// u_min are Profile::rectangle's segments s0..s3, a circle's "side" is s0, polygon names are their
+// segment's s{n}, and `rounded` labels its segments with springrep's names (Pen::label). A blend
+// pair (face, face) is the edges between those faces. springrep's Profile::circle takes a
+// diameter, yack's a radius; MeshOptions { linear: 0.2 } is chord 0.2, checked watertight.
 
 //! Chamfers and fillets on small swept solids against closed-form volume and area, each result
 //! checked valid and watertight, with the blend faces named by the operation.
@@ -16,18 +15,64 @@
 use std::f64::consts::PI;
 
 use yack::prelude::*;
-use yack::{CurveKind, EdgeId, SurfaceKind};
 
 const COARSE: f64 = 0.2;
 
+fn at_z(z: f64) -> Frame {
+    Frame::at([0.0, 0.0, z])
+}
+
 /// springrep's `block(id, w, d, h)`: the rectangle (0, 0)–(w, d) extruded h up z.
-fn block_at(w: f64, d: f64, h: f64) -> Solid {
-    extrude(&Frame::WORLD, &Profile::rectangle([0.0, 0.0], [w, d]).unwrap(), h).unwrap()
+fn block_at(id: &str, w: f64, d: f64, h: f64) -> Solid {
+    extrude(&at_z(0.0), &Profile::rectangle([0.0, 0.0], [w, d]).unwrap(), h).unwrap().named(id)
 }
 
 /// springrep's `disc(id, z, diameter, h)`.
-fn disc(z: f64, diameter: f64, h: f64) -> Solid {
-    extrude(&Frame::at([0.0, 0.0, z]), &Profile::circle([0.0, 0.0], diameter / 2.0).unwrap(), h).unwrap()
+fn disc(id: &str, z: f64, diameter: f64, h: f64) -> Solid {
+    extrude(&at_z(z), &Profile::circle([0.0, 0.0], diameter / 2.0).unwrap(), h).unwrap().named(id)
+}
+
+/// springrep's face name `<id>.<face>` as the yack tag and role (see the header).
+fn name(n: &str) -> (&str, Role) {
+    let (tag, face) = n.split_once('.').unwrap();
+    let side = |s: &str| Role::Side(s.into());
+    let role = match face {
+        "start" => Role::Start,
+        "end" => Role::End,
+        "corner" => Role::Corner,
+        "v_min" | "side" => side("s0"),
+        "u_max" => side("s1"),
+        "v_max" => side("s2"),
+        "u_min" => side("s3"),
+        _ => {
+            if let Some(k) = face.strip_prefix("round_") {
+                Role::Round(k.parse().unwrap())
+            } else if let Some(k) = face.strip_prefix("bevel_") {
+                Role::Bevel(k.parse().unwrap())
+            } else if let Some(k) = face.strip_prefix('e').filter(|k| k.parse::<u32>().is_ok()) {
+                side(&format!("s{k}"))
+            } else {
+                side(face)
+            }
+        }
+    };
+    (tag, role)
+}
+
+/// The edges each springrep pair of named faces picks, in pair order.
+fn pairs(b: &Solid, pairs: &[(&str, &str)]) -> Vec<EdgeId> {
+    let mut edges = Vec::new();
+    for &(a, c) in pairs {
+        let ((ta, ra), (tc, rc)) = (name(a), name(c));
+        let (fa, fc) = (b.faces_by(ta, ra), b.faces_by(tc, rc));
+        assert!(!fa.is_empty() && !fc.is_empty(), "no face {a} or {c}");
+        for &x in &fa {
+            for &y in &fc {
+                edges.extend(b.edges_between(x, y).unwrap());
+            }
+        }
+    }
+    edges
 }
 
 fn assert_solid(b: &Solid, volume: f64, area: f64) {
@@ -38,6 +83,11 @@ fn assert_solid(b: &Solid, volume: f64, area: f64) {
     assert!((v - volume).abs() <= 1e-9 * volume, "volume {v} vs {volume}");
     assert!((a - area).abs() <= 1e-9 * area, "area {a} vs {area}");
     assert!(b.mesh(COARSE).unwrap().is_watertight());
+}
+
+fn names(b: &Solid, n: &str) -> usize {
+    let (tag, role) = name(n);
+    b.faces_by(tag, role).len()
 }
 
 fn kinds(b: &Solid, keep: fn(&SurfaceKind) -> bool) -> usize {
@@ -57,69 +107,62 @@ fn is_sphere(k: &SurfaceKind) -> bool {
     matches!(k, SurfaceKind::Sphere { .. })
 }
 
-/// Every piece of the circular edge of radius `r` at height `z` (a circle may be split at a seam).
-fn circle_edges(b: &Solid, r: f64, z: f64) -> Vec<EdgeId> {
-    let picked = b.edges_where(|e| {
-        matches!(e.kind(), CurveKind::Circle { radius, .. } if (radius - r).abs() < 1e-9)
-            && (e.midpoint().z - z).abs() < 1e-9
-    });
-    assert!(!picked.is_empty(), "no circle of radius {r} at z = {z}");
-    picked
-}
-
 fn invalid(r: &Result<Solid>) -> bool {
     matches!(r, Err(e) if matches!(e.kind, ErrorKind::Invalid))
 }
 
+/// springrep's `fillet(body, pairs, r, id)`.
+fn fillet(body: &Solid, p: &[(&str, &str)], r: f64, id: &str) -> Result<Solid> {
+    body.fillet(&pairs(body, p), r).map(|b| b.named(id))
+}
+
+/// springrep's `chamfer(body, pairs, d, id)`.
+fn chamfer(body: &Solid, p: &[(&str, &str)], d: f64, id: &str) -> Result<Solid> {
+    body.chamfer(&pairs(body, p), d).map(|b| b.named(id))
+}
+
 #[test]
 fn a_straight_convex_edge_takes_a_cylinder_fillet() {
-    // ("box.end", "box.v_min"): the top edge on y = 0.
-    let body = block_at(40.0, 30.0, 20.0);
-    let b = body.fillet(&[body.edge_at([20.0, 0.0, 20.0]).unwrap()], 5.0).unwrap().named("f");
+    let b = fillet(&block_at("box", 40.0, 30.0, 20.0), &[("box.end", "box.v_min")], 5.0, "f").unwrap();
     let spandrel = 25.0 * (1.0 - PI / 4.0);
     let area = 5200.0 - 2.0 * 5.0 * 40.0 - 2.0 * spandrel + PI / 2.0 * 5.0 * 40.0;
     assert_solid(&b, 24000.0 - spandrel * 40.0, area);
     assert_eq!(b.faces().len(), 7);
     assert_eq!(kinds(&b, is_cylinder), 1);
-    // "f.round_0": the one round.
-    assert_eq!(b.faces_tagged("f").len(), 1);
-    // API GAP: names(&b, "box.end") == 1; a tag names every face of the op that made it, so one
-    // face of a constructor (the block's top) has no name of its own.
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "box.end"), 1);
 }
 
 #[test]
 fn a_straight_concave_edge_takes_a_fillet_that_adds_material() {
+    // Segments e0..e5 run from each corner to the next.
     let pts = [[0.0, 0.0], [40.0, 0.0], [40.0, 10.0], [10.0, 10.0], [10.0, 30.0], [0.0, 30.0]];
-    let ell = extrude(&Frame::WORLD, &Profile::polygon(&pts).unwrap(), 20.0).unwrap();
-    // ("l.e2", "l.e3"): the inside corner at (10, 10).
-    let b = ell.fillet(&[ell.edge_at([10.0, 10.0, 10.0]).unwrap()], 4.0).unwrap().named("f");
+    let ell = extrude(&at_z(0.0), &Profile::polygon(&pts).unwrap(), 20.0).unwrap().named("l");
+    let b = fillet(&ell, &[("l.e2", "l.e3")], 4.0, "f").unwrap();
     let spandrel = 16.0 * (1.0 - PI / 4.0);
     let area = 2.0 * (600.0 + spandrel) + 20.0 * (140.0 - 8.0 + 2.0 * PI);
     assert_solid(&b, 600.0 * 20.0 + spandrel * 20.0, area);
-    // "f.round_0".
-    assert_eq!(b.faces_tagged("f").len(), 1);
-    // API GAP: names(&b, "l.e2") == 1; profile segment labels are not face tags.
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "l.e2"), 1);
 }
 
 #[test]
 fn a_circular_edge_takes_a_cone_chamfer() {
-    let body = disc(0.0, 40.0, 20.0);
-    // ("c.end", "c.side"): the top rim.
-    let b = body.chamfer(&circle_edges(&body, 20.0, 20.0), 2.0).unwrap().named("ch");
+    let b = chamfer(&disc("c", 0.0, 40.0, 20.0), &[("c.end", "c.side")], 2.0, "ch").unwrap();
     let volume = PI * 400.0 * 18.0 + PI * 2.0 / 3.0 * (400.0 + 360.0 + 324.0);
     let area = 400.0 * PI + 2.0 * PI * 20.0 * 18.0 + 324.0 * PI + PI * 38.0 * 2.0 * 2f64.sqrt();
     assert_solid(&b, volume, area);
     assert_eq!(kinds(&b, is_cone), 1);
-    // "ch.bevel_0".
-    assert_eq!(b.faces_tagged("ch").len(), 1);
+    assert_eq!(names(&b, "ch.bevel_0"), 1);
 }
 
 #[test]
 fn a_concave_circular_edge_takes_a_torus_fillet() {
-    let plate = extrude(&Frame::WORLD, &Profile::rectangle([-30.0, -30.0], [30.0, 30.0]).unwrap(), 10.0).unwrap();
-    let body = plate.union(&disc(10.0, 20.0, 10.0)).unwrap();
-    // ("plate.end", "boss.side"): the boss's foot.
-    let b = body.fillet(&circle_edges(&body, 10.0, 10.0), 3.0).unwrap().named("f");
+    let plate = extrude(&at_z(0.0), &Profile::rectangle([-30.0, -30.0], [30.0, 30.0]).unwrap(), 10.0)
+        .unwrap()
+        .named("plate");
+    let body = plate.union(&disc("boss", 10.0, 20.0, 10.0)).unwrap();
+    let b = fillet(&body, &[("plate.end", "boss.side")], 3.0, "f").unwrap();
     // Pappus: the spandrel's centroid sits 3·(10 − 3π)/(12 − 3π) from the corner, in ρ and z.
     let spandrel = 9.0 * (1.0 - PI / 4.0);
     let offset = 3.0 * (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
@@ -132,20 +175,13 @@ fn a_concave_circular_edge_takes_a_torus_fillet() {
         + 2.0 * PI * (13.0 - 6.0 / PI) * (1.5 * PI);
     assert_solid(&b, volume, area);
     assert_eq!(kinds(&b, is_torus), 1);
-    // "f.round_0".
-    assert_eq!(b.faces_tagged("f").len(), 1);
+    assert_eq!(names(&b, "f.round_0"), 1);
 }
 
 #[test]
 fn three_fillets_at_a_corner_close_with_a_sphere() {
-    // ("box.end", "box.u_max"), ("box.end", "box.v_max"), ("box.u_max", "box.v_max").
-    let body = block_at(20.0, 20.0, 20.0);
-    let edges = [
-        body.edge_at([20.0, 10.0, 20.0]).unwrap(),
-        body.edge_at([10.0, 20.0, 20.0]).unwrap(),
-        body.edge_at([20.0, 20.0, 10.0]).unwrap(),
-    ];
-    let b = body.fillet(&edges, 4.0).unwrap().named("f");
+    let p = [("box.end", "box.u_max"), ("box.end", "box.v_max"), ("box.u_max", "box.v_max")];
+    let b = fillet(&block_at("box", 20.0, 20.0, 20.0), &p, 4.0, "f").unwrap();
     let spandrel = 16.0 * (1.0 - PI / 4.0);
     let volume = 8000.0 - 3.0 * 16.0 * spandrel - (64.0 - PI * 64.0 / 6.0);
     let area = 2400.0 - 3.0 * 4.0 * 16.0 * 2.0 - 3.0 * 16.0 - 3.0 * spandrel
@@ -153,16 +189,15 @@ fn three_fillets_at_a_corner_close_with_a_sphere() {
         + PI * 16.0 / 2.0;
     assert_solid(&b, volume, area);
     assert_eq!(kinds(&b, is_sphere), 1);
-    // "f.corner" once and "f.round_0", "f.round_1", "f.round_2" once each: four faces. yack's one
-    // tag cannot tell the corner from the rounds; the sphere count above does.
-    assert_eq!(b.faces_tagged("f").len(), 1 + 3);
+    assert_eq!(names(&b, "f.corner"), 1);
+    for i in 0..3 {
+        assert_eq!(names(&b, &format!("f.round_{i}")), 1);
+    }
 }
 
 #[test]
 fn a_blend_wider_than_its_face_is_refused() {
-    // ("box.end", "box.v_min") on a block 4 high.
-    let body = block_at(40.0, 30.0, 4.0);
-    let r = body.chamfer(&[body.edge_at([20.0, 0.0, 4.0]).unwrap()], 5.0);
+    let r = chamfer(&block_at("box", 40.0, 30.0, 4.0), &[("box.end", "box.v_min")], 5.0, "ch");
     assert!(invalid(&r), "{:?}", r.err());
 }
 
@@ -191,8 +226,7 @@ fn assert_dies_into(body: &Solid, side: f64, r: f64, from: f64, x1: f64, w0: imp
     let taken = body.volume() - b.volume();
     assert!((taken - removed).abs() <= 1e-6 * removed, "took {taken} vs {removed}");
     assert_eq!(b.faces().len(), body.faces().len() + 1);
-    // "f.round_0".
-    assert_eq!(b.faces_tagged("f").len(), 1);
+    assert_eq!(names(&b, "f.round_0"), 1);
 }
 
 #[test]
@@ -201,8 +235,8 @@ fn a_fillet_ending_on_a_hub_it_meets_at_a_glancing_angle_dies_into_it() {
     // with d = √624: the side leaves the hub at x = 1, at 1/25 of a right angle from its tangent.
     // A fillet of 2 on the side's top edge ends on the hub, and leaves the hub's own edge sharp.
     let d = 624f64.sqrt();
-    let bar = extrude(&Frame::WORLD, &Profile::rectangle([0.0, -d], [60.0, d]).unwrap(), 4.0).unwrap();
-    let body = disc(0.0, 50.0, 4.0).union(&bar).unwrap();
+    let bar = extrude(&at_z(0.0), &Profile::rectangle([0.0, -d], [60.0, d]).unwrap(), 4.0).unwrap().named("bar");
+    let body = disc("hub", 0.0, 50.0, 4.0).union(&bar).unwrap();
     let x1 = (625.0 - (d - 2.0) * (d - 2.0)).sqrt();
     assert_dies_into(&body, -d, 2.0, 1.0, x1, |x| d - (625.0 - x * x).sqrt());
 }
@@ -231,7 +265,7 @@ fn a_fillet_end_whose_rim_bows_out_behind_its_edge_runs_no_further() {
     }
     segments.push(line(corners[4], end));
     let profile = Profile::new(Loop::new(segments).unwrap(), vec![]).unwrap();
-    let body = extrude(&Frame::WORLD, &profile, 4.0).unwrap();
+    let body = extrude(&at_z(0.0), &profile, 4.0).unwrap().named("p");
     let x1 = (2501.0f64 - 48.0 * 48.0).sqrt() - 1.0;
     assert_dies_into(&body, 0.0, 2.0, 0.0, x1, |x| 50.0 - (2501.0 - (x + 1.0) * (x + 1.0)).sqrt());
 }
@@ -240,9 +274,8 @@ fn a_fillet_end_whose_rim_bows_out_behind_its_edge_runs_no_further() {
 fn a_boss_fillet_wider_than_its_ledge_ends_on_the_ledge_side() {
     // A disc of radius 10 and height 4 with a boss of radius 8 and height 6 on it: the ledge is 2
     // wide and a fillet of 3 at the boss's foot runs over its rim, ending on the disc's side.
-    let body = disc(0.0, 20.0, 4.0).union(&disc(4.0, 16.0, 6.0)).unwrap();
-    // ("base.end", "boss.side"): the boss's foot.
-    let b = body.fillet(&circle_edges(&body, 8.0, 4.0), 3.0).unwrap().named("f");
+    let body = disc("base", 0.0, 20.0, 4.0).union(&disc("boss", 4.0, 16.0, 6.0)).unwrap();
+    let b = fillet(&body, &[("base.end", "boss.side")], 3.0, "f").unwrap();
     // In the section, s out from the boss and h up from the ledge, the arc's centre is (3, 3):
     // h = 3 − √(9 − w²), w = 3 − s, kept for s ≤ 2 (w ≥ 1). With J = ∫₁³ √(9 − w²) dw
     // = 9π/4 − √2 − 4.5·asin(1/3), the spandrel kept is 6 − J and its moment about the boss's
@@ -258,10 +291,8 @@ fn a_boss_fillet_wider_than_its_ledge_ends_on_the_ledge_side() {
     assert_solid(&b, volume, area);
     assert_eq!(b.faces().len(), 5);
     assert_eq!(kinds(&b, is_torus), 1);
-    // "f.round_0".
-    assert_eq!(b.faces_tagged("f").len(), 1);
-    // API GAP: names(&b, "base.end") == 0 (the ledge is used up); one face of a constructor has
-    // no name of its own.
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "base.end"), 0);
 }
 
 #[test]
@@ -270,11 +301,11 @@ fn a_concave_fillet_wider_than_its_ledge_ends_on_the_ledge_face() {
     // 2 back from the ledge's front (u = 0), running 20 of its length. A fillet of 3 where the
     // ledge's top meets the wall needs 3 of ledge and finds 2: it runs over the ledge's front edge
     // and ends on the front face, which is carried up to meet it.
-    let ledge = extrude(&Frame::WORLD, &Profile::rectangle([0.0, 0.0], [10.0, 4.0]).unwrap(), 30.0).unwrap();
-    let wall = extrude(&Frame::WORLD, &Profile::rectangle([2.0, 4.0], [6.0, 10.0]).unwrap(), 20.0).unwrap();
+    let ledge =
+        extrude(&at_z(0.0), &Profile::rectangle([0.0, 0.0], [10.0, 4.0]).unwrap(), 30.0).unwrap().named("ledge");
+    let wall = extrude(&at_z(0.0), &Profile::rectangle([2.0, 4.0], [6.0, 10.0]).unwrap(), 20.0).unwrap().named("wall");
     let body = ledge.union(&wall).unwrap();
-    // ("ledge.v_max", "wall.u_min"): the inside corner along z at u = 2, v = 4.
-    let b = body.fillet(&[body.edge_at([2.0, 4.0, 10.0]).unwrap()], 3.0).unwrap().named("f");
+    let b = fillet(&body, &[("ledge.v_max", "wall.u_min")], 3.0, "f").unwrap();
     // The arc's centre is at (−1, 7). The full spandrel is 9 − 9π/4; past u = 0 it would hold
     // ∫₀¹ (3 − √(9 − s²)) ds = 3 − √2 − 4.5·asin(1/3). The arc meets u = 0 at v = 7 − √8, having
     // turned acos(1/3) from the wall. The body's area is 1208.
@@ -283,19 +314,14 @@ fn a_concave_fillet_wider_than_its_ledge_ends_on_the_ledge_face() {
     let area = 1208.0 + 2.0 * kept + 20.0 * rise - 40.0 - 60.0 + 60.0 * (1.0f64 / 3.0).acos();
     assert_solid(&b, 1680.0 + 20.0 * kept, area);
     assert_eq!(b.faces().len(), 11);
-    // "f.round_0".
-    assert_eq!(b.faces_tagged("f").len(), 1);
-    // API GAP: names(&b, "ledge.u_min") == 1; one face of a constructor has no name of its own.
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "ledge.u_min"), 1);
 }
 
 #[test]
 fn a_pair_that_names_no_edge_is_invalid() {
-    // ("box.end", "box.start"): the top and the bottom share no edge.
-    // yack: the pair is the edges between the two faces; either that walk or the fillet of the
-    // edges it finds (none) is refused as invalid.
-    let body = block_at(4.0, 4.0, 4.0);
-    let (top, bottom) = (body.face_at([2.0, 2.0, 4.0]).unwrap(), body.face_at([2.0, 2.0, 0.0]).unwrap());
-    let r = body.edges_between(top, bottom).and_then(|edges| body.fillet(&edges, 1.0));
+    // yack: the pair picks no edge, and a fillet of no edges is refused.
+    let r = fillet(&block_at("box", 4.0, 4.0, 4.0), &[("box.end", "box.start")], 1.0, "f");
     assert!(invalid(&r), "{:?}", r.err());
 }
 
@@ -304,41 +330,37 @@ fn a_pair_that_names_no_edge_is_invalid() {
 fn rounded(w: f64, d: f64, r: f64) -> Profile {
     let (x, y) = (w / 2.0 - r, d / 2.0 - r);
     let (hw, hd) = (w / 2.0, d / 2.0);
-    let arc = |cx: f64, cy: f64, start: f64| Segment::Arc {
-        center: [cx, cy].into(),
-        radius: r,
-        start: rad(start),
-        sweep: rad(PI / 2.0),
-    };
-    let line = |a: [f64; 2], b: [f64; 2]| Segment::Line { a: a.into(), b: b.into() };
-    let segments = vec![
-        line([-x, -hd], [x, -hd]),
-        arc(x, -y, -PI / 2.0),
-        line([hw, -y], [hw, y]),
-        arc(x, y, 0.0),
-        line([x, hd], [-x, hd]),
-        arc(-x, y, PI / 2.0),
-        line([-hw, y], [-hw, -y]),
-        arc(-x, -y, PI),
-    ];
-    Profile::new(Loop::new(segments).unwrap(), vec![]).unwrap()
+    let outline = Loop::starting_at([-x, -hd])
+        .line_to([x, -hd])
+        .label("s0")
+        .arc_ccw_to([hw, -y], [x, -y])
+        .label("c0")
+        .line_to([hw, y])
+        .label("s1")
+        .arc_ccw_to([x, hd], [x, y])
+        .label("c1")
+        .line_to([-x, hd])
+        .label("s2")
+        .arc_ccw_to([-hw, y], [-x, y])
+        .label("c2")
+        .line_to([-hw, -y])
+        .label("s3")
+        .arc_ccw_to([-x, -hd], [-x, -y])
+        .label("c3")
+        .close()
+        .unwrap();
+    Profile::new(outline, vec![]).unwrap()
 }
 
 #[test]
 fn a_chamfer_follows_a_tangent_chain_round_a_pocket() {
     // A rounded-rectangle pocket through a plate: picking two opposite sides takes the corner arcs
     // and the other sides with them, so the whole rim is bevelled, the arcs as cones.
-    let plate = extrude(&Frame::WORLD, &Profile::rectangle([-30.0, -20.0], [30.0, 20.0]).unwrap(), 10.0);
-    let slot = extrude(&Frame::WORLD, &rounded(30.0, 12.0, 5.0), 10.0);
-    let body = plate.unwrap().difference(&slot.unwrap()).unwrap();
+    let plate = extrude(&at_z(0.0), &Profile::rectangle([-30.0, -20.0], [30.0, 20.0]).unwrap(), 10.0);
+    let slot = extrude(&at_z(0.0), &rounded(30.0, 12.0, 5.0), 10.0);
+    let body = plate.unwrap().named("plate").difference(&slot.unwrap().named("slot")).unwrap();
     let d = 1.0;
-    // ("plate.end", "slot.s0") and ("plate.end", "slot.s2"), and the tangent chain they reach:
-    // yack: every edge of the pocket's top rim, picked whole.
-    let rim = body.edges_where(|e| {
-        let m = e.midpoint();
-        (m.z - 10.0).abs() < 1e-9 && m.x.abs() <= 15.0 + 1e-9 && m.y.abs() <= 6.0 + 1e-9
-    });
-    let b = body.chamfer(&rim, d).unwrap().named("ch");
+    let b = chamfer(&body, &[("plate.end", "slot.s0"), ("plate.end", "slot.s2")], d, "ch").unwrap();
     // The band a hole's chamfer takes grows as the outline's outward offset: perimeter L + 2πw.
     let l = 2.0 * 20.0 + 2.0 * 2.0 + 2.0 * PI * 5.0;
     let hole = 30.0 * 12.0 - (4.0 - PI) * 25.0;
@@ -347,35 +369,25 @@ fn a_chamfer_follows_a_tangent_chain_round_a_pocket() {
         + 2f64.sqrt() * (l * d + PI * d * d);
     assert_solid(&b, volume, area);
     assert_eq!(kinds(&b, is_cone), 4);
-    // names(&b, "ch.bevel_0") + names(&b, "ch.bevel_1") == 8.
-    assert_eq!(b.faces_tagged("ch").len(), 8);
+    assert_eq!(names(&b, "ch.bevel_0") + names(&b, "ch.bevel_1"), 8);
 }
 
 #[test]
 fn an_edge_two_pairs_pick_is_blended_once() {
-    // ("box.end", "box.v_min") and ("box.v_min", "box.end"): the same edge twice.
-    let body = block_at(40.0, 30.0, 20.0);
-    let e = body.edge_at([20.0, 0.0, 20.0]).unwrap();
-    let b = body.fillet(&[e, e], 5.0).unwrap().named("f");
+    let p = [("box.end", "box.v_min"), ("box.v_min", "box.end")];
+    let b = fillet(&block_at("box", 40.0, 30.0, 20.0), &p, 5.0, "f").unwrap();
     let spandrel = 25.0 * (1.0 - PI / 4.0);
     assert!((b.volume() - (24000.0 - spandrel * 40.0)).abs() <= 1e-9 * 24000.0);
-    // "f.round_0" once and "f.round_1" once, on the one cylinder below: one face carries the tag.
-    assert_eq!(b.faces_tagged("f").len(), 1);
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "f.round_1"), 1);
     assert_eq!(kinds(&b, is_cylinder), 1);
 }
 
 #[test]
 fn chamfers_meeting_at_corners_are_mitred() {
     let (w, d, h, c) = (20.0, 12.0, 8.0, 1.5);
-    // ("box.end", "box.u_min" | "box.u_max" | "box.v_min" | "box.v_max"): the four top edges.
-    let body = block_at(w, d, h);
-    let edges = [
-        body.edge_at([0.0, d / 2.0, h]).unwrap(),
-        body.edge_at([w, d / 2.0, h]).unwrap(),
-        body.edge_at([w / 2.0, 0.0, h]).unwrap(),
-        body.edge_at([w / 2.0, d, h]).unwrap(),
-    ];
-    let b = body.chamfer(&edges, c).unwrap();
+    let p = [("box.end", "box.u_min"), ("box.end", "box.u_max"), ("box.end", "box.v_min"), ("box.end", "box.v_max")];
+    let b = chamfer(&block_at("box", w, d, h), &p, c, "ch").unwrap();
     // A hipped top: at depth z the section is the rectangle inset by c − z on every side.
     let volume = w * d * h - (c * c * (w + d) - 4.0 * c * c * c / 3.0);
     let area = (w - 2.0 * c) * (d - 2.0 * c) + w * d + 2.0 * (w + d) * (h - c) + 2.0 * 2f64.sqrt() * c * (w - c + d - c);
@@ -389,12 +401,11 @@ fn a_chamfer_ending_under_an_overhang_stops_at_its_end_face() {
     // y = 0, which leaves a strip of the bar's top 1 wide along y = 20. A chamfer of 4 on the bar's
     // edge at x = 14, y = 20 runs past that strip's 1 mm edge, under the web, and into the concave
     // corner where the strip meets the web's side; it ends square on the strip's plane, z = 40.
-    let rect = |w: f64, d: f64, z: f64, h: f64| {
-        extrude(&Frame::at([0.0, 0.0, z]), &Profile::rectangle([0.0, 0.0], [w, d]).unwrap(), h).unwrap()
+    let rect = |id: &str, w: f64, d: f64, z: f64, h: f64| {
+        extrude(&at_z(z), &Profile::rectangle([0.0, 0.0], [w, d]).unwrap(), h).unwrap().named(id)
     };
-    let body = rect(14.0, 20.0, 0.0, 40.0).union(&rect(14.0, 19.0, 40.0, 10.0)).unwrap();
-    // ("bar.u_max", "bar.v_max"): the bar's vertical edge at x = 14, y = 20.
-    let b = body.chamfer(&[body.edge_at([14.0, 20.0, 20.0]).unwrap()], 4.0).unwrap().named("ch");
+    let body = rect("bar", 14.0, 20.0, 0.0, 40.0).union(&rect("web", 14.0, 19.0, 40.0, 10.0)).unwrap();
+    let b = chamfer(&body, &[("bar.u_max", "bar.v_max")], 4.0, "ch").unwrap();
     // The bevel takes the triangle x + y ≥ 30 off the bar's 40 height: 8 × 40 of volume, 4 of each
     // wall and 4√2 of bevel across, and 8 off the bottom. At z = 40 it takes 3.5 off the strip,
     // and leaves the web's underside over (14, 16), (14, 19), (11, 19) bare: 4.5. The body's area
@@ -402,8 +413,7 @@ fn a_chamfer_ending_under_an_overhang_stops_at_its_end_face() {
     let area = 3940.0 - 320.0 + 160.0 * 2f64.sqrt() - 8.0 - 3.5 + 4.5;
     assert_solid(&b, 13860.0 - 320.0, area);
     assert_eq!(b.faces().len(), 10);
-    // "ch.bevel_0".
-    assert_eq!(b.faces_tagged("ch").len(), 1);
+    assert_eq!(names(&b, "ch.bevel_0"), 1);
 }
 
 #[test]
@@ -411,10 +421,19 @@ fn a_chamfer_ending_on_a_slanted_face_is_trimmed_by_it() {
     // A trapezoid prism whose right end leans back; the chamfered edge between its top and its
     // end cap runs from the square left end into that slant.
     let (l, s, hh, t, d) = (30.0, 6.0, 10.0, 8.0, 1.0);
-    let outline = Profile::polygon(&[[0.0, 0.0], [l, 0.0], [l - s, hh], [0.0, hh]]).unwrap();
-    let body = extrude(&Frame::WORLD, &outline, t).unwrap();
-    // ("p.top", "p.end"): the edge along x where the top y = hh meets the end cap z = t.
-    let b = body.chamfer(&[body.edge_at([(l - s) / 2.0, hh, t]).unwrap()], d).unwrap().named("ch");
+    let outline = Loop::starting_at([0.0, 0.0])
+        .line_to([l, 0.0])
+        .label("bottom")
+        .line_to([l - s, hh])
+        .label("slant")
+        .line_to([0.0, hh])
+        .label("top")
+        .line_to([0.0, 0.0])
+        .label("left")
+        .close()
+        .unwrap();
+    let body = extrude(&at_z(0.0), &Profile::new(outline, vec![]).unwrap(), t).unwrap().named("p");
+    let b = chamfer(&body, &[("p.top", "p.end")], d, "ch").unwrap();
     // Each line along x through the bevel's section ends on the slant x = l − s·y/hh.
     let tri = d * d / 2.0;
     let reach = |y: f64| l - s * y / hh;
@@ -424,8 +443,7 @@ fn a_chamfer_ending_on_a_slanted_face_is_trimmed_by_it() {
     let cap_strip = d * l - s * (hh * hh - (hh - d) * (hh - d)) / (2.0 * hh);
     let area = a0 - d * (l - s) - cap_strip - tri * slant / hh - tri + d * 2f64.sqrt() * reach(hh - d / 2.0);
     assert_solid(&b, volume, area);
-    // "ch.bevel_0".
-    assert_eq!(b.faces_tagged("ch").len(), 1);
+    assert_eq!(names(&b, "ch.bevel_0"), 1);
 }
 
 fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
@@ -445,18 +463,18 @@ fn arc_green(o: [f64; 2], r: f64, a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
 #[test]
 fn a_straight_edge_between_a_plane_and_a_bore_takes_a_fillet() {
     // A key standing in a bore: the root of each side is filleted against the bore's wall.
-    let plate = extrude(&Frame::WORLD, &Profile::rectangle([-30.0, -30.0], [30.0, 30.0]).unwrap(), 10.0);
-    let bore = extrude(&Frame::WORLD, &Profile::circle([0.0, 0.0], 20.0).unwrap(), 10.0);
-    let key = extrude(&Frame::WORLD, &Profile::rectangle([15.0, -3.0], [21.0, 3.0]).unwrap(), 10.0);
-    let body = plate.unwrap().difference(&bore.unwrap()).unwrap().union(&key.unwrap()).unwrap();
+    let plate = extrude(&at_z(0.0), &Profile::rectangle([-30.0, -30.0], [30.0, 30.0]).unwrap(), 10.0);
+    let bore = extrude(&at_z(0.0), &Profile::circle([0.0, 0.0], 20.0).unwrap(), 10.0);
+    let key = extrude(&at_z(0.0), &Profile::rectangle([15.0, -3.0], [21.0, 3.0]).unwrap(), 10.0);
+    let body = plate
+        .unwrap()
+        .named("plate")
+        .difference(&bore.unwrap().named("bore"))
+        .unwrap()
+        .union(&key.unwrap().named("key"))
+        .unwrap();
     let r = 1.0;
-    // ("key.v_max", "bore.side") and ("key.v_min", "bore.side"): the key's sides y = ±3 meet
-    // the bore at x = √391.
-    let edges = [
-        body.edge_at([391f64.sqrt(), 3.0, 5.0]).unwrap(),
-        body.edge_at([391f64.sqrt(), -3.0, 5.0]).unwrap(),
-    ];
-    let b = body.fillet(&edges, r).unwrap().named("f");
+    let b = fillet(&body, &[("key.v_max", "bore.side"), ("key.v_min", "bore.side")], r, "f").unwrap();
     // The round's centre is 1 off the side y = 3 and 1 inside the bore of radius 20.
     let p = [391f64.sqrt(), 3.0];
     let c = [345f64.sqrt(), 4.0];
@@ -470,8 +488,8 @@ fn a_straight_edge_between_a_plane_and_a_bore_takes_a_fillet() {
     let tp = sub(t0, p);
     let area = body.area() + 4.0 * spandrel + 20.0 * (round_len - (tp[0] * tp[0] + tp[1] * tp[1]).sqrt() - bore_len);
     assert_solid(&b, volume, area);
-    // "f.round_0" and "f.round_1": two rounds.
-    assert_eq!(b.faces_tagged("f").len(), 2);
+    assert_eq!(names(&b, "f.round_0"), 1);
+    assert_eq!(names(&b, "f.round_1"), 1);
     assert_eq!(kinds(&b, is_cylinder), 3);
 }
 
@@ -480,10 +498,8 @@ fn a_fillet_as_round_as_its_corners_closes_them_with_spheres() {
     // Every corner of the outline has the fillet's own radius, so each corner's round is an eighth
     // of a sphere; picking one side takes the whole tangent rim.
     let (w, d, h, r) = (20.0, 12.0, 6.0, 2.0);
-    let body = extrude(&Frame::WORLD, &rounded(w, d, r), h).unwrap();
-    // ("b.end", "b.s1") and the tangent rim it reaches. yack: every edge of the top face.
-    let rim = body.edges_of(body.face_at([0.0, 0.0, h]).unwrap()).unwrap();
-    let b = body.fillet(&rim, r).unwrap().named("f");
+    let body = extrude(&at_z(0.0), &rounded(w, d, r), h).unwrap().named("b");
+    let b = fillet(&body, &[("b.end", "b.s1")], r, "f").unwrap();
     let straight = 2.0 * (w - 2.0 * r) + 2.0 * (d - 2.0 * r);
     let spandrel = r * r * (1.0 - PI / 4.0);
     // Pappus: the spandrel's centroid sits r·(10 − 3π)/(12 − 3π) in from the rim.
@@ -496,8 +512,7 @@ fn a_fillet_as_round_as_its_corners_closes_them_with_spheres() {
         + 2.0 * PI * r * r;
     assert_solid(&b, volume, area);
     assert_eq!(kinds(&b, is_sphere), 4);
-    // "f.round_0" on eight faces.
-    assert_eq!(b.faces_tagged("f").len(), 8);
+    assert_eq!(names(&b, "f.round_0"), 8);
 }
 
 #[test]
@@ -505,10 +520,8 @@ fn a_chamfer_as_wide_as_its_corner_arcs_narrows_them_to_points() {
     // Each corner arc's bevel is a cone whose apex lies on the arc's axis, where the top face keeps
     // only a sharp rectangle.
     let (w, d, h, r) = (40.0, 20.0, 10.0, 5.0);
-    let body = extrude(&Frame::WORLD, &rounded(w, d, r), h).unwrap();
-    // ("rr.end", "rr.s0") and the tangent rim it reaches. yack: every edge of the top face.
-    let rim = body.edges_of(body.face_at([0.0, 0.0, h]).unwrap()).unwrap();
-    let b = body.chamfer(&rim, r).unwrap();
+    let body = extrude(&at_z(0.0), &rounded(w, d, r), h).unwrap().named("rr");
+    let b = chamfer(&body, &[("rr.end", "rr.s0")], r, "c").unwrap();
     let straight = 2.0 * (w - 2.0 * r) + 2.0 * (d - 2.0 * r);
     let section = w * d - (4.0 - PI) * r * r;
     // Pappus: the bevel's triangle has its centroid r/3 in from the rim.
@@ -536,8 +549,7 @@ fn a_chamfer_of_two_distances_sets_the_first_back_on_the_face_named() {
         assert!((cut.volume() - volume).abs() < 1e-9);
         // Where each face now ends: a point just inside the kept part is on it, one just past
         // the chamfer's edge is not.
-        // yack: "on a face" is face_at finding one within tol::PICK.
-        let on = |p: [f64; 3]| cut.face_at(p).is_ok();
+        let on = |p: [f64; 3]| cut.nearest_face(p).is_ok_and(|(_, d)| d < 1e-9);
         assert!(on([10.0 - on_top - 0.01, 4.0, 6.0]));
         assert!(!on([10.0 - on_top + 0.01, 4.0, 6.0]));
         assert!(on([10.0, 4.0, 6.0 - on_side - 0.01]));

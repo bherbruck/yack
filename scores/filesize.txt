@@ -35,9 +35,9 @@ crates/yack-cadrs/src/types.rs 1985
 crates/yack-cadrs/tests/analytic_blocks.rs 1584
 crates/yack-cadrs/tests/conformance.rs 4954
 crates/yack-springrep/src/blend.rs 3467
-crates/yack-springrep/src/boolean/csi.rs 2540
+crates/yack-springrep/src/intersect/csi.rs 2540
 crates/yack-springrep/src/boolean/mod.rs 2945
-crates/yack-springrep/src/boolean/tests.rs 1829
+crates/yack-springrep/src/boolean/tests.rs 1833
 crates/yack-springrep/src/geom/nurbs.rs 2555
 crates/yack-springrep/src/measure.rs 1969
 crates/yack-springrep/src/step/tests.rs 1964

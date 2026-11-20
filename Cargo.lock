@@ -122,6 +122,8 @@ name = "yack"
 version = "0.0.0"
 dependencies = [
  "yack-base",
+ "yack-bridge",
+ "yack-cadrs",
  "yack-math",
  "yack-springrep",
  "yack-tol",
@@ -149,6 +151,7 @@ dependencies = [
 name = "yack-bridge"
 version = "0.0.0"
 dependencies = [
+ "yack-cadrs",
  "yack-springrep",
 ]
 

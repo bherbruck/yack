@@ -3,6 +3,7 @@
 // Every check reads a `Tree` (meta.rs), so each one is proven by a planted-violation fixture in
 // crates/xtask/fixtures/ (see the tests at the bottom).
 pub mod api;
+mod cases;
 mod deps;
 mod files;
 pub mod lex;
@@ -169,7 +170,7 @@ impl Out {
 type Check = fn(&Ctx, &mut Out);
 
 /// The checks of PLAN §6.6, by number.
-pub const CHECKS: [(u8, &str, Check); 13] = [
+pub const CHECKS: [(u8, &str, Check); 14] = [
     (1, "layers", deps::layers),
     (2, "one public crate", deps::one_public),
     (3, "zero dependencies", deps::zero_deps),
@@ -183,6 +184,7 @@ pub const CHECKS: [(u8, &str, Check); 13] = [
     (11, "build directory", files::build_dir),
     (12, "temporaries", deps::temporaries),
     (13, "facade routes, never computes", lints::facade),
+    (14, "bench case programs", cases::case_programs),
 ];
 
 /// Runs every check.
@@ -205,7 +207,12 @@ pub fn ratchet_files(ctx: &Ctx) -> Vec<(&'static str, String)> {
         ("filesize.txt", format!("# files over 1500 lines and their allowed length (gate 6; may only fall)\n{}", fmt(files::oversize(ctx)))),
         ("hidden.txt", format!("# hidden-state sites per temporary crate (gate 8; may only fall)\n{}", fmt(source::hidden_counts(ctx)))),
         ("lints.txt", format!("# denied-lint sites per temporary crate (gate 9; may only fall)\n{}", fmt(lints::lint_counts(ctx)))),
-        ("cadrs-loc.txt", format!("# yack-cadrs lines of code (gate 12; may only fall)\n{}", fmt(deps::cadrs_loc(ctx)))),
+        ("cadrs-loc.txt", format!(
+            "# yack-cadrs lines of code (gate 12): `{}` (src/native/**) may only fall; `{}` (src/facade/** + yack_glue.rs) is recorded, not ratcheted, until M4\n{}",
+            deps::CADRS_NATIVE,
+            deps::CADRS_GLUE,
+            fmt(deps::cadrs_loc(ctx))
+        )),
     ]
 }
 

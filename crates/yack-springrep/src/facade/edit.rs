@@ -25,24 +25,24 @@ pub fn offset(b: &Brep, distance: f64) -> Result<Brep> {
 }
 
 /// Offsets each of `faces` by the same `distance`.
-pub fn offset_faces(b: &Brep, faces: &[FaceId], distance: f64) -> Result<Brep> {
+fn offset_faces(b: &Brep, faces: &[FaceId], distance: f64) -> Result<Brep> {
     let by: HashMap<FaceId, f64> = faces.iter().map(|&f| (f, distance)).collect();
     edit::offset_faces(b, &by)
 }
 
 /// Removes `faces`, healing from their neighbours.
-pub fn delete_faces(b: &Brep, faces: &[FaceId]) -> Result<Brep> {
+fn delete_faces(b: &Brep, faces: &[FaceId]) -> Result<Brep> {
     edit::delete_faces(b, faces)
 }
 
 /// Moves `faces` by the rigid motion with rows `m`.
-pub fn move_faces(b: &Brep, faces: &[FaceId], m: [[f64; 4]; 3]) -> Result<Brep> {
+fn move_faces(b: &Brep, faces: &[FaceId], m: [[f64; 4]; 3]) -> Result<Brep> {
     let (r, t) = split(m);
     edit::move_faces_by(b, faces, &Transform::rigid(r, t)?)
 }
 
 /// Thickens `faces` by `thickness`.
-pub fn thicken(b: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
+fn thicken(b: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
     edit::thicken(b, faces, thickness)
 }
 
@@ -57,7 +57,7 @@ pub fn shell_outward(b: &Brep, open: &[FaceId], thickness: f64) -> Result<Brep> 
 }
 
 /// Drafts `faces` by `angle` radians about the neutral plane through `origin` normal to `pull`.
-pub fn draft(b: &Brep, faces: &[FaceId], origin: [f64; 3], pull: [f64; 3], angle: f64) -> Result<Brep> {
+fn draft(b: &Brep, faces: &[FaceId], origin: [f64; 3], pull: [f64; 3], angle: f64) -> Result<Brep> {
     let z = v3(pull);
     let hint = if z.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
     let neutral = Frame::new(v3(origin), z, hint)?;

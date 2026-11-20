@@ -9,6 +9,6 @@ pub fn build() -> Result<Solid> {
     let start = Frame::new([8.0, 0.0, -1.5], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0])?;
     let bar = extrude(&start, &Profile::new(Loop::new(vec![spline])?, vec![])?, 16.0)?;
     let up = Vec3::new(0.0, 0.0, 1.0);
-    let screw = Motion::Screw { axis_point: Point3::ORIGIN, axis: up, angle: deg(1440.0), rise_per_turn: 6.0 };
-    cylinder(&Frame::WORLD, 5.0, 20.0)?.difference(&bar.swept(&screw)?)
+    let screw = Motion::screw(Point3::ORIGIN, up, rad(0.0), deg(1440.0), Lead::per_turn(6.0));
+    cylinder(&Frame::WORLD, 5.0, 20.0)?.cut_swept(&bar, &screw)
 }

@@ -365,7 +365,7 @@
   "chain-rim-after-cut-7f4962ee195363c8": {"outcome": "pass", "tier": "1e-7", "time_ms": 40.0},
   "chain-rim-after-cut-82e2a020674b4767": {"outcome": "pass", "tier": "1e-7", "time_ms": 40.5},
   "chain-rim-after-cut-abd3a4d387b8bcf6": {"outcome": "pass", "tier": "1e-7", "time_ms": 53.9},
-  "chain-rim-after-cut-b9009b4a92bd4075": {"outcome": "pass", "tier": "1e-7", "time_ms": 46.9},
+  "chain-rim-after-cut-b9009b4a92bd4075": {"outcome": "refused", "tier": null, "time_ms": 80.3},
   "chain-rim-after-cut-bb5076197e066643": {"outcome": "pass", "tier": "1e-7", "time_ms": 59.6},
   "chain-rim-after-cut-c2778c37cfddecd6": {"outcome": "pass", "tier": "1e-7", "time_ms": 45.3},
   "chain-rim-after-cut-c767a0a239e57957": {"outcome": "pass", "tier": "1e-7", "time_ms": 57.8},

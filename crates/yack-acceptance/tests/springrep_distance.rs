@@ -3,13 +3,15 @@
 // Changes: springrep API replaced by the yack public API (PLAN §4.3); the revolved half-disc ball,
 // the rect/circle extrusions and the revolved torus are made with make::sphere / block / cylinder /
 // torus on the same frames (springrep circles take a diameter, so radii are halved); Selection /
-// Nearest::boundary become Solid::closest_pair and Solid::closest; the outline spline through 24
-// points is Loop::through and its curve is sampled with EdgeRef::points; the face/vertex
-// selections, the nearest-face query and evaluating an edge at a parameter are API gaps.
+// Nearest::boundary become Solid::closest_pair, Solid::nearest_face and FaceRef::closest (a vertex
+// to a face is the vertex's point to that face's closest point); the outline spline through 24
+// points is Loop::through, its curve evaluated with EdgeRef::range / point; measure::face_at is
+// Solid::nearest_face; face-to-face distance is an API gap.
 
 use std::f64::consts::TAU;
 
 use yack::prelude::*;
+use yack::VertexId;
 
 fn ball(c: [f64; 3], r: f64) -> Solid {
     sphere(&Frame::at(c), r).unwrap()
@@ -111,9 +113,22 @@ fn a_rod_inside_one_a_hair_wider_is_no_distance_away() {
     assert_distance(bodies(&inner, &outer), 0.0);
 }
 
-// API GAP (test faces_edges_and_vertices_measure_as_themselves omitted): the distance between a
-// face and a face, or a vertex and a face, of solids needs a selection-restricted distance; §4.3
-// has only whole-solid Solid::distance.
+#[test]
+fn faces_edges_and_vertices_measure_as_themselves() {
+    let b = cuboid([0.0; 3], [10.0, 6.0, 3.0]);
+    let top = b.face_at([5.0, 3.0, 3.0]).unwrap();
+    // API GAP: no face-to-face distance (springrep Selection::face on both sides), so "the box's
+    // floor and roof are its height apart, though they bound one solid" (3.0) is dropped.
+    // A corner of a second box set 1 above and 2 beyond, to the first's roof: its edge (10, 6) is
+    // the nearest part of the roof.
+    let other = cuboid([12.0, 7.0, 4.0], [14.0, 9.0, 5.0]);
+    let at = Point3::new(12.0, 7.0, 4.0);
+    let d = |v: VertexId| other.vertex(v).unwrap().point().distance(at);
+    let v = other.vertices().into_iter().min_by(|&x, &y| d(x).total_cmp(&d(y))).unwrap();
+    let corner = other.vertex(v).unwrap().point();
+    let on_roof = b.face(top).unwrap().closest(corner).unwrap();
+    assert_distance((corner.distance(on_roof), corner, on_roof), (4.0f64 + 1.0 + 1.0).sqrt());
+}
 
 #[test]
 fn a_ball_beside_a_spline_extrusion_is_the_profile_curves_distance_away() {
@@ -133,14 +148,26 @@ fn a_ball_beside_a_spline_extrusion_is_the_profile_curves_distance_away() {
     let centre = Point3::new(33.0, 9.0, 5.0);
     let outline =
         disc.edges_where(|e| e.midpoint().z.abs() < 1e-9 && !matches!(e.kind(), CurveKind::Line { .. }))[0];
-    let plan = |q: Point3| (q.x - centre.x).hypot(q.y - centre.y);
-    // API GAP: EdgeRef cannot be evaluated at a parameter, so the original's 200 000-interval
-    // sampling refined by 200 golden sections is replaced by the least of 2 000 000 intervals'
-    // samples of EdgeRef::points (evenly in the parameter, ends included).
-    let n = 2_000_000;
-    let samples = disc.edge(outline).unwrap().points(n + 1);
-    let least = samples.iter().map(|&q| plan(q)).fold(f64::INFINITY, f64::min);
-    let want = least - 1.0;
+    let c = disc.edge(outline).unwrap();
+    let [t0, t1] = c.range();
+    let plan = |t: f64| {
+        let q = c.point(t);
+        (q.x - centre.x).hypot(q.y - centre.y)
+    };
+    let n = 200_000;
+    let at = |i: usize| t0 + (t1 - t0) * i as f64 / n as f64;
+    let k = (0..=n).min_by(|&i, &j| plan(at(i)).total_cmp(&plan(at(j)))).unwrap();
+    let (mut lo, mut hi) = (at(k.saturating_sub(1)), at((k + 1).min(n)));
+    let g = 0.5 * (5.0f64.sqrt() - 1.0);
+    for _ in 0..200 {
+        let (x1, x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+        if plan(x1) < plan(x2) {
+            hi = x2;
+        } else {
+            lo = x1;
+        }
+    }
+    let want = plan(0.5 * (lo + hi)) - 1.0;
     assert_distance(bodies(&ball(centre.to_array(), 1.0), &disc), want);
 }
 
@@ -160,7 +187,7 @@ fn a_point_just_inside_a_holes_rim_is_as_far_as_the_rim_not_on_the_face() {
         for turn in [0.1f64, 1.3, 2.9, 4.4] {
             let r = 10.0 + off;
             let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
-            let got = plate.closest(&[p]).unwrap()[0].distance(p);
+            let got = plate.nearest_face(p).unwrap().1;
             assert!((got - want).abs() < 1e-7, "{off} at {turn}: {got} against {want}");
         }
     }
@@ -185,15 +212,16 @@ fn the_face_at_a_point_just_inside_a_holes_rim_is_the_holes_wall() {
     // face whose own region holds its nearest point is the hole's wall, 5 µm away.
     let plate = drilled_plate();
     for turn in [0.1f64, 1.3, 2.9, 4.4] {
-        // API GAP: the nearest face to a point 5 µm inside the hole (the wall, at 0.005 to 1e-9)
-        // needs a nearest-face query returning (FaceId, distance); Solid::face_at only picks within
-        // tol::PICK and gives NotFound here, and the nearest point is on the rim, shared by both faces.
+        let r = 10.0 - 0.005;
+        let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
+        let (face, d) = plate.nearest_face(p).unwrap();
+        assert!(matches!(plate.face(face).unwrap().kind(), SurfaceKind::Cylinder { .. }), "at {turn}");
+        assert!((d - 0.005).abs() < 1e-9, "at {turn}: {d}");
         // And 5 µm outside it, on the plate: the top, at no distance.
         let r = 10.0 + 0.005;
         let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
-        let face = plate.face_at(p).unwrap();
+        let (face, d) = plate.nearest_face(p).unwrap();
         assert!(matches!(plate.face(face).unwrap().kind(), SurfaceKind::Plane { .. }), "at {turn}");
-        let d = plate.closest(&[p]).unwrap()[0].distance(p);
         assert!(d < 1e-9, "at {turn}: {d}");
     }
 }

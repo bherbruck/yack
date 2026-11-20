@@ -112,12 +112,12 @@ fn a_face_of_another_solid_is_foreign() {
 
 #[test]
 fn swept_sequences_go_leg_by_leg() {
-    let one = brick().swept(&Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }).unwrap();
+    let one = brick().swept(&Motion::slide([1.0, 0.0, 0.0])).unwrap();
     let two = brick()
-        .swept(&Motion::Then(vec![Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }, Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }]))
+        .swept(&Motion::then(vec![Motion::slide([1.0, 0.0, 0.0]), Motion::slide([1.0, 0.0, 0.0])]))
         .unwrap();
     assert!(two.volume() > one.volume());
-    let e = brick().swept(&Motion::Then(vec![Motion::Then(vec![])])).unwrap_err();
+    let e = brick().swept(&Motion::then(vec![Motion::then(vec![])])).unwrap_err();
     assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
 }
 
@@ -140,4 +140,37 @@ fn offset_and_shell_faces_take_the_name_given() {
     let top = b.face_at([5.0, 5.0, 10.0]).unwrap();
     let hollow = b.shell(&[top], 1.0).unwrap().named("hollow");
     assert!(!hollow.faces_by("hollow", Role::Inner).is_empty(), "strategy {}", hollow.strategy());
+}
+
+
+#[test]
+fn turns_together_and_from_a_start_angle() {
+    let b = brick();
+    let quarter = b.swept(&Motion::turn([0.0; 3], [0.0, 0.0, 1.0], deg(0.0), deg(90.0)));
+    let later = b.swept(&Motion::turn([0.0; 3], [0.0, 0.0, 1.0], deg(90.0), deg(180.0)));
+    if let (Ok(q), Ok(l)) = (&quarter, &later) {
+        assert!((q.volume() - l.volume()).abs() < 1e-6 * q.volume(), "a quarter turn from 90° holds as much as one from 0°");
+    }
+    match b.swept(&Motion::together(vec![Motion::slide([2.0, 0.0, 0.0]), Motion::slide([0.0, 2.0, 0.0])])) {
+        Ok(s) => assert!(s.volume() > b.volume() && s.check().is_empty()),
+        Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
+    }
+    assert_eq!(sewn(&[]).unwrap_err().kind, ErrorKind::Invalid);
+    // a unit cube from five bilinear patches and a filled floor
+    let p = |a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]| Patch::Bezier {
+        ctrl: vec![vec![a.into(), b.into()], vec![d.into(), c.into()]],
+    };
+    let line = |a: [f64; 3], b: [f64; 3]| Spline3::bezier(&[a, b]).unwrap();
+    let (o, x, xy, y) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]);
+    let up = |q: [f64; 3]| [q[0], q[1], 1.0];
+    let cube = sewn(&[
+        p(up(o), up(x), up(xy), up(y)),
+        p(o, x, up(x), up(o)),
+        p(x, xy, up(xy), up(x)),
+        p(xy, y, up(y), up(xy)),
+        p(y, o, up(o), up(y)),
+        Patch::PlanarFill { boundary: vec![line(o, x), line(x, xy), line(xy, y), line(y, o)] },
+    ]);
+    let c = cube.unwrap();
+    assert!((c.volume() - 1.0).abs() < 1e-6, "{}", c.volume());
 }

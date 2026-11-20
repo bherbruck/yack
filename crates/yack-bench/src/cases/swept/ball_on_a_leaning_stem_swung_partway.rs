@@ -7,5 +7,5 @@ pub fn build() -> Result<Solid> {
     let stem = cylinder(&Frame::new([10.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c])?, 0.4, 3.0)?;
     let tool = sphere(&Frame::at([10.0, 0.0, 0.0]), 0.8)?.union(&stem)?;
     let tool = tool.transform(&Rigid::rotation([0.0; 3], z, deg(-140.0))?.into())?;
-    sector.difference(&tool.swept(&Motion::Turn { axis_point: [0.0; 3].into(), axis: z.into(), angle: deg(170.0) })?)
+    sector.cut_swept(&tool, &Motion::turn([0.0; 3], z, rad(0.0), deg(170.0)))
 }

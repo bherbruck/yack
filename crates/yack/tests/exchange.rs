@@ -26,6 +26,18 @@ fn step_round_trips_a_drilled_block() {
 }
 
 #[test]
+fn step_writes_a_ring_pushed_in_at_a_lean_faithfully() {
+    let (sn, cs) = (35f64.to_radians().sin(), 35f64.to_radians().cos());
+    let ring = torus(&Frame::new([0.0, 0.0, 4.0], [cs, 0.0, -sn], [0.0, 1.0, 0.0], [sn, 0.0, cs]).unwrap(), 3.0, 1.0).unwrap();
+    let hole = ring.swept(&Motion::slide([0.0, 0.0, -8.0])).unwrap();
+    let s = block(&Frame::at([-8.0, -8.0, -8.0]), [16.0, 16.0, 8.0]).unwrap().difference(&hole).unwrap();
+    let back = yack::step::read(&yack::step::write(&s).unwrap()).unwrap();
+    // the reader heals on the way back in: its noise is about 1e-6, the write check's bound 1e-5
+    assert!((back.volume() - s.volume()).abs() <= 1e-5 * s.volume(), "{} vs {}", back.volume(), s.volume());
+    assert!((back.area() - s.area()).abs() <= 1e-5 * s.area(), "{} vs {}", back.area(), s.area());
+}
+
+#[test]
 fn bad_step_is_refused_not_a_crash() {
     for text in ["", "ISO-10303-21;", "garbage #1=FOO(;", "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"] {
         let e = yack::step::read(text).unwrap_err();
