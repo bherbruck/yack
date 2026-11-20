@@ -153,3 +153,18 @@ fn queries_on_the_empty_solid_are_answered() {
     assert_eq!(Yack.area(&e).ok(), Some(0.0));
     assert_eq!(Yack.centroid(&e).ok(), Some(None));
 }
+
+/// The bake-off build forces one engine: what it builds says so (PLAN §3.5).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn a_forced_engine_builds_every_solid() {
+    use yack::bakeoff::{Engine, force};
+    for (e, name) in [(Engine::Springrep, "springrep"), (Engine::Cadrs, "cadrs")] {
+        force(e);
+        let b = block(&Yack).unwrap();
+        assert_eq!(b.strategy(), name, "a box built with {name} forced");
+        let u = Yack.union(&b, &block(&Yack).unwrap()).unwrap();
+        assert_eq!(u.strategy(), name, "a union built with {name} forced");
+    }
+    force(Engine::Both);
+}

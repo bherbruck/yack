@@ -169,3 +169,14 @@ fn spherical_cap_thickened() {
         695.3391739945413,
     );
 }
+
+#[test]
+fn a_shell_as_thick_as_the_part_is_refused() {
+    let b = block(&Frame::WORLD, [2.0, 2.0, 2.0]).unwrap();
+    assert!(b.shell(&[b.face_at([1.0, 1.0, 2.0]).unwrap()], 1.5).is_err());
+}
+
+#[test]
+fn a_torus_tube_across_its_axis_is_invalid() {
+    assert_eq!(torus(&Frame::WORLD, 1.0, 2.0).unwrap_err().kind, ErrorKind::Invalid);
+}

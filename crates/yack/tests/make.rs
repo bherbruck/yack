@@ -167,10 +167,6 @@ fn a_negative_extrusion_points_at_the_frame() {
 
 #[test]
 fn horn_tori_and_parabolic_profiles() {
-    let horn = torus(&Frame::WORLD, 2.0, 2.0);
-    if let Ok(h) = &horn {
-        assert!(h.volume() > 0.0);
-    }
     let cup = Loop::starting_at([0.0, 0.0]).conic_to([4.0, 4.0], [2.0, 0.0], 1.0).line_to([0.0, 4.0]).close().unwrap();
     let s = revolve(&Frame::WORLD, &Profile::new(cup, vec![]).unwrap(), deg(360.0)).unwrap();
     assert!(s.check().is_empty());

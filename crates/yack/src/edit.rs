@@ -32,10 +32,11 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
+                    let out = engine::solid(op, sr::offset(b, distance))?;
                     if api::radius_collapses(b, None, distance, false) {
                         return Err(guard(op, "a round face would collapse at this distance (a hole closing, a rod vanishing)"));
                     }
-                    engine::solid(op, sr::offset(b, distance))
+                    Ok(out)
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::offset(k, id, distance)),
             )
@@ -50,10 +51,11 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
+                    let out = engine::solid(op, sr::offset_faces(self.need(op)?, &f, distance))?;
                     if api::radius_collapses(self.need(op)?, Some(&f), distance, false) {
                         return Err(guard(op, "a round face would collapse at this distance"));
                     }
-                    engine::solid(op, sr::offset_faces(self.need(op)?, &f, distance))
+                    Ok(out)
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::offset_faces(k, id, &ix, distance)),
             )
@@ -109,13 +111,14 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
+                    let out = engine::solid(op, sr::thicken(self.need(op)?, &f, thickness))?;
                     if !api::rims_square(self.need(op)?, &f) {
                         return Err(guard(
                             op,
                             "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
                         ));
                     }
-                    engine::solid(op, sr::thicken(self.need(op)?, &f, thickness))
+                    Ok(out)
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::thicken(k, id, &ix, thickness)),
             )
@@ -131,13 +134,14 @@ impl Solid {
                 op,
                 &|| {
                     let b = self.need(op)?;
+                    let out = engine::solid(op, sr::shell(b, &f, thickness))?;
                     if api::radius_collapses(b, None, thickness, true) || api::walls_cross(b, &f, thickness) {
                         return Err(guard(
                             op,
                             "the moved walls would cross (a wall thinner than twice the thickness, or a round face of radius under it)",
                         ));
                     }
-                    engine::solid(op, sr::shell(b, &f, thickness))
+                    Ok(out)
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::shell(k, id, &ix, thickness, false)),
             )
@@ -153,10 +157,11 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
+                    let out = engine::solid(op, sr::shell_outward(self.need(op)?, &f, thickness))?;
                     if api::radius_collapses(self.need(op)?, None, thickness, false) {
                         return Err(guard(op, "a hole of radius under the thickness would close"));
                     }
-                    engine::solid(op, sr::shell_outward(self.need(op)?, &f, thickness))
+                    Ok(out)
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::shell(k, id, &ix, thickness, true)),
             )

@@ -18,5 +18,9 @@ yack = { path = "../yack" }
 # The one external dependency in the workspace (layers.toml `external`), pinned per PLAN §5.1.
 brep-protocol = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
 
+[features]
+# Tool-only: `YACK_ENGINE=springrep|cadrs` forces one engine for the bake-off (PLAN §3.5).
+bakeoff = ["yack/bakeoff"]
+
 [lints]
 workspace = true

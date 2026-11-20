@@ -60,6 +60,11 @@ pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
         sr::Error::InvalidInput(_) => Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(Stage::Validate), detail },
         sr::Error::Unsupported(_) => Error::new(ErrorKind::Unsupported, op, detail),
         sr::Error::Numerical(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: None, detail },
+        // A moved face turned inside out is the act the input does not allow (a shell as thick as
+        // the part, a step raised past the next): the contract's invalid, not a failure.
+        sr::Error::InvalidResult(issues) if issues.iter().any(|i| i.contains("turns inside out")) => {
+            Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(Stage::Check), detail }
+        }
         sr::Error::InvalidResult(_) => Error::failed(op, Stage::Check, detail),
     }
 }

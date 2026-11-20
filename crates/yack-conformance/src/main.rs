@@ -367,7 +367,22 @@ impl Kernel for Yack {
     }
 }
 
+/// The bake-off build (PLAN §3.5) runs one engine alone when `YACK_ENGINE` names it; unset or
+/// anything else keeps the ladder. Read once, before the first request.
+#[cfg(feature = "bakeoff")]
+fn force_engine() {
+    use yack::bakeoff::{Engine, force};
+    #[allow(clippy::disallowed_methods)] // tool crate: the bake-off's opt-in switch, read once
+    match std::env::var("YACK_ENGINE").as_deref() {
+        Ok("springrep") => force(Engine::Springrep),
+        Ok("cadrs") => force(Engine::Cadrs),
+        _ => {}
+    }
+}
+
 fn main() -> ExitCode {
+    #[cfg(feature = "bakeoff")]
+    force_engine();
     match brep_protocol::serve(&Yack) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

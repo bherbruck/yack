@@ -24,6 +24,11 @@ thread_local! {
 }
 
 /// From now on, on this thread, run only `e`'s rungs (`Engine::Both` restores the ladder).
+///
+/// Thread-local, and that is enough: the ladder picks its rung in the facade, on the calling
+/// thread, before an engine fans any work out to threads (springrep's `par_map`, cadrs's scoped
+/// threads), so the forced engine holds for the whole op. Call it on the thread that runs the
+/// case.
 pub fn force(e: Engine) {
     FORCED.with(|f| f.set(e));
 }

@@ -278,3 +278,11 @@ pub fn rims_square(b: &Brep, faces: &[FaceId]) -> bool {
     }
     true
 }
+
+/// Whether the bounding boxes of `a` and `b` overlap with positive volume (by more than the
+/// linear tolerance on every axis).
+pub fn boxes_overlap(a: &Brep, b: &Brep) -> bool {
+    let (p, q) = (measure::bbox(a), measure::bbox(b));
+    let t = crate::tol::LINEAR;
+    p.min.x + t < q.max.x && q.min.x + t < p.max.x && p.min.y + t < q.max.y && q.min.y + t < p.max.y && p.min.z + t < q.max.z && q.min.z + t < p.max.z
+}

@@ -46,19 +46,15 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
 }
 
 /// A torus about the frame's z axis: tube centre at `major` from the axis, tube radius `minor`.
-/// `minor ≥ major` gives a horn or spindle torus (the solid the tube fills, counted once).
+/// The tube must clear the axis (`minor < major`); a horn or spindle torus is refused as Invalid.
 pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
     firewall::run("torus", || {
         let feature = engine::feature();
         let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
         ladder::two(
             "torus",
-            &|| {
-                if minor > 0.0 && minor >= major {
-                    return Err(Error::new(crate::ErrorKind::Unsupported, "torus", "springrep builds ring tori only (minor < major)"));
-                }
-                engine::made_as(&feature, "torus", &[("tube", "skin")], primitive::torus(&engine::frame(frame), major, minor, &feature))
-            },
+            // A tube reaching the axis is invalid (the protocol's rule); springrep says so, finally.
+            &|| engine::made_as(&feature, "torus", &[("tube", "skin")], primitive::torus(&engine::frame(frame), major, minor, &feature)),
             &|| engine_cadrs::make("torus", |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor)),
         )
     })
