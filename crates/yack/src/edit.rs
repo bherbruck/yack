@@ -61,7 +61,7 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let out = engine::solid(op, sr::offset_faces(self.need(op)?, &f, distance))?;
+                    let out = engine::made(engine::PROVISIONAL, op, sr::offset_faces_named(self.need(op)?, &f, distance, engine::PROVISIONAL))?;
                     if api::radius_collapses(self.need(op)?, Some(&f), distance, false) {
                         return guard(out, "a round face would collapse at this distance");
                     }
@@ -81,7 +81,7 @@ impl Solid {
                 op,
                 &|| {
                     let b = self.need(op)?;
-                    let out = engine::solid(op, sr::delete_faces(b, &f))?;
+                    let out = engine::made(engine::PROVISIONAL, op, sr::delete_faces_named(b, &f, engine::PROVISIONAL))?;
                     if out.brep().is_some_and(|o| api::same_shape(b, o)) {
                         return refuse(out, op, "the faces' gap was not closed: the result is the solid unchanged");
                     }
@@ -107,7 +107,7 @@ impl Solid {
         firewall::run(op, || {
             ladder::two(
                 op,
-                &|| engine::solid(op, sr::move_faces(self.need(op)?, &f, by.rows())),
+                &|| engine::made(engine::PROVISIONAL, op, sr::move_faces_named(self.need(op)?, &f, by.rows(), engine::PROVISIONAL)),
                 &|| engine_cadrs::op(op, self, |k, id| glue::move_faces(k, id, &ix, by.rows())),
             )
         })
@@ -121,7 +121,7 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let out = engine::solid(op, sr::thicken(self.need(op)?, &f, thickness))?;
+                    let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, engine::PROVISIONAL))?;
                     if !api::rims_square(self.need(op)?, &f) {
                         return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
                         );
@@ -216,7 +216,7 @@ impl Solid {
         firewall::run(op, || {
             ladder::two(
                 op,
-                &|| engine::solid(op, sr::draft(self.need(op)?, &f, o, p, a)),
+                &|| engine::made(engine::PROVISIONAL, op, sr::draft_named(self.need(op)?, &f, o, p, a, engine::PROVISIONAL)),
                 &|| engine_cadrs::op(op, self, |k, id| glue::draft(k, id, &ix, o, p, a)),
             )
         })
@@ -237,13 +237,19 @@ impl Solid {
     pub fn transform(&self, m: &Similarity) -> Result<Solid> {
         let op = "transform";
         let Some(b) = self.brep() else { return Ok(Solid::empty()) };
-        ladder::springrep_only(op, || engine::solid(op, sr::transform(b, m.rows())))
+        let rows = m.rows();
+        firewall::run(op, || {
+            ladder::two(op, &|| engine::solid(op, sr::transform(b, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
+        })
     }
 
     /// The image under an invertible affine map (protocol `affine`).
     pub fn transform_affine(&self, m: &Affine) -> Result<Solid> {
         let op = "transform_affine";
         let Some(b) = self.brep() else { return Ok(Solid::empty()) };
-        ladder::springrep_only(op, || engine::solid(op, sr::affine(b, m.rows())))
+        let rows = m.rows();
+        firewall::run(op, || {
+            ladder::two(op, &|| engine::solid(op, sr::affine(b, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
+        })
     }
 }

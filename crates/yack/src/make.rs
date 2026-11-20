@@ -160,7 +160,8 @@ pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Resul
 /// `profile` scaled by `scale` about the frame's z axis, sent ready-made; yack lofts to `top` as
 /// given and does not scale it again.
 pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid> {
-    ladder::springrep_only("loft", || {
+    firewall::run("loft", || {
+        ladder::two("loft", &|| {
         let _ = scale; // recorded by the protocol; `top` is already the scaled copy
         let feature = engine::feature();
         let op = "loft";
@@ -170,6 +171,7 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Pro
             sr_loft::Section { profile: engine::profile(op, top, None)?, frame: engine::frame(&up) },
         ];
         engine::made_as(&feature, op, &[("side", "seg:side")], sr_loft::loft(&sections, true, &feature))
+    }, &|| engine_cadrs::loft("loft", frame, profile, height, top))
     })
 }
 
@@ -211,7 +213,8 @@ pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<
 /// `profile` swept along a path of lines and arcs starting along the frame's z. A positive arc
 /// angle turns toward the frame's +x.
 pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid> {
-    ladder::springrep_only("sweep", || {
+    firewall::run("sweep", || {
+        ladder::two("sweep", &|| {
         let feature = engine::feature();
         let op = "sweep";
         let axis = engine::v3(frame.y().vec());
@@ -223,27 +226,32 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
             })
             .collect();
         engine::made(&feature, op, sweep::along(&engine::profile(op, profile, None)?, &engine::frame(frame), &legs, &feature))
+    }, &|| engine_cadrs::sweep("sweep", frame, profile, path))
     })
 }
 
 /// `profile` swept along a spline `path` given in the frame's coordinates (it starts at the
 /// profile), twisting by `twist` over its length.
 pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid> {
-    ladder::springrep_only("sweep_path", || {
+    firewall::run("sweep_path", || {
+        ladder::two("sweep_path", &|| {
         let feature = engine::feature();
         let op = "sweep_path";
         let (curve, domain) = engine::spline(op, path, |c| frame.point(c.to_array()))?;
         let sketch = engine::profile(op, profile, None)?;
         engine::made(&feature, op, sweep::along_curve(&sketch, &engine::frame(frame), &curve, domain, twist.radians(), &feature))
+    }, &|| engine_cadrs::sweep_path("sweep_path", frame, profile, path, twist.radians()))
     })
 }
 
 /// A slab over the `size` rectangle with a spline top: `heights[i][j]` over knots `knots_u[i]`,
 /// `knots_v[j]`.
 pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid> {
-    ladder::springrep_only("slab", || {
+    firewall::run("slab", || {
+        ladder::two("slab", &|| {
         let feature = engine::feature();
         engine::made(&feature, "slab", primitive::slab(&engine::frame(frame), size, (knots_u, knots_v), heights, &feature))
+    }, &|| engine_cadrs::slab("slab", frame, size, knots_u, knots_v, heights))
     })
 }
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use yack_cadrs::yack_glue::{self, Made, Move};
 use yack_cadrs::facade::names::{self as cnames, FaceRole, Wall};
-use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, InputFace, Kernel, KernelError, Origin};
+use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, InputFace, KernelError, Origin};
 use yack_springrep::topo::FaceName;
 
 use crate::engine::{self, Brep};
@@ -241,7 +241,7 @@ fn boolean_raw(op: &'static str, how: BoolOp, a: &Solid, tools: &[&Solid]) -> Re
     let ca = of(op, a)?;
     let ids = tools.iter().map(|t| into_session(op, &ca, &of(op, t)?)).collect::<Result<Vec<_>>>()?;
     let feature = engine::feature();
-    let r = lock(&ca.session).boolean(how, ca.id, &ids).and_then(|r| Ok((r.first()?, r.history)));
+    let r = yack_glue::boolean(&mut lock(&ca.session), how, ca.id, &ids);
     let mut inputs: Vec<(BodyId, &Brep)> = a.brep().map(|b| vec![(ca.id, b)]).unwrap_or_default();
     inputs.extend(ids.iter().zip(tools).filter_map(|(&id, t)| Some((id, t.brep()?))));
     result(op, &feature, &ca.session, r, &Naming { inputs, ..Naming::default() })
@@ -440,3 +440,53 @@ pub(crate) fn shell(name: &'static str, s: &Solid, open: &[u64], thickness: f64,
     result(name, &feature, &c.session, made, &how)
 }
 
+
+/// A slab built by cadrs (protocol `slab`).
+pub(crate) fn slab(op: &'static str, f: &crate::Frame, size: [f64; 2], ku: &[f64], kv: &[f64], heights: &[Vec<f64>]) -> Result<Solid> {
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = yack_glue::slab(&mut lock(&session), &place(f), size, ku, kv, heights);
+    result(op, &feature, &session, r, &Naming::default())
+}
+
+/// `profile` swept by cadrs along `path` (lines and arcs) in frame `f`.
+pub(crate) fn sweep(op: &'static str, f: &crate::Frame, p: &crate::Profile, path: &[crate::PathPiece]) -> Result<Solid> {
+    let ctrl = ctrl2(p);
+    let loops = segs(op, p, &ctrl)?;
+    let refs: Vec<&[Seg]> = loops.iter().map(Vec::as_slice).collect();
+    let pieces: Vec<cp::Piece> = path
+        .iter()
+        .map(|x| match *x {
+            crate::PathPiece::Line { length } => cp::Piece::Line { length },
+            crate::PathPiece::Arc { radius, angle } => cp::Piece::Arc { radius, angle: angle.radians() },
+        })
+        .collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::sweep(&mut lock(&session), &place(f), &refs, &pieces);
+    result(op, &feature, &session, r, &Naming { segments: engine::segment_parts(p), ..Naming::default() })
+}
+
+/// `profile` swept by cadrs along the spline `path` (frame coordinates), twisting `twist` radians.
+pub(crate) fn sweep_path(op: &'static str, f: &crate::Frame, p: &crate::Profile, path: &crate::Spline3, twist: f64) -> Result<Solid> {
+    let ctrl = ctrl2(p);
+    let loops = segs(op, p, &ctrl)?;
+    let refs: Vec<&[Seg]> = loops.iter().map(Vec::as_slice).collect();
+    let pc: Vec<[f64; 3]> = path.ctrl().iter().map(|c| c.to_array()).collect();
+    let spline = cp::Spline { degree: usize::try_from(path.degree()).unwrap_or(usize::MAX), knots: path.knots(), ctrl: &pc, weights: None };
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::sweep_path(&mut lock(&session), &place(f), &refs, &spline, twist);
+    result(op, &feature, &session, r, &Naming { segments: engine::segment_parts(p), ..Naming::default() })
+}
+
+/// A two-section ruled loft by cadrs: `profile` at z = 0, `top` (already scaled) at `height`.
+pub(crate) fn loft(op: &'static str, f: &crate::Frame, p: &crate::Profile, height: f64, top: &crate::Profile) -> Result<Solid> {
+    let (c0, c1) = (ctrl2(p), ctrl2(top));
+    let (l0, l1) = (segs(op, p, &c0)?, segs(op, top, &c1)?);
+    let (r0, r1): (Vec<&[Seg]>, Vec<&[Seg]>) = (l0.iter().map(Vec::as_slice).collect(), l1.iter().map(Vec::as_slice).collect());
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::loft(&mut lock(&session), &place(f), &r0, height, &r1);
+    result(op, &feature, &session, r, &Naming::default())
+}

@@ -82,11 +82,18 @@ impl Solid {
 
     /// A conic blend with `setback` along each face and shape `rho` (0.5 is parabolic).
     pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> {
-        ladder::springrep_only("fillet_conic", || {
+        let ix = crate::edit::indices(edges);
+        firewall::run("fillet_conic", || {
+            ladder::two(
+                "fillet_conic",
+                &|| {
             let feature = engine::feature();
             let op = "fillet_conic";
             let ids = self.sr_edges(op, "edges", edges)?;
             engine::made(&feature, op, sr::fillet_conic(self.need(op)?, &ids, setback, rho, &feature))
+        },
+                &|| engine_cadrs::blend("fillet_conic", self, &ix, "round", |k, id| glue::fillet_conic(k, id, &ix, setback, rho)),
+            )
         })
     }
 
