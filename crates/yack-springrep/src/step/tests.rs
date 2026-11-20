@@ -1,6 +1,6 @@
 // yack: springrep module src/step/tests.rs
 // Adapted from springrep@a03e8a1 src/step/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: this header added; modified: one regression test for read.rs's traversal cap.
 use std::f64::consts::{PI, TAU};
 
 use super::{read, write};
@@ -1904,4 +1904,61 @@ fn a_band_of_a_spline_surface_closed_round_one_parameter_is_read() {
         let want = PI * 4.0 * 3.0;
         assert!((measure::volume(&b) - want).abs() < 1e-6 * want);
     }
+}
+
+/// yack: a product DAG that uses its child twice at each of 31 levels expands to 2^31 product
+/// uses while placing no solid at all; the reader's traversal cap refuses it at once.
+#[test]
+fn an_assembly_reused_at_every_level_is_refused_not_expanded() {
+    let mut data = String::from(
+        "#20=AXIS2_PLACEMENT_3D('',#21,#22,#23);
+#21=CARTESIAN_POINT('',(0.,0.,0.));
+#22=DIRECTION('',(0.,0.,1.));
+#23=DIRECTION('',(1.,0.,0.));
+#90=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));
+#99=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#90)) \
+REPRESENTATION_CONTEXT('','3D'));
+",
+    );
+    let levels = 31;
+    for i in 0..=levels {
+        data += &format!(
+            "#{a}=PRODUCT_DEFINITION_SHAPE('','',#{pd});\n#{r}=SHAPE_REPRESENTATION('l',(#20),#99);\n\
+             #{s}=SHAPE_DEFINITION_REPRESENTATION(#{a},#{r});\n",
+            a = 1000 + i,
+            pd = 100 + i,
+            r = 2000 + i,
+            s = 3000 + i,
+        );
+        if i == levels {
+            continue;
+        }
+        for k in 0..2 {
+            let n = 10 * i + k;
+            data += &format!(
+                "#{u}=NEXT_ASSEMBLY_USAGE_OCCURRENCE('u','','',#{parent},#{child},$);
+#{t}=ITEM_DEFINED_TRANSFORMATION('','',#20,#20);
+#{rel}=(REPRESENTATION_RELATIONSHIP('','',#{child_rep},#{parent_rep}) \
+REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{t}) SHAPE_REPRESENTATION_RELATIONSHIP());
+#{ps}=PRODUCT_DEFINITION_SHAPE('','',#{u});
+#{c}=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{ps});
+",
+                u = 40000 + n,
+                t = 50000 + n,
+                rel = 60000 + n,
+                ps = 70000 + n,
+                c = 80000 + n,
+                parent = 100 + i,
+                child = 101 + i,
+                child_rep = 2001 + i,
+                parent_rep = 2000 + i,
+            );
+        }
+    }
+    let text = format!(
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('a','',(''),(''),'','other','');\nENDSEC;\nDATA;\n\
+         {data}ENDSEC;\nEND-ISO-10303-21;\n"
+    );
+    let e = read(text.as_bytes(), "imp").err().expect("refused");
+    assert!(e.to_string().contains("product and representation uses"), "{e}");
 }

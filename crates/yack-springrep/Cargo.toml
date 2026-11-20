@@ -17,3 +17,9 @@ build = "build.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# The donor code uses HashMap/HashSet, Instant and one env switch (root clippy.toml bans them);
+# M2 removes them. Allowed here so clippy can reach the crates that depend on this one.
+[lints.clippy]
+disallowed_types = "allow"
+disallowed_methods = "allow"

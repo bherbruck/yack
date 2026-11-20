@@ -1,6 +1,7 @@
 // yack: Reading a STEP file: the product structure gives each solid's placements, and each solid is
 // Adapted from springrep@a03e8a1 src/step/read.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: this header added; modified: traversal cap (MAX_VISITS bounds walk()/rep_solids()
+//   calls, so a product or mapped-item DAG reused at every level is refused, not expanded).
 //! Reading a STEP file: the product structure gives each solid's placements, and each solid is
 //! built once and copied to every placement.
 
@@ -120,6 +121,11 @@ const SOLIDS: [&str; 4] = [
 /// exponentially deep is refused rather than expanded.
 const MAX_PLACEMENTS: usize = 1_000_000;
 
+/// The most products and representations one file's assembly walk may visit, counting each
+/// reuse again: a graph that reuses a part at every level expands exponentially even where it
+/// places no solid, so the walk is bounded, not just its output.
+const MAX_VISITS: usize = 1_000_000;
+
 fn cyclic<T>(id: u64, what: &str) -> Result<T> {
     Err(Error::InvalidInput(format!("STEP #{id}: {what}")))
 }
@@ -174,6 +180,8 @@ struct Assembly<'a> {
     /// Each product definition's children: the child, the relation that places it, and the use.
     children: HashMap<u64, Vec<(u64, u64, u64)>>,
     related: HashSet<u64>,
+    /// How many products and representations the walk has visited, against [`MAX_VISITS`].
+    visits: std::cell::Cell<usize>,
 }
 
 impl<'a> Assembly<'a> {
@@ -184,6 +192,7 @@ impl<'a> Assembly<'a> {
             reps: HashMap::new(),
             children: HashMap::new(),
             related: HashSet::new(),
+            visits: std::cell::Cell::new(0),
         };
         let mut nauo_place: HashMap<u64, u64> = HashMap::new();
         for e in &file.entities {
@@ -243,6 +252,18 @@ impl<'a> Assembly<'a> {
         a
     }
 
+    /// Counts one more visit of `id`, refusing the file once the walk passes [`MAX_VISITS`].
+    fn visit(&self, id: u64) -> Result<()> {
+        let n = self.visits.get() + 1;
+        self.visits.set(n);
+        if n > MAX_VISITS {
+            return Err(Error::InvalidInput(format!(
+                "STEP #{id}: the assembly expands to more than {MAX_VISITS} product and representation uses"
+            )));
+        }
+        Ok(())
+    }
+
     /// Every representation joined to `rep` without a transformation, `rep` included.
     fn linked(&self, rep: u64) -> Vec<u64> {
         let mut seen = vec![rep];
@@ -271,6 +292,7 @@ impl<'a> Assembly<'a> {
         if path.contains(&rep) {
             return cyclic(rep, "a mapped representation contains itself");
         }
+        self.visit(rep)?;
         path.push(rep);
         let r = self.rep_solids_in(geo, rep, at, path, out);
         path.pop();
@@ -371,6 +393,7 @@ impl<'a> Assembly<'a> {
         if path.contains(&pd) {
             return cyclic(pd, "the assembly contains itself");
         }
+        self.visit(pd)?;
         seen.insert(pd);
         path.push(pd);
         let own = out.len();
