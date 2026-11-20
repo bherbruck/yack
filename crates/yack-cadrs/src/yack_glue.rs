@@ -81,14 +81,13 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
     if v3(dir).norm() == 0.0 {
         return Err(KernelError::InvalidInput("a motion needs a non-zero direction".into()));
     }
-    // A screw past a whole turn sweeps over itself; cadrs makes it only as a mesh-bounded solid
-    // (seconds, tens of thousands of facets), and the union of its half-turn legs measured 0.1 %
-    // off the exact cut (fine-thread: 1278.13 against 1276.70). Refused: cut by it with
-    // [`cut_swept`] (cadrs's own cut by a moving tool, exact there).
+    // A screw past a whole turn: cadrs sweeps a ball, a box or a torus exactly (as cadrs's runner,
+    // helical-pipe-round-ends, box-screwed-inside-a-rod); where it cannot it falls back to a
+    // mesh-bounded solid, refused below. A screw of more turns than any part has is a runaway.
     if let Move::Screw { angle, .. } = *m
-        && angle.abs() > std::f64::consts::TAU
+        && angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU
     {
-        return Err(KernelError::Unsupported("a screw past a whole turn (cut by it with cut_swept)"));
+        return Err(KernelError::Unsupported("a screw of more than 64 turns"));
     }
     let (out, history) = made(k.sweep_solid(body, &solid_motion(m)))?;
     if faceted(k, out)? {
@@ -99,33 +98,62 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
 }
 
 /// The unit normal of the plane holding every control point, or `None` when they are collinear
-/// or not coplanar (within `tol` relative to their spread).
+/// or not coplanar (within `tol` relative to their spread). The plane is the farthest point's
+/// direction and the direction of the point farthest from that line (an S-shaped path's control
+/// polygon encloses no area, so its area vector would say nothing); its sign makes the largest
+/// component positive.
 pub fn plane_normal(ctrl: &[[f64; 3]], tol: f64) -> Option<[f64; 3]> {
     let pts: Vec<Point3<f64>> = ctrl.iter().map(|&c| p3(c)).collect();
     let first = *pts.first()?;
-    let spread = pts.iter().map(|p| (p - first).norm()).fold(0.0, f64::max);
+    let far = pts.iter().copied().max_by(|a, b| (a - first).norm().total_cmp(&(b - first).norm()))?;
+    let spread = (far - first).norm();
     if spread == 0.0 {
         return None;
     }
-    let mut n = Vector3::zeros();
-    for (i, a) in pts.iter().enumerate() {
-        let b = pts.get((i + 1) % pts.len())?;
-        n += (a - first).cross(&(b - first));
-    }
-    let len = n.norm();
-    if len <= tol * spread * spread {
+    let d = (far - first) / spread;
+    let off = |p: &Point3<f64>| (p - first) - d * (p - first).dot(&d);
+    let side = pts.iter().map(off).max_by(|a, b| a.norm().total_cmp(&b.norm()))?;
+    if side.norm() <= tol * spread {
         return None;
     }
-    let n = n / len;
+    let mut n = d.cross(&side.normalize());
     if pts.iter().any(|p| (p - first).dot(&n).abs() > tol * spread) {
         return None;
+    }
+    if n.iter().copied().max_by(|a, b| a.abs().total_cmp(&b.abs())).is_some_and(|c| c < 0.0) {
+        n = -n;
     }
     Some([n.x, n.y, n.z])
 }
 
+/// The `up` of [`Move::Along`] that carries `body` along the path on control points `ctrl` as
+/// the protocol's frame law does (`fixed`: the body keeps its orientation; else the path's
+/// rotation-minimising frame), or why cadrs cannot. On a planar path the rotation-minimising
+/// frame turns about the plane's normal with the tangent: `up` is that normal. A fixed frame is
+/// the same motion where turning about that normal through the path's start leaves the body as
+/// it is: a ball, or a body of revolution about that line (a mill on its own axis).
+pub fn along_up(k: &DefaultKernel, body: BodyId, ctrl: &[[f64; 3]], fixed: bool, tol: f64) -> Result<[f64; 3]> {
+    let n = plane_normal(ctrl, tol);
+    let faces = &k.get(body)?.faces;
+    if fixed {
+        if let [f] = faces.as_slice()
+            && matches!(f.surf, crate::native::surface::Surface::Sphere { .. })
+        {
+            return Ok(n.unwrap_or([0.0, 0.0, 1.0]));
+        }
+        let start = ctrl.first().map(|&c| p3(c));
+        let on_line = |n: [f64; 3]| start.is_some_and(|s| of_revolution_about(faces, s, v3(n)));
+        return match n {
+            Some(n) if on_line(n) => Ok(n),
+            _ => Err(KernelError::Unsupported("a fixed-frame path sweep of a solid other than a ball or a body turned about the path's normal at its start")),
+        };
+    }
+    n.ok_or(KernelError::Unsupported("a rotation-minimising sweep along a path that is not planar"))
+}
+
 // ---- ops by face and edge index (the bridge keeps springrep's indices) ----
 
-use crate::{ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, DraftSpec, Origin, EdgeId, FaceId, FaceInput, Motion, OffsetSpec, Primitive, ShellSpec, ThickenSpec};
+use crate::{ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, DraftSpec, Origin, EdgeId, EdgeInfo, FaceId, FaceInput, Motion, OffsetSpec, Primitive, ShellSpec, ThickenSpec};
 
 fn faces(ix: &[u64]) -> Vec<FaceId> {
     ix.iter().map(|&i| FaceId(i)).collect()
@@ -236,16 +264,61 @@ fn chain_ids(k: &DefaultKernel, body: BodyId, ix: &[u64]) -> Result<Vec<EdgeId>>
     Ok(chained(k, body, ix)?.into_iter().map(|(e, _)| EdgeId(e)).collect())
 }
 
+/// The protocol's fit rule for a blend of `es` on `body` made as `out` ("the ball fits when its
+/// contact with each face stays on that face"): every old face a new face of the blend meets must
+/// continue a face at one of the blended edges or at one of their ends. A blend whose contact runs
+/// off its face onto a third one (a hole's rim round wider than the plate round it) is declined:
+/// cadrs trims it by that face and answers a solid that is not the protocol's.
+fn fits(k: &DefaultKernel, body: BodyId, es: &[EdgeId], out: &Made) -> Result<()> {
+    let info = k.edges(body)?;
+    let named: Vec<&EdgeInfo> = info.iter().filter(|i| es.contains(&i.id)).collect();
+    let near = |a: &Point3<f64>, b: &Point3<f64>| (a - b).norm() <= crate::native::tol::POINT;
+    let ends: Vec<Point3<f64>> = named.iter().flat_map(|i| [i.start, i.end]).collect();
+    let mut allowed: Vec<FaceId> = Vec::new();
+    for i in &info {
+        let at_end = [i.start, i.end].iter().any(|p| ends.iter().any(|q| near(p, q)));
+        if es.contains(&i.id) || at_end {
+            allowed.extend(i.faces.iter().flatten().copied());
+        }
+    }
+    let (made_body, history) = out;
+    let new = |f: FaceId| history.generated.iter().any(|&(g, _)| g == f);
+    let old = |f: FaceId| -> Option<FaceId> {
+        history.modified.iter().find(|&&(g, _)| g == f).map(|&(_, from)| from.face)
+    };
+    for e in k.edges(*made_body)? {
+        let [Some(a), Some(b)] = e.faces else { continue };
+        for (n, o) in [(a, b), (b, a)] {
+            if !new(n) || new(o) {
+                continue;
+            }
+            match old(o) {
+                Some(f) if allowed.contains(&f) => {}
+                _ => {
+                    return Err(KernelError::InvalidInput(
+                        "the blend does not fit: its contact runs off a face it rounds onto another face".into(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Edges `ix` (and their tangent chains) rounded with `radius`.
 pub fn fillet(k: &mut DefaultKernel, body: BodyId, ix: &[u64], radius: f64) -> Result<Made> {
     let es = chain_ids(k, body, ix)?;
-    made(k.fillet(body, &es, radius))
+    let out = made(k.fillet(body, &es, radius))?;
+    fits(k, body, &es, &out)?;
+    Ok(out)
 }
 
 /// Edges `ix` (and their tangent chains) chamfered with `opts`.
 fn chamfer_opts(k: &mut DefaultKernel, body: BodyId, ix: &[u64], opts: &ChamferOpts) -> Result<Made> {
     let es = chain_ids(k, body, ix)?;
-    made(k.chamfer_with(body, &es, opts))
+    let out = made(k.chamfer_with(body, &es, opts))?;
+    fits(k, body, &es, &out)?;
+    Ok(out)
 }
 
 /// Edges `ix` (and their tangent chains) chamfered `distance` along each face; where three or
@@ -487,14 +560,48 @@ fn near_axis(k: &mut DefaultKernel, tool: BodyId, target: BodyId, point: [f64; 3
 /// `target` less everything `tool` passes through as it moves by `m` (cadrs's cut by a moving
 /// tool, which builds what it removes a stretch at a time). Under a turn or screw only the tool's
 /// part within the target's reach of the axis is moved.
+/// Whether `faces` are all of revolution about one axis (spheres, tori, cones and cylinders on
+/// it, planes square to it): a body cadrs sweeps by a turn or screw by its envelope.
+fn of_revolution(faces: &[crate::native::topo::Face]) -> bool {
+    use crate::native::surface::Surface as S;
+    let axis = faces.iter().find_map(|f| match &f.surf {
+        S::Cylinder { f, .. } | S::Cone { f, .. } | S::Torus { f, .. } => Some((f.o, f.z)),
+        _ => None,
+    });
+    match axis {
+        Some((o, a)) => of_revolution_about(faces, o, a),
+        // A ball alone.
+        None => matches!(faces, [f] if matches!(f.surf, S::Sphere { .. })),
+    }
+}
+
+/// Whether `faces` are all of revolution about the line through `o` along `a`.
+fn of_revolution_about(faces: &[crate::native::topo::Face], o: Point3<f64>, a: Vector3<f64>) -> bool {
+    use crate::native::surface::Surface as S;
+    let Some(a) = a.try_normalize(0.0) else { return false };
+    let on_axis = |p: Point3<f64>| (p - o).cross(&a).norm() <= crate::native::tol::POINT;
+    let parallel = |z: Vector3<f64>| z.cross(&a).norm() <= crate::native::tol::ANGULAR;
+    !faces.is_empty()
+        && faces.iter().all(|f| match &f.surf {
+            S::Cylinder { f, .. } | S::Cone { f, .. } | S::Torus { f, .. } | S::Revolution { f, .. } => on_axis(f.o) && parallel(f.z),
+            S::Sphere { f, .. } => on_axis(f.o),
+            S::Plane { f } => parallel(f.z),
+            _ => false,
+        })
+}
+
 fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) -> Result<Made> {
     if let Move::Screw { angle, .. } = *m
         && angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU
     {
         return Err(KernelError::Unsupported("a screw of more than 64 turns"));
     }
+    // A body of revolution is left whole: cadrs cuts by a turned or screwed one exactly, by its
+    // envelope (torus-screwed-through-rod: 4 faces in 0.1 s, v-wheel-screwed-through-rod), and
+    // by a trimmed piece of one only as a mesh.
+    let whole = k.get(tool).is_ok_and(|b| of_revolution(&b.faces));
     let used = match *m {
-        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } => near_axis(k, tool, target, point, axis)?,
+        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } if !whole => near_axis(k, tool, target, point, axis)?,
         _ => tool,
     };
     // cadrs's cut by a moving tool is exact for a screw (fine-thread: 1276.703 against cadrs's
@@ -756,6 +863,157 @@ mod tests {
         k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(10.0, 10.0, 10.0) })
             .and_then(|r| r.first())
             .unwrap()
+    }
+
+    /// A plate drilled through with a hole of radius `rad` at `c`, and its top rim's edges.
+    fn drilled(k: &mut DefaultKernel, size: [f64; 3], c: [f64; 2], rad: f64) -> (BodyId, Vec<u64>) {
+        let plate = k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(size[0], size[1], size[2]) }).and_then(|r| r.first()).unwrap();
+        let hole = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::new(c[0], c[1], -1.0),
+                axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+                radius: rad,
+                height: size[2] + 2.0,
+            })
+            .and_then(|r| r.first())
+            .unwrap();
+        let (d, _) = boolean(k, crate::BoolOp::Subtract, plate, &[hole]).unwrap();
+        let rim = k
+            .edges(d)
+            .unwrap()
+            .iter()
+            .filter(|e| (e.mid.z - size[2]).abs() < 1e-9 && ((e.mid.x - c[0]).hypot(e.mid.y - c[1]) - rad).abs() < 1e-6)
+            .map(|e| e.id.0)
+            .collect();
+        (d, rim)
+    }
+
+    #[test]
+    fn a_rim_round_that_runs_off_the_plate_is_declined() {
+        // brep-conformance seed 2 chain-rim-after-cut-2ee7ef: the round's outer edge (radius 4.75
+        // about (4.73, 4.32)) crosses the plate's sides x = 0 and y = 0.
+        let mut k = DefaultKernel::new();
+        let size = [10.875072829244813, 10.544234942431189, 5.669455797435571];
+        let (d, rim) = drilled(&mut k, size, [4.726518256981529, 4.317994990440217], 3.428784132901775);
+        assert!(!rim.is_empty());
+        assert!(fillet(&mut k, d, &rim[..1], 1.3217145850745369).is_err());
+        assert!(chamfer(&mut k, d, &rim[..1], 1.3217145850745369).is_err());
+        // One that stays on the top: Pappus (section (1 - pi/4) r^2, its centroid at
+        // rad + r (10 - 3 pi) / (12 - 3 pi) from the axis).
+        let (r, rad) = (0.5, 3.428784132901775);
+        let (f, _) = fillet(&mut k, d, &rim[..1], r).unwrap();
+        let v0 = k.mass_properties(d).unwrap().volume;
+        let pi = std::f64::consts::PI;
+        let cut = 2.0 * pi * (rad + r * (10.0 - 3.0 * pi) / (12.0 - 3.0 * pi)) * (1.0 - pi / 4.0) * r * r;
+        assert!((k.mass_properties(f).unwrap().volume - (v0 - cut)).abs() < 1e-6);
+        assert!(chamfer(&mut k, d, &rim[..1], r).is_ok());
+    }
+
+    #[test]
+    fn edge_rounds_meeting_their_end_faces_fit() {
+        let mut k = DefaultKernel::new();
+        let b = cube(&mut k);
+        assert!(fillet(&mut k, b, &[0], 2.0).is_ok());
+        let all: Vec<u64> = (0..k.edges(b).unwrap().len() as u64).collect();
+        assert!(fillet(&mut k, b, &all, 2.0).is_ok());
+        assert!(chamfer(&mut k, b, &[0], 2.0).is_ok());
+    }
+
+    #[test]
+    fn a_ball_screwed_three_turns_is_a_round_ended_pipe() {
+        // brep-bench sweep/helical-pipe-round-ends: pi r^2 L + 4/3 pi r^3 with L the helix's length.
+        let mut k = DefaultKernel::new();
+        let ball = k.primitive(&Primitive::Sphere { center: Point3::new(10.0, 0.0, 0.0), radius: 1.0, axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), seam: nalgebra::Unit::new_normalize(Vector3::new(1.0, 0.0, 0.0)) }).and_then(|r| r.first()).unwrap();
+        let tau = std::f64::consts::TAU;
+        let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 3.0 * tau, rise_per_turn: 5.0 };
+        let (s, _) = swept(&mut k, ball, &m).unwrap();
+        let pi = std::f64::consts::PI;
+        let len = 3.0 * (tau * 10.0).hypot(5.0);
+        let want = pi * len + 4.0 / 3.0 * pi;
+        let v = k.mass_properties(s).unwrap().volume;
+        assert!((v - want).abs() < 1e-6 * want, "{v} against {want}");
+    }
+
+    #[test]
+    fn a_screwed_torus_cuts_whole_and_exactly() {
+        // brep-bench swept/torus-screwed-through-rod: cadrs's runner 1460.6300023677913 (4 faces).
+        let mut k = DefaultKernel::new();
+        let rod = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::new(0.0, 0.0, 0.0),
+                axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+                radius: 5.0,
+                height: 20.0,
+            })
+            .and_then(|r| r.first())
+            .unwrap();
+        let h = (std::f64::consts::TAU * 5.5 / 30.0).atan();
+        let (s, c) = (-108f64).to_radians().sin_cos();
+        let rot = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
+        let centre = rot([11.5, 0.0, 0.0]);
+        let (wheel, _) = torus(&mut k, [centre[0], centre[1], -9.0], rot([0.0, h.cos(), -h.sin()]), 6.0, 2.0).unwrap();
+        let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 456f64.to_radians(), rise_per_turn: 30.0 };
+        let (out, _) = cut_swept(&mut k, rod, wheel, &[m]).unwrap();
+        let v = k.mass_properties(out).unwrap().volume;
+        assert!((v - 1460.6300023677913).abs() < 1e-6 * v, "{v}");
+        assert!(k.get(out).unwrap().faces.len() <= 10);
+    }
+
+    #[test]
+    fn a_v_wheel_screwed_through_a_rod_cuts_exactly() {
+        // brep-bench swept/v-wheel-screwed-through-rod: cadrs's runner 1554.3809661193923.
+        let mut k = DefaultKernel::new();
+        let rod = k
+            .primitive(&Primitive::Cylinder {
+                base: Point3::new(0.0, 0.0, 0.0),
+                axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)),
+                radius: 5.0,
+                height: 20.0,
+            })
+            .and_then(|r| r.first())
+            .unwrap();
+        let h = (std::f64::consts::TAU * 4.5 / 30.0).atan();
+        let along = Vector3::new(0.0, h.cos(), -h.sin());
+        let centre = Point3::new(14.0, 0.0, 0.0);
+        let x = Vector3::new(-1.0, 0.0, 0.0);
+        let on = crate::Plane::new(centre, x, x.cross(&along));
+        let w = 2.5 * 30f64.to_radians().tan();
+        let section = crate::Profile::of(on, vec![crate::Loop::polygon(&[[10.0, 0.0], [7.5, w], [7.5, -w]])]);
+        let wheel = k.revolve(&section, Axis::new(centre, along), std::f64::consts::TAU).and_then(|r| r.first()).unwrap();
+        // cadrs's runner turns it from -144 degrees: placed there first.
+        let start = crate::facade::motion::end_motion(&Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: (-144f64).to_radians(), rise_per_turn: 30.0 }).unwrap();
+        let wheel = k.transform_motion(wheel, &start).and_then(|r| r.first()).unwrap();
+        let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 528f64.to_radians(), rise_per_turn: 30.0 };
+        let (out, _) = cut_swept(&mut k, rod, wheel, &[m]).unwrap();
+        let v = k.mass_properties(out).unwrap().volume;
+        assert!((v - 1554.3809661193923).abs() < 1e-6 * v, "{v}");
+    }
+
+    #[test]
+    fn a_key_carried_along_an_s_shaped_spline() {
+        // brep-bench swept/key-carried-along-a-spline: cadrs's runner 10652.879989210425. The
+        // S-shaped control polygon encloses no area, yet the path is planar.
+        let mut k = DefaultKernel::new();
+        let ctrl = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]];
+        assert_eq!(plane_normal(&ctrl, 1e-9), Some([0.0, 0.0, 1.0]));
+        let block = |k: &mut DefaultKernel, a: [f64; 3], b: [f64; 3]| {
+            k.primitive(&Primitive::Box { min: p3(a), max: p3(b) }).and_then(|r| r.first()).unwrap()
+        };
+        let plate = block(&mut k, [-6.0, -6.0, -8.0], [36.0, 26.0, 0.0]);
+        let key = block(&mut k, [-1.5, -0.8, -1.5], [1.5, 0.8, 2.5]);
+        assert!(along_up(&k, key, &ctrl, true, 1e-9).is_err());
+        let up = along_up(&k, key, &ctrl, false, 1e-9).unwrap();
+        let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let m = Move::Along { degree: 3, knots: &knots, ctrl: &ctrl, up };
+        let (out, _) = cut_swept(&mut k, plate, key, &[m]).unwrap();
+        let v = k.mass_properties(out).unwrap().volume;
+        assert!((v - 10652.879989210425).abs() < 1e-6 * v, "{v}");
+        // A post on its own axis at the path's start: a fixed frame is the same motion.
+        let post = k
+            .primitive(&Primitive::Cylinder { base: Point3::new(0.0, 0.0, -1.5), axis: nalgebra::Unit::new_normalize(Vector3::new(0.0, 0.0, 1.0)), radius: 1.0, height: 3.0 })
+            .and_then(|r| r.first())
+            .unwrap();
+        assert_eq!(along_up(&k, post, &ctrl, true, 1e-9).unwrap(), [0.0, 0.0, 1.0]);
     }
 
     #[test]
