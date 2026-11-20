@@ -9,6 +9,13 @@ yack: pub use solid::Solid
 yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
+yack::bakeoff: enum Engine variant Both
+yack::bakeoff: enum Engine variant Cadrs
+yack::bakeoff: enum Engine variant Springrep
+yack::bakeoff: pub enum Engine
+yack::bakeoff: pub fn force(e: Engine)
+yack::bakeoff: pub fn forced() -> Engine
+yack::bakeoff: pub fn roundtrip(s: &Solid) -> Vec<String>
 yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn chamfer_angle(&self, edge: EdgeId, face: FaceId, distance: f64, angle: Angle) -> Result<Solid> }
 yack::blend: impl Solid { pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }

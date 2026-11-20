@@ -36,6 +36,11 @@ fn is_final(kind: ErrorKind) -> bool {
 pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
     let mut declined: Vec<(&'static str, Error)> = Vec::new();
     for rung in rungs {
+        #[cfg(feature = "bakeoff")]
+        if !crate::bakeoff::allows(rung.name) {
+            declined.push((rung.name, Error::new(ErrorKind::Unsupported, op, format!("bakeoff: {} not forced", rung.name))));
+            continue;
+        }
         match (rung.run)() {
             Ok(s) => return Ok(s.with_strategy(rung.name)),
             Err(e) if is_final(e.kind) => return Err(e),

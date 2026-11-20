@@ -19,6 +19,8 @@
 #![deny(missing_docs)]
 #![deny(clippy::float_arithmetic)]
 
+#[cfg(feature = "bakeoff")]
+pub mod bakeoff;
 mod blend;
 mod boolean;
 pub mod codec;

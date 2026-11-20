@@ -111,7 +111,12 @@ fn a_face_of_another_solid_is_foreign() {
 }
 
 #[test]
-fn swept_sequences_are_not_supported_yet() {
-    let e = brick().swept(&Motion::Then(vec![Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }])).unwrap_err();
+fn swept_sequences_go_leg_by_leg() {
+    let one = brick().swept(&Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }).unwrap();
+    let two = brick()
+        .swept(&Motion::Then(vec![Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }, Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) }]))
+        .unwrap();
+    assert!(two.volume() > one.volume());
+    let e = brick().swept(&Motion::Then(vec![Motion::Then(vec![])])).unwrap_err();
     assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
 }

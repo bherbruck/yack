@@ -36,7 +36,17 @@ impl Solid {
             match (self.brep(), other.brep()) {
                 (Some(a), Some(b)) => ladder::two(
                     "intersection",
-                    &|| engine::solid("intersection", sr::intersection(a, b)),
+                    &|| {
+                        let out = engine::solid("intersection", sr::intersection(a, b))?;
+                        if out.is_empty() && yack_springrep::facade::api::boxes_overlap(a, b) {
+                            return Err(crate::Error::failed(
+                                "intersection",
+                                crate::Stage::Classify,
+                                "springrep declines: an empty intersection of solids whose boxes overlap (a sliver it may have lost)",
+                            ));
+                        }
+                        Ok(out)
+                    },
                     &|| engine_cadrs::boolean("intersection", BoolOp::Intersect, self, &[other]),
                 ),
                 _ => Ok(Solid::empty()),

@@ -16,5 +16,10 @@ yack-math = { path = "../yack-math" }
 yack-springrep = { path = "../yack-springrep" }
 yack-tol = { path = "../yack-tol" }
 
+[features]
+# Tool-only (yack-bench, yack-conformance): force one engine per run for the M1.10 bake-off, and
+# the bridge round-trip report. Never enabled by the published crate's users; gate-exempt.
+bakeoff = []
+
 [lints]
 workspace = true

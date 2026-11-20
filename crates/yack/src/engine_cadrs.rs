@@ -129,11 +129,9 @@ fn is_ball(s: &Solid) -> bool {
     !faces.is_empty() && s.faces_where(|f| matches!(f.kind(), SurfaceKind::Sphere { .. })).len() == faces.len()
 }
 
-/// Everything `s` passes through during `m`, by cadrs's sweep of a solid.
-pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
-    let op = "swept";
-    let ctrl: Vec<[f64; 3]>;
-    let mv = match m {
+/// One leg of a motion in cadrs's terms; `ctrl` holds an `Along` path's control points.
+fn leg<'a>(op: &'static str, s: &Solid, m: &'a Motion, ctrl: &'a [[f64; 3]]) -> Result<Move<'a>> {
+    Ok(match m {
         Motion::Slide { by } => Move::Slide { by: by.to_array() },
         Motion::Turn { axis_point, axis, angle } => {
             Move::Turn { point: axis_point.to_array(), axis: axis.to_array(), angle: angle.radians() }
@@ -145,22 +143,44 @@ pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
             rise_per_turn: *rise_per_turn,
         },
         Motion::Along { path, law } => {
-            ctrl = path.ctrl().iter().map(|p| p.to_array()).collect();
             let up = match law {
                 FrameLaw::Fixed if is_ball(s) => [0.0, 0.0, 1.0],
                 FrameLaw::Fixed => return Err(unsupported(op, "a fixed-frame path sweep of a solid other than a ball")),
-                FrameLaw::RotationMinimising => yack_glue::plane_normal(&ctrl, yack_tol::TANGENT)
+                FrameLaw::RotationMinimising => yack_glue::plane_normal(ctrl, yack_tol::TANGENT)
                     .ok_or_else(|| unsupported(op, "a rotation-minimising sweep along a path that is not planar"))?,
                 FrameLaw::Toward(_) => return Err(unsupported(op, "a path sweep facing a direction")),
             };
             let degree = usize::try_from(path.degree()).unwrap_or(usize::MAX);
-            Move::Along { degree, knots: path.knots(), ctrl: &ctrl, up }
+            Move::Along { degree, knots: path.knots(), ctrl, up }
         }
-        Motion::Then(_) => return Err(unsupported(op, "a sequence of motions")),
+        Motion::Then(_) => return Err(unsupported(op, "a sequence nested in a sequence")),
+    })
+}
+
+fn control(m: &Motion) -> Vec<[f64; 3]> {
+    match m {
+        Motion::Along { path, .. } => path.ctrl().iter().map(|p| p.to_array()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Everything `s` passes through during `m`, by cadrs's sweep of a solid (a sequence: each leg
+/// starting where the last left the solid, their sweeps united).
+pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
+    let op = "swept";
+    let legs: Vec<&Motion> = match m {
+        Motion::Then(ms) => ms.iter().collect(),
+        one => vec![one],
     };
+    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
+    let moves = legs.iter().zip(&ctrls).map(|(m, c)| leg(op, s, m, c)).collect::<Result<Vec<_>>>()?;
     let c = of(op, s)?;
     let feature = engine::feature();
-    let r = yack_glue::swept(&mut lock(&c.session), c.id, &mv);
+    let r = match moves.as_slice() {
+        [] => return Ok(s.clone()),
+        [one] => yack_glue::swept(&mut lock(&c.session), c.id, one),
+        many => yack_cadrs::facade::motion::swept_then(&mut lock(&c.session), c.id, many),
+    };
     let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), ..Naming::default() };
     result(op, &feature, &c.session, r, &how)
 }
