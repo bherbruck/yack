@@ -2,5 +2,7 @@
 //! An L-shaped block shelled outward open at its step, the walls beyond the opening kept.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
-    Err(Error::unsupported("shell/l-block-open-at-its-step-outward-sharp"))
+    let l = Profile::polygon(&[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [15.0, 20.0], [15.0, 5.0], [0.0, 5.0]])?;
+    let b = extrude(&Frame::WORLD, &l, 20.0)?;
+    b.shell_outward(&[b.face_at([7.0, 5.0, 10.0])?], 1.0)
 }

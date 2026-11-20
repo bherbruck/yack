@@ -6,7 +6,6 @@
 // depend on, so a result can depend on its lineage's session. There is no global session. Every
 // cadrs result is carried back to springrep through the bridge at once; queries and selection
 // run on that springrep form, and its face order is the bridge's (it preserves order).
-use core::fmt;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -22,12 +21,6 @@ use crate::{Error, ErrorKind, FrameLaw, Motion, Result, Solid, Stage, SurfaceKin
 pub(crate) struct CadrsRef {
     session: Arc<Mutex<DefaultKernel>>,
     id: BodyId,
-}
-
-impl fmt::Debug for CadrsRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CadrsRef({:?})", self.id)
-    }
 }
 
 fn lock(s: &Mutex<DefaultKernel>) -> MutexGuard<'_, DefaultKernel> {

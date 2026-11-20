@@ -17,7 +17,9 @@ regression: any case whose outcome got worse, any `wrong` at all (never waivable
 mean `loc` of the cases run, or a case's time over 2x its baseline (1.5x warns; cases under 50 ms
 in both are not timed against each other). --bless writes the baseline (merged, for a part of the
 suite) instead of failing on what is worse. `loc` is a case program's lines that are neither blank
-nor comments (PLAN §4.4); runner lines per case counts every src/**/*.rs file the same way.
+nor comments (PLAN §4.4); runner lines per case counts every src/**/*.rs file the same way. A
+case's strategy (`Solid::strategy()`, the ladder rung that made it) comes from one untimed
+`yack-bench --strategy CASE` run per built case after the harness's, and a change of it fails until blessed.
 
 The harness still keeps its scratch in the clone, all of it git-ignored there: results/meshes/yack/
 and results/mass/yack.json. Nothing else in the clone is written.
@@ -65,14 +67,34 @@ def loc(path):
         return None
 
 
+def strategies(runner, rows, timeout):
+    """Which ladder strategy built each case's solid, for the cases that built one: `yack-bench
+    --strategy CASE`, one process per case (untimed, niced), each given `timeout` seconds."""
+    import subprocess
+    out = {}
+    for r in rows:
+        if r["outcome"] not in ("pass", "built", "wrong"):
+            continue
+        try:
+            p = subprocess.run(["nice", runner, "--strategy", r["case"]], capture_output=True, text=True,
+                               timeout=timeout)
+            out[r["case"]] = p.stdout.strip() or None
+        except subprocess.TimeoutExpired:
+            out[r["case"]] = "timeout"
+            print(f"strategy: {r['case']} ran past {timeout} s")
+    return out
+
+
 def scored(rows, k):
-    """Each case's ratcheted measures: outcome, loc and time (the kernel's own, where it paused)."""
+    """Each case's ratcheted measures: outcome, loc, time (the kernel's own, where it paused) and
+    the strategy that built it."""
     import run  # noqa: E402
     out = {}
     for r in rows:
         secs = r.get("own_seconds") if r.get("own_seconds") is not None else r.get("seconds")
         out[r["case"]] = {"outcome": r["outcome"], "loc": loc(run.source(k, r["case"])),
-                          "time_ms": None if secs is None else round(secs * 1000, 1)}
+                          "time_ms": None if secs is None else round(secs * 1000, 1),
+                          "strategy": r.get("strategy")}
     return out
 
 
@@ -97,6 +119,8 @@ def ratchet(now, path, bless):
             continue
         if RANK.get(n["outcome"], 99) > RANK.get(b["outcome"], 99):
             problems.append(f"{cid}: {b['outcome']} -> {n['outcome']}")
+        if b.get("strategy") and n.get("strategy") and b["strategy"] != n["strategy"]:
+            problems.append(f"{cid}: strategy {b['strategy']} -> {n['strategy']} (bless it)")
         t0, t1 = b.get("time_ms"), n.get("time_ms")
         if t0 is not None and t1 is not None and max(t0, t1) >= FLOOR_MS:
             if t1 > 2 * t0:
@@ -146,6 +170,8 @@ def main():
     ap.add_argument("--brep-bench", default=DEFAULT_REF, help="the brep-bench clone")
     ap.add_argument("--runner", default=os.path.join(REPO, "bin", "release", "yack-bench"))
     ap.add_argument("--timeout", type=float, default=60)
+    ap.add_argument("--mass-bin", help="the harness's STEP measurer, prebuilt (default: <brep-bench>/../bin/"
+                    "release/mass, built with --target-dir there so the clone gets no target/)")
     ap.add_argument("--jobs", type=int, default=None)
     ap.add_argument("--scores", help="the ratchet baseline, e.g. scores/bench.json")
     ap.add_argument("--bless", action="store_true", help="write the baseline instead of failing")
@@ -157,6 +183,13 @@ def main():
     sys.path.insert(0, os.path.join(os.path.abspath(args.brep_bench), "harness"))
     import run  # noqa: E402  (brep-bench's harness/run.py)
 
+    # The STEP measurer is used prebuilt from outside the clone; run.py would otherwise build it
+    # into harness/mass/target. Where it is missing, say so instead of building it.
+    mass = os.path.abspath(args.mass_bin or os.path.join(os.path.abspath(args.brep_bench), "..", "bin",
+                                                          "release", "mass"))
+    run.MASS_BIN = mass
+    run.mass_command = lambda: [mass] if os.access(mass, os.X_OK) else f"{mass} is not built"
+
     k = entry(runner)
     chosen = run.cases(args.case)
     if not chosen:
@@ -166,6 +199,9 @@ def main():
     start, size = run.overhead(k, args.timeout, None) if whole else (None, run.binary(k))
     rows = run.run_kernel(k, chosen, args.timeout, None, run.MASS_TIMEOUT,
                           args.jobs or run.JOBS)
+    built = strategies(runner, rows, args.timeout)
+    for r in rows:
+        r["strategy"] = built.get(r["case"])
     result = {"kernel": k["name"], "version": run.version(k), "measured": "exact",
               "run": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": run.host(),
               "startup": start, "binary": size, "cases_run": args.case or "all",

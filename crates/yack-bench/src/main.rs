@@ -6,6 +6,9 @@
 //! ```text
 //! yack-bench CASE OUT.stl [OUT.step]
 //! yack-bench --version
+//! yack-bench --digests      (every case: `<id> <digest hex>` or `<id> refused`)
+//! yack-bench --strategy CASE  (`<Solid::strategy()>` or `refused`)
+//! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
 //! ```
 //!
 //! Builds the case `CASE` (`boolean/napkin-ring`) with its program,
@@ -178,7 +181,7 @@ fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, Str
         None => String::new(),
         Some((path, Ok(text))) => {
             std::fs::write(path, text).map_err(|e| format!("{path} not written: {e}"))?;
-            return Ok("{\"status\":\"ok\"}".to_owned());
+            return Ok(format!("{{\"status\":\"ok\",\"strategy\":{}}}", quoted(solid.strategy())));
         }
         Some((_, Err(e))) => format!(",\"step_error\":{}", quoted(&e.to_string())),
     };
@@ -198,10 +201,11 @@ fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, Str
     write_stl(out, &mesh).map_err(|e| format!("{out} not written: {e}"))?;
     Ok(format!(
         "{{\"status\":\"ok\",\"volume\":{},\"area\":{}{centroid},\"inertia\":[{}],\"faces\":{{{faces}}},\
-         \"valid\":{valid}{step_error}}}",
+         \"valid\":{valid},\"strategy\":{}{step_error}}}",
         number(volume),
         number(area),
         rows.join(","),
+        quoted(solid.strategy()),
     ))
 }
 
@@ -216,10 +220,68 @@ fn pause() {
     }
 }
 
+/// `--roundtrip [CASE]` (M1.9 bridge bake-off): every case, or one, built and passed through
+/// `yack::bakeoff::roundtrip`, a line each: `roundtrip <case> ok`, `roundtrip <case> refused`, or
+/// `roundtrip <case> FAIL <first problem>` with the rest indented below it.
+#[cfg(feature = "bakeoff")]
+fn roundtrip(only: Option<&str>) -> ExitCode {
+    let chosen: Vec<_> = cases::CASES.iter().filter(|(id, _)| only.is_none_or(|c| c == *id)).collect();
+    if chosen.is_empty() {
+        eprintln!("no implementation of `{}`", only.unwrap_or_default());
+        return ExitCode::from(2);
+    }
+    for (id, build) in chosen {
+        let Ok(solid) = build() else {
+            println!("roundtrip {id} refused");
+            continue;
+        };
+        match yack::bakeoff::roundtrip(&solid).split_first() {
+            None => println!("roundtrip {id} ok"),
+            Some((first, rest)) => {
+                println!("roundtrip {id} FAIL {first}");
+                for p in rest {
+                    println!("    {p}");
+                }
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(feature = "bakeoff"))]
+fn roundtrip(_: Option<&str>) -> ExitCode {
+    eprintln!("--roundtrip needs a build with `--features bakeoff`");
+    ExitCode::from(2)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--version") {
         println!("yack {} {}", yack::VERSION, yack::SOURCE);
+        return ExitCode::SUCCESS;
+    }
+    // Every case built in order, one line each: its id and its solid's digest, or `refused`
+    // (for `cargo xtask digest`, scores/digests/bench.txt). Nothing written, no pauses.
+    if args.get(1).map(String::as_str) == Some("--roundtrip") {
+        return roundtrip(args.get(2).map(String::as_str));
+    }
+    if let [_, flag, case] = &args[..]
+        && flag == "--strategy"
+    {
+        let Some(&(_, build)) = cases::CASES.iter().find(|(id, _)| id == case) else {
+            eprintln!("no implementation of `{case}`");
+            return ExitCode::from(2);
+        };
+        println!("{}", build().map_or("refused", |s| s.strategy()));
+        return ExitCode::SUCCESS;
+    }
+    if args.get(1).map(String::as_str) == Some("--digests") {
+        for (id, build) in cases::CASES {
+            match build() {
+                Ok(solid) => println!("{id} {}", solid.digest().iter().map(|b| format!("{b:02x}")).collect::<String>()),
+                Err(_) => println!("{id} refused"),
+            }
+        }
         return ExitCode::SUCCESS;
     }
     let (case, out, out_step) = match &args[..] {

@@ -8,11 +8,15 @@ use crate::{Error, ErrorKind, Frame, Point2, Point3, Profile, Result, Segment, S
 
 pub(crate) use sr::topo::Brep;
 
-/// A fresh feature name for the faces one operation makes; [`made`] records it on the result so
-/// `Solid::named` can find exactly those faces.
+/// The feature name an operation builds its new faces under; [`made`] records it on the result
+/// (made deterministic there) so `Solid::named` can find exactly those faces.
 pub(crate) fn feature() -> String {
-    format!("yack#{}", crate::solid::fresh_stamp())
+    PROVISIONAL.to_string()
 }
+
+/// The provisional feature name an op builds under; `Solid::with_feature` replaces it with one
+/// derived from the result's content.
+pub(crate) const PROVISIONAL: &str = "yack#new";
 
 pub(crate) fn v3(v: Vec3) -> SrVec3 {
     SrVec3::new(v.x, v.y, v.z)

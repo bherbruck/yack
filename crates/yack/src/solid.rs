@@ -19,8 +19,18 @@ use crate::{EdgeId, Error, FaceId, History, Result, Tag, VertexId};
 /// assert_eq!(nothing.volume(), 0.0);
 /// assert!(nothing.faces().is_empty());
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Solid(Arc<Inner>);
+
+impl core::fmt::Debug for Solid {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Solid")
+            .field("strategy", &self.strategy())
+            .field("faces", &self.faces().len())
+            .field("tag", &self.0.tag)
+            .finish_non_exhaustive()
+    }
+}
 
 /// The next solid's stamp. Process-wide state, allowed in the facade only (lead, M1.5): it keeps
 /// ids from one solid from ever passing on another, dropped or alive, and never affects geometry.
@@ -31,7 +41,6 @@ pub(crate) fn fresh_stamp() -> u64 {
     NEXT_STAMP.fetch_add(1, Ordering::Relaxed)
 }
 
-#[derive(Debug)]
 struct Inner {
     stamp: u64,
     body: Body,
@@ -146,17 +155,12 @@ impl Solid {
         &self.0.history
     }
 
-    /// A content digest of topology and geometry (face names and tags aside): equal solids, bit for
-    /// bit, have equal digests, and running the same program again gives the same digest. The empty solid's is all zeros.
+    /// A content digest of topology, geometry and face names: equal solids, bit for bit, have equal
+    /// digests, and running the same program again gives the same digest. The empty solid's is all zeros.
     pub fn digest(&self) -> [u8; 32] {
         match &self.0.body {
             Body::Empty => [0; 32],
-            Body::Springrep(b) => {
-                // Geometry and topology only: face names carry per-process operation numbers.
-                let mut bare = (**b).clone();
-                bare.rename_faces(|_| None::<yack_springrep::topo::FaceName>);
-                engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(&bare)))
-            }
+            Body::Springrep(b) => engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(b.as_ref()))),
         }
     }
 
@@ -166,10 +170,27 @@ impl Solid {
     }
 
     /// The same solid remembering that its new faces carry engine feature `feature`.
+    /// The same solid remembering that its new faces carry `feature`. An op's provisional name
+    /// ([`engine::feature`]) is replaced here by one derived from the result's own topology and
+    /// geometry, so a program names its faces alike on every run, whatever ran before it.
     pub(crate) fn with_feature(self, feature: &str) -> Solid {
         match Arc::try_unwrap(self.0) {
             Ok(mut inner) => {
-                inner.feature = Some(feature.to_string());
+                let mut name = feature.to_string();
+                if feature == engine::PROVISIONAL
+                    && let Body::Springrep(b) = &mut inner.body
+                {
+                    let d = bare_digest(b);
+                    name = format!("yack#{}", d.iter().take(8).map(|x| format!("{x:02x}")).collect::<String>());
+                    b.rename_faces(|n| {
+                        let mut n = n.clone();
+                        if n.feature == engine::PROVISIONAL {
+                            n.feature.clone_from(&name);
+                        }
+                        Some(n)
+                    });
+                }
+                inner.feature = Some(name);
                 Solid(Arc::new(inner))
             }
             Err(shared) => Solid(shared),
@@ -258,6 +279,13 @@ impl Solid {
             (None, Body::Springrep(_)) => "springrep",
         }
     }
+}
+
+/// The digest of `b`'s topology and geometry alone, its face names stripped.
+fn bare_digest(b: &Brep) -> [u8; 32] {
+    let mut bare = b.clone();
+    bare.rename_faces(|_| None::<yack_springrep::topo::FaceName>);
+    engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(&bare)))
 }
 
 /// The engine's id types, named once.
