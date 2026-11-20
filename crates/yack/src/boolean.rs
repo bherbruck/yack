@@ -39,11 +39,7 @@ impl Solid {
                     &|| {
                         let out = engine::solid("intersection", sr::intersection(a, b))?;
                         if out.is_empty() && yack_springrep::facade::api::boxes_overlap(a, b) {
-                            return Err(crate::Error::failed(
-                                "intersection",
-                                crate::Stage::Classify,
-                                "springrep declines: an empty intersection of solids whose boxes overlap (a sliver it may have lost)",
-                            ));
+                            return Ok(out.suspect("an empty intersection of solids whose boxes overlap (a sliver it may have lost)"));
                         }
                         Ok(out)
                     },
@@ -132,28 +128,25 @@ impl Solid {
         let op = "split";
         let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };
         let (o, n) = (plane.origin(), plane.normal().vec());
-        let springrep = || -> Result<Split> {
+        let springrep = || -> Result<(Split, bool)> {
             ladder::allowed(op, "springrep")?;
             let (front, back) = sr::split(b, engine::p3(o), engine::v3(n)).map_err(|e| engine::error(op, e))?;
             let (front, back) = (Solid::from_springrep(front), Solid::from_springrep(back));
-            if (front.is_empty() || back.is_empty()) && yack_springrep::facade::api::plane_cuts(b, engine::p3(o), engine::v3(n)) {
-                return Err(crate::Error::failed(
-                    op,
-                    crate::Stage::Split,
-                    "springrep lost one side of a plane that passes through the solid (a sliver it snapped away)",
-                ));
-            }
-            Ok(Split { front, back })
+            let doubted = (front.is_empty() || back.is_empty()) && yack_springrep::facade::api::plane_cuts(b, engine::p3(o), engine::v3(n));
+            Ok((Split { front, back }, doubted))
         };
         let cadrs = || -> Result<Split> {
             ladder::allowed(op, "cadrs")?;
             let (front, back) = engine_cadrs::split(self, o.to_array(), n.to_array())?;
             Ok(Split { front: front.with_strategy("cadrs"), back: back.with_strategy("cadrs") })
         };
-        firewall::run(op, || match springrep() {
-            Ok(s) => Ok(s),
+        // A springrep split that lost a side to a sliver (brep-bench tangent/wedge-a-millionth)
+        // goes to cadrs; a hard guard: it is never the answer.
+        match firewall::run(op, springrep) {
+            Ok((s, false)) => Ok(s),
+            Ok((_, true)) => firewall::run(op, cadrs),
             Err(e) if matches!(e.kind, crate::ErrorKind::Invalid | crate::ErrorKind::Internal) => Err(e),
-            Err(first) => cadrs().map_err(|second| crate::Error { detail: format!("springrep: {first}; cadrs: {second}"), ..second }),
-        })
+            Err(first) => firewall::run(op, cadrs).map_err(|second| crate::Error { detail: format!("springrep: {first}; cadrs: {second}"), ..second }),
+        }
     }
 }

@@ -53,6 +53,9 @@ struct Inner {
     /// The same solid in the cadrs engine: set when cadrs built it, else converted on first use
     /// (the error kept when the bridge cannot carry it).
     cadrs: OnceLock<core::result::Result<CadrsRef, String>>,
+    /// Why a guard doubts this result (springrep may have built it wrong): the ladder tries the
+    /// next rung and keeps this answer only if every later rung fails.
+    suspect: Option<String>,
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
@@ -72,6 +75,7 @@ impl Solid {
             feature: None,
             strategy: None,
             cadrs: OnceLock::new(),
+            suspect: None,
         }))
     }
 
@@ -197,6 +201,40 @@ impl Solid {
         }
     }
 
+    /// The same solid flagged as doubted by a guard, for `why`.
+    pub(crate) fn suspect(self, why: &str) -> Solid {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.suspect = Some(why.to_string());
+                Solid(Arc::new(inner))
+            }
+            Err(shared) => Solid(shared),
+        }
+    }
+
+    /// How many faces carry this solid's own feature with a face part starting `prefix`
+    /// (`round_`, `bevel_`): the faces the op that made it blended.
+    pub(crate) fn own_parts(&self, prefix: &str) -> usize {
+        let (Some(b), Some(f)) = (self.brep(), self.0.feature.as_deref()) else { return 0 };
+        b.face_ids().filter(|&x| b.face(x).names.iter().any(|n| n.feature == f && n.face.starts_with(prefix))).count()
+    }
+
+    /// Why a guard doubts this solid, if one does.
+    pub(crate) fn suspected(&self) -> Option<&str> {
+        self.0.suspect.as_deref()
+    }
+
+    /// The same solid, no longer doubted (the ladder keeps it as its answer).
+    pub(crate) fn trusted(self) -> Solid {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.suspect = None;
+                Solid(Arc::new(inner))
+            }
+            Err(shared) => Solid(shared),
+        }
+    }
+
     /// The same solid recording that the ladder rung `name` built it.
     pub(crate) fn with_strategy(self, name: &'static str) -> Solid {
         match Arc::try_unwrap(self.0) {
@@ -262,6 +300,7 @@ impl Solid {
             feature: Some(name),
             strategy: self.0.strategy,
             cadrs: self.0.cadrs.clone(),
+            suspect: None,
         }))
     }
 

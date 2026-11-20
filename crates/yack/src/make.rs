@@ -179,13 +179,6 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
         let feature = engine::feature();
         let op = "loft_through";
         let counts: BTreeSet<usize> = sections.iter().map(|(_, p)| p.outer().segments().len()).collect();
-        if counts.len() > 1 {
-            return Err(Error::failed(
-                op,
-                crate::Stage::Validate,
-                "springrep declines: sections with different segment counts would loft as twisted ruled walls",
-            ));
-        }
         let sections = sections
             .iter()
             .map(|(h, p)| {
@@ -193,7 +186,13 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
                 Ok(sr_loft::Section { profile: engine::profile(op, p, None)?, frame: engine::frame(&at) })
             })
             .collect::<Result<Vec<_>>>()?;
-        engine::made_as(&feature, op, &[("side", "seg:side")], sr_loft::loft(&sections, false, &feature))
+        let out = engine::made_as(&feature, op, &[("side", "seg:side")], sr_loft::loft(&sections, false, &feature))?;
+        if counts.len() > 1 {
+            // a hard guard (brep-bench loft/square-to-round): never this wrong solid
+            let _ = out;
+            return Err(Error::failed(op, crate::Stage::Validate, "springrep declines: sections with different segment counts loft as twisted ruled walls"));
+        }
+        Ok(out)
     })
 }
 

@@ -7,6 +7,21 @@ use crate::{engine_cadrs, firewall, ladder};
 use yack_cadrs::yack_glue as glue;
 use crate::{Angle, EdgeId, FaceId, Point3, Result, Solid};
 
+/// A hard guard (brep-bench edit/half-torus-outer-rim-round-deleted): springrep's fillet given
+/// one rim of a half torus's flat face rounds both. A springrep blend that made more blend faces
+/// than the given edges' tangent chains have edges blended past them: refused (never this solid),
+/// so cadrs answers.
+fn over_blend(op: &'static str, input: &Solid, edges: &[u64], part: &str, out: Solid) -> Result<Solid> {
+    match engine_cadrs::chain_len(input, edges) {
+        Some(n) if out.own_parts(part) > n => Err(crate::Error::failed(
+            op,
+            crate::Stage::Validate,
+            format!("springrep declines: it blended {} faces where the given edges' chains have {n} edges", out.own_parts(part)),
+        )),
+        _ => Ok(out),
+    }
+}
+
 impl Solid {
     /// Rounds `edges` with a constant `radius` (mm). Each edge brings its whole tangent chain (the
     /// edges it runs on into smoothly, seams aside): the round runs on along it.
@@ -27,7 +42,7 @@ impl Solid {
             let ix = crate::edit::indices(edges);
             ladder::two(
                 op,
-                &|| engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature)),
+                &|| over_blend(op, self, &ix, "round_", engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))?),
                 &|| engine_cadrs::blend(op, self, &ix, "round", |k, id| glue::fillet(k, id, &ix, radius)),
             )
         })
@@ -133,7 +148,7 @@ impl Solid {
             let ix = crate::edit::indices(edges);
             ladder::two(
                 op,
-                &|| engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature)),
+                &|| over_blend(op, self, &ix, "bevel_", engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?),
                 &|| engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance)),
             )
         })

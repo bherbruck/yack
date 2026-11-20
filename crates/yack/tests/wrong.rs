@@ -187,3 +187,24 @@ fn a_torus_tube_across_its_axis_is_invalid() {
     }
     assert_eq!(spindle_torus(&Frame::WORLD, 3.0, 1.0).unwrap_err().kind, ErrorKind::Invalid);
 }
+
+#[test]
+fn a_guard_redirects_but_keeps_springreps_answer() {
+    // a plate whose hole closes when grown past its radius: springrep's answer is held by the
+    // guard and returned when cadrs cannot do better (never refused)
+    let plate = block(&Frame::at([-10.0, -10.0, 0.0]), [20.0, 20.0, 4.0]).unwrap();
+    let drilled = plate.difference(&cylinder(&Frame::at([0.0, 0.0, -1.0]), 2.0, 6.0).unwrap()).unwrap();
+    let grown = drilled.offset(3.0);
+    assert!(grown.is_ok(), "{grown:?}");
+}
+
+#[test]
+fn half_torus_outer_rim_round_deleted() {
+    // springrep rounded both rims of the flat face when given the outer one (4 faces, not 3)
+    let half = torus(&Frame::WORLD, 6.0, 2.0).unwrap().split(&Plane::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]).unwrap()).unwrap().front;
+    let rounded = half.fillet(&[half.edge_at([0.0, 8.0, 0.0]).unwrap()], 0.5);
+    if let Ok(r) = rounded {
+        let rounds = r.faces_where(|f| matches!(f.kind(), SurfaceKind::Torus) && f.area() < 100.0);
+        assert!(rounds.len() <= 1, "{} small toroidal rounds (strategy {})", rounds.len(), r.strategy());
+    }
+}

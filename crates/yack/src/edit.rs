@@ -9,8 +9,18 @@ use crate::{Affine, Angle, Error, FaceId, Motion, Point3, Result, Rigid, Similar
 
 /// A springrep result refused because springrep would build it wrong (M1.10 guards); the ladder
 /// falls through past it.
-fn guard(op: &'static str, why: &str) -> Error {
-    Error::failed(op, crate::Stage::Validate, format!("springrep declines: {why}"))
+/// A soft guard: springrep's result is doubted, so the ladder tries the next rung, and keeps
+/// this answer if that fails (springrep is right on most such inputs: holes closing past their
+/// radius in an offset).
+fn guard(out: Solid, why: &str) -> Result<Solid> {
+    Ok(out.suspect(why))
+}
+
+/// A hard guard: springrep is known to build this input wrong (each one a brep-bench case it
+/// answered wrong), so its result is refused and the ladder falls through. A wrong answer is
+/// never returned, even when no later rung builds one.
+fn refuse(_out: Solid, op: &'static str, why: &str) -> Result<Solid> {
+    Err(Error::failed(op, crate::Stage::Validate, format!("springrep declines: {why}")))
 }
 
 /// The engine indices of ids already checked to belong to the solid (the bridge keeps indices).
@@ -34,7 +44,7 @@ impl Solid {
                 &|| {
                     let out = engine::made_from("offset", op, sr::offset(b, distance))?;
                     if api::radius_collapses(b, None, distance, false) {
-                        return Err(guard(op, "a round face would collapse at this distance (a hole closing, a rod vanishing)"));
+                        return guard(out, "a round face would collapse at this distance (a hole closing, a rod vanishing)");
                     }
                     Ok(out)
                 },
@@ -53,7 +63,7 @@ impl Solid {
                 &|| {
                     let out = engine::solid(op, sr::offset_faces(self.need(op)?, &f, distance))?;
                     if api::radius_collapses(self.need(op)?, Some(&f), distance, false) {
-                        return Err(guard(op, "a round face would collapse at this distance"));
+                        return guard(out, "a round face would collapse at this distance");
                     }
                     Ok(out)
                 },
@@ -73,7 +83,7 @@ impl Solid {
                     let b = self.need(op)?;
                     let out = engine::solid(op, sr::delete_faces(b, &f))?;
                     if out.brep().is_some_and(|o| api::same_shape(b, o)) {
-                        return Err(guard(op, "the faces' gap was not closed: the result is the solid unchanged"));
+                        return refuse(out, op, "the faces' gap was not closed: the result is the solid unchanged");
                     }
                     Ok(out)
                 },
@@ -113,10 +123,8 @@ impl Solid {
                 &|| {
                     let out = engine::solid(op, sr::thicken(self.need(op)?, &f, thickness))?;
                     if !api::rims_square(self.need(op)?, &f) {
-                        return Err(guard(
-                            op,
-                            "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
-                        ));
+                        return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
+                        );
                     }
                     Ok(out)
                 },
@@ -136,10 +144,8 @@ impl Solid {
                     let b = self.need(op)?;
                     let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
                     if api::radius_collapses(b, None, thickness, true) || api::walls_cross(b, &f, thickness) || api::open_at_concave_edge(b, &f) {
-                        return Err(guard(
-                            op,
-                            "the moved walls would cross (a wall thinner than twice the thickness, or a round face of radius under it)",
-                        ));
+                        return refuse(out, op, "the moved walls would cross (a wall thinner than twice the thickness, or a round face of radius under it)",
+                        );
                     }
                     Ok(out)
                 },
@@ -159,7 +165,7 @@ impl Solid {
                 &|| {
                     let out = engine::made_from("shell", op, sr::shell_outward(self.need(op)?, &f, thickness))?;
                     if api::radius_collapses(self.need(op)?, None, thickness, false) || api::open_at_concave_edge(self.need(op)?, &f) {
-                        return Err(guard(op, "a hole of radius under the thickness would close, or an open face meets a concave edge"));
+                        return refuse(out, op, "a hole of radius under the thickness would close, or an open face meets a concave edge");
                     }
                     Ok(out)
                 },

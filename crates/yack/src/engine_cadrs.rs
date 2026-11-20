@@ -223,6 +223,18 @@ pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
 
 /// `a` combined with `tools` by cadrs's boolean `how`.
 pub(crate) fn boolean(op: &'static str, how: BoolOp, a: &Solid, tools: &[&Solid]) -> Result<Solid> {
+    let out = boolean_raw(op, how, a, tools)?;
+    if matches!(how, BoolOp::Intersect)
+        && out.is_empty()
+        && let (Some(x), Some(y)) = (a.brep(), tools.first().and_then(|t| t.brep()))
+        && yack_springrep::facade::api::boxes_overlap(x, y)
+    {
+        return Err(Error::failed(op, Stage::Classify, "cadrs declines: an empty intersection of solids whose boxes overlap"));
+    }
+    Ok(out)
+}
+
+fn boolean_raw(op: &'static str, how: BoolOp, a: &Solid, tools: &[&Solid]) -> Result<Solid> {
     let ca = of(op, a)?;
     let ids = tools.iter().map(|t| into_session(op, &ca, &of(op, t)?)).collect::<Result<Vec<_>>>()?;
     let feature = engine::feature();
@@ -423,4 +435,11 @@ pub(crate) fn shell(name: &'static str, s: &Solid, open: &[u64], thickness: f64,
     };
     let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), roles, ..Naming::default() };
     result(name, &feature, &c.session, made, &how)
+}
+
+/// How many edges a blend of `edges` on `s` runs along (each edge's tangent chain, seams aside),
+/// by cadrs's rule; `None` when cadrs cannot take the solid.
+pub(crate) fn chain_len(s: &Solid, edges: &[u64]) -> Option<usize> {
+    let c = of("blend", s).ok()?;
+    yack_glue::chained(&lock(&c.session), c.id, edges).ok().map(|v| v.len())
 }
