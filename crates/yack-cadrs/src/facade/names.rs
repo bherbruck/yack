@@ -52,6 +52,9 @@ pub struct Naming<'a> {
     pub loop_lens: &'a [usize],
     /// The blend's edges, in the call's order (`round_<n>`/`bevel_<n>` is the n-th).
     pub blend_edges: &'a [u64],
+    /// The edges the blend actually ran along, each with the index in `blend_edges` of the edge
+    /// whose tangent chain it is on ([`crate::yack_glue::chained`]); empty: `blend_edges` alone.
+    pub blend_seeds: &'a [(u64, usize)],
     /// Which blend, if any.
     pub blend: Blend,
     /// For a shell: its wall's side.
@@ -85,7 +88,12 @@ fn origin_part(o: &Origin, how: &Naming) -> Option<String> {
         Origin::StartCap { .. } => Some("start".into()),
         Origin::EndCap { .. } => Some("end".into()),
         Origin::FromEdge { edge, .. } => {
-            let n = how.blend_edges.iter().position(|&e| e == edge.0)?;
+            let n = how
+                .blend_seeds
+                .iter()
+                .find(|&&(e, _)| e == edge.0)
+                .map(|&(_, n)| n)
+                .or_else(|| how.blend_edges.iter().position(|&e| e == edge.0))?;
             match how.blend {
                 Blend::Round => Some(format!("round_{n}")),
                 Blend::Bevel => Some(format!("bevel_{n}")),
@@ -183,7 +191,7 @@ mod tests {
     use crate::{EdgeId, FaceId, VertexId};
 
     fn how<'a>(segments: &'a [String], loop_lens: &'a [usize], edges: &'a [u64], blend: Blend) -> Naming<'a> {
-        Naming { segments, loop_lens, blend_edges: edges, blend, shell: None }
+        Naming { segments, loop_lens, blend_edges: edges, blend_seeds: &[], blend, shell: None }
     }
 
     #[test]
@@ -207,6 +215,10 @@ mod tests {
         assert_eq!(origin_part(&Origin::FromEdge { body, edge: EdgeId(8) }, &h), None);
         assert_eq!(origin_part(&Origin::FromVertex { body, vertex: VertexId(0) }, &h).as_deref(), Some("corner"));
         assert_eq!(origin_part(&Origin::PathSegment { segment: 2 }, &h), None);
+        // An edge on the chain of the call's second edge is named by it.
+        let seeds = [(7, 0), (9, 1), (12, 1)];
+        let h = Naming { blend_seeds: &seeds, ..how(&[], &[], &[7, 9], Blend::Round) };
+        assert_eq!(origin_part(&Origin::FromEdge { body, edge: EdgeId(12) }, &h).as_deref(), Some("round_1"));
     }
 
     #[test]
