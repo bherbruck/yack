@@ -19,11 +19,13 @@ pub use sample::{
 use std::f64::consts::TAU;
 
 use crate::{
-    check::coedge_params,
     geom::{IsoLine, NurbsSurface, Patch, Surface},
     math::{Aabb, Point3, Vec2, Vec3},
     numeric::{KRONROD_7, KRONROD_15, gauss, solve2},
-    topo::{Brep, CoedgeId, FaceId, FaceVolume, IntegralKey, LoopId, PCurve, SolidId, VertexId},
+    topo::{
+        Brep, CoedgeId, FaceId, FaceVolume, IntegralKey, LoopId, PCurve, SolidId, VertexId,
+        coedge_params,
+    },
 };
 
 /// Whether a face's inner integral runs along v, and the lowest value its loops reach along that
@@ -1023,7 +1025,7 @@ pub fn betti(b: &Brep) -> [u64; 3] {
         .flat_map(|e| [b.edge(e).start, b.edge(e).end])
         .collect();
     let scale = 1e-3 * bbox(b).diagonal();
-    let fans: i64 = crate::check::fans_at_vertices(b)
+    let fans: i64 = crate::topo::fans_at_vertices(b)
         .into_iter()
         .filter(|(_, fs)| fs.len() > 1)
         .map(|(v, fs)| {

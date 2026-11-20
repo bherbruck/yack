@@ -1019,7 +1019,7 @@ pub(crate) fn move_faces_pinned(
             // The loop starts where it did: a moved surface keeps its parameters, so the old
             // start places a periodic u on the right side of the period.
             let mut last: Option<Vec2> = b.lp(lp).coedges.first().map(|&c| {
-                let ts = check::coedge_params(b, c, 1);
+                let ts = crate::topo::coedge_params(b, c, 1);
                 b.coedge_uvs(c, &ts[..1])[0]
             });
             let specs = b

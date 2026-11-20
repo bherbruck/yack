@@ -464,7 +464,7 @@ pub(super) fn sewn(
                 for &c in &tool.lp(lp).coedges {
                     let co = tool.coedge(c);
                     let m = tmap[i][&co.edge];
-                    let params = check::coedge_params(tool, c, 1);
+                    let params = crate::topo::coedge_params(tool, c, 1);
                     let pcurve = |at_end: bool| -> PCurve {
                         if m.own && matches!(co.pcurve, PCurve::Affine { .. }) {
                             return co.pcurve.clone();

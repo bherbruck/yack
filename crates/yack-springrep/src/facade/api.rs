@@ -343,3 +343,37 @@ pub fn blend_strays(out: &Brep, feature: &str, part: &str, near: &[Point3], reac
     }
     best.values().any(|&d| d > reach)
 }
+
+/// Whether springrep's refusal `detail` from yack op `op` says the input breaks a stated
+/// requirement of the operation (yack's §4.3 docs, which follow brep-conformance doc/api.md);
+/// any other springrep refusal is a limit of springrep, not of the request. Each entry names the
+/// requirement it stands for.
+pub fn breaks_requirement(op: &str, detail: &str) -> bool {
+    const BLENDS: &[&str] = &[
+        "fillet", "fillet_radii", "fillet_variable", "fillet_conic", "fillet_g2", "fillet_setback", "fillet_setback_g2",
+        "fillet_faces", "full_round", "chamfer", "chamfer_two", "chamfer_distances",
+    ];
+    let is = |ops: &[&str]| ops.contains(&op);
+    // sizes, radii, heights and blend sizes must be positive (block, cylinder, sphere, cone, every blend)
+    detail.contains("must be positive")
+        // a radius or distance must fit the faces it lies on (every fillet and chamfer)
+        || (is(BLENDS)
+            && (detail.contains("takes a whole face")
+                || detail.contains("runs past the end of an edge")
+                || detail.contains("does not fit on its faces")
+                || detail.contains("the faces are parallel")))
+        // a cone needs a positive height and a radius at one end at least
+        || (op == "cone" && detail.contains("needs a positive height"))
+        // an extrusion's height must be positive
+        || (op == "extrude" && detail.contains("must be nonzero"))
+        // loft_through's heights must rise
+        || (op == "loft_through" && detail.contains("do not come in order"))
+        // a revolved or screwed profile must keep to one side of the axis
+        || (is(&["revolve", "screw"]) && detail.contains("axis crosses the profile"))
+        // a screw's turns must stay apart
+        || (op == "screw" && detail.contains("coils met"))
+        // a torus needs major > minor > 0
+        || (op == "torus" && detail.contains("clear of its axis"))
+        // a shell's walls must not meet; a moved face may not pass the face it meets
+        || (is(&["shell", "offset_faces", "move_faces"]) && detail.contains("turns inside out"))
+}

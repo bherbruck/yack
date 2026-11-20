@@ -18,9 +18,8 @@ use crate::locate::{
 };
 use crate::{
     Result,
-    check::coedge_params,
     math::{Point3, Vec2},
-    topo::{Brep, CoedgeId, PCurve, SolidId},
+    topo::{Brep, CoedgeId, PCurve, SolidId, coedge_params},
 };
 
 /// `b` with its same-domain neighbours merged, or a copy of `b` when no two faces merge. The

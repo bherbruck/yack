@@ -11,6 +11,7 @@ mod names;
 pub(crate) mod pcurve;
 pub(crate) mod radial;
 mod similar;
+mod walks;
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -20,6 +21,7 @@ pub use facts::{Facts, OnFace};
 pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey};
 pub use names::FaceName;
 pub use pcurve::PCurve;
+pub(crate) use walks::{coedge_params, fans_at_vertices};
 pub(crate) use pcurve::project_on;
 
 use crate::{

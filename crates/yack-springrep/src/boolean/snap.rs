@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    check::{self, coedge_params},
+    check,
+    topo::coedge_params,
     edit::tweak,
     geom::Surface,
     math::{Aabb, Frame, Point3},

@@ -941,7 +941,7 @@ impl Writer {
             .chain(es.iter().map(|x| x.1))
             .fold(crate::tol::LINEAR, f64::max);
         let ctx = self.context(widest);
-        for fans in crate::check::fans_at_vertices(b).into_values() {
+        for fans in crate::topo::fans_at_vertices(b).into_values() {
             for (k, fan) in fans.into_iter().enumerate() {
                 self.fans.extend(fan.into_iter().map(|c| (c, k)));
             }

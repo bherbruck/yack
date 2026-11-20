@@ -49,7 +49,7 @@ use crate::{
 };
 use crate::{
     Error, Result,
-    check::coedge_params,
+    topo::coedge_params,
     geom::{Curve, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
     measure,

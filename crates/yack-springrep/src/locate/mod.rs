@@ -11,12 +11,11 @@ use std::rc::Rc;
 
 use self::domain::{Domain, Trim, UvMap};
 use crate::{
-    check::coedge_params,
     geom::{Curve, Surface},
     intersect::ssi::same_domain,
     math::Vec2,
     tol,
-    topo::{Brep, CoedgeId, FaceId, PCurve},
+    topo::{Brep, CoedgeId, FaceId, PCurve, coedge_params},
 };
 
 /// A coedge's parameter-plane points at edge parameters `ts`, given in its direction; points in
