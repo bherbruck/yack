@@ -32,9 +32,19 @@ disallowed_methods = "deny"
 opt-level = 1
 
 [profile.release]
+# Fast to rebuild during development (the swarm builds release constantly). Official timing
+# runs use `--profile dist`.
 debug = 0
+lto = false
+codegen-units = 16
+incremental = true
+
+# Official benchmark timing builds: `cargo build --profile dist`.
+[profile.dist]
+inherits = "release"
 lto = "fat"
 codegen-units = 1
+incremental = false
 
 # For sampling stacks: `cargo build --profile profiling`.
 [profile.profiling]
