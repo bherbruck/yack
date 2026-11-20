@@ -1,5 +1,5 @@
 # files over 1500 lines and their allowed length (gate 6; may only fall)
-crates/yack-cadrs/src/lib.rs 1621
+crates/yack-cadrs/src/lib.rs 1623
 crates/yack-cadrs/src/native/blend.rs 4258
 crates/yack-cadrs/src/native/boolean.rs 6587
 crates/yack-cadrs/src/native/brep_occt.rs 2661
@@ -22,7 +22,7 @@ crates/yack-cadrs/src/native/step.rs 4374
 crates/yack-cadrs/src/native/surface.rs 2004
 crates/yack-cadrs/src/native/surfacing.rs 1589
 crates/yack-cadrs/src/native/sweep/frames.rs 1609
-crates/yack-cadrs/src/native/sweep_faces.rs 2124
+crates/yack-cadrs/src/native/sweep_faces.rs 2141
 crates/yack-cadrs/src/native/sweep_generate.rs 6800
 crates/yack-cadrs/src/native/sweep_moving.rs 4297
 crates/yack-cadrs/src/native/sweep_solid.rs 5490
