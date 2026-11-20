@@ -1,0 +1,17 @@
+# yack: temporary converter between springrep's Brep and cadrs's Body (PLAN §3.2, M1.9); deleted by M4.
+[package]
+name = "yack-bridge"
+description = "Temporary: lossless springrep Brep <-> cadrs Body conversion (deleted by M4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack-springrep = { path = "../yack-springrep" }
+yack-cadrs = { path = "../yack-cadrs" }
+
+[lints]
+workspace = true
