@@ -1,0 +1,20 @@
+[package]
+name = "yack-bench"
+description = "The brep-bench runner for yack: one yack program per case (PLAN §5.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "yack-bench"
+path = "src/main.rs"
+
+[dependencies]
+yack = { path = "../yack" }
+
+[lints]
+workspace = true

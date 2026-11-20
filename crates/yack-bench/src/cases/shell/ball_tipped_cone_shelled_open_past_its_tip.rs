@@ -1,0 +1,9 @@
+//! A ball-tipped cone shelled open at its base, the wall thicker than its tip's radius.
+use yack::prelude::*;
+pub fn build() -> Result<Solid> {
+    let (s, c) = (5f64.sqrt(), 12.0 - 5f64.sqrt());
+    let outline = Loop::starting_at([0.0, 0.0]).line_to([6.0, 0.0]).line_to([2.0 / s, 12.0 - 4.0 / s]);
+    let outline = outline.arc_ccw_to([0.0, c + 1.0], [0.0, c]).close()?;
+    let tipped = revolve(&Frame::WORLD, &Profile::new(outline, vec![])?, deg(360.0))?;
+    tipped.shell(&[tipped.face_at([1.0, 1.0, 0.0])?], 1.5)
+}
