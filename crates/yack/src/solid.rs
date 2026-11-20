@@ -292,3 +292,4 @@ fn bare_digest(b: &Brep) -> [u8; 32] {
 pub(crate) mod engine_ids {
     pub(crate) use yack_springrep::topo::{EdgeId as Edge, FaceId as Face, VertexId as Vertex};
 }
+

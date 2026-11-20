@@ -146,3 +146,15 @@ fn the_same_program_twice_gives_the_same_digest() {
     };
     assert_eq!(run(), run());
 }
+
+#[test]
+fn cut_swept_is_the_difference_with_the_swept_tool() {
+    let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
+    let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
+    let motion = Motion::Along { path, law: FrameLaw::Fixed };
+    let ball = sphere(&Frame::WORLD, 3.0).unwrap();
+    let direct = plate.cut_swept(&ball, &motion).unwrap();
+    let two_step = plate.difference(&ball.swept(&motion).unwrap()).unwrap();
+    assert!(direct.check().is_empty());
+    assert!((direct.volume() - two_step.volume()).abs() < 1e-3 * two_step.volume());
+}

@@ -16,7 +16,14 @@ pub(crate) struct Rung<'a> {
 /// Ops cadrs runs first until the bake-off (doc/donors.md) orders them; springrep first elsewhere.
 /// (chamfer went back to springrep first: cadrs-first lost 77 chamfer-prism conformance cases.)
 const CADRS_FIRST: &[&str] =
-    &["swept", "delete_faces", "move_faces", "offset_faces", "offset", "shell", "shell_outward", "thicken", "draft"];
+    &["swept", "delete_faces", "move_faces", "offset_faces", "shell", "shell_outward", "thicken", "draft", "fillet_variable"];
+
+/// Ops where springrep's `Invalid` is not the contract's: springrep refuses some valid inputs it
+/// cannot build as invalid (an offset whose rounds close to nothing, a face it turns inside out),
+/// which cadrs builds right; there its refusal falls through like any other. (offset went
+/// springrep-first: cadrs-first lost 24 conformance cases per seed in offset-past-holes and the
+/// offset chains; brep-bench's offset category loses nothing this way.)
+const SPRINGREP_INVALID_FALLS_THROUGH: &[&str] = &["offset"];
 
 /// Whether cadrs leads `op`'s ladder.
 pub(crate) fn cadrs_first(op: &str) -> bool {
@@ -51,10 +58,10 @@ pub(crate) fn two<'a>(op: &'static str, springrep: &'a dyn Fn() -> Result<Solid>
 /// `Invalid` (and an id or pick refusal, which comes before any engine) is final; cadrs's
 /// `Invalid` falls through, as cadrs refuses some inputs springrep builds. A caught panic is
 /// always final.
-fn is_final(rung: &str, kind: ErrorKind) -> bool {
+fn is_final(op: &str, rung: &str, kind: ErrorKind) -> bool {
     match kind {
         ErrorKind::Internal | ErrorKind::NotFound | ErrorKind::Ambiguous | ErrorKind::ForeignId => true,
-        ErrorKind::Invalid => rung == "springrep",
+        ErrorKind::Invalid => rung == "springrep" && !SPRINGREP_INVALID_FALLS_THROUGH.contains(&op),
         _ => false,
     }
 }
@@ -70,7 +77,7 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
         }
         match (rung.run)() {
             Ok(s) => return Ok(s.with_strategy(rung.name)),
-            Err(e) if is_final(rung.name, e.kind) => return Err(e),
+            Err(e) if is_final(op, rung.name, e.kind) => return Err(e),
             Err(e) => declined.push((rung.name, e)),
         }
     }

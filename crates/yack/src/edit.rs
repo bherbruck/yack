@@ -32,7 +32,7 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let out = engine::solid(op, sr::offset(b, distance))?;
+                    let out = engine::made_from("offset", op, sr::offset(b, distance))?;
                     if api::radius_collapses(b, None, distance, false) {
                         return Err(guard(op, "a round face would collapse at this distance (a hole closing, a rod vanishing)"));
                     }
@@ -134,8 +134,8 @@ impl Solid {
                 op,
                 &|| {
                     let b = self.need(op)?;
-                    let out = engine::solid(op, sr::shell(b, &f, thickness))?;
-                    if api::radius_collapses(b, None, thickness, true) || api::walls_cross(b, &f, thickness) {
+                    let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
+                    if api::radius_collapses(b, None, thickness, true) || api::walls_cross(b, &f, thickness) || api::open_at_concave_edge(b, &f) {
                         return Err(guard(
                             op,
                             "the moved walls would cross (a wall thinner than twice the thickness, or a round face of radius under it)",
@@ -143,7 +143,7 @@ impl Solid {
                     }
                     Ok(out)
                 },
-                &|| engine_cadrs::op(op, self, |k, id| glue::shell(k, id, &ix, thickness, false)),
+                &|| engine_cadrs::shell(op, self, &ix, thickness, false, false),
             )
         })
     }
@@ -157,14 +157,35 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let out = engine::solid(op, sr::shell_outward(self.need(op)?, &f, thickness))?;
-                    if api::radius_collapses(self.need(op)?, None, thickness, false) {
-                        return Err(guard(op, "a hole of radius under the thickness would close"));
+                    let out = engine::made_from("shell", op, sr::shell_outward(self.need(op)?, &f, thickness))?;
+                    if api::radius_collapses(self.need(op)?, None, thickness, false) || api::open_at_concave_edge(self.need(op)?, &f) {
+                        return Err(guard(op, "a hole of radius under the thickness would close, or an open face meets a concave edge"));
                     }
                     Ok(out)
                 },
-                &|| engine_cadrs::op(op, self, |k, id| glue::shell(k, id, &ix, thickness, true)),
+                &|| engine_cadrs::shell(op, self, &ix, thickness, true, false),
             )
+        })
+    }
+    /// Hollows the solid to a wall of `thickness`, removing the `open` faces, its walls joined
+    /// round where they part (every point within `thickness` of the solid's inside surface is
+    /// wall); [`shell`](Solid::shell) joins them sharp.
+    pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
+        let op = "shell_rounded";
+        self.sr_faces(op, "open", open)?;
+        let ix = indices(open);
+        firewall::run(op, || {
+            ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, false, true) }])
+        })
+    }
+    /// As [`shell_outward`](Solid::shell_outward), the outside wall joined round where it parts
+    /// (every point within `thickness` of the solid).
+    pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
+        let op = "shell_outward_rounded";
+        self.sr_faces(op, "open", open)?;
+        let ix = indices(open);
+        firewall::run(op, || {
+            ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, true, true) }])
         })
     }
     /// Tilts `faces` by `angle` about the neutral plane through `origin` normal to `pull`.

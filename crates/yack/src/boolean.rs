@@ -106,6 +106,27 @@ impl Solid {
         })
     }
 
+    /// This solid less every point `tool` passes through along `motion`: exactly
+    /// `self.difference(&tool.swept(motion)?)`, computed directly where cadrs can (an exact cut
+    /// where the swept tool alone would come out faceted, a long screw trimmed to the reach of
+    /// this solid), else as that difference.
+    pub fn cut_swept(&self, tool: &Solid, motion: &crate::Motion) -> Result<Solid> {
+        let op = "cut_swept";
+        if self.is_empty() || tool.is_empty() {
+            return Ok(self.clone());
+        }
+        firewall::run(op, || {
+            ladder::ladder(
+                op,
+                &[
+                    ladder::Rung { name: "cadrs", run: &|| engine_cadrs::cut_swept(self, tool, motion) },
+                    // swept is cadrs-only, so the fallback needs cadrs too
+                    ladder::Rung { name: "cadrs", run: &|| self.difference(&tool.swept(motion)?) },
+                ],
+            )
+        })
+    }
+
     /// The parts on each side of `plane`; `front` is on the normal's side. Either may be empty.
     pub fn split(&self, plane: &Plane) -> Result<Split> {
         let op = "split";

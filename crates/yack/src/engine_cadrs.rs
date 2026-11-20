@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use yack_cadrs::yack_glue::{self, Made, Move};
-use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, Kernel, KernelError, Origin};
+use yack_cadrs::facade::names::{self as cnames, FaceRole, Wall};
+use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, InputFace, Kernel, KernelError, Origin};
 use yack_springrep::topo::FaceName;
 
 use crate::engine::{self, Brep};
@@ -78,10 +79,39 @@ struct Naming<'a> {
     /// `edges` of the edge whose chain it is on.
     seeds: Vec<(u64, usize)>,
     blend: &'a str,
+    /// For a sweep of a profile: each segment's face part (`seg:<label>` / `seg:s<n>`), by the
+    /// segment's index through the profile's loops (the cadrs curve's `source`).
+    segments: Vec<String>,
+    /// Per result face, cadrs's naming glue's roles (a shell's): these replace the history rules.
+    roles: Option<Vec<Vec<FaceRole>>>,
+}
+
+fn kept(how: &Naming, from: &InputFace) -> Option<BTreeSet<FaceName>> {
+    how.inputs.iter().find(|(id, _)| *id == from.body).and_then(|(_, b)| {
+        let face = b.face_ids().nth(usize::try_from(from.face.0).ok()?)?;
+        Some(b.face(face).names.clone())
+    })
 }
 
 fn names(feature: &str, n: usize, history: &History, how: &Naming) -> Vec<BTreeSet<FaceName>> {
     let mut out = vec![BTreeSet::from([FaceName::new(feature, "")]); n];
+    if let Some(roles) = &how.roles {
+        for (slot, rs) in out.iter_mut().zip(roles) {
+            let mut set = BTreeSet::new();
+            for r in rs {
+                match r {
+                    FaceRole::Keep(from) => set.extend(kept(how, from).unwrap_or_default()),
+                    FaceRole::Part(p) => {
+                        set.insert(FaceName::new(feature, p.as_str()));
+                    }
+                }
+            }
+            if !set.is_empty() {
+                *slot = set;
+            }
+        }
+        return out;
+    }
     for (f, from) in &history.modified {
         let kept = how.inputs.iter().find(|(id, _)| *id == from.body).and_then(|(_, b)| {
             let face = b.face_ids().nth(usize::try_from(from.face.0).ok()?)?;
@@ -98,6 +128,7 @@ fn names(feature: &str, n: usize, history: &History, how: &Naming) -> Vec<BTreeS
                 seed.or_else(|| how.edges.iter().position(|&e| e == edge.0)).map(|n| format!("{}_{n}", how.blend))
             }
             Origin::FromVertex { .. } => Some("corner".to_string()),
+            Origin::ProfileCurve { curve, .. } => usize::try_from(*curve).ok().and_then(|i| how.segments.get(i)).cloned(),
             Origin::StartCap { .. } => Some("start".to_string()),
             Origin::EndCap { .. } => Some("end".to_string()),
             _ => None,
@@ -119,7 +150,8 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
     };
     let body = lock(session).get(id).map_err(|e| error(op, e))?.clone();
     let names = names(feature, body.faces().len(), &history, how);
-    let brep = yack_bridge::to_springrep(&body, &names)
+    // Edges cadrs left unused by any face are dropped (ids are springrep's, so nothing to remap).
+    let (brep, _edges) = yack_bridge::to_springrep_mapped(&body, &names)
         .map_err(|e| unsupported(op, format!("the cadrs result cannot be carried back: {e}")))?;
     Ok(Solid::from_springrep(brep)
         .with_feature(feature)
@@ -217,7 +249,7 @@ pub(crate) fn blend(
     let feature = engine::feature();
     let seeds = if edges.is_empty() { Vec::new() } else { yack_glue::chained(&lock(&c.session), c.id, edges).unwrap_or_default() };
     let r = f(&mut lock(&c.session), c.id);
-    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), edges, seeds, blend: kind };
+    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), edges, seeds, blend: kind, ..Naming::default() };
     result(name, &feature, &c.session, r, &how)
 }
 
@@ -239,4 +271,156 @@ pub(crate) fn split(s: &Solid, origin: [f64; 3], normal: [f64; 3]) -> Result<(So
         Some(m) => result(op, &engine::feature(), &c.session, Ok(m), &Naming::default()),
     };
     Ok((side(front)?, side(back)?))
+}
+
+use yack_cadrs::facade::profile::{self as cp, Place, Seg};
+
+fn place(f: &crate::Frame) -> Place {
+    Place { origin: f.origin().to_array(), x: f.x().vec().to_array(), y: f.y().vec().to_array(), z: f.z().vec().to_array() }
+}
+
+/// A yack profile as cadrs segment data (loops outer first), and each segment's face part.
+fn segs<'a>(op: &'static str, p: &'a crate::Profile, ctrl: &'a [Vec<[f64; 2]>]) -> Result<Vec<Vec<Seg<'a>>>> {
+    use crate::Segment as S;
+    let mut k = 0usize;
+    let mut out = Vec::new();
+    for l in core::iter::once(p.outer()).chain(p.holes()) {
+        let mut segs = Vec::new();
+        for s in l.segments() {
+            let c = ctrl.get(k).map_or(&[][..], Vec::as_slice);
+            k = k.saturating_add(1);
+            segs.push(match s {
+                S::Line { a, b } => Seg::Line { a: a.to_array(), b: b.to_array() },
+                S::Arc { center, radius, start, sweep } => {
+                    Seg::Arc { center: center.to_array(), radius: *radius, start: start.radians(), sweep: sweep.radians() }
+                }
+                S::Conic { a, apex, b, weight } => Seg::Conic { a: a.to_array(), apex: apex.to_array(), b: b.to_array(), weight: *weight },
+                S::Nurbs { degree, knots, weights, .. } => Seg::Nurbs {
+                    degree: usize::try_from(*degree).unwrap_or(usize::MAX),
+                    knots,
+                    ctrl: c,
+                    weights: weights.as_deref(),
+                },
+                S::PeriodicSpline { degree, knots, .. } => {
+                    Seg::Periodic { degree: usize::try_from(*degree).unwrap_or(usize::MAX), knots, ctrl: c }
+                }
+                S::Blend { .. } => return Err(unsupported(op, "a blend segment (cadrs has no such curve)")),
+            });
+        }
+        out.push(segs);
+    }
+    Ok(out)
+}
+
+fn ctrl2(p: &crate::Profile) -> Vec<Vec<[f64; 2]>> {
+    use crate::Segment as S;
+    core::iter::once(p.outer())
+        .chain(p.holes())
+        .flat_map(|l| l.segments().iter())
+        .map(|s| match s {
+            S::Nurbs { ctrl, .. } | S::PeriodicSpline { ctrl, .. } => ctrl.iter().map(|c| c.to_array()).collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// `profile` swept by cadrs (`revolve` false: extruded `amount` along z; true: revolved `amount`
+/// radians about z, drawn in xz), its side faces named by segment, its caps start/end.
+pub(crate) fn sweep_profile(op: &'static str, f: &crate::Frame, p: &crate::Profile, amount: f64, revolve: bool) -> Result<Solid> {
+    let ctrl = ctrl2(p);
+    let loops = segs(op, p, &ctrl)?;
+    let refs: Vec<&[Seg]> = loops.iter().map(Vec::as_slice).collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = if revolve { cp::revolve(&mut lock(&session), &place(f), &refs, amount) } else { cp::extrude(&mut lock(&session), &place(f), &refs, amount) };
+    let how = Naming { segments: engine::segment_parts(p), ..Naming::default() };
+    result(op, &feature, &session, r, &how)
+}
+
+/// A loft through profiles in their own frames along guide splines, by cadrs.
+pub(crate) fn loft_guided(op: &'static str, sections: &[(crate::Frame, crate::Profile)], guides: &[crate::Spline3]) -> Result<Solid> {
+    let ctrls: Vec<Vec<Vec<[f64; 2]>>> = sections.iter().map(|(_, p)| ctrl2(p)).collect();
+    let loops: Vec<Vec<Vec<Seg>>> = sections.iter().zip(&ctrls).map(|((_, p), c)| segs(op, p, c)).collect::<Result<_>>()?;
+    let refs: Vec<Vec<&[Seg]>> = loops.iter().map(|l| l.iter().map(Vec::as_slice).collect()).collect();
+    let secs: Vec<(Place, &[&[Seg]])> = sections.iter().zip(&refs).map(|((f, _), r)| (place(f), r.as_slice())).collect();
+    let gctrl: Vec<Vec<[f64; 3]>> = guides.iter().map(|g| g.ctrl().iter().map(|p| p.to_array()).collect()).collect();
+    let gs: Vec<cp::Spline> = guides
+        .iter()
+        .zip(&gctrl)
+        .map(|(g, c)| cp::Spline { degree: usize::try_from(g.degree()).unwrap_or(usize::MAX), knots: g.knots(), ctrl: c, weights: None })
+        .collect();
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::loft_guided(&mut lock(&session), &secs, &gs);
+    result(op, &feature, &session, r, &Naming::default())
+}
+
+/// A solid bounded by a closed NURBS net, by cadrs.
+pub(crate) fn nurbs_solid(
+    op: &'static str,
+    f: &crate::Frame,
+    degree: [u32; 2],
+    knots: [&[f64]; 2],
+    ctrl: &[Vec<crate::Point3>],
+    weights: Option<&[Vec<f64>]>,
+) -> Result<Solid> {
+    let net: Vec<Vec<[f64; 3]>> = ctrl.iter().map(|r| r.iter().map(|p| p.to_array()).collect()).collect();
+    let d = degree.map(|x| usize::try_from(x).unwrap_or(usize::MAX));
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = cp::nurbs_solid(&mut lock(&session), &place(f), d, knots, &net, weights);
+    result(op, &feature, &session, r, &Naming::default())
+}
+
+/// A primitive built by cadrs in frame `f`, its faces named as springrep's are (caps start/end,
+/// block sides x_min..y_max, a round side `side`, a ball's `skin`).
+pub(crate) fn primitive(op: &'static str, f: &crate::Frame, p: yack_glue::Prim) -> Result<Solid> {
+    let session = Arc::new(Mutex::new(DefaultKernel::new()));
+    let feature = engine::feature();
+    let r = yack_glue::primitive(&mut lock(&session), &place(f), p);
+    let segments = ["seg:x_min", "seg:x_max", "seg:y_min", "seg:y_max", "seg:side", "skin"].map(String::from).to_vec();
+    result(op, &feature, &session, r, &Naming { segments, ..Naming::default() })
+}
+
+/// `target` less every point `tool` passes through along `m`, cut directly by cadrs.
+pub(crate) fn cut_swept(target: &Solid, tool: &Solid, m: &Motion) -> Result<Solid> {
+    let op = "cut_swept";
+    let legs: Vec<&Motion> = match m {
+        Motion::Then(ms) => ms.iter().collect(),
+        one => vec![one],
+    };
+    let ctrls: Vec<Vec<[f64; 3]>> = legs.iter().map(|m| control(m)).collect();
+    let moves = legs.iter().zip(&ctrls).map(|(m, c)| leg(op, tool, m, c)).collect::<Result<Vec<_>>>()?;
+    let ct = of(op, target)?;
+    let tool_id = into_session(op, &ct, &of(op, tool)?)?;
+    let feature = engine::feature();
+    let r = yack_glue::cut_swept(&mut lock(&ct.session), ct.id, tool_id, &moves);
+    let how = Naming { inputs: target.brep().map(|b| vec![(ct.id, b)]).unwrap_or_default(), ..Naming::default() };
+    result(op, &feature, &ct.session, r, &how)
+}
+
+/// A cadrs shell of `s` (sharp or `rounded`, inward or `outward`), open at faces `open`, its faces
+/// named by cadrs's shell naming: the input's faces keep their names, the cavity's are `inner`.
+pub(crate) fn shell(name: &'static str, s: &Solid, open: &[u64], thickness: f64, outward: bool, rounded: bool) -> Result<Solid> {
+    let c = of(name, s)?;
+    let feature = engine::feature();
+    let r = {
+        let mut k = lock(&c.session);
+        let r = if rounded {
+            yack_glue::shell_rounded(&mut k, c.id, open, thickness, outward)
+        } else {
+            yack_glue::shell(&mut k, c.id, open, thickness, outward)
+        };
+        r.and_then(|(id, history)| {
+            let how = cnames::Naming { shell: Some(if outward { Wall::Outward } else { Wall::Inward }), ..cnames::Naming::default() };
+            let roles = cnames::face_roles(&k, Some(c.id), id, &history, &how)?;
+            Ok(((id, history), roles))
+        })
+    };
+    let (made, roles) = match r {
+        Ok((m, roles)) => (Ok(m), Some(roles)),
+        Err(e) => (Err(e), None),
+    };
+    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), roles, ..Naming::default() };
+    result(name, &feature, &c.session, made, &how)
 }

@@ -39,3 +39,14 @@ fn under_a_forced_engine_every_constructor_builds_on_it_or_refuses() {
     }
     force(Engine::Both);
 }
+
+#[test]
+fn a_block_builds_on_either_forced_engine() {
+    for (engine, name) in [(Engine::Cadrs, "cadrs"), (Engine::Springrep, "springrep")] {
+        force(engine);
+        let b = block(&Frame::at([1.0, 2.0, 3.0]), [2.0, 3.0, 4.0]).unwrap();
+        assert_eq!(b.strategy(), name);
+        assert!((b.volume() - 24.0).abs() < 1e-9);
+    }
+    force(Engine::Both);
+}

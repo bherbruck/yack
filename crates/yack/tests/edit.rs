@@ -120,3 +120,24 @@ fn swept_sequences_go_leg_by_leg() {
     let e = brick().swept(&Motion::Then(vec![Motion::Then(vec![])])).unwrap_err();
     assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
 }
+
+#[test]
+fn a_rounded_shell_holds_more_than_a_sharp_one_outward() {
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0]).unwrap();
+    let top = b.face_at([5.0, 5.0, 10.0]).unwrap();
+    match (b.shell_outward(&[top], 1.0), b.shell_outward_rounded(&[top], 1.0)) {
+        (Ok(sharp), Ok(round)) => assert!(round.volume() < sharp.volume()),
+        (_, Err(e)) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
+        (Err(e), _) => panic!("{e}"),
+    }
+}
+
+#[test]
+fn offset_and_shell_faces_take_the_name_given() {
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0]).unwrap();
+    let grown = b.offset(1.0).unwrap().named("grown");
+    assert!(!grown.faces_tagged("grown").is_empty());
+    let top = b.face_at([5.0, 5.0, 10.0]).unwrap();
+    let hollow = b.shell(&[top], 1.0).unwrap().named("hollow");
+    assert!(!hollow.faces_by("hollow", Role::Inner).is_empty(), "strategy {}", hollow.strategy());
+}

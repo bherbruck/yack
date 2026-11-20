@@ -29,6 +29,7 @@ yack::blend: impl Solid { pub fn fillet_setback(&self, edges: &[EdgeId], radius:
 yack::blend: impl Solid { pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn full_round(&self, side_a: FaceId, middle: FaceId, side_b: FaceId) -> Result<Solid> }
+yack::boolean: impl Solid { pub fn cut_swept(&self, tool: &Solid, motion: &crate::Motion) -> Result<Solid> }
 yack::boolean: impl Solid { pub fn difference(&self, tool: &Solid) -> Result<Solid> }
 yack::boolean: impl Solid { pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> }
 yack::boolean: impl Solid { pub fn intersection(&self, other: &Solid) -> Result<Solid> }
@@ -44,6 +45,8 @@ yack::edit: impl Solid { pub fn offset(&self, distance: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn shell_outward(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
+yack::edit: impl Solid { pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }

@@ -23,25 +23,31 @@ use crate::{Angle, Error, Frame, PathPiece, Point3, Profile, Result, Solid, Spli
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
-    ladder::springrep_only("block", || {
+    firewall::run("block", || {
+        ladder::two("block", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
+    }, &|| engine_cadrs::primitive("block", frame, yack_cadrs::yack_glue::Prim::Block { size }))
     })
 }
 
 /// A cylinder of `radius` on the frame's z axis, from z = 0 to z = `height`.
 pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
-    ladder::springrep_only("cylinder", || {
+    firewall::run("cylinder", || {
+        ladder::two("cylinder", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "cylinder", &[("side", "seg:side")], primitive::cylinder(&engine::frame(frame), radius, height, &feature))
+    }, &|| engine_cadrs::primitive("cylinder", frame, yack_cadrs::yack_glue::Prim::Cylinder { radius, height }))
     })
 }
 
 /// A sphere of `radius` centred at the frame origin.
 pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
-    ladder::springrep_only("sphere", || {
+    firewall::run("sphere", || {
+        ladder::two("sphere", &|| {
         let feature = engine::feature();
         engine::made(&feature, "sphere", primitive::sphere(&engine::frame(frame), radius, &feature))
+    }, &|| engine_cadrs::primitive("sphere", frame, yack_cadrs::yack_glue::Prim::Sphere { radius }))
     })
 }
 
@@ -85,9 +91,11 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 
 /// A cone (or frustum) on the frame's z axis: radius `bottom` at z = 0, `top` at z = `height`.
 pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> {
-    ladder::springrep_only("cone", || {
+    firewall::run("cone", || {
+        ladder::two("cone", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "cone", &[("bottom", "start"), ("top", "end"), ("side", "seg:side")], primitive::cone(&engine::frame(frame), bottom, top, height, &feature))
+    }, &|| engine_cadrs::primitive("cone", frame, yack_cadrs::yack_glue::Prim::Cone { bottom, top, height }))
     })
 }
 
@@ -102,17 +110,26 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
             format!("height {height} is negative; to extrude the other way, flip the frame: Frame::new(origin, x, -y, -z)"),
         ));
     }
-    ladder::springrep_only("extrude", || {
+    firewall::run("extrude", || {
+        ladder::two(
+            "extrude",
+            &|| {
         let feature = engine::feature();
         let op = "extrude";
         engine::made(&feature, op, sweep::extrude(&engine::profile(op, profile, None)?, &engine::frame(frame), height, &feature))
+    },
+            &|| engine_cadrs::sweep_profile("extrude", frame, profile, height, false),
+        )
     })
 }
 
 /// `profile` revolved about the frame's z axis by `angle`. The profile is drawn in the frame's xz
 /// plane: profile x along the frame's x (out from the axis, x ≥ 0), profile y along the frame's z.
 pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> {
-    ladder::springrep_only("revolve", || {
+    firewall::run("revolve", || {
+        ladder::two(
+            "revolve",
+            &|| {
         let feature = engine::feature();
         let op = "revolve";
         let sketch = engine::profile(op, profile, None)?;
@@ -120,6 +137,9 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
         engine::made(&feature, 
             op,
             sweep::revolve(&sketch, &engine::meridian(frame), engine::p3(frame.origin()), axis, angle.radians(), &feature),
+        )
+    },
+            &|| engine_cadrs::sweep_profile("revolve", frame, profile, angle.radians(), true),
         )
     })
 }
@@ -179,8 +199,8 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
 
 /// A loft through profiles placed in their own frames, following `guides`.
 pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<Solid> {
-    let _ = (sections, guides);
-    Err(Error::unsupported("loft_guided"))
+    let op = "loft_guided";
+    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::loft_guided(op, sections, guides) }]))
 }
 
 /// `profile` swept along a path of lines and arcs starting along the frame's z. A positive arc
@@ -230,8 +250,10 @@ pub fn nurbs_solid(
     ctrl: &[Vec<Point3>],
     weights: Option<&[Vec<f64>]>,
 ) -> Result<Solid> {
-    let _ = (frame, degree, knots, ctrl, weights);
-    Err(Error::unsupported("nurbs_solid"))
+    let op = "nurbs_solid";
+    firewall::run(op, || {
+        ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::nurbs_solid(op, frame, degree, knots, ctrl, weights) }])
+    })
 }
 
 /// The solid with no pieces.

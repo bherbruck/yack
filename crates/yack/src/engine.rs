@@ -130,6 +130,23 @@ pub(crate) fn made(feature: &str, op: &'static str, r: sr::Result<Brep>) -> Resu
     r.map(|b| Solid::from_springrep(b).with_feature(feature)).map_err(|e| error(op, e))
 }
 
+/// A springrep result whose new faces the engine named under its own fixed feature `engine_name`
+/// (`edit::offset`'s "offset", `edit::shell`'s "shell"): those are renamed to the op's own,
+/// content-derived feature, so `named`, `faces_tagged` and roles work as for every other op.
+pub(crate) fn made_from(engine_name: &str, op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
+    let r = r.map(|mut b| {
+        b.rename_faces(|n| {
+            let mut n = n.clone();
+            if n.feature == engine_name {
+                n.feature = PROVISIONAL.to_string();
+            }
+            Some(n)
+        });
+        b
+    });
+    made(PROVISIONAL, op, r)
+}
+
 /// A springrep result as a solid.
 pub(crate) fn solid(op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
     r.map(Solid::from_springrep).map_err(|e| error(op, e))
@@ -179,6 +196,23 @@ fn segment(op: &'static str, s: &Segment, scale: Option<f64>) -> Result<sr::prof
         }
         Segment::PeriodicSpline { .. } => return Err(unsupported(op, "a periodic spline of degree other than 3")),
     })
+}
+
+/// Each segment's face part as [`profile`] names it (`seg:<label>` / `seg:s<n>`), through every
+/// loop, outer first.
+pub(crate) fn segment_parts(p: &Profile) -> Vec<String> {
+    let mut n = 0usize;
+    let mut out = Vec::new();
+    for l in core::iter::once(p.outer()).chain(p.holes()) {
+        for label in l.labels() {
+            out.push(match label {
+                Some(t) => format!("{SEGMENT}{}", t.as_str()),
+                None => format!("{SEGMENT}s{n}"),
+            });
+            n = n.saturating_add(1);
+        }
+    }
+    out
 }
 
 /// A yack profile as springrep's, each segment named by its label or by its place in the profile
