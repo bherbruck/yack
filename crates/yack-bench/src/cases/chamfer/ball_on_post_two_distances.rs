@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/ball-on-post-two-distances
 //! A ball on a post, the concave edge between them chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

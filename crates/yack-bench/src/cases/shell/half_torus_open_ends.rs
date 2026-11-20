@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/half-torus-open-ends
 //! A half torus shelled open at both ends: a curved pipe.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

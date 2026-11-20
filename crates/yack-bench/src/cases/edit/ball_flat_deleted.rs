@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/ball-flat-deleted
 //! A ball's flat deleted: the ball is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

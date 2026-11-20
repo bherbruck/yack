@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/cylinder-side-open
 //! A cylinder shelled open at its side: two separate disks.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/tetrahedron-grown
 //! A regular tetrahedron grown by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

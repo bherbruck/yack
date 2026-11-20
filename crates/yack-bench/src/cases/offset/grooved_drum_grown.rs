@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/grooved-drum-grown
 //! A grooved drum grown until its groove closes.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

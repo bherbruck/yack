@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/cylinder-cut-at-thirty-degrees-grown
 //! A cylinder cut by a plane at 30° and grown by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

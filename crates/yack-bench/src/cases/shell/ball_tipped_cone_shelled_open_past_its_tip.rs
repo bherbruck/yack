@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/ball-tipped-cone-shelled-open-past-its-tip
 //! A ball-tipped cone shelled open at its base, the wall thicker than its tip's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/drilled-plate-grown-by-its-hole
 //! A drilled plate grown by its hole's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

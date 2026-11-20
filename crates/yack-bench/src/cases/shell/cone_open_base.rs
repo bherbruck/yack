@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/cone-open-base
 //! A cone shelled open at its base, its apex moved in.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

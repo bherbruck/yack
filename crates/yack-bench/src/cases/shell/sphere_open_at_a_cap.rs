@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/sphere-open-at-a-cap
 //! A ball cut by a plane and shelled open there: the rim meets the walls aslant.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

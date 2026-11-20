@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/hole-deleted
 //! A drilled block's hole deleted: the block is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

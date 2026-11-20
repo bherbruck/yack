@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/napkin-ring
 //! A napkin ring.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

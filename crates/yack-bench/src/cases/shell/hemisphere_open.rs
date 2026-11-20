@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/hemisphere-open
 //! A half ball shelled open at its flat face: a bowl.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

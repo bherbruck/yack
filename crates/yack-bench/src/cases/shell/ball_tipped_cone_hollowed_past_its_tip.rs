@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/ball-tipped-cone-hollowed-past-its-tip
 //! A ball-tipped cone hollowed to a wall thicker than its tip's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

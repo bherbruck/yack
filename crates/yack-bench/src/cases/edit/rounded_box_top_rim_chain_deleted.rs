@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/rounded-box-top-rim-chain-deleted
 //! A rounded box's rounded top rim deleted: the top and the walls meet again all round.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

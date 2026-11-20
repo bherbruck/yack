@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/hemisphere-rim-round-deleted
 //! A hemisphere's rounded rim deleted: the flat and the ball meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

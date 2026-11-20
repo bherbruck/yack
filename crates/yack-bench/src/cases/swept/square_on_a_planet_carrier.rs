@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/square-on-a-planet-carrier
 //! A square bar carried round on a planet gear.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

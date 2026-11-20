@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-open-top-and-bottom
 //! A box shelled open at two opposite faces.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

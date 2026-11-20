@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/frustum-ring-groove-deleted
 //! A cone frustum's ring groove deleted: the frustum is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

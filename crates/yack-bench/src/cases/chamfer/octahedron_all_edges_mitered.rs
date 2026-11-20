@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/octahedron-all-edges-mitered
 //! An octahedron with every edge chamfered, its corners mitered.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

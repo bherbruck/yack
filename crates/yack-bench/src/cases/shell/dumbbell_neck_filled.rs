@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/dumbbell-neck-filled
 //! A dumbbell plate shelled thicker than its neck: the inside walls cross and the neck fills.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

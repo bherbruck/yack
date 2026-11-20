@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/l-block-shrunk
 //! An L-shaped plate shrunk by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

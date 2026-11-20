@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/round-consumed
 //! A plate with rounded corners shelled thicker than its rounds: the inside rounds are consumed.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

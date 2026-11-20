@@ -1,3 +1,4 @@
+// yack: brep-bench case primitives/revolved-sector
 //! A quarter of a washer.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

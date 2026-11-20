@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-open-top-outward-sharp
 //! A box shelled outward with its top open, its edges kept sharp.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

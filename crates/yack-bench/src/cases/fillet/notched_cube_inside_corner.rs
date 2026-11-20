@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/notched-cube-inside-corner
 //! A notched cube with its inside corner rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

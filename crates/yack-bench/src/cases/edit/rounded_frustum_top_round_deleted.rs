@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/rounded-frustum-top-round-deleted
 //! A cone frustum's rounded top rim deleted, its rounded base kept.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

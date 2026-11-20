@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/double-frustum-turned-rounds-deleted
 //! Two cone frustums base to base, the upper made turned two radians about the axis, their rounded
 //! ridge deleted: the two cones meet again.
 use yack::prelude::*;

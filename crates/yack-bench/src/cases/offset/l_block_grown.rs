@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/l-block-grown
 //! An L-shaped plate grown by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

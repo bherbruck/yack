@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/square-boss-root-mixed-corners
 //! A square boss rounded at its corners and its root, two concave rounds and one convex at each
 //! corner.
 use yack::prelude::*;

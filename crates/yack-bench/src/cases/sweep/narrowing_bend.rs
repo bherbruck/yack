@@ -1,3 +1,4 @@
+// yack: brep-bench case sweep/narrowing-bend
 //! A hollow square duct narrowing around a bend.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

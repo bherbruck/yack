@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/cube-all-edges-mitered
 //! A cube with every edge chamfered, its corners mitered.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/turned-post-round-deleted
 //! A turned post's rounded shoulder deleted: its cylinder and its cone meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

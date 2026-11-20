@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/round-shrunk-to-an-edge
 //! A plate with rounded corners shelled as thick as its rounds: the inside rounds shrink to edges.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

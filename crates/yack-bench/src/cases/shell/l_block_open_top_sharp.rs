@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/l-block-open-top-sharp
 //! An L-shaped plate shelled with its top open, the wall at its inside corner kept sharp.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

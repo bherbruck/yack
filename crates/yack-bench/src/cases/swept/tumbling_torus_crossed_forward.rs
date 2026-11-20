@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-crossed-forward
 //! The forward member of a crossed pair of torus sweeps.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

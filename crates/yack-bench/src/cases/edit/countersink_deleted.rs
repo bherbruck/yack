@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/countersink-deleted
 //! A hole's countersink deleted: the hole runs straight up to the top.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/boxes-sharing-a-face
 //! Two cubes joined face to face.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/shaft-round-groove-deleted
 //! A shaft's round-bottomed groove deleted: the shaft is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

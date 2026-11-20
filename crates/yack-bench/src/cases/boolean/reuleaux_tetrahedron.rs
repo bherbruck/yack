@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/reuleaux-tetrahedron
 //! A Reuleaux tetrahedron: four balls in common.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

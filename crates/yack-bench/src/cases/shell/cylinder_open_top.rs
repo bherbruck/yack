@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/cylinder-open-top
 //! A cylinder shelled with its top open: a cup.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

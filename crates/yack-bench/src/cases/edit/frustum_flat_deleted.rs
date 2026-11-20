@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/frustum-flat-deleted
 //! A cone frustum's flat deleted: the frustum is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

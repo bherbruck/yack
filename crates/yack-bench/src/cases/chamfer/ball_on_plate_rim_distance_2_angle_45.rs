@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/ball-on-plate-rim-distance-2-angle-45
 //! A ball on a plate, the concave edge between them chamfered by a distance of 2 and an angle of
 //! 45°.
 use yack::prelude::*;

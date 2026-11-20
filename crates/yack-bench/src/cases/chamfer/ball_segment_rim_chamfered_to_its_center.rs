@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/ball-segment-rim-chamfered-to-its-center
 //! A ball cut flat above its middle, its rim chamfered until the flat is gone.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

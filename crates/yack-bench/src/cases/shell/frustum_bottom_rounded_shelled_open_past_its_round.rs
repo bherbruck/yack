@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/frustum-bottom-rounded-shelled-open-past-its-round
 //! A cone frustum with its bottom rim rounded, shelled open at its top past the round's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

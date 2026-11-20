@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/boxes-union
 //! Two overlapping blocks, united.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

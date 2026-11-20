@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/torus-grown-past-its-hole
 //! A torus grown past its hole.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

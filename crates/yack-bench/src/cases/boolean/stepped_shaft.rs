@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/stepped-shaft
 //! A stepped shaft.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

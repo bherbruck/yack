@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/boss-root-round-deleted
 //! A boss's rounded root deleted: the boss stands on the plate with a sharp foot.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

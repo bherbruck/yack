@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/box-shrunk
 //! A box shrunk by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

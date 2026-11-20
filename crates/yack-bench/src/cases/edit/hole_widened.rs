@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/hole-widened
 //! A plate's hole widened.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

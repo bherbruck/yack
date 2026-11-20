@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/knife-edge
 //! A knife edge of 5° rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

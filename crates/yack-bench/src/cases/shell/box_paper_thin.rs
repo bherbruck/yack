@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-paper-thin
 //! A box shelled to a wall 0.001 thick.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/rounded-frustum-rounds-deleted
 //! A cone frustum's two rounded rims deleted: its ends and its cone meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

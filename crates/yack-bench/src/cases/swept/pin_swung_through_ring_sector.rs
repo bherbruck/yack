@@ -1,5 +1,10 @@
+// yack: brep-bench case swept/pin-swung-through-ring-sector
 //! A slot swung by a pin lying along a radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
-    Err(Error::unsupported("swept/pin-swung-through-ring-sector"))
+    let z = [0.0, 0.0, 1.0];
+    let sector = revolve(&Frame::WORLD, &Profile::rectangle([8.0, -1.0], [12.0, 1.0])?, deg(60.0))?;
+    let end = Frame::new([6.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])?;
+    let pin = cylinder(&end.moved(&Rigid::rotation([0.0; 3], z, deg(-140.0))?), 0.5, 5.0)?;
+    sector.difference(&pin.swept(&Motion::Turn { axis_point: [0.0; 3].into(), axis: z.into(), angle: deg(280.0) })?)
 }

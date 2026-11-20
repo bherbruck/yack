@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/dumbbell-split
 //! A dumbbell shrunk until it splits into two bodies.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

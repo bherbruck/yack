@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/side-notch-deleted
 //! A half-round notch in a block's side deleted: the side closes over it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

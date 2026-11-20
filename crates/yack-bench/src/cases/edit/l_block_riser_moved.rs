@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/l-block-riser-moved
 //! An L-block's step moved out.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

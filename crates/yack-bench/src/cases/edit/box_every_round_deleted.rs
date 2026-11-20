@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/box-every-round-deleted
 //! A box with every edge rounded, all twenty rounds deleted.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

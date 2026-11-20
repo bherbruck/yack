@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/drilled-block-open-at-its-bore
 //! A drilled block shelled open at its bore.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

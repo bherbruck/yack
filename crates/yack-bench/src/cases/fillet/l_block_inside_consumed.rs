@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/l-block-inside-consumed
 //! An L-block whose inside corner is rounded away.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/cylinder-grown
 //! A cylinder grown by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

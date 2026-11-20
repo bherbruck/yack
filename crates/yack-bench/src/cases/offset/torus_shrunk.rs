@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/torus-shrunk
 //! A torus shrunk by 1.5.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

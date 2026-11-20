@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/steinmetz-common
 //! Two crossed cylinders, their common part.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

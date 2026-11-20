@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-open-top
 //! A box shelled with its top open.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

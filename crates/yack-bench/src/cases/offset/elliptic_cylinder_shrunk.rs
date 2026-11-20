@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/elliptic-cylinder-shrunk
 //! An elliptic cylinder shrunk by 1.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

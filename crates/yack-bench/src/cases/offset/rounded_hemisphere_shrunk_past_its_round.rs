@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/rounded-hemisphere-shrunk-past-its-round
 //! A hemisphere with its rim rounded, shrunk past the round's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

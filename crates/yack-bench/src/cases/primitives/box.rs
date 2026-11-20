@@ -1,3 +1,4 @@
+// yack: brep-bench case primitives/box
 //! A box.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-crossed-union
 //! The union of opposing torus tumbles.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

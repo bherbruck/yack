@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/offset-hole-sphere
 //! A ball pierced off center.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

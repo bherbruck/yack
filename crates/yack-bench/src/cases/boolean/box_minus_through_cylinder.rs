@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/box-minus-through-cylinder
 //! A cube drilled through.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

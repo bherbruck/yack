@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/half-torus
 //! Half a torus.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

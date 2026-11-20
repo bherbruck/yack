@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/nurbs-ball-grown
 //! A NURBS ball grown.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

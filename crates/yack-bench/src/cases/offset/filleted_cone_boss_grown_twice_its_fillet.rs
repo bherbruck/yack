@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/filleted-cone-boss-grown-twice-its-fillet
 //! A filleted cone boss grown to twice its fillet's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

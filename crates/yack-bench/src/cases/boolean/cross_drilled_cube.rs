@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/cross-drilled-cube
 //! A cube drilled through on a grid three ways.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/capped-frustum-rim-distance-1-angle-60
 //! A frustum capped by a ball, its rim chamfered by a distance of 1 and an angle of 60°.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

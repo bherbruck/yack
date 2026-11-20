@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/tube-bore-ring-groove-deleted
 //! A tube's internal ring groove deleted: the bore is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

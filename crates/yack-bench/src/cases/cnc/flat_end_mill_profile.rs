@@ -1,3 +1,4 @@
+// yack: brep-bench case cnc/flat-end-mill-profile
 //! A groove profiled round a cross by a flat end mill in three step-downs.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

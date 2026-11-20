@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/flanged-drum-shrunk
 //! A flanged drum shrunk until its flange is gone.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

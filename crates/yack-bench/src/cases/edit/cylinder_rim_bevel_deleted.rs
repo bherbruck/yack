@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/cylinder-rim-bevel-deleted
 //! A cylinder's beveled rim deleted: the top and the side meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

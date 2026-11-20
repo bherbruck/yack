@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-hollowed
 //! A box hollowed, its cavity closed.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

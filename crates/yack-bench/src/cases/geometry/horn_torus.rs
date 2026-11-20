@@ -1,5 +1,6 @@
+// yack: brep-bench case geometry/horn-torus
 //! A horn torus.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
-    Err(Error::unsupported("geometry/horn-torus"))
+    torus(&Frame::WORLD, 5.0, 5.0)
 }

@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/ball-tipped-cone-shrunk-past-its-tip
 //! A ball-tipped cone shrunk past its tip's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

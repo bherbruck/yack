@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/chain-of-three-balls-halved
 //! A chain of three balls halved through their centers.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

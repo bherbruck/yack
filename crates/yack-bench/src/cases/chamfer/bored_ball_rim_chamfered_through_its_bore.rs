@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/bored-ball-rim-chamfered-through-its-bore
 //! A bored ball whose rim is chamfered the whole length of its bore.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

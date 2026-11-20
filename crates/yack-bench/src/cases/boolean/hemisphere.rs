@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/hemisphere
 //! A hemisphere.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

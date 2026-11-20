@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/hole-skin-merging-wall
 //! A drilled block shelled with its top open, the bore's tube running into a wall.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

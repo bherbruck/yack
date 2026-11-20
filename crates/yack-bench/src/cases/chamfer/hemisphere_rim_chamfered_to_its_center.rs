@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/hemisphere-rim-chamfered-to-its-center
 //! A hemisphere whose rim is chamfered until its flat face is gone.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

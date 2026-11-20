@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/round-swallowing-a-tiny-face
 //! A broken edge rounded over.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

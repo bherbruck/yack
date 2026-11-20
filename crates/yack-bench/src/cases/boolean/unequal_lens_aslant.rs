@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/unequal-lens-aslant
 //! A lens of two unequal balls, one placed aslant.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

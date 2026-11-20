@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/variable-radius-edge
 //! A cube edge rounded with a radius growing along it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/rounded-frustum-hollowed-past-its-rounds
 //! A rounded cone frustum hollowed with walls thicker than its rounds.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

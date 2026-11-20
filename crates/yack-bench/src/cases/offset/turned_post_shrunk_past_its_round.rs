@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/turned-post-shrunk-past-its-round
 //! A turned post with its shoulder rounded, shrunk by 1.5, past the round.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case integration/benchy
 //! #3DBenchy.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

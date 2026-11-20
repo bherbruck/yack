@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/cylinder-both-rims-rounds-deleted
 //! A cylinder's rounded rims deleted, top and bottom: the ends and the side meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

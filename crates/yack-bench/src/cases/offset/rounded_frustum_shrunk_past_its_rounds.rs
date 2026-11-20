@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/rounded-frustum-shrunk-past-its-rounds
 //! A rounded cone frustum shrunk past its rounds' radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

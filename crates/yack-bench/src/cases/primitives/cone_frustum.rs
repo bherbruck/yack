@@ -1,3 +1,4 @@
+// yack: brep-bench case primitives/cone-frustum
 //! A truncated cone.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

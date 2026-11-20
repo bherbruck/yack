@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/hole-both-rim-rounds-deleted
 //! A drilled block's two rounded hole rims deleted: the faces and the bore meet again at both ends.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

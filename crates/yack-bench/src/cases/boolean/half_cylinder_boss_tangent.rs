@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/half-cylinder-boss-tangent
 //! A cube with a half-round end.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-crossed-difference
 //! The difference of opposing torus tumbles.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

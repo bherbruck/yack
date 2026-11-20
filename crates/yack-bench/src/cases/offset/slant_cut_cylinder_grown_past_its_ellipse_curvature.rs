@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/slant-cut-cylinder-grown-past-its-ellipse-curvature
 //! A cylinder cut by a plane at 45° and grown by 2.5.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

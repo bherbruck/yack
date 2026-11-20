@@ -1,3 +1,4 @@
+// yack: brep-bench case primitives/cylinder
 //! A cylinder.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

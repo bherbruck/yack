@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/rounded-block-top-moved-up
 //! A block's top moved up, carrying its round.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

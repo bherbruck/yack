@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/half-torus-outer-rim-round-deleted
 //! A half torus's rounded outer rim deleted: the flat and the torus meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

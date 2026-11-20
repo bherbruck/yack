@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/bored-ball-rim-two-distances
 //! A bored ball whose rim is chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

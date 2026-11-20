@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/boxes-cut
 //! One block cut by another.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

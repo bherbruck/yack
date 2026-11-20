@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/frustum-sealed-below-its-opening
 //! A cone frustum shelled open at its top, the cavity closing to a point below it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

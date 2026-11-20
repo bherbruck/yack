@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/blind-bore-floor-round-deleted
 //! A blind bore's rounded floor deleted: the floor and the wall meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/boss-deleted
 //! A plate's boss deleted: the plate's top closes over where it stood.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

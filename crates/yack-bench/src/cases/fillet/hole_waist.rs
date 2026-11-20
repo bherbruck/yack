@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/hole-waist
 //! A hole whose two rim rounds meet at its waist.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

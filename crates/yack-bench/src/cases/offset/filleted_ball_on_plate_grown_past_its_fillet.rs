@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/filleted-ball-on-plate-grown-past-its-fillet
 //! A ball standing in a plate, its root filleted, grown past the fillet's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

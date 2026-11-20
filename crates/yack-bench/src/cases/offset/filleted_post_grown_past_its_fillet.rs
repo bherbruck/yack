@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/filleted-post-grown-past-its-fillet
 //! A post on a plate, filleted at its foot, grown past the fillet's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/ball-and-post
 //! A post standing out of a ball, rounded where it leaves.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

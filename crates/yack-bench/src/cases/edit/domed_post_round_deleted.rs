@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/domed-post-round-deleted
 //! A post capped by a ball, its rounded rim deleted: the cylinder and the ball meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/nested-shells
 //! Three bodies nested in each other's hollows.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

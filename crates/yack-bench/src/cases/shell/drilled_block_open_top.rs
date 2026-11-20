@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/drilled-block-open-top
 //! A drilled block shelled with its top open: the bore becomes a tube standing in the cup.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/block-top-moved-up
 //! A drilled block's top moved up.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

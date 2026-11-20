@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/torus-hollowed
 //! A torus hollowed, its cavity closed.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

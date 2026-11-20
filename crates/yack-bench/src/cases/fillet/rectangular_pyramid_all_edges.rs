@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/rectangular-pyramid-all-edges
 //! A pyramid on a rectangle with every edge rounded, its apex split.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

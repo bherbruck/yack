@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/shaft-v-groove-deleted
 //! A shaft's V-groove deleted: the shaft is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

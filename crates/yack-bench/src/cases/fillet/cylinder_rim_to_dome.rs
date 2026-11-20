@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/cylinder-rim-to-dome
 //! A cylinder whose rim is rounded into a dome.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

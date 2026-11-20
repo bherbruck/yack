@@ -1,3 +1,4 @@
+// yack: brep-bench case primitives/extruded-l
 //! An L-shaped plate.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

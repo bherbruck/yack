@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/cube-corner-rounds-deleted
 //! Three rounds meeting at a cube's corner deleted, with the ball between them.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

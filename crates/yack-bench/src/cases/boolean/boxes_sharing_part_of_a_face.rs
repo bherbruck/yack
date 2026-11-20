@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/boxes-sharing-part-of-a-face
 //! A cube on a cube, overhanging.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

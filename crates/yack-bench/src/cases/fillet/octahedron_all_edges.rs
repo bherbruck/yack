@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/octahedron-all-edges
 //! An octahedron with every edge rounded, four rounds meeting at each corner.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

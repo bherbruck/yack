@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/sphere-pinhole-opening
 //! A ball cut by a plane and shelled open there, the cavity barely reaching it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

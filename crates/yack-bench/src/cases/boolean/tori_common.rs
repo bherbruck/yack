@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/tori-common
 //! Two coaxial tori, their common part.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

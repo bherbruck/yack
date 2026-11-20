@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/frustum-rim-bevel-deleted
 //! A cone frustum's beveled top rim deleted: the top and the cone meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/open-slot-deleted
 //! An open slot in a block's side deleted: the side closes over it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

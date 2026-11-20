@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/blind-bore-floor-bevel-deleted
 //! A blind bore's beveled floor deleted: the floor and the wall meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

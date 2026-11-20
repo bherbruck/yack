@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/spherical-sector-rim-distance-3-angle-30
 //! A spherical sector's rim chamfered by a distance of 3 and an angle of 30°.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

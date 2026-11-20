@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/drilled-plate
 //! A plate drilled nine times.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

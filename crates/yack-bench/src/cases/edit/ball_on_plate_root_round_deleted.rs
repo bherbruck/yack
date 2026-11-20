@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/ball-on-plate-root-round-deleted
 //! A ball standing in a plate, its rounded root deleted: the plate and the ball meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-open-top-outward
 //! A box shelled outward with its top open, its edges rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

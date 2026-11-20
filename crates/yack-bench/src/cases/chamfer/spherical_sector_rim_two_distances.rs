@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/spherical-sector-rim-two-distances
 //! A spherical sector whose rim is chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

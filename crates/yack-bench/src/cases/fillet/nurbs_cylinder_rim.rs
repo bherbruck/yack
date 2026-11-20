@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/nurbs-cylinder-rim
 //! A NURBS cylinder with its top rim rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

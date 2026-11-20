@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/rounded-frustum-shrunk-to-a-stub
 //! A rounded cone frustum shrunk to a stub.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-near-orthogonal
 //! A thin torus tumbled about nearly perpendicular axes.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/bezier-dome-one-edge
 //! The Bézier dome block with one top edge rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

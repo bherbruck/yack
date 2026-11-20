@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/sphere-pocket
 //! A block with a spherical pocket.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

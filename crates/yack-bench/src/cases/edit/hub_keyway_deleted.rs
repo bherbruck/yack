@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/hub-keyway-deleted
 //! A hub's keyway deleted: the bore is round again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

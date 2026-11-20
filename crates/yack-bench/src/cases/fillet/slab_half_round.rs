@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/slab-half-round
 //! A block whose top is rounded into a half-cylinder.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

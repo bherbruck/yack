@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/tube-flush-ends
 //! A tube cut flush.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

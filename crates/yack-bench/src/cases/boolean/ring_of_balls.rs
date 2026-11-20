@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/ring-of-balls
 //! Twelve balls on a ring, each overlapping its neighbors.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

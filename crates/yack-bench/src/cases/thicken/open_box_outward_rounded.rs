@@ -1,3 +1,4 @@
+// yack: brep-bench case thicken/open-box-outward-rounded
 //! An open box's sheet thickened outward, its edges rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

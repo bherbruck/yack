@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/rounded-puck-shrunk-past-its-rounds
 //! A rounded puck shrunk past its rounds' radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/cylinder-rim-round-deleted
 //! A cylinder's rounded rim deleted: the top and the side meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

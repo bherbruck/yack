@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-hairline-cavity
 //! A box shelled nearly to half its width, leaving a cavity 0.02 wide.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

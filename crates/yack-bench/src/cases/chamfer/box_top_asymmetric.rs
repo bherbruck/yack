@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/box-top-asymmetric
 //! A box with its top edges chamfered unequally.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

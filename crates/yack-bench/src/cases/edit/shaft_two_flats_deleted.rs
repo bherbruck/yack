@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/shaft-two-flats-deleted
 //! A shaft's two opposite flats deleted: the shaft is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

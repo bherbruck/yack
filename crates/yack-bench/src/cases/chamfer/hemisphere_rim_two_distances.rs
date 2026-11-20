@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/hemisphere-rim-two-distances
 //! A hemisphere whose rim is chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/block-edge-round-deleted
 //! A block's rounded edge deleted: the top and the side meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

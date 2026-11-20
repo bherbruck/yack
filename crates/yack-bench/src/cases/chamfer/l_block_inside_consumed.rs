@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/l-block-inside-consumed
 //! An L-block whose inside corner is chamfered away.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

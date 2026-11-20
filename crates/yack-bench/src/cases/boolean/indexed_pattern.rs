@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/indexed-pattern
 //! A disk with six holes indexed around it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

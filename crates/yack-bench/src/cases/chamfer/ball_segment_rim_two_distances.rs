@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/ball-segment-rim-two-distances
 //! A ball cut flat above its middle, its rim chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

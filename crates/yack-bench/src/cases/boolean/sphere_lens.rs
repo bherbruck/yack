@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/sphere-lens
 //! A lens of two balls.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

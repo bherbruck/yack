@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/block-ridge
 //! A block whose top is chamfered into a ridge.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

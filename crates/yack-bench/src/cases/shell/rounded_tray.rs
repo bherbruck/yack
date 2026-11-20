@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/rounded-tray
 //! A plate with rounded corners shelled thinner than its rounds.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/spheres-union
 //! Two overlapping balls, united.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/linked-tori
 //! Two separate rings linked through each other.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

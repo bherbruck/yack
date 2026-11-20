@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/spiroid-face-gear-hobbed-by-its-worm
 //! A spiroid face gear hobbed by its tapered worm.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

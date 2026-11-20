@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/holes-widened-until-merged
 //! Two holes widened until they merge.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

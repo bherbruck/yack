@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/l-block-inside-round-deleted
 //! An L-block's rounded inside corner deleted: the corner is sharp again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

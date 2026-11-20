@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/shaft-flat-deleted
 //! A flat milled along a shaft deleted: the shaft is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

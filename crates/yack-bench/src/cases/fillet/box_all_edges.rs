@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/box-all-edges
 //! A cube with every edge rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

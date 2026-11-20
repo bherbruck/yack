@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/frustum-open-at-both-ends-closing-below-its-top
 //! A cone frustum shelled open at both ends, the cavity closing to a point below its top.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

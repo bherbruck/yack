@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/boss-s-curve
 //! A boss whose root and rim rounds meet.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

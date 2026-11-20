@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/tee-of-two-cylinders
 //! A tee of two cylinders with its junction rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

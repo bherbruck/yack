@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/creased-bar-turned-through-ring-sector
 //! A groove cut by a bar drafted both ways from a parting line.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

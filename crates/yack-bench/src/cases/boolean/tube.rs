@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/tube
 //! A tube.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

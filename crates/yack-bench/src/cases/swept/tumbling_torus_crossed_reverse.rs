@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-crossed-reverse
 //! The reverse member of a crossed pair of torus sweeps.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

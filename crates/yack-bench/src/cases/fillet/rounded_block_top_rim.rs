@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/rounded-block-top-rim
 //! A rounded block with its top rim rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/turned-post-cone-turned-rounds-deleted
 //! A turned post's rounded shoulder deleted, its cone made turned a radian about the axis: the
 //! cylinder and the cone meet again.
 use yack::prelude::*;

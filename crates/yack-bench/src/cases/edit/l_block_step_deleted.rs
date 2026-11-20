@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/l-block-step-deleted
 //! An L-block's step deleted: the block is whole again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

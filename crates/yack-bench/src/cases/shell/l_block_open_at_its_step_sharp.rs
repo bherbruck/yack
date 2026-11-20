@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/l-block-open-at-its-step-sharp
 //! An L-shaped block shelled inward open at its step, the wall rising past the opening kept.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

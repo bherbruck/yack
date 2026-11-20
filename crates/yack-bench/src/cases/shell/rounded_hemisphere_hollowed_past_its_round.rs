@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/rounded-hemisphere-hollowed-past-its-round
 //! A hemisphere with its rim rounded, hollowed with walls thicker than the round.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

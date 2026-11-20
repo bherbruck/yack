@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/box-one-edge
 //! A cube with one edge rounded.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

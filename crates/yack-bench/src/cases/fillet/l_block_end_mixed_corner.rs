@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/l-block-end-mixed-corner
 //! An L-block's end rounded across its inside corner, one concave round and two convex.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

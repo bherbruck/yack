@@ -1,3 +1,4 @@
+// yack: brep-bench case boolean/chain-of-three-balls
 //! A chain of three balls.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

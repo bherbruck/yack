@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/sliver-strip
 //! A plate with a sliver of side left between two rounds.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

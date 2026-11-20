@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/tumbling-torus-full-turn
 //! An oblique torus tumble through a full turn.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

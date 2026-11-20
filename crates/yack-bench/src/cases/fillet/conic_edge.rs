@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/conic-edge
 //! A block's edge blended by a parabolic conic.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

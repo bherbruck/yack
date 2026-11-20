@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/domed-post-cap-turned-rounds-deleted
 //! A post capped by a ball, the cap made turned 1.5 radians about the axis, its rounded rim
 //! deleted: the cylinder and the ball meet again.
 use yack::prelude::*;

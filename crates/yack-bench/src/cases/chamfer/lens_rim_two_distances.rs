@@ -1,3 +1,4 @@
+// yack: brep-bench case chamfer/lens-rim-two-distances
 //! A lens of two balls whose rim is chamfered with two distances.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

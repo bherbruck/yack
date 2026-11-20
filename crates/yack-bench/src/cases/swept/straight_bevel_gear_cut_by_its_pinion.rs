@@ -1,3 +1,4 @@
+// yack: brep-bench case swept/straight-bevel-gear-cut-by-its-pinion
 //! A straight bevel gear's tooth space cut by its pinion.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

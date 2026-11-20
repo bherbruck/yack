@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-five-faces-open
 //! A box shelled open at every face but one.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

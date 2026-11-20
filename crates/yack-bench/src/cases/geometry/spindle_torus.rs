@@ -1,5 +1,6 @@
+// yack: brep-bench case geometry/spindle-torus
 //! A spindle torus.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
-    Err(Error::unsupported("geometry/spindle-torus"))
+    torus(&Frame::WORLD, 3.0, 5.0)
 }

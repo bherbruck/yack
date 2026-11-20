@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/box-walls-meeting
 //! A box shelled to half its width: the walls meet and nothing is hollowed.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

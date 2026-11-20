@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/capsule-open-base
 //! A capsule's end shelled open at its base, its walls meeting tangentially.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

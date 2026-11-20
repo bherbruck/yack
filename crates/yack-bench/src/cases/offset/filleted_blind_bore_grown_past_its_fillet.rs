@@ -1,3 +1,4 @@
+// yack: brep-bench case offset/filleted-blind-bore-grown-past-its-fillet
 //! A block with a blind bore, filleted at the bore's floor, grown past the fillet's radius.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

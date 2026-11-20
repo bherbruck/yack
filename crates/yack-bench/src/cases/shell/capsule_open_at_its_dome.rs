@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/capsule-open-at-its-dome
 //! A capsule's end shelled open at its dome: the walls run on past their face to meet it.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case edit/block-two-rounds-deleted
 //! A block's two rounded top edges deleted: the top and both sides meet again.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

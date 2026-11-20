@@ -1,3 +1,4 @@
+// yack: brep-bench case fillet/nearly-flat-ridge
 //! A ridge nearly flat, rounded by a radius of 180.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {

@@ -1,3 +1,4 @@
+// yack: brep-bench case shell/frustum-too-thick-to-hollow
 //! A cone frustum shelled open at its top, so thick that nothing is hollowed.
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
