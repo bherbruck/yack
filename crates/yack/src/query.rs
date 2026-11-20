@@ -69,8 +69,9 @@ impl Solid {
         })
     }
 
-    /// For each point, the nearest point on the solid's boundary (not its inside: a point inside
-    /// the solid gets the nearest boundary point too). Empty for the empty solid.
+    /// For each point, the nearest point of the solid with its inside counted, as the protocol's
+    /// `closest` has it: a point the solid holds is its own nearest point; one outside gets the
+    /// nearest boundary point. Empty for the empty solid.
     pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> {
         let op = "closest";
         let Some(b) = self.brep() else { return Ok(Vec::new()) };
@@ -103,6 +104,21 @@ impl Solid {
             distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| c.distance)
                 .map_err(|e| engine::error(op, e))
+        })
+    }
+
+    /// The face nearest `p` and its distance, at any distance (unlike [`face_at`](Solid::face_at),
+    /// which picks only within `tol::PICK`). A point nearest an edge goes to the face whose own
+    /// surface it is nearer; `NotFound` for the empty solid.
+    pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> {
+        let op = "nearest_face";
+        let p = p.into();
+        let b = self.brep().ok_or_else(|| crate::Error::not_found(op, "self", "the solid is empty"))?;
+        firewall::run(op, || {
+            let (f, d) = yack_springrep::facade::api::nearest_face(b, engine::p3(p))
+                .map_err(|e| engine::error(op, e))?
+                .ok_or_else(|| crate::Error::not_found(op, "p", "the solid has no faces"))?;
+            Ok((self.face_id(f), d))
         })
     }
 

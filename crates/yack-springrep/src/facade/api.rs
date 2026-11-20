@@ -143,3 +143,33 @@ pub fn periodic_through(points: &[[f64; 2]]) -> Result<(Vec<f64>, Vec<[f64; 2]>)
     let s = BSpline::interpolate_periodic(&p3)?;
     Ok((s.knots().to_vec(), s.control_points().iter().map(|c| [c.x, c.y]).collect()))
 }
+
+/// The nearest point of face `f` to `p` (the face alone, wherever the rest of the solid lies).
+pub fn face_closest(b: &Brep, f: FaceId, p: Point3) -> Result<Point3> {
+    Ok(Nearest::of(b, &Selection::face(f))?.to(p)?.on_b)
+}
+
+/// The face nearest `p` and its distance; ties (a point nearest a shared edge) go to the face
+/// whose own surface passes nearer `p`.
+pub fn nearest_face(b: &Brep, p: Point3) -> Result<Option<(FaceId, f64)>> {
+    let mut best: Option<(f64, f64, FaceId)> = None;
+    for f in b.face_ids() {
+        let d = Nearest::of(b, &Selection::face(f))?.to(p)?.distance;
+        let s = &b.face(f).surface;
+        let uv = s.project(p);
+        let off = s.eval(uv.x, uv.y).dist(p);
+        let better = match best {
+            None => true,
+            Some((bd, boff, _)) => d < bd - crate::tol::LINEAR || (d <= bd + crate::tol::LINEAR && off < boff),
+        };
+        if better {
+            best = Some((d, off, f));
+        }
+    }
+    Ok(best.map(|(d, _, f)| (f, d)))
+}
+
+/// Edge `e`'s point at curve parameter `t`, and the edge's parameter range.
+pub fn edge_point(b: &Brep, e: EdgeId, t: f64) -> Option<Point3> {
+    b.edge(e).curve.as_ref().map(|c| c.eval(t))
+}

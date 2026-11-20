@@ -98,6 +98,7 @@ yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
 yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
 yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
 yack::query: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }
+yack::query: impl Solid { pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> }
 yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<Vec3>> }
 yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> }
 yack::query: impl Solid { pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> }
@@ -139,11 +140,14 @@ yack::values: impl EdgeRef<'_> { pub fn id(&self) -> EdgeId }
 yack::values: impl EdgeRef<'_> { pub fn kind(&self) -> CurveKind }
 yack::values: impl EdgeRef<'_> { pub fn length(&self) -> f64 }
 yack::values: impl EdgeRef<'_> { pub fn midpoint(&self) -> Point3 }
+yack::values: impl EdgeRef<'_> { pub fn point(&self, t: f64) -> Point3 }
 yack::values: impl EdgeRef<'_> { pub fn points(&self, n: usize) -> Vec<Point3> }
+yack::values: impl EdgeRef<'_> { pub fn range(&self) -> [f64; 2] }
 yack::values: impl EdgeRef<'_> { pub fn uses(&self) -> usize }
 yack::values: impl FaceRef<'_> { pub fn area(&self) -> f64 }
 yack::values: impl FaceRef<'_> { pub fn bbox(&self) -> Aabb }
 yack::values: impl FaceRef<'_> { pub fn centroid(&self) -> Point3 }
+yack::values: impl FaceRef<'_> { pub fn closest(&self, p: impl Into<Point3>) -> Result<Point3> }
 yack::values: impl FaceRef<'_> { pub fn id(&self) -> FaceId }
 yack::values: impl FaceRef<'_> { pub fn kind(&self) -> SurfaceKind }
 yack::values: impl FaceRef<'_> { pub fn normal(&self) -> Option<Vec3> }

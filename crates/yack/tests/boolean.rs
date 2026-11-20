@@ -96,3 +96,21 @@ fn a_spline_loop_through_points_extrudes() {
     assert!(s.check().is_empty());
     assert!(s.volume() > 0.0);
 }
+
+#[test]
+fn nearest_faces_edge_parameters_and_closest_with_insides() {
+    let a = cube([0.0; 3]);
+    let (f, d) = a.nearest_face([1.0, 1.0, 5.0]).unwrap();
+    close(d, 3.0);
+    assert!(a.face(f).unwrap().normal().unwrap().z > 0.99);
+    // inside counts: a held point is its own nearest point
+    let c = a.closest(&[[1.0, 1.0, 1.0], [1.0, 1.0, 5.0]]).unwrap();
+    close(c[0].z, 1.0);
+    close(c[1].z, 2.0);
+    let top = a.face(f).unwrap();
+    close(top.closest([1.0, 1.0, -7.0]).unwrap().z, 2.0);
+    let e = a.edge(a.edge_at([1.0, 0.0, 2.0]).unwrap()).unwrap();
+    let [t0, t1] = e.range();
+    let p = e.point(t0);
+    assert!((p.x - e.ends()[0].x).abs() < 1e-12 && t1 > t0);
+}

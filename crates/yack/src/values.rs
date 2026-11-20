@@ -298,6 +298,12 @@ impl FaceRef<'_> {
     pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> {
         api::face_normal_at(self.brep, self.face, engine::p3(p.into())).map(engine::vec)
     }
+    /// The nearest point of this face alone to `p` (the rest of the solid ignored).
+    pub fn closest(&self, p: impl Into<Point3>) -> Result<Point3> {
+        api::face_closest(self.brep, self.face, engine::p3(p.into()))
+            .map(engine::point)
+            .map_err(|e| engine::error("FaceRef::closest", e))
+    }
     /// An even `nu` × `nv` grid over the face's surface parameter box, rows along u. The box spans
     /// the face's outline, so on a trimmed face some points lie off the face.
     pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
@@ -349,6 +355,17 @@ impl EdgeRef<'_> {
     /// A face that runs along both sides of the edge counts twice.
     pub fn uses(&self) -> usize {
         self.uses
+    }
+    /// The edge's curve parameter range `[t0, t1]`, `t0 < t1`, running from `ends()[0]` to
+    /// `ends()[1]`.
+    pub fn range(&self) -> [f64; 2] {
+        let (t0, t1) = self.brep.edge(self.edge).range;
+        [t0, t1]
+    }
+    /// The point of the edge's curve at parameter `t` (any `t`; within [`range`](EdgeRef::range)
+    /// it lies on the edge).
+    pub fn point(&self, t: f64) -> Point3 {
+        api::edge_point(self.brep, self.edge, t).map_or(self.ends[0], engine::point)
     }
     /// `n` points spaced evenly in the edge's parameter, ends included.
     pub fn points(&self, n: usize) -> Vec<Point3> {
