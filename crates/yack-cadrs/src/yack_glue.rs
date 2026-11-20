@@ -40,29 +40,15 @@ pub enum Move<'a> {
     Along { degree: usize, knots: &'a [f64], ctrl: &'a [[f64; 3]], up: [f64; 3] },
 }
 
-/// The most turns a screw [`swept`] takes on.
-pub const SCREW_TURNS_MAX: f64 = 1.0;
+/// The most turns a screw [`swept`] takes on at all (a runaway bound).
+pub const SCREW_TURNS_MAX: f64 = 64.0;
 
-/// Everything `body` passes through as it moves by `m` (cadrs's sweep of a solid).
-pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
-    let dir = match *m {
-        Move::Turn { axis, .. } | Move::Screw { axis, .. } => axis,
-        Move::Along { up, .. } => up,
-        Move::Slide { by } => by,
-    };
-    if v3(dir).norm() == 0.0 {
-        return Err(KernelError::InvalidInput("a motion needs a non-zero direction".into()));
-    }
-    // A screw past a whole turn sweeps over itself; cadrs builds it as a mesh-bounded solid, tens
-    // of seconds and tens of thousands of faces (swept/fine-thread-with-sharp-crests: > 60 s).
-    // cadrs's own runner cuts such threads half a turn at a time from the trimmed tool instead.
-    // Refused here at once (a deterministic budget), so the ladder moves on in time.
-    if let Move::Screw { angle, .. } = *m
-        && angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU
-    {
-        return Err(KernelError::Unsupported("a screw past a whole turn (sweep it a half turn at a time)"));
-    }
-    let motion = match *m {
+/// A leg of a long screw: half a turn, the most cadrs sweeps without the sweep overlapping itself.
+const SCREW_LEG: f64 = std::f64::consts::PI;
+
+/// cadrs's motion for `m`.
+fn solid_motion(m: &Move) -> SolidMotion {
+    match *m {
         Move::Slide { by } => SolidMotion::slide(v3(by)),
         Move::Turn { point, axis, angle } => SolidMotion::swing(Axis::new(p3(point), v3(axis)), 0.0, angle),
         Move::Screw { point, axis, angle, rise_per_turn } => {
@@ -77,8 +63,54 @@ pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
             };
             SolidMotion::along(vec![PathCurve::Bspline(spline)], v3(up))
         }
+    }
+}
+
+/// Whether cadrs made `body` only as a mesh (a thousand flat facets and no curved face: its
+/// contouring fallback), not as the solid's own faces.
+fn faceted(k: &DefaultKernel, body: BodyId) -> Result<bool> {
+    let b = k.get(body)?;
+    let flat = b.faces.iter().filter(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })).count();
+    Ok(flat == b.faces.len() && flat > 1000)
+}
+
+/// Everything `body` passes through as it moves by `m` (cadrs's sweep of a solid).
+pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
+    let dir = match *m {
+        Move::Turn { axis, .. } | Move::Screw { axis, .. } => axis,
+        Move::Along { up, .. } => up,
+        Move::Slide { by } => by,
     };
-    made(k.sweep_solid(body, &motion))
+    if v3(dir).norm() == 0.0 {
+        return Err(KernelError::InvalidInput("a motion needs a non-zero direction".into()));
+    }
+    if let Move::Screw { point, axis, angle, rise_per_turn } = *m
+        && angle.abs() > SCREW_LEG
+    {
+        if angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU {
+            return Err(KernelError::Unsupported("a screw of more than 64 turns"));
+        }
+        // A swept solid is the point set the body passes through: a long screw's is the union of
+        // its half-turn legs' (each from where the one before left the body), each of which
+        // cadrs sweeps without overlapping itself.
+        let n = (angle.abs() / SCREW_LEG).ceil();
+        let legs = vec![Move::Screw { point, axis, angle: angle / n, rise_per_turn }; n as usize];
+        // The first leg alone tells whether cadrs sweeps this body exactly: faceted, the rest
+        // would cost as much again each (seconds), so refuse at once.
+        let (first, _) = made(k.sweep_solid(body, &solid_motion(&legs[0])))?;
+        let flat = faceted(k, first)?;
+        k.release(first);
+        if flat {
+            return Err(KernelError::Unsupported("cadrs sweeps this body by a screw only as a mesh of flat facets"));
+        }
+        return crate::facade::motion::swept_then(k, body, &legs);
+    }
+    let (out, history) = made(k.sweep_solid(body, &solid_motion(m)))?;
+    if faceted(k, out)? {
+        k.release(out);
+        return Err(KernelError::Unsupported("cadrs sweeps this body only as a mesh of flat facets"));
+    }
+    Ok((out, history))
 }
 
 /// The unit normal of the plane holding every control point, or `None` when they are collinear
@@ -108,7 +140,7 @@ pub fn plane_normal(ctrl: &[[f64; 3]], tol: f64) -> Option<[f64; 3]> {
 
 // ---- ops by face and edge index (the bridge keeps springrep's indices) ----
 
-use crate::{ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, DraftSpec, EdgeId, FaceId, FaceInput, Motion, OffsetSpec, Primitive, ShellSpec, ThickenSpec};
+use crate::{ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, DraftSpec, Origin, EdgeId, FaceId, FaceInput, Motion, OffsetSpec, Primitive, ShellSpec, ThickenSpec};
 
 fn faces(ix: &[u64]) -> Vec<FaceId> {
     ix.iter().map(|&i| FaceId(i)).collect()
@@ -344,6 +376,183 @@ pub fn split(k: &mut DefaultKernel, body: BodyId, origin: [f64; 3], normal: [f64
     Ok((gather(front)?, gather(back)?))
 }
 
+// ---- primitives placed in a yack frame ----
+
+/// A primitive in its own frame (origin, x, y, z): the block from the origin along +x, +y, +z;
+/// the cylinder and cone on the z axis from the origin up `height`; the ball about the origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Prim {
+    /// The block `size[0]` × `size[1]` × `size[2]`.
+    #[allow(missing_docs)]
+    Block { size: [f64; 3] },
+    /// The cylinder of `radius`, `height` tall.
+    #[allow(missing_docs)]
+    Cylinder { radius: f64, height: f64 },
+    /// The ball of `radius`.
+    #[allow(missing_docs)]
+    Sphere { radius: f64 },
+    /// The cone (or frustum) of radius `bottom` at z = 0 and `top` at z = `height`.
+    #[allow(missing_docs)]
+    Cone { bottom: f64, top: f64, height: f64 },
+}
+
+/// The curve ids the history of [`primitive`] names the sides by (as `ProfileCurve` origins, so a
+/// [`crate::facade::names::Naming`] with `segments` in this order names them): a block's four
+/// sides, then a cylinder's or cone's side, then a ball's skin.
+pub const PRIM_SIDES: [&str; 6] = ["x_min", "x_max", "y_min", "y_max", "side", "skin"];
+
+/// `p` built in `frame` (orthonormal and right-handed): made axis-aligned at
+/// the world origin, then moved rigidly into the frame. Its history: the face at z = 0 is the
+/// start cap, the one at z = height the end cap, the others `ProfileCurve { region: 0, curve }`
+/// with `curve` an index into [`PRIM_SIDES`].
+pub fn primitive(k: &mut DefaultKernel, frame: &crate::facade::profile::Place, p: Prim) -> Result<Made> {
+    let up = nalgebra::Unit::new_unchecked(Vector3::z());
+    let prim = match p {
+        Prim::Block { size } => Primitive::Box { min: Point3::origin(), max: Point3::new(size[0], size[1], size[2]) },
+        Prim::Cylinder { radius, height } => Primitive::Cylinder { base: Point3::origin(), axis: up, radius, height },
+        Prim::Sphere { radius } => Primitive::Sphere {
+            center: Point3::origin(),
+            radius,
+            axis: up,
+            seam: nalgebra::Unit::new_unchecked(Vector3::x()),
+        },
+        Prim::Cone { bottom, top, height } => {
+            Primitive::Cone { base: Point3::origin(), axis: up, base_radius: bottom, top_radius: top, height }
+        }
+    };
+    let at_origin = k.primitive(&prim)?.first()?;
+    // Name each face from where it lies before the move (the move keeps face indices).
+    let mut history = History::default();
+    {
+        use crate::native::surface::Surface;
+        let b = k.get(at_origin)?;
+        for (i, f) in b.faces.iter().enumerate() {
+            let id = FaceId(i as u64);
+            let origin = match &f.surf {
+                Surface::Plane { f: fr } => {
+                    let n = fr.z * if f.sense { 1.0 } else { -1.0 };
+                    if n.z < -0.5 {
+                        Origin::StartCap { region: 0 }
+                    } else if n.z > 0.5 {
+                        Origin::EndCap { region: 0 }
+                    } else if n.x < -0.5 {
+                        Origin::ProfileCurve { region: 0, curve: 0 }
+                    } else if n.x > 0.5 {
+                        Origin::ProfileCurve { region: 0, curve: 1 }
+                    } else if n.y < -0.5 {
+                        Origin::ProfileCurve { region: 0, curve: 2 }
+                    } else {
+                        Origin::ProfileCurve { region: 0, curve: 3 }
+                    }
+                }
+                Surface::Sphere { .. } => Origin::ProfileCurve { region: 0, curve: 5 },
+                _ => Origin::ProfileCurve { region: 0, curve: 4 },
+            };
+            history.generated.push((id, origin));
+        }
+    }
+    let [o, x, y, z] = [frame.origin, frame.x, frame.y, frame.z].map(v3);
+    let motion = Motion { linear: nalgebra::Matrix3::from_columns(&[x, y, z]), translation: o };
+    let r = k.transform_motion(at_origin, &motion);
+    k.release(at_origin);
+    Ok((r?.first()?, history))
+}
+
+// ---- cutting by a moving tool ----
+
+/// `tool`'s part within reach of `target` under a turn or screw about the line through `point`
+/// along `axis`: such a motion keeps every point's distance to the axis, so tool points farther
+/// out than all of `target` never meet it. `tool` itself when all of it is within reach (or when
+/// trimming fails: the cut is the same, only slower).
+fn near_axis(k: &mut DefaultKernel, tool: BodyId, target: BodyId, point: [f64; 3], axis: [f64; 3]) -> Result<BodyId> {
+    let a = v3(axis).normalize();
+    let o = p3(point);
+    let corners = |bb: crate::Aabb| -> Vec<Point3<f64>> {
+        (0..8).map(|i| {
+            Point3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            )
+        })
+        .collect()
+    };
+    let radial = |p: Point3<f64>| {
+        let d = p - o;
+        (d - a * d.dot(&a)).norm()
+    };
+    let reach = corners(k.bounding_box(target)?).into_iter().map(radial).fold(0.0, f64::max);
+    let tb = k.bounding_box(tool)?;
+    if corners(tb).into_iter().map(radial).fold(0.0, f64::max) <= reach {
+        return Ok(tool);
+    }
+    let (s0, s1) = corners(tb).into_iter().map(|p| (p - o).dot(&a)).fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), s| (l.min(s), h.max(s)));
+    // Room to spare on every side: a hundredth of the sizes involved.
+    let pad = 0.01 * (reach + (s1 - s0));
+    let base = o + a * (s0 - pad);
+    let cylinder = Primitive::Cylinder { base, axis: nalgebra::Unit::new_normalize(a), radius: reach + pad, height: s1 - s0 + 2.0 * pad };
+    let c = k.primitive(&cylinder)?.first()?;
+    let r = k.boolean(crate::BoolOp::Intersect, tool, &[c]);
+    k.release(c);
+    match r.and_then(|r| r.first()) {
+        Ok(t) => Ok(t),
+        Err(_) => Ok(tool),
+    }
+}
+
+/// `target` less everything `tool` passes through as it moves by `m` (cadrs's cut by a moving
+/// tool, which builds what it removes a stretch at a time). Under a turn or screw only the tool's
+/// part within the target's reach of the axis is moved.
+fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) -> Result<Made> {
+    if let Move::Screw { angle, .. } = *m
+        && angle.abs() > SCREW_TURNS_MAX * std::f64::consts::TAU
+    {
+        return Err(KernelError::Unsupported("a screw of more than 64 turns"));
+    }
+    let used = match *m {
+        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } => near_axis(k, tool, target, point, axis)?,
+        _ => tool,
+    };
+    let r = k.cut_swept(target, used, &solid_motion(m));
+    if used != tool {
+        k.release(used);
+    }
+    let (out, history) = made(r)?;
+    if faceted(k, out)? {
+        k.release(out);
+        return Err(KernelError::Unsupported("cadrs cuts by this moving tool only as a mesh of flat facets"));
+    }
+    Ok((out, history))
+}
+
+/// `target` less everything `tool` passes through as it moves by each of `moves` in turn (one:
+/// a single motion; several: legs, each from where the one before left the tool): the target cut
+/// by each leg in order. The history is the last cut's (for a single move, the target's faces
+/// kept or modified, as a boolean's); Unsupported where cadrs would make the cut only as a mesh.
+pub fn cut_swept(k: &mut DefaultKernel, target: BodyId, tool: BodyId, moves: &[Move]) -> Result<Made> {
+    let Some((last, before)) = moves.split_last() else {
+        return Err(KernelError::InvalidInput("a cut by no motion".into()));
+    };
+    let mut made_here: Vec<BodyId> = Vec::new();
+    let r = (|| {
+        let (mut cur, mut at) = (target, tool);
+        for m in before {
+            let (next, _) = cut_swept_one(k, cur, at, m)?;
+            made_here.push(next);
+            at = k.transform_motion(at, &crate::facade::motion::end_motion(m)?)?.first()?;
+            made_here.push(at);
+            cur = next;
+        }
+        cut_swept_one(k, cur, at, last)
+    })();
+    for id in made_here {
+        if r.as_ref().map_or(true, |(out, _): &Made| *out != id) {
+            k.release(id);
+        }
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +611,54 @@ mod tests {
         let chain = chained(&k, b, &[rim]).unwrap();
         assert!(chain.iter().all(|&(_, n)| n == 0) && chain.iter().any(|&(e, _)| e == rim));
         assert!(fillet(&mut k, b, &[rim], 1.0).is_ok());
+    }
+
+    #[test]
+    fn primitives_land_in_their_frame_with_caps_named() {
+        let mut k = DefaultKernel::new();
+        // A frame at (10, 0, 0) turned a quarter about z: its x is world y.
+        let frame = &crate::facade::profile::Place { origin: [10.0, 0.0, 0.0], x: [0.0, 1.0, 0.0], y: [-1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
+        let (b, h) = primitive(&mut k, frame, Prim::Block { size: [4.0, 2.0, 3.0] }).unwrap();
+        let m = k.mass_properties(b).unwrap();
+        assert!((m.volume - 24.0).abs() < 1e-9);
+        // Centre: origin + 2 x + 1 y + 1.5 z = (10 - 1, 2, 1.5).
+        assert!((m.center_of_mass - Point3::new(9.0, 2.0, 1.5)).norm() < 1e-9, "{:?}", m.center_of_mass);
+        let caps = |h: &History| {
+            (
+                h.generated.iter().filter(|(_, o)| matches!(o, Origin::StartCap { .. })).count(),
+                h.generated.iter().filter(|(_, o)| matches!(o, Origin::EndCap { .. })).count(),
+            )
+        };
+        assert_eq!(caps(&h), (1, 1));
+        assert_eq!(h.generated.len(), 6);
+        let (c, h) = primitive(&mut k, frame, Prim::Cone { bottom: 3.0, top: 1.0, height: 2.0 }).unwrap();
+        let v = k.mass_properties(c).unwrap().volume;
+        assert!((v - std::f64::consts::PI * 2.0 / 3.0 * (9.0 + 3.0 + 1.0)).abs() < 1e-9, "{v}");
+        assert_eq!(caps(&h), (1, 1));
+        let (s, h) = primitive(&mut k, frame, Prim::Sphere { radius: 2.0 }).unwrap();
+        assert!((k.mass_properties(s).unwrap().center_of_mass - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-9);
+        assert!(h.generated.iter().all(|(_, o)| matches!(o, Origin::ProfileCurve { curve: 5, .. })));
+        let (cy, h) = primitive(&mut k, frame, Prim::Cylinder { radius: 1.0, height: 5.0 }).unwrap();
+        assert!((k.mass_properties(cy).unwrap().volume - 5.0 * std::f64::consts::PI).abs() < 1e-9);
+        assert_eq!(caps(&h), (1, 1));
+    }
+
+    #[test]
+    fn a_fine_thread_is_cut_in_time() {
+        let mut k = DefaultKernel::new();
+        let rod = k
+            .primitive(&Primitive::cylinder(Point3::origin(), nalgebra::Vector3::z(), 5.0, 20.0))
+            .and_then(|r| r.first())
+            .unwrap();
+        let bar = k
+            .primitive(&Primitive::Box { min: Point3::new(4.5, -8.0, -0.45), max: Point3::new(12.0, 8.0, 0.45) })
+            .and_then(|r| r.first())
+            .unwrap();
+        // Three turns (the bench case's 21 take seconds; this test stays quick).
+        let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 3.0 * std::f64::consts::TAU, rise_per_turn: 1.0 };
+        let (cut, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
+        let v = k.mass_properties(cut).unwrap().volume;
+        assert!(v > 0.0 && v < 500.0 * std::f64::consts::PI, "{v}");
+        assert!(!faceted(&k, cut).unwrap());
     }
 }
