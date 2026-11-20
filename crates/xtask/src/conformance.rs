@@ -12,10 +12,11 @@ use crate::json::{self, Json};
 
 const USAGE: &str = "\
 cargo xtask conformance [--seed N | --seeds A-B] [--family F[,G]] [--threads N] [--ref DIR]
-                        [--bless] [--record-digests]
+                        [--adapter PATH] [--bless] [--record-digests]
   --seed N       one seed (default 0); --seeds A-B a range, e.g. 0-3
   --family F     only these families (passed to the runner); the ratchet then checks only them
   --threads N    runner threads (default 6)
+  --adapter PATH use this adapter binary (a frozen copy) and build nothing
   --ref DIR      the yack-ref checkout holding bin/release/brep-conformance (default ../yack-ref)
   --bless        write the run as the new baseline in scores/conformance/
   --record-digests  (M1.6) record result digests in scores/digests/
@@ -29,6 +30,7 @@ struct Opts {
     family: Option<String>,
     threads: u32,
     reference: PathBuf,
+    adapter: Option<PathBuf>,
     bless: bool,
 }
 
@@ -43,6 +45,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         family: None,
         threads: 6,
         reference: root().join("../yack-ref"),
+        adapter: None,
         bless: false,
     };
     let mut it = args.iter();
@@ -59,6 +62,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--family" => o.family = Some(value()?),
             "--threads" => o.threads = value()?.parse().map_err(|e| format!("--threads: {e}"))?,
             "--ref" => o.reference = PathBuf::from(value()?),
+            "--adapter" => o.adapter = Some(PathBuf::from(value()?)),
             "--bless" => o.bless = true,
             "--record-digests" => return Err("--record-digests lands with M1.6".into()),
             "-h" | "--help" => return Err(String::new()),
@@ -95,15 +99,21 @@ fn drive(o: &Opts) -> Result<bool, String> {
     if !runner.is_file() {
         return Err(format!("no runner at {} (build brep-conformance @ 12ffc75 there)", runner.display()));
     }
-    let status = Command::new("cargo")
-        .args(["build", "--release", "-p", "yack-conformance"])
-        .current_dir(&root)
-        .status()
-        .map_err(|e| format!("cargo build: {e}"))?;
-    if !status.success() {
-        return Err("building yack-conformance failed".into());
-    }
-    let adapter = root.join("bin/release/yack-conformance");
+    let adapter = match &o.adapter {
+        Some(a) if a.is_file() => a.clone(),
+        Some(a) => return Err(format!("no adapter at {}", a.display())),
+        None => {
+            let status = Command::new("cargo")
+                .args(["build", "--release", "-p", "yack-conformance"])
+                .current_dir(&root)
+                .status()
+                .map_err(|e| format!("cargo build: {e}"))?;
+            if !status.success() {
+                return Err("building yack-conformance failed".into());
+            }
+            root.join("bin/release/yack-conformance")
+        }
+    };
     let out_dir = root.join("bin/conformance");
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let mut ok = true;

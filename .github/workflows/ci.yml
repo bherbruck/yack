@@ -1,0 +1,58 @@
+# yack: CI. The structure gate, the tests, then `cargo xtask ci --quick` (PLAN §6.4, §6.6).
+#
+# The brep-conformance runner is built from its public repository at the pinned revision. When it
+# cannot be fetched or built, the suite steps (conformance digests, conformance ratchet) are
+# skipped with a notice instead of failing the run; bench digests and the gates still run.
+name: ci
+
+on:
+  push:
+    branches: ["batch/**", "main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  # brep-conformance @ 12ffc75, the revision yack-conformance's brep-protocol is pinned to
+  SUITE_REPO: https://github.com/springcraft-ai/brep-conformance
+  SUITE_REV: 12ffc75d305451004e12a24862dc092f6df0529b
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Structure gate
+        run: cargo xtask gate
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Fetch and build the brep-conformance runner
+        id: suite
+        continue-on-error: true
+        run: |
+          set -e
+          git clone --quiet "$SUITE_REPO" ../yack-ref/brep-conformance
+          git -C ../yack-ref/brep-conformance checkout --quiet "$SUITE_REV"
+          (cd ../yack-ref/brep-conformance && cargo build --release -p brep-conformance --bin brep-conformance)
+          mkdir -p ../yack-ref/bin/release
+          cp ../yack-ref/brep-conformance/target/release/brep-conformance ../yack-ref/bin/release/
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: xtask ci --quick (with the suite)
+        if: steps.suite.outputs.ok == 'true'
+        run: cargo xtask ci --quick
+
+      - name: xtask ci --quick (suite unavailable)
+        if: steps.suite.outputs.ok != 'true'
+        run: |
+          echo "::notice::brep-conformance could not be fetched or built; conformance digests and the conformance ratchet are SKIPPED"
+          cargo xtask ci --quick --skip-suite

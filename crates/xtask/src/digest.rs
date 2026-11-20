@@ -13,20 +13,38 @@
 //! share of the families, so the n-th block of its log is the n-th case of its results.
 //!
 //! Bench: `yack-bench --digests` prints `<case> <hex>` or `<case> refused` per case.
+//!
+//! Policy: the first run records a baseline. After that, plain writes are refused. Only the
+//! lead re-blesses, with `--bless --reason "<why the digests changed>"`, and the reason and the
+//! tree go into the file header. A pure move (M2, M3) must pass `--check` unchanged. Workers
+//! run `cargo xtask ci --quick` (a 10% family sample) before handing over, and the lead runs
+//! the full `ci` before a commit.
 use crate::json::{self, Json};
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-const USAGE: &str = "usage: cargo xtask digest [--check] [--only conformance|bench] [--seed N] [--threads N] [--ref DIR]
-                            [--bin-dir DIR --tree FINGERPRINT]";
+const USAGE: &str = "\
+usage: cargo xtask digest [--check | --bless --reason \"why\"] [--only conformance|bench] [--seed N]
+                          [--families A,B | --sample PERCENT] [--threads N] [--ref DIR]
+                          [--bin-dir DIR --tree FINGERPRINT] [--dir DIGESTS_DIR]
+  --check            diff a fresh run against scores/digests/ (exit 1 on any difference)
+  --bless --reason   re-record a baseline (the lead only; the reason goes into the header)
+  --families A,B     conformance: only these families (with --check)
+  --sample PERCENT   conformance: the families whose name hashes into the first PERCENT of 100
+                     (deterministic; `--sample 10` takes 1-2 min), with --check";
 
 /// The environment variable the adapter reads (set by the proxy on its child only).
 pub const LOG_VAR: &str = "YACK_DIGESTS";
 
 struct Opts {
     check: bool,
+    bless: bool,
+    reason: Option<String>,
+    /// Restrict conformance to these families (`--families`), or to a hash sample (`--sample`).
+    families: Option<Vec<String>>,
+    sample: Option<u64>,
     conformance: bool,
     bench: bool,
     seed: u64,
@@ -38,17 +56,24 @@ struct Opts {
     bin_dir: Option<PathBuf>,
     /// The tree the binaries were built from, recorded in each file's header.
     tree: Option<String>,
+    /// Where the digest files live (default scores/digests).
+    dir: Option<PathBuf>,
 }
 
 fn parse(args: &[String]) -> Result<Opts, String> {
     let root = crate::meta::root();
-    let mut o = Opts { check: false, conformance: true, bench: true, seed: 0, threads: 4, reference: root.join("../yack-ref"), bin_dir: None, tree: None };
+    let mut o = Opts { check: false, bless: false, reason: None, families: None, sample: None, conformance: true, bench: true, seed: 0, threads: 4, reference: root.join("../yack-ref"), bin_dir: None, tree: None, dir: None };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--check" => o.check = true,
+            "--bless" => o.bless = true,
+            "--reason" => o.reason = Some(it.next().ok_or(USAGE)?.clone()),
+            "--families" => o.families = Some(it.next().ok_or(USAGE)?.split(',').map(str::to_string).collect()),
+            "--sample" => o.sample = Some(it.next().and_then(|s| s.parse().ok()).filter(|&p| p > 0 && p <= 100).ok_or(USAGE)?),
             "--bin-dir" => o.bin_dir = Some(PathBuf::from(it.next().ok_or(USAGE)?)),
             "--tree" => o.tree = Some(it.next().ok_or(USAGE)?.clone()),
+            "--dir" => o.dir = Some(PathBuf::from(it.next().ok_or(USAGE)?)),
             "--only" => match it.next().map(String::as_str) {
                 Some("conformance") => o.bench = false,
                 Some("bench") => o.conformance = false,
@@ -59,6 +84,15 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--ref" => o.reference = PathBuf::from(it.next().ok_or(USAGE)?),
             _ => return Err(format!("unknown argument `{a}`\n{USAGE}")),
         }
+    }
+    if o.check && o.bless {
+        return Err(format!("--check and --bless exclude each other\n{USAGE}"));
+    }
+    if o.bless && o.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
+        return Err("--bless needs --reason \"<why the digests changed>\"".into());
+    }
+    if !o.check && (o.families.is_some() || o.sample.is_some()) {
+        return Err("--families/--sample check a subset; a baseline is always recorded in full".into());
     }
     if o.bin_dir.is_some() != o.tree.is_some() {
         return Err(format!("--bin-dir and --tree go together\n{USAGE}"));
@@ -103,27 +137,38 @@ fn build(root: &Path, pkg: &str) -> Result<(), String> {
 
 fn drive(o: &Opts) -> Result<bool, String> {
     let root = crate::meta::root();
-    let dir = root.join("scores/digests");
+    let dir = o.dir.clone().unwrap_or_else(|| root.join("scores/digests"));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut ok = true;
     if o.conformance {
-        let lines = conformance(&root, o)?;
-        ok &= settle(&dir.join(format!("conformance-seed{}.txt", o.seed)), &lines, o.check, o.tree.as_deref())?;
+        let (lines, subset) = conformance(&root, o)?;
+        ok &= settle(&dir.join(format!("conformance-seed{}.txt", o.seed)), &lines, o, subset.as_ref())?;
     }
     if o.bench {
         let lines = bench(&binary(&root, o, "yack-bench")?)?;
-        ok &= settle(&dir.join("bench.txt"), &lines, o.check, o.tree.as_deref())?;
+        ok &= settle(&dir.join("bench.txt"), &lines, o, None)?;
     }
     Ok(ok)
 }
 
-/// Writes `lines` to `path`, or with `check` diffs them against it. True when nothing differs.
-fn settle(path: &Path, lines: &BTreeSet<String>, check: bool, tree: Option<&str>) -> Result<bool, String> {
+/// Writes `lines` to `path` (first record, or `--bless`), or with `--check` diffs them against it,
+/// limited to the cases of `subset`'s families when given. True when nothing differs.
+fn settle(path: &Path, lines: &BTreeSet<String>, o: &Opts, subset: Option<&BTreeSet<String>>) -> Result<bool, String> {
     let name = path.display();
+    let check = o.check;
     if !check {
-        let head = format!("# Solid::digest() per result (cargo xtask digest); tree {}\n", tree.unwrap_or("unrecorded"));
+        if path.is_file() && !o.bless {
+            return Err(format!("{name} exists; re-recording it is `--bless --reason \"..\"` (the lead only)"));
+        }
+        let mut head = format!("# Solid::digest() per result (cargo xtask digest); tree {}\n", o.tree.as_deref().unwrap_or("unrecorded"));
+        if let Some(r) = &o.reason {
+            head.push_str(&format!("# reason: {}\n", r.replace('\n', " ")));
+        }
         let body: String = head + &lines.iter().map(|l| format!("{l}\n")).collect::<String>();
-        std::fs::write(path, body).map_err(|e| format!("{name}: {e}"))?;
+        let _lock = Lock::take(path)?;
+        let tmp = path.with_extension(format!("txt.tmp-{}", std::process::id()));
+        std::fs::write(&tmp, body).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{name}: {e}"))?;
         println!("digest: wrote {name} ({} lines)", lines.len());
         return Ok(true);
     }
@@ -131,6 +176,7 @@ fn settle(path: &Path, lines: &BTreeSet<String>, check: bool, tree: Option<&str>
         .map_err(|e| format!("{name}: {e} (record it first with `cargo xtask digest`)"))?
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| subset.is_none_or(|fs| fs.contains(family(l.split(' ').next().unwrap_or_default()))))
         .map(str::to_string)
         .collect();
     let gone: Vec<_> = old.difference(lines).collect();
@@ -147,6 +193,38 @@ fn settle(path: &Path, lines: &BTreeSet<String>, check: bool, tree: Option<&str>
     } else {
         println!("error: digest: {name}: {} lines gone, {} new", gone.len(), new.len());
         Ok(false)
+    }
+}
+
+/// `<digests dir>/.lock` holding the writer's pid: one recording at a time. Released on drop; a
+/// lock whose pid is gone is stale and taken over.
+struct Lock(PathBuf);
+
+impl Lock {
+    fn take(file: &Path) -> Result<Lock, String> {
+        let lock = file.with_file_name(".lock");
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
+                Ok(mut f) => {
+                    let _ = writeln!(f, "{}", std::process::id());
+                    return Ok(Lock(lock));
+                }
+                Err(_) => {
+                    let pid = std::fs::read_to_string(&lock).unwrap_or_default().trim().to_string();
+                    if !pid.is_empty() && Path::new("/proc").join(&pid).exists() {
+                        return Err(format!("{} is held by pid {pid}: another digest recording is in progress", lock.display()));
+                    }
+                    let _ = std::fs::remove_file(&lock); // stale
+                }
+            }
+        }
+        Err(format!("could not take {}", lock.display()))
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -197,16 +275,47 @@ fn groups(fams: &[(String, usize)], n: usize) -> Vec<(Vec<String>, usize)> {
     out
 }
 
-fn conformance(root: &Path, o: &Opts) -> Result<BTreeSet<String>, String> {
+/// FNV-1a, for the deterministic family sample.
+fn fnv(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The deterministic `percent` sample of the families of conformance `seed`'s baseline.
+pub fn sample_families(seed: u64, percent: u64) -> Result<Vec<String>, String> {
+    let fams = families(&crate::meta::root(), seed)?;
+    Ok(fams.into_iter().filter(|(f, _)| fnv(f) % 100 < percent).map(|(f, _)| f).collect())
+}
+
+/// The families `--families`/`--sample` select, or `None` for all.
+fn subset(fams: &[(String, usize)], o: &Opts) -> Result<Option<BTreeSet<String>>, String> {
+    if let Some(want) = &o.families {
+        let known: BTreeSet<&str> = fams.iter().map(|(f, _)| f.as_str()).collect();
+        if let Some(bad) = want.iter().find(|f| !known.contains(f.as_str())) {
+            return Err(format!("no family `{bad}` in the baseline"));
+        }
+        return Ok(Some(want.iter().cloned().collect()));
+    }
+    Ok(o.sample.map(|p| fams.iter().filter(|(f, _)| fnv(f) % 100 < p).map(|(f, _)| f.clone()).collect()))
+}
+
+fn conformance(root: &Path, o: &Opts) -> Result<(BTreeSet<String>, Option<BTreeSet<String>>), String> {
     let runner = o.reference.join("bin/release/brep-conformance");
     if !runner.is_file() {
         return Err(format!("no runner at {}", runner.display()));
     }
     let adapter = binary(root, o, "yack-conformance")?;
-    let work = root.join("bin/digest");
+    // a private scratch dir per run (tree + pid), so two digest runs never share logs or results;
+    // removed when the run assembled cleanly, kept for diagnosis otherwise
+    let work = o.reference.join("tmp").join(format!("digest-{}-{}", o.tree.as_deref().unwrap_or("local"), std::process::id()));
     std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
     let me = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let gs = groups(&families(root, o.seed)?, o.threads);
+    let all = families(root, o.seed)?;
+    let chosen = subset(&all, o)?;
+    let fams: Vec<(String, usize)> = all.into_iter().filter(|(f, _)| chosen.as_ref().is_none_or(|c| c.contains(f))).collect();
+    if fams.is_empty() {
+        return Err("the sample selects no family; raise --sample".into());
+    }
+    let gs = groups(&fams, o.threads);
     let total: usize = gs.iter().map(|g| g.1).sum();
     // one single-threaded runner per group, so each log's blocks follow its results' case order
     let mut runs = Vec::new();
@@ -259,7 +368,8 @@ fn conformance(root: &Path, o: &Opts) -> Result<BTreeSet<String>, String> {
         let text = std::fs::read_to_string(log).map_err(|e| format!("{}: {e}", log.display()))?;
         lines.extend(assemble(&ids, &text).map_err(|e| format!("{}: {e}", log.display()))?);
     }
-    Ok(lines)
+    let _ = std::fs::remove_dir_all(&work);
+    Ok((lines, chosen))
 }
 
 /// Pairs the log's blocks (split at `reset`) with the case ids, in order:
@@ -363,6 +473,20 @@ mod tests {
         let got: Vec<String> = assemble(&ids, log).unwrap().into_iter().collect();
         assert_eq!(got, ["b-2 000 box aa", "b-2 001 union bb", "c-3 000 sphere cc"]);
         assert!(assemble(&ids[..2], log).is_err());
+    }
+
+    #[test]
+    fn sample_and_policy() {
+        let fams: Vec<(String, usize)> = (0..200).map(|i| (format!("fam{i}"), 1)).collect();
+        let o = |a: &[&str]| parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let ten = subset(&fams, &o(&["--check", "--sample", "10"]).unwrap()).unwrap().unwrap();
+        assert!((5..=40).contains(&ten.len()), "{}", ten.len());
+        assert_eq!(subset(&fams, &o(&["--check", "--sample", "10"]).unwrap()).unwrap().unwrap(), ten);
+        assert!(o(&["--bless"]).is_err());
+        assert!(o(&["--sample", "10"]).is_err());
+        assert!(o(&["--check", "--bless", "--reason", "x"]).is_err());
+        assert!(o(&["--bless", "--reason", "names changed"]).is_ok());
+        assert!(subset(&fams, &o(&["--check", "--families", "nope"]).unwrap()).is_err());
     }
 
     #[test]
