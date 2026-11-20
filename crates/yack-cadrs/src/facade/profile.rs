@@ -225,15 +225,39 @@ fn xy_plane(place: &Place) -> Plane {
 /// of the first section's outline to a corner of the last's (cadrs's loft with guides: two
 /// sections, each one loop drawn in its frame's xy plane).
 pub fn loft_guided(k: &mut DefaultKernel, sections: &[(Place, &[&[Seg]])], guides: &[Spline]) -> Result<Made> {
+    let sections: Vec<Section> = sections.iter().map(|&(place, loops)| Section::Profile(place, loops)).collect();
+    loft_guided_to(k, &sections, guides)
+}
+
+/// A guided loft's section: a profile (one loop) in a frame's xy plane, or a point (the first or
+/// the last section only: the loft runs to an apex there).
+#[derive(Clone, Copy, Debug)]
+pub enum Section<'a> {
+    /// The loop `loops[0]` in the frame's xy plane.
+    Profile(Place, &'a [&'a [Seg<'a>]]),
+    /// A point.
+    Point([f64; 3]),
+}
+
+/// [`loft_guided`] with point sections allowed at either end (the guides then run to the point).
+pub fn loft_guided_to(k: &mut DefaultKernel, sections: &[Section], guides: &[Spline]) -> Result<Made> {
     let [first, last] = sections else {
         return Err(KernelError::Unsupported("a guided loft through other than two sections"));
     };
-    let section = |(place, loops): &(Place, &[&[Seg]])| -> Result<LoftSection> {
-        if loops.len() != 1 {
-            return Err(KernelError::Unsupported("a guided loft's section with holes"));
+    let section = |s: &Section| -> Result<LoftSection> {
+        match *s {
+            Section::Point(p) => Ok(LoftSection::Point(Point3::from(v3(p)))),
+            Section::Profile(place, loops) => {
+                if loops.len() != 1 {
+                    return Err(KernelError::Unsupported("a guided loft's section with holes"));
+                }
+                Ok(LoftSection::Profile(profile(xy_plane(&place), loops)?))
+            }
         }
-        Ok(LoftSection::Profile(profile(xy_plane(place), loops)?))
     };
+    if matches!((first, last), (Section::Point(_), Section::Point(_))) {
+        return Err(KernelError::InvalidInput("a loft between two points".into()));
+    }
     let spec = LoftSpec::solid(vec![section(first)?, section(last)?]);
     let guides: Vec<Vec<PathCurve>> = guides
         .iter()
@@ -394,5 +418,24 @@ mod tests {
         let (b, _) = loft_guided(&mut k, &[(world(), &loops), (top, &loops)], &guides).unwrap();
         let vol = k.mass_properties(b).unwrap().volume;
         assert!((vol - 16.0).abs() < 1e-6, "{vol}");
+    }
+
+    #[test]
+    fn a_guided_loft_to_a_point_is_a_pyramid() {
+        let mut k = DefaultKernel::new();
+        let sq = [
+            Seg::Line { a: [0.0, 0.0], b: [2.0, 0.0] },
+            Seg::Line { a: [2.0, 0.0], b: [2.0, 2.0] },
+            Seg::Line { a: [2.0, 2.0], b: [0.0, 2.0] },
+            Seg::Line { a: [0.0, 2.0], b: [0.0, 0.0] },
+        ];
+        let loops: [&[Seg]; 1] = [&sq];
+        let apex = [1.0, 1.0, 3.0];
+        let knots = [0.0, 0.0, 1.0, 1.0];
+        let lines: Vec<[[f64; 3]; 2]> = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]].iter().map(|&[x, y]| [[x, y, 0.0], apex]).collect();
+        let guides: Vec<Spline> = lines.iter().map(|l| Spline { degree: 1, knots: &knots, ctrl: l, weights: None }).collect();
+        let (b, _) = loft_guided_to(&mut k, &[Section::Profile(world(), &loops), Section::Point(apex)], &guides).unwrap();
+        let v = k.mass_properties(b).unwrap().volume;
+        assert!((v - 4.0).abs() < 1e-6, "{v}");
     }
 }

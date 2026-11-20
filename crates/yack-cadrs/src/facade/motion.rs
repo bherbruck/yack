@@ -100,6 +100,73 @@ pub fn swept_then(k: &mut DefaultKernel, body: BodyId, moves: &[Move]) -> Result
     r
 }
 
+/// One step of a motion run with others at once ([`together`]): each moves by its own amount
+/// at each instant, the instant running from 0 to 1 for all of them alike.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    /// A slide from the offset `from` to `to`.
+    #[allow(missing_docs)]
+    Slide { from: [f64; 3], to: [f64; 3] },
+    /// A turn about the line through `point` along `axis` from the angle `from` to `to` (radians,
+    /// right-handed about `axis`).
+    #[allow(missing_docs)]
+    Turn { point: [f64; 3], axis: [f64; 3], from: f64, to: f64 },
+    /// A turn as above while rising `rise_per_turn` along the axis per whole turn.
+    #[allow(missing_docs)]
+    Screw { point: [f64; 3], axis: [f64; 3], from: f64, to: f64, rise_per_turn: f64 },
+}
+
+/// What [`together`] made: the solid, and whether it is only an approximation (cadrs sweeps one
+/// slide, one turn or one screw exactly; any other set of steps it finds as the region the body
+/// fills, bounded by a contoured mesh: a valid closed solid near the exact one, never the exact
+/// one).
+#[derive(Clone, Debug)]
+pub struct Together {
+    /// The body and its history.
+    pub made: Made,
+    /// Whether it is an approximation (a mesh-bounded solid).
+    pub faceted: bool,
+}
+
+/// Everything `body` passes through as `steps` all run at once, applied in order at each
+/// instant (cadrs's `SolidMotion::Rigid`; the body drawn where it is at every step's start). A
+/// faceted result is returned only when it is a valid closed solid, flagged so.
+pub fn together(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<Together> {
+    use crate::{Axis, RigidStep, SolidMotion};
+    if steps.is_empty() {
+        return Err(KernelError::InvalidInput("a motion of no steps".into()));
+    }
+    let mut rigid = Vec::new();
+    for s in steps {
+        match *s {
+            Step::Slide { from, to } => rigid.push(RigidStep::slide(v3(from), v3(to))),
+            Step::Turn { point, axis, from, to } => {
+                let a = unit(axis, "a turn's axis")?;
+                rigid.push(RigidStep::turn(Axis { origin: nalgebra::Point3::from(v3(point)), dir: a }, from, to));
+            }
+            Step::Screw { point, axis, from, to, rise_per_turn } => {
+                let a = unit(axis, "a screw's axis")?;
+                let rise = |t: f64| a.into_inner() * (rise_per_turn * t / TAU);
+                rigid.push(RigidStep::turn(Axis { origin: nalgebra::Point3::from(v3(point)), dir: a }, from, to));
+                rigid.push(RigidStep::slide(rise(from), rise(to)));
+            }
+        }
+    }
+    let r = k.sweep_solid(body, &SolidMotion::rigid(rigid))?;
+    let out = r.first()?;
+    let b = k.get(out)?;
+    // Exact only for one slide, one turn or one screw (types.rs, SolidMotion::Rigid); else cadrs
+    // contours the region on a grid.
+    let exact_kind = matches!(steps, [Step::Slide { .. }] | [Step::Turn { .. }] | [Step::Screw { .. }]);
+    let flat = b.faces.iter().filter(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })).count();
+    let faceted = !exact_kind || (flat == b.faces.len() && flat > 1000);
+    if faceted && !(b.is_solid() && b.check_with(crate::native::topo::CheckLevel::Full).is_empty()) {
+        k.release(out);
+        return Err(KernelError::Unsupported("cadrs bounds this motion's sweep only by a mesh that is not a valid solid"));
+    }
+    Ok(Together { made: (out, r.history), faceted })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +205,24 @@ mod tests {
         let m = end_motion(&Move::Along { degree: 2, knots: &knots, ctrl: &ctrl, up: [0.0, 0.0, 1.0] }).unwrap();
         assert!((m.point(&Point3::new(0.0, 0.0, 0.0)) - Point3::new(1.0, 1.0, 0.0)).norm() < 1e-12);
         assert!((m.vector(&Vector3::x()) - Vector3::y()).norm() < 1e-12);
+    }
+
+    #[test]
+    fn steps_run_together() {
+        let mut k = DefaultKernel::new();
+        let b = cube(&mut k);
+        // A slide by 2 along x and one by 3 along y at once: the cube swept along the diagonal.
+        let steps = [Step::Slide { from: [0.0; 3], to: [2.0, 0.0, 0.0] }, Step::Slide { from: [0.0; 3], to: [0.0, 3.0, 0.0] }];
+        let t = together(&mut k, b, &steps).unwrap();
+        // Two steps: cadrs contours the region, so the result is flagged as an approximation.
+        assert!(t.faceted);
+        // The unit square swept by (2, 3): area 1 + |2·1| + |3·1| = 6, times height 1, nearly.
+        let v = k.mass_properties(t.made.0).unwrap().volume;
+        assert!((v - 6.0).abs() < 0.1, "{v}");
+        // One slide is exact.
+        let t = together(&mut k, b, &[Step::Slide { from: [0.0; 3], to: [2.0, 0.0, 0.0] }]).unwrap();
+        assert!(!t.faceted);
+        let v = k.mass_properties(t.made.0).unwrap().volume;
+        assert!((v - 3.0).abs() < 1e-9, "{v}");
     }
 }
