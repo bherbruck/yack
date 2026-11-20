@@ -1,5 +1,5 @@
 // yack: cadrs `Body` → springrep `Brep` (MAPPING.md §1–§4, the C→S column).
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use yack_cadrs::native::pcurve::closed_periods;
 use yack_cadrs::native::{Body, Curve as CCurve, Frame as CFrame, NurbsCurve as CNurbsCurve, P3, Surface as CSurface, V3};
@@ -10,7 +10,7 @@ use yack_springrep::{
         NurbsSurface as SNurbsSurface, Plane, Revolution, Sphere, Surface as SSurface, Torus,
     },
     math::{Frame as SFrame, Vec2, Vec3},
-    topo::{Brep, CoedgeSpec, EdgeId, FaceName, PCurve, VertexId},
+    topo::{Brep, CoedgeSpec, EdgeId, FaceName, LoopId, PCurve, VertexId},
 };
 
 use crate::{Error, Result};
@@ -228,6 +228,77 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
     if body.shells().iter().any(|s| !s.closed) {
         return Err(Error::Unsupported("a body with an open shell (a sheet)".into()));
     }
+    let (bb, edges, loops) = assemble(body, names, &BTreeMap::new())?;
+    // A degenerate (pole) coedge runs from where the coedge before it leaves the pole to where the
+    // one after it arrives; springrep works out those coedges' u at the pole its own way, so the
+    // pole's pcurve is set from what springrep made of them, and the body built again.
+    let poles = pole_pcurves(body, &bb, &loops);
+    let (bb, edges) = if poles.is_empty() {
+        (bb, edges)
+    } else {
+        let (bb, edges, _) = assemble(body, names, &poles)?;
+        (bb, edges)
+    };
+    let map = edges.iter().map(|e| e.map(EdgeId::index)).collect();
+    let b = bb.finish().map_err(|e| match e {
+        yack_springrep::Error::InvalidResult(issues) => Error::Rejected(issues),
+        other => Error::Rejected(vec![other.to_string()]),
+    })?;
+    Ok((b, map))
+}
+
+/// How many steps along a coedge springrep's checker samples it by (`check::SAMPLES`).
+const END_SAMPLES: usize = 16;
+
+/// Where each face's loops went: `loops[face][loop]`.
+type Loops = Vec<Vec<LoopId>>;
+
+/// The springrep pcurve each pole coedge should have, by (face, loop, coedge) of `body`.
+fn pole_pcurves(body: &Body, bb: &Builder, loops: &Loops) -> BTreeMap<(usize, usize, usize), PCurve> {
+    let b = bb.peek();
+    let mut out = BTreeMap::new();
+    for (fi, f) in body.faces().iter().enumerate() {
+        for (li, lp) in f.loops.iter().enumerate() {
+            let Some(&lid) = loops.get(fi).and_then(|l| l.get(li)) else { continue };
+            let ids = &b.lp(lid).coedges;
+            let n = ids.len();
+            for (k, co) in lp.iter().enumerate() {
+                if !body.edges().get(co.edge).is_some_and(|e| e.degenerate) || n < 3 {
+                    continue;
+                }
+                let (Some(&prev), Some(&here), Some(&next)) = (ids.get((k + n - 1) % n), ids.get(k), ids.get((k + 1) % n)) else {
+                    continue;
+                };
+                // Sampled along the whole coedge, as springrep's checker reads its ends: a periodic
+                // projection follows its branch from the start.
+                let end_of = |c: yack_springrep::topo::CoedgeId, start: bool| {
+                    let (t0, t1) = b.edge(b.coedge(c).edge).range;
+                    let (a, z) = if b.coedge(c).reversed { (t1, t0) } else { (t0, t1) };
+                    let ts: Vec<f64> = (0..=END_SAMPLES).map(|i| if i == END_SAMPLES { z } else { a + (z - a) * i as f64 / END_SAMPLES as f64 }).collect();
+                    let uvs = b.coedge_uvs(c, &ts);
+                    if start { uvs.first().copied() } else { uvs.last().copied() }
+                };
+                let (Some(a), Some(z)) = (end_of(prev, false), end_of(next, true)) else { continue };
+                let (t0, t1) = b.edge(b.coedge(here).edge).range;
+                let (ts, te) = if b.coedge(here).reversed { (t1, t0) } else { (t0, t1) };
+                if te == ts {
+                    continue;
+                }
+                let dir = Vec2::new((z.x - a.x) / (te - ts), (z.y - a.y) / (te - ts));
+                let origin = Vec2::new(a.x - dir.x * ts, a.y - dir.y * ts);
+                out.insert((fi, li, k), PCurve::Affine { origin, dir });
+            }
+        }
+    }
+    out
+}
+
+/// Builds `body` into springrep, with `poles` in place of the pole coedges' own pcurves; unchecked.
+fn assemble(
+    body: &Body,
+    names: &[BTreeSet<FaceName>],
+    poles: &BTreeMap<(usize, usize, usize), PCurve>,
+) -> Result<(Builder, Vec<Option<EdgeId>>, Loops)> {
     let mut bb = Builder::new();
     let (edge_gap, vert_gap) = gaps(body);
     // Geometry that meets only to more than cadrs's loop gap is not carried: springrep's booleans
@@ -264,10 +335,12 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
         }));
     }
     let mut faces = Vec::with_capacity(body.faces().len());
+    let mut loops: Loops = Vec::with_capacity(body.faces().len());
     for (i, f) in body.faces().iter().enumerate() {
         let id = bb.face(surface(&f.surf)?, !f.sense, names.get(i).cloned().unwrap_or_default().into_iter().collect());
         let periods = closed_periods(&f.surf);
-        for lp in &f.loops {
+        let mut face_loops = Vec::with_capacity(f.loops.len());
+        for (li, lp) in f.loops.iter().enumerate() {
             let mut ids = Vec::with_capacity(lp.len());
             let mut uses = Vec::with_capacity(lp.len());
             for co in lp {
@@ -289,10 +362,16 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
             let specs = ids
                 .into_iter()
                 .zip(uses)
-                .map(|((edge, reversed), u)| CoedgeSpec { edge, reversed, pcurve: u.pc })
+                .enumerate()
+                .map(|(k, ((edge, reversed), u))| CoedgeSpec {
+                    edge,
+                    reversed,
+                    pcurve: poles.get(&(i, li, k)).cloned().unwrap_or(u.pc),
+                })
                 .collect();
-            bb.add_loop(id, specs);
+            face_loops.push(bb.add_loop(id, specs));
         }
+        loops.push(face_loops);
         faces.push(id);
     }
     let mut shells = Vec::with_capacity(body.shells().len());
@@ -304,10 +383,5 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
         let sh = s.shells.iter().map(|&i| shells.get(i).copied().ok_or_else(|| Error::Unsupported(format!("shell {i} out of range"))));
         bb.solid(sh.collect::<Result<_>>()?, 1);
     }
-    let map = edges.iter().map(|e| e.map(EdgeId::index)).collect();
-    let b = bb.finish().map_err(|e| match e {
-        yack_springrep::Error::InvalidResult(issues) => Error::Rejected(issues),
-        other => Error::Rejected(vec![other.to_string()]),
-    })?;
-    Ok((b, map))
+    Ok((bb, edges, loops))
 }

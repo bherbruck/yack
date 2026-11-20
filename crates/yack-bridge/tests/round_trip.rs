@@ -154,3 +154,42 @@ fn a_cadrs_box_rounded_on_every_edge_carries_back() {
     let r = yack_bridge::round_trip(&back);
     assert!(r.ok(), "\nFAILED box-all-edges round trip: {}", r.problems.join("\nFAILED   "));
 }
+
+/// The elliptic cylinder x²/25 + y²/9 ≤ 1, 0 ≤ z ≤ 10, from four conic arcs: its ellipse arcs go
+/// to cadrs as rational B-splines (cadrs's form), and the round trip holds.
+fn elliptic_cylinder() -> Brep {
+    use yack_springrep::math::Vec2;
+    use yack_springrep::profile::{NamedSegment, Profile, ProfileLoop, Segment};
+    let w = 0.5f64.sqrt();
+    let p = Vec2::new;
+    let pts = [
+        (p(5.0, 0.0), p(5.0, 3.0), p(0.0, 3.0)),
+        (p(0.0, 3.0), p(-5.0, 3.0), p(-5.0, 0.0)),
+        (p(-5.0, 0.0), p(-5.0, -3.0), p(0.0, -3.0)),
+        (p(0.0, -3.0), p(5.0, -3.0), p(5.0, 0.0)),
+    ];
+    let segments = pts
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, apex, b))| NamedSegment::new(Segment::conic(a, apex, b, w).unwrap(), format!("s{i}")))
+        .collect();
+    yack_springrep::sweep::extrude(&Profile { loops: vec![ProfileLoop { segments }] }, &Frame::WORLD, 10.0, "e").unwrap()
+}
+
+#[test]
+fn elliptic_cylinder_round_trips() {
+    check("elliptic cylinder", &elliptic_cylinder());
+}
+
+/// offset/elliptic-cylinder-grown: cadrs offsets the bridged elliptic cylinder by 1 (it refused the
+/// analytic-ellipse form); the bench's value is 896.45909906955167.
+#[test]
+fn bridged_elliptic_cylinder_offsets_on_cadrs() {
+    use yack_cadrs::{DefaultKernel, Kernel, yack_glue};
+    let mut k = DefaultKernel::new();
+    let id = k.insert(yack_bridge::to_cadrs(&elliptic_cylinder()).unwrap().0);
+    let (r, _) = yack_glue::offset(&mut k, id, 1.0).unwrap_or_else(|e| panic!("\nFAILED offset: {e}"));
+    let v = k.mass_properties(r).unwrap().volume;
+    // cadrs natively gives 896.4591175 too: 2e-8 relative from the bench value.
+    assert!((v - 896.45909906955167).abs() < 1e-6 * v, "\nFAILED offset volume {v}");
+}

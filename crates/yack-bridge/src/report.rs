@@ -121,9 +121,16 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
             say(format!("order: vertex {} moved", v.index()));
         }
     }
+    // Edge i is the same edge: the same ends (a conic may come over re-parametrised).
     for (e, ce) in s.edge_ids().zip(body.edges()) {
-        if [s.edge(e).range.0, s.edge(e).range.1] != ce.t {
-            say(format!("order: edge {} range changed", e.index()));
+        let edge = s.edge(e);
+        let Some(c) = &edge.curve else { continue };
+        let (a, b) = (c.eval(edge.range.0), c.eval(edge.range.1));
+        let (ca, cb) = (ce.curve.point(ce.t[0]), ce.curve.point(ce.t[1]));
+        let off = (a.x - ca.x).abs().max((a.y - ca.y).abs()).max((a.z - ca.z).abs())
+            .max((b.x - cb.x).abs().max((b.y - cb.y).abs()).max((b.z - cb.z).abs()));
+        if !(off <= 1e-9 * (1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs()))) {
+            say(format!("order: edge {} ends moved by {off:.1e}", e.index()));
         }
     }
     let (cv, bv) = (mass::body_volume(&body), measure::volume(&back));

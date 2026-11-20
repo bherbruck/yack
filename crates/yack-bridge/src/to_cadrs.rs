@@ -61,6 +61,36 @@ fn nurbs_curve(degree: usize, knots: &[f64], ctrl: &[Vec3], weights: Option<&[f6
     Ok(CCurve::nurbs(clamp(n)?))
 }
 
+/// The arc of the ellipse `c + a cos t·x + b sin t·y` over `[t0, t1]` as an exact rational quadratic
+/// B-spline on `s ∈ [0, 1]`, in pieces of at most a quarter turn (cadrs's own form of a conic):
+/// each piece is the affine image of a circular arc, its middle pole where the end tangents meet,
+/// weighted by the cosine of half its angle.
+fn ellipse_arc(c: P3, x: V3, y: V3, a: f64, b: f64, (t0, t1): (f64, f64)) -> Result<CNurbsCurve> {
+    let n = (((t1 - t0) / std::f64::consts::FRAC_PI_2).ceil() as usize).max(1);
+    let at = |phi: f64, scale: f64| c + x * (a * phi.cos() * scale) + y * (b * phi.sin() * scale);
+    let mut knots = vec![0.0; 3];
+    let mut cps = Vec::with_capacity(2 * n + 1);
+    for i in 0..n {
+        let (p0, p1) = (t0 + (t1 - t0) * i as f64 / n as f64, t0 + (t1 - t0) * (i + 1) as f64 / n as f64);
+        let h = 0.5 * (p1 - p0);
+        let w = h.cos();
+        if i == 0 {
+            let q = at(p0, 1.0);
+            cps.push(H::new(q.x, q.y, q.z, 1.0));
+        }
+        let m = at(p0 + h, 1.0 / w);
+        cps.push(H::new(m.x * w, m.y * w, m.z * w, w));
+        let q = at(p1, 1.0);
+        cps.push(H::new(q.x, q.y, q.z, 1.0));
+        let s = (i + 1) as f64 / n as f64;
+        if i + 1 < n {
+            knots.extend([s, s]);
+        }
+    }
+    knots.extend([1.0; 3]);
+    CNurbsCurve::new(2, knots, cps).map_err(|e| Error::Rejected(vec![e.to_string()]))
+}
+
 /// Whether `knots` start and end with `p + 1` equal knots.
 fn clamped(knots: &[f64], p: usize) -> bool {
     let n = knots.len();
@@ -199,6 +229,93 @@ fn curve(c: &SCurve, range: (f64, f64)) -> Result<(CCurve, f64)> {
     })
 }
 
+fn unreachable_conic<T>() -> Result<T> {
+    Err(Error::Unsupported("a conic surface without its conic".into()))
+}
+
+/// Whether the cadrs form of `s` re-parametrises it (a swept ellipse becomes a swept rational
+/// B-spline on [0, 1]), so springrep's pcurves on it do not carry over.
+fn reparametrised(s: &SSurface) -> bool {
+    match s {
+        SSurface::Extrusion(e) => matches!(e.curve, SCurve::Ellipse(_)),
+        SSurface::Revolution(r) => matches!(r.curve, SCurve::Ellipse(_)),
+        _ => false,
+    }
+}
+
+/// A pcurve made by cadrs itself for an edge or a face the bridge re-parametrised, and how far its
+/// surface point strays from the edge (cadrs's own geometry on both sides).
+fn fresh_pcurve(surf: &CSurface, edge: &CEdge, near: Option<P2>) -> Result<(CCurve, f64)> {
+    if edge.degenerate {
+        return Err(Error::Unsupported("a pole on a re-parametrised conic surface".into()));
+    }
+    let [t0, t1] = edge.t;
+    let pc = pcurve(surf, &edge.curve, t0, t1, near);
+    let gap = (0..2 * SAMPLES - 1)
+        .map(|i| {
+            let t = t0 + (t1 - t0) * i as f64 / (2 * SAMPLES - 2) as f64;
+            let uv = pc.point(t);
+            (surf.eval(uv.x, uv.y) - edge.curve.point(t)).norm()
+        })
+        .fold(0.0, f64::max);
+    if !(gap <= GAP_CAP) {
+        return Err(Error::Unsupported(format!("cadrs's pcurve of a re-parametrised conic strays {gap:.1e} mm")));
+    }
+    Ok((pc, gap))
+}
+
+/// The pcurve of an ellipse edge carried over as a rational B-spline on `s ∈ [0, 1]`: springrep's
+/// own pcurve read at the angle `t(s)` of each new parameter's point, interpolated in `s` (finer
+/// until it holds to its edge), so it stays on springrep's branch of a closed surface.
+fn remapped_pcurve(
+    b: &Brep,
+    c: CoedgeId,
+    el: &yack_springrep::geom::Ellipse,
+    surf: &CSurface,
+    edge: &CEdge,
+) -> Result<(CCurve, f64)> {
+    let (t0, t1) = b.edge(b.coedge(c).edge).range;
+    let f = &el.frame;
+    // The angle of the ellipse's point at s, on the branch nearest the straight guess.
+    let angle = |s: f64| {
+        let p = edge.curve.point(s);
+        let d = Vec3::new(p.x, p.y, p.z) - f.origin;
+        let raw = (d.dot(f.y) / el.minor).atan2(d.dot(f.x) / el.major);
+        let guess = t0 + (t1 - t0) * s;
+        raw + ((guess - raw) / std::f64::consts::TAU).round() * std::f64::consts::TAU
+    };
+    let mut best: Option<(CCurve, f64)> = None;
+    for n in [33usize, 129, 513] {
+        let ss = spaced(0.0, 1.0, n);
+        let ts: Vec<f64> = ss.iter().map(|&s| angle(s).clamp(t0, t1)).collect();
+        let uv = b.coedge_uvs(c, &ts);
+        let pts: Vec<P3> = uv.iter().map(|w| P3::new(w.x, w.y, 0.0)).collect();
+        let fit = CCurve::nurbs(CNurbsCurve::interpolate(&pts, &ss, 3, None, None));
+        let mids: Vec<f64> = ss.windows(2).map(|w| 0.5 * (w[0] + w[1])).collect();
+        let gap = ss
+            .iter()
+            .chain(&mids)
+            .map(|&s| {
+                let q = fit.point(s);
+                (surf.eval(q.x, q.y) - edge.curve.point(s)).norm()
+            })
+            .fold(0.0, f64::max);
+        if best.as_ref().is_none_or(|(_, g)| gap < *g) {
+            best = Some((fit, gap));
+        }
+        if gap <= GAP_TIGHT {
+            break;
+        }
+    }
+    match best {
+        Some((pc, g)) if g <= GAP_CAP => Ok((pc, g)),
+        other => Err(Error::Unsupported(format!(
+            "an ellipse edge's pcurve strays {:?} mm once re-parametrised",
+            other.map(|(_, g)| g)
+        ))),
+    }
+}
+
 /// A range widened to hold `want` (a face's span of one parameter).
 fn widen(domain: (f64, f64), want: (f64, f64)) -> (f64, f64) {
     (domain.0.min(want.0), domain.1.max(want.1))
@@ -249,6 +366,21 @@ fn surface(s: &SSurface, uv: ((f64, f64), (f64, f64))) -> Result<CSurface> {
         SSurface::Cone(c) => CSurface::Cone { f: frame(&c.frame), r: c.radius, a: c.half_angle },
         SSurface::Sphere(c) => CSurface::Sphere { f: frame(&c.frame), r: c.radius },
         SSurface::Torus(c) => CSurface::Torus { f: frame(&c.frame), rmaj: c.major, rmin: c.minor },
+        SSurface::Extrusion(e) if matches!(e.curve, SCurve::Ellipse(_)) => {
+            let SCurve::Ellipse(el) = &e.curve else { return unreachable_conic(); };
+            let f = &el.frame;
+            let arc = ellipse_arc(p3(f.origin), v3(f.x), v3(f.y), el.major, el.minor, uv.0)?;
+            CSurface::Extrusion { c: CCurve::nurbs(arc), d: v3(e.dir) }
+        }
+        SSurface::Revolution(r) if matches!(r.curve, SCurve::Ellipse(_)) => {
+            let SCurve::Ellipse(el) = &r.curve else { return unreachable_conic(); };
+            let f = &el.frame;
+            let arc = ellipse_arc(p3(f.origin), v3(f.x), v3(f.y), el.major, el.minor, uv.1)?;
+            let m = CCurve::nurbs(arc);
+            let mid = r.curve.eval(0.5 * (uv.1.0 + uv.1.1));
+            let fr = CFrame::from_xz(p3(r.origin), v3(mid - r.origin), v3(r.axis));
+            CSurface::Revolution { f: fr, m }
+        }
         SSurface::Extrusion(e) => {
             let (c, gap) = curve(&e.curve, widen(e.curve.domain(), uv.0))?;
             if gap > 0.0 {
@@ -453,8 +585,9 @@ fn coedge_pcurve(b: &Brep, c: CoedgeId, surf: &CSurface, edge_curve: Option<&CCu
 
 /// Shifts each coedge's pcurve by whole periods so it starts where the one before it ends: springrep
 /// keeps each coedge on its own branch of a periodic surface, cadrs needs the loop continuous in uv.
-fn chain(surf: &CSurface, edges: &[CEdge], loop_: &mut [Coedge]) {
-    let periods = closed_periods(surf);
+fn chain(surf: &CSurface, edges: &[CEdge], loop_: &mut [Coedge], extra: [Option<f64>; 2]) {
+    let base = closed_periods(surf);
+    let periods = [base[0].or(extra[0]), base[1].or(extra[1])];
     if periods.iter().all(Option::is_none) {
         return;
     }
@@ -497,9 +630,14 @@ fn bridge_poles(surf: &CSurface, edges: &mut Vec<CEdge>, lp: Vec<Coedge>) -> Vec
         let (b, _) = ends(next, edges);
         let (du, dv) = (b.x - a.x, b.y - a.y);
         // Which parameter jumps, and whether the surface ignores it there.
+        // A small step both ways (one of them may leave a clamped surface's knots, where cadrs holds
+        // the end point): a pole moves neither.
         let ignores = |along_u: bool| {
-            let q = if along_u { surf.eval(a.x + 1.0, a.y) } else { surf.eval(a.x, a.y + 1.0) };
-            (q - surf.eval(a.x, a.y)).norm() <= POLE_SPAN
+            let here = surf.eval(a.x, a.y);
+            [-POLE_STEP, POLE_STEP].iter().all(|&h| {
+                let q = if along_u { surf.eval(a.x + h, a.y) } else { surf.eval(a.x, a.y + h) };
+                (q - here).norm() <= POLE_SPAN
+            })
         };
         let jump = if du.abs() > PCURVE_SLACK && dv.abs() <= PCURVE_SLACK && ignores(true) {
             Some((true, a.x, b.x, a.y))
@@ -521,8 +659,10 @@ fn bridge_poles(surf: &CSurface, edges: &mut Vec<CEdge>, lp: Vec<Coedge>) -> Vec
     out
 }
 
-/// A surface whose points one unit of a parameter apart are this close does not depend on it there.
-const POLE_SPAN: f64 = 1e-9; // tol: a pole's span, mm
+/// A surface whose points `POLE_STEP` of a parameter apart, both ways, are within `POLE_SPAN` does
+/// not depend on that parameter there.
+const POLE_STEP: f64 = 1e-3; // tol: a parameter step well inside any face
+const POLE_SPAN: f64 = 1e-10; // tol: a pole's span, mm
 
 /// The cadrs body of `b`, and each face's springrep names (by face index) to restore on the way
 /// back.
@@ -533,6 +673,8 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
     for v in b.vertex_ids() {
         body.verts.push(CVertex { p: p3(b.vertex(v).point), tol: b.vertex_tolerance(v).max(CONFUSION) });
     }
+    // Edges re-parametrised on the way (their pcurves are made afresh by cadrs).
+    let mut as_nurbs: Vec<usize> = Vec::new();
     for e in b.edge_ids() {
         if b.edge_uses(e).len() > 2 {
             return Err(Error::Unsupported(format!("edge {} is used by more than two faces", e.index())));
@@ -549,6 +691,13 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                 degenerate: true,
                 tol,
             },
+            Some(SCurve::Ellipse(el)) => {
+                // cadrs's ops expect a conic as its rational B-spline (MAPPING.md §2).
+                let f = &el.frame;
+                let n = ellipse_arc(p3(f.origin), v3(f.x), v3(f.y), el.major, el.minor, edge.range)?;
+                as_nurbs.push(e.index());
+                CEdge { curve: CCurve::nurbs(n), t: [0.0, 1.0], v, degenerate: false, tol }
+            }
             Some(c) => {
                 let (curve, gap) = curve(c, edge.range)?;
                 CEdge { curve, t, v, degenerate: false, tol: tol.max(2.0 * gap) }
@@ -574,6 +723,7 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
             }
         }
         let surf = surface(&face.surface, uv)?;
+        let fresh_face = reparametrised(&face.surface);
         let (canon, flipped) = canonical(surf.clone());
         let mut loops = Vec::with_capacity(face.loops.len());
         for &lp in &face.loops {
@@ -581,7 +731,25 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
             for &c in &b.lp(lp).coedges {
                 let co = b.coedge(c);
                 let curve = body.edges.get(co.edge.index()).filter(|e| !e.degenerate).map(|e| e.curve.clone());
-                let (pc, gap) = coedge_pcurve(b, c, &surf, curve.as_ref())?;
+                let (pc, gap) = if fresh_face || as_nurbs.contains(&co.edge.index()) {
+                    let Some(edge) = body.edges.get(co.edge.index()) else {
+                        return Err(Error::Unsupported(format!("edge {} out of range", co.edge.index())));
+                    };
+                    // springrep's uv at the edge's middle places a periodic surface's branch.
+                    let near = (!fresh_face).then(|| {
+                        let (t0, t1) = b.edge(co.edge).range;
+                        let w = b.coedge_uvs(c, &[0.5 * (t0 + t1)]);
+                        w.first().map(|w| P2::new(w.x, w.y))
+                    });
+                    match (fresh_face, b.edge(co.edge).curve.as_ref()) {
+                        // Only the edge was re-parametrised: follow springrep's own pcurve (its
+                        // branch of a closed surface) at the angle each new parameter stands for.
+                        (false, Some(SCurve::Ellipse(el))) => remapped_pcurve(b, c, el, &surf, edge)?,
+                        _ => fresh_pcurve(&surf, edge, near.flatten())?,
+                    }
+                } else {
+                    coedge_pcurve(b, c, &surf, curve.as_ref())?
+                };
                 if gap > 0.0 {
                     let mut ends = [None, None];
                     if let Some(edge) = body.edges.get_mut(co.edge.index()) {
@@ -597,7 +765,14 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                 let pc = if flipped { flip_v(pc) } else { pc };
                 coedges.push(Coedge { edge: co.edge.index(), fwd: !co.reversed, pc });
             }
-            chain(&canon, &body.edges, &mut coedges);
+            // A whole swept ellipse re-parametrised onto s ∈ [0, 1] closes with period 1 there.
+            let closes = |span: (f64, f64)| span.1 - span.0 >= std::f64::consts::TAU - PCURVE_SLACK;
+            let extra = match &face.surface {
+                SSurface::Extrusion(_) if fresh_face && closes(uv.0) => [Some(1.0), None],
+                SSurface::Revolution(_) if fresh_face && closes(uv.1) => [None, Some(1.0)],
+                _ => [None, None],
+            };
+            chain(&canon, &body.edges, &mut coedges, extra);
             let coedges = bridge_poles(&canon, &mut body.edges, coedges);
             loops.push(coedges);
         }
@@ -616,8 +791,24 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
         }
         body.solids.push(CSolid { shells });
     }
-    let issues = body.check_with(CheckLevel::Full);
+    let mut issues = body.check_with(CheckLevel::Full);
     if !issues.is_empty() {
+        // Which springrep surfaces the faces cadrs refused came from, to say what to fix.
+        let named: BTreeSet<usize> = issues
+            .iter()
+            .filter_map(|m| m.strip_prefix("face ").and_then(|r| r.split(' ').next()).and_then(|n| n.parse().ok()))
+            .collect();
+        for f in named.into_iter().take(3) {
+            if let Some(face) = b.face_ids().nth(f).map(|id| b.face(id)) {
+                let kinds: Vec<&str> = face
+                    .loops
+                    .iter()
+                    .flat_map(|&lp| b.lp(lp).coedges.iter())
+                    .map(|&c| b.edge(b.coedge(c).edge).curve.as_ref().map_or("pole", |k| k.kind()))
+                    .collect();
+                issues.push(format!("(face {f} was springrep {}; its edges {})", face.surface.kind(), kinds.join(",")));
+            }
+        }
         return Err(Error::Rejected(issues));
     }
     Ok((body, names))
