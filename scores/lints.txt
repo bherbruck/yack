@@ -1,0 +1,4 @@
+# denied-lint sites per temporary crate (gate 9; may only fall)
+yack-cadrs 137
+yack-shim 3
+yack-springrep 125

@@ -1,0 +1,3 @@
+# small float literals without `// tol:` per crate (gate 7; may only fall)
+yack-cadrs 1252
+yack-springrep 355

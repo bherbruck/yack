@@ -18,9 +18,21 @@ Donor projects (code in this tree)
   In: crates/yack-springrep (src/, tests/, build.rs, README.md; temporary, deleted by M3).
   The full MIT licence text is crates/yack-springrep/LICENSE-springrep; every copied file
   carries a provenance header.
+- cadrs (https://github.com/rvdende/cadrs, crates/cadrs_kernel) @ eb5899ef, MIT OR Apache-2.0,
+  Copyright (c) 2026 Rouan van der Ende
+  In: crates/yack-cadrs (src/, tests/ and two cadrs-authored test data files; temporary,
+  deleted by M4). The MIT licence text is crates/yack-cadrs/LICENSE-cadrs-MIT; every copied
+  file carries a provenance header; crates/yack-cadrs/IMPORT.md records the changes.
+
+- brep-conformance-springrep (https://github.com/springcraft-ai/brep-conformance-springrep) @ 92ee43f, MIT,
+  Copyright (c) 2026 Springcraft, Inc.
+  In: crates/yack-conformance (adapted from src/main.rs); each adapted file carries a provenance header.
+- brep-bench (https://github.com/bmander/brep-bench) @ d522d62, MIT OR Apache-2.0,
+  Copyright (c) 2026 the brep-bench contributors
+  In: crates/yack-bench (runner main.rs/build.rs adapted from kernels/cadrs; case texts summarised
+  from cases/); each adapted file carries a provenance header.
 
 Donor projects planned (PLAN.md §9), with the notices to copy when their first file arrives:
-- cadrs (crates/cadrs_kernel) @ eb5899ef, MIT OR Apache-2.0, Copyright (c) 2026 Rouan van der Ende
 - geomsolver / cad-kernel @ 694cb72, MIT, Copyright (c) 2026 Brandon Martin-Anderson
   (its util/fmath.rs carries a musl/FreeBSD notice, which is kept verbatim here when copied)
 - ssi (solidcraft-main/solidcore/crates/ssi @ 4b1a170b), MIT OR Apache-2.0, Copyright (c) 2026 h0witzer

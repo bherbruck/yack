@@ -269,9 +269,50 @@ deps = ["yack"]
 external = ["brep-protocol"]
 license = "MIT OR Apache-2.0"
 
+[crate.yack-acceptance]
+layer = 12
+kind = "tool"
+owner = "w-m04-conf"
+deps = ["yack"]
+license = "MIT OR Apache-2.0"
+
 [crate.yack-bench]
 layer = 12
 kind = "tool"
 owner = "api-owner"
 deps = ["yack"]
 license = "MIT OR Apache-2.0"
+
+# ---- module maps (PLAN §6.6 gate 5; `cargo xtask modgraph --crate <c>`) ----
+# [modules.<crate>]: top-level module = [top-level modules it may name]. yack-springrep's map is
+# the M2 target (PLAN §3.4, T1-T12): each module maps to the crate it becomes (§3.1) and may name
+# the modules of that crate's allow-list, plus siblings bound for the same crate. `pick` is
+# dissolved (T8) and has no entry; `facade` is yack's glue and may name everything.
+[modules.yack-springrep]
+error = []
+tol = []
+numeric = ["error", "tol"]
+math = ["error", "tol", "numeric"]
+geom = ["error", "tol", "numeric", "math"]
+profile = ["error", "tol", "numeric", "math", "geom"]
+topo = ["error", "tol", "math", "geom"]
+intersect = ["error", "tol", "numeric", "math", "geom"]
+locate = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "rays", "distance"]
+rays = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "distance"]
+distance = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays"]
+measure = ["error", "tol", "numeric", "math", "geom", "topo", "intersect"]
+codec = ["error", "math", "geom", "topo"]
+check = ["error", "tol", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure"]
+mesh = ["error", "tol", "numeric", "math", "geom", "topo", "locate", "rays", "distance"]
+tweak = ["error", "tol", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "check"]
+primitive = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "sweep", "loft"]
+sweep = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "primitive", "loft"]
+loft = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "primitive", "sweep"]
+boolean = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "mesh", "tweak", "primitive", "sweep", "loft"]
+blend = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "tweak", "primitive", "sweep", "loft", "boolean"]
+edit = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "tweak", "primitive", "sweep", "loft", "boolean", "blend"]
+step = ["error", "tol", "math", "geom", "topo", "check", "mesh", "boolean"]
+draw = ["error", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "overlap", "probe"]
+overlap = ["error", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "draw", "probe"]
+probe = ["error", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "draw", "overlap"]
+facade = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "codec", "check", "mesh", "tweak", "primitive", "sweep", "loft", "boolean", "blend", "edit", "step", "draw", "overlap", "probe"]
