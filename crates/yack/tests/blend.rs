@@ -86,3 +86,19 @@ fn convexity_tells_convex_concave_and_tangent() {
     let r = b.fillet(&[e], 2.0).unwrap();
     assert_eq!(r.edges_where(|e| e.convex().is_none()).len(), 2);
 }
+
+#[test]
+fn face_refs_carry_tags_normals_and_samples() {
+    let b = ten();
+    let r = b.fillet(&[b.edge_at([5.0, 0.0, 10.0]).unwrap()], 2.0).unwrap().named("round");
+    let round = r.faces_tagged("round")[0];
+    let f = r.face(round).unwrap();
+    assert_eq!(f.tags(), &[yack::Tag::from("round")]);
+    let grid = f.sample(5, 3);
+    assert_eq!((grid.len(), grid[0].len()), (5, 3));
+    let top = r.face(r.face_at([5.0, 5.0, 10.0]).unwrap()).unwrap();
+    let n = top.normal_at([5.0, 5.0, 10.0]).unwrap();
+    assert!((n.z - 1.0).abs() < 1e-12);
+    let e = r.edge(r.edges_of(round).unwrap()[0]).unwrap();
+    assert_eq!(e.points(9).len(), 9);
+}

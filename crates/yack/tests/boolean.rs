@@ -71,3 +71,28 @@ fn queries_on_a_block() {
     assert_eq!(tops.len(), 1);
     assert_eq!(a.edges_of(tops[0]).unwrap().len(), 4);
 }
+
+#[test]
+fn closest_pairs_meshes_and_vertices() {
+    let (a, b) = (cube([0.0; 3]), cube([5.0, 0.0, 0.0]));
+    let (d, pa, pb) = a.closest_pair(&b).unwrap();
+    close(d, 3.0);
+    close(pa.x, 2.0);
+    close(pb.x, 5.0);
+    let m = a.mesh(0.01).unwrap();
+    assert!(m.is_watertight());
+    close(m.volume(), 8.0);
+    let corners: Vec<_> = a.vertices().into_iter().map(|v| a.vertex(v).unwrap().point()).collect();
+    assert!(corners.iter().any(|p| p.x == 2.0 && p.y == 2.0 && p.z == 2.0));
+    assert!(a.edges_where(|e| e.uses() == 2).len() == 12);
+    let touching = a.union(&cube([2.0, 2.0, 0.0])).unwrap();
+    assert_eq!(touching.edges_where(|e| e.uses() == 4).len(), 1);
+}
+
+#[test]
+fn a_spline_loop_through_points_extrudes() {
+    let l = Loop::through(&[[0.0, 0.0], [4.0, -1.0], [6.0, 2.0], [3.0, 5.0], [-1.0, 3.0]]).unwrap();
+    let s = extrude(&Frame::WORLD, &Profile::new(l, vec![]).unwrap(), 2.0).unwrap();
+    assert!(s.check().is_empty());
+    assert!(s.volume() > 0.0);
+}

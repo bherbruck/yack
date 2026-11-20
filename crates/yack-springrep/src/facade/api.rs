@@ -4,7 +4,8 @@
 use crate::{
     Result,
     distance::{Nearest, Selection},
-    math::{Aabb, Point3},
+    geom::BSpline,
+    math::{Aabb, Point3, Vec3},
     measure,
     topo::{Brep, EdgeId, FaceId},
 };
@@ -71,4 +72,38 @@ pub fn convexity(b: &Brep, e: EdgeId) -> Option<bool> {
     }
     let t = if b.coedge(*cf).reversed { -dp } else { dp };
     Some(m.dot(n.cross(t)) < 0.0)
+}
+
+/// The outward unit normal of face `f`'s own surface at the point of it nearest `p`.
+pub fn face_normal_at(b: &Brep, f: FaceId, p: Point3) -> Option<Vec3> {
+    let face = b.face(f);
+    let uv = face.surface.project(p);
+    let n = face.surface.normal(uv.x, uv.y).unit()?;
+    Some(if face.reversed { -n } else { n })
+}
+
+/// An even `nu` × `nv` grid of points over face `f`'s parameter box (rows along u). The box
+/// spans the face's outline, so on a trimmed face some points lie outside the face itself.
+pub fn face_grid(b: &Brep, f: FaceId, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
+    let (lo, hi) = measure::face_uv_bounds(b, f);
+    let s = &b.face(f).surface;
+    let at = |i: usize, n: usize, a: f64, z: f64| if n <= 1 { a } else { a + (z - a) * i as f64 / (n - 1) as f64 };
+    (0..nu).map(|i| (0..nv).map(|j| s.eval(at(i, nu, lo.x, hi.x), at(j, nv, lo.y, hi.y))).collect()).collect()
+}
+
+/// `n` points evenly spaced in parameter along edge `e`, ends included (empty for a pole).
+pub fn edge_points(b: &Brep, e: EdgeId, n: usize) -> Vec<Point3> {
+    let edge = b.edge(e);
+    let Some(c) = &edge.curve else { return Vec::new() };
+    let (t0, t1) = edge.range;
+    let pts: Vec<Point3> = (0..n).map(|i| c.eval(if n <= 1 { t0 } else { t0 + (t1 - t0) * i as f64 / (n - 1) as f64 })).collect();
+    pts
+}
+
+/// The closed C² cubic through `points` (chord-length parameters), as protocol periodic-spline
+/// data: knots `u₋₃ … u_{n+3}` and the `n` control points with the first three repeated.
+pub fn periodic_through(points: &[[f64; 2]]) -> Result<(Vec<f64>, Vec<[f64; 2]>)> {
+    let p3: Vec<Vec3> = points.iter().map(|p| Vec3::new(p[0], p[1], 0.0)).collect();
+    let s = BSpline::interpolate_periodic(&p3)?;
+    Ok((s.knots().to_vec(), s.control_points().iter().map(|c| [c.x, c.y]).collect()))
 }

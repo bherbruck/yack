@@ -6,7 +6,7 @@ yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
 yack: pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline3}
 yack: pub use solid::Solid
-yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId,}
+yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
 yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
@@ -47,6 +47,7 @@ yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
 yack::input: impl Loop { pub fn polygon(corners: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Loop { pub fn segments(&self) -> &[Segment] }
 yack::input: impl Loop { pub fn starting_at(p: impl Into<Point2>) -> Pen }
+yack::input: impl Loop { pub fn through(points: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Pen { pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn close(self) -> Result<Loop> }
@@ -90,6 +91,7 @@ yack::query: impl Solid { pub fn centroid(&self) -> Option<Point3> }
 yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
 yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> }
 yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> }
+yack::query: impl Solid { pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> }
 yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<[f64; 2]>> }
 yack::query: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
 yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
@@ -116,6 +118,7 @@ yack::select: impl Solid { pub fn faces_at<P: Into<Point3> + Copy>(&self, pts: &
 yack::select: impl Solid { pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> }
 yack::select: impl Solid { pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> }
 yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> }
+yack::select: impl Solid { pub fn vertex(&self, id: VertexId) -> Result<VertexRef> }
 yack::select: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
 yack::solid: impl Solid { pub fn digest(&self) -> [u8; 32] }
 yack::solid: impl Solid { pub fn history(&self) -> &History }
@@ -134,15 +137,22 @@ yack::values: impl EdgeRef<'_> { pub fn id(&self) -> EdgeId }
 yack::values: impl EdgeRef<'_> { pub fn kind(&self) -> CurveKind }
 yack::values: impl EdgeRef<'_> { pub fn length(&self) -> f64 }
 yack::values: impl EdgeRef<'_> { pub fn midpoint(&self) -> Point3 }
+yack::values: impl EdgeRef<'_> { pub fn points(&self, n: usize) -> Vec<Point3> }
+yack::values: impl EdgeRef<'_> { pub fn uses(&self) -> usize }
 yack::values: impl FaceRef<'_> { pub fn area(&self) -> f64 }
 yack::values: impl FaceRef<'_> { pub fn bbox(&self) -> Aabb }
 yack::values: impl FaceRef<'_> { pub fn centroid(&self) -> Point3 }
 yack::values: impl FaceRef<'_> { pub fn id(&self) -> FaceId }
 yack::values: impl FaceRef<'_> { pub fn kind(&self) -> SurfaceKind }
 yack::values: impl FaceRef<'_> { pub fn normal(&self) -> Option<Vec3> }
+yack::values: impl FaceRef<'_> { pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> }
+yack::values: impl FaceRef<'_> { pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> }
+yack::values: impl FaceRef<'_> { pub fn tags(&self) -> &[Tag] }
 yack::values: impl From<&str> for Tag
 yack::values: impl From<String> for Tag
 yack::values: impl History { pub fn is_empty(&self) -> bool }
+yack::values: impl Mesh { pub fn is_watertight(&self) -> bool }
+yack::values: impl Mesh { pub fn volume(&self) -> f64 }
 yack::values: impl Plane { pub fn new(origin: impl Into<Point3>, normal: impl Into<Vec3>) -> Result<Plane> }
 yack::values: impl Plane { pub fn normal(&self) -> Dir3 }
 yack::values: impl Plane { pub fn origin(&self) -> Point3 }
@@ -150,4 +160,6 @@ yack::values: impl Ray { pub fn direction(&self) -> Dir3 }
 yack::values: impl Ray { pub fn new(origin: impl Into<Point3>, direction: impl Into<Vec3>) -> Result<Ray> }
 yack::values: impl Ray { pub fn origin(&self) -> Point3 }
 yack::values: impl Tag { pub fn as_str(&self) -> &str }
+yack::values: impl VertexRef { pub fn id(&self) -> VertexId }
+yack::values: impl VertexRef { pub fn point(&self) -> Point3 }
 yack::values: impl fmt::Display for Tag

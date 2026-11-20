@@ -32,3 +32,14 @@ pub fn scale2(p: Point2, s: f64) -> Point2 {
 pub fn scale_length(l: f64, s: f64) -> f64 {
     l * s
 }
+
+/// The volume a closed, outward triangle mesh encloses (divergence theorem); triangles with an
+/// index out of range are skipped.
+pub fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
+    let at = |i: u32| positions.get(i as usize).map(|p| p.to_vec());
+    triangles
+        .iter()
+        .filter_map(|&[a, b, c]| Some(at(a)?.dot(at(b)?.cross(at(c)?))))
+        .sum::<f64>()
+        / 6.0
+}

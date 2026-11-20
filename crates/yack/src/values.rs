@@ -1,7 +1,10 @@
 // yack: small public value types: planes, rays, ids, tags and query results.
 use core::fmt;
-use core::marker::PhantomData;
 
+use yack_springrep::facade::api;
+
+use crate::engine::{self, Brep};
+use crate::solid::engine_ids;
 use crate::{Aabb, Dir3, Point2, Point3, Result, Solid, Vec3};
 
 /// An oriented plane: a point on it and a unit normal.
@@ -120,7 +123,6 @@ macro_rules! id {
                 $name { stamp, index }
             }
             /// The stamp of the solid this id belongs to.
-            #[allow(dead_code)] // VertexId has no lookup yet
             pub(crate) fn stamp(self) -> u64 {
                 self.stamp
             }
@@ -194,28 +196,20 @@ pub enum CurveKind {
 }
 
 /// A read-only view of one face, from [`Solid::face`] or [`Solid::faces_where`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct FaceRef<'a> {
-    id: FaceId,
-    kind: SurfaceKind,
-    normal: Option<Vec3>,
-    area: f64,
-    centroid: Point3,
-    bbox: Aabb,
-    solid: PhantomData<&'a Solid>,
+    pub(crate) id: FaceId,
+    pub(crate) kind: SurfaceKind,
+    pub(crate) normal: Option<Vec3>,
+    pub(crate) area: f64,
+    pub(crate) centroid: Point3,
+    pub(crate) bbox: Aabb,
+    pub(crate) tags: Vec<Tag>,
+    pub(crate) brep: &'a Brep,
+    pub(crate) face: engine_ids::Face,
 }
 
 impl FaceRef<'_> {
-    pub(crate) fn new(
-        id: FaceId,
-        kind: SurfaceKind,
-        normal: Option<Vec3>,
-        area: f64,
-        centroid: Point3,
-        bbox: Aabb,
-    ) -> FaceRef<'static> {
-        FaceRef { id, kind, normal, area, centroid, bbox, solid: PhantomData }
-    }
     /// The face's id.
     pub fn id(&self) -> FaceId {
         self.id
@@ -240,31 +234,38 @@ impl FaceRef<'_> {
     pub fn bbox(&self) -> Aabb {
         self.bbox
     }
+    /// The feature names the face carries ([`Solid::named`]), sorted, without repeats: a face two
+    /// operations' faces merged into carries both.
+    pub fn tags(&self) -> &[Tag] {
+        &self.tags
+    }
+    /// The outward unit normal of the face's own surface at the point of it nearest `p` (defined
+    /// at creases too, unlike [`Solid::normal_at`]); `None` where the surface is singular.
+    pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> {
+        api::face_normal_at(self.brep, self.face, engine::p3(p.into())).map(engine::vec)
+    }
+    /// An even `nu` × `nv` grid over the face's surface parameter box, rows along u. The box spans
+    /// the face's outline, so on a trimmed face some points lie off the face.
+    pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
+        api::face_grid(self.brep, self.face, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect()
+    }
 }
 
 /// A read-only view of one edge, from [`Solid::edge`] or [`Solid::edges_where`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct EdgeRef<'a> {
-    id: EdgeId,
-    kind: CurveKind,
-    ends: [Point3; 2],
-    convex: Option<bool>,
-    length: f64,
-    midpoint: Point3,
-    solid: PhantomData<&'a Solid>,
+    pub(crate) id: EdgeId,
+    pub(crate) kind: CurveKind,
+    pub(crate) ends: [Point3; 2],
+    pub(crate) convex: Option<bool>,
+    pub(crate) length: f64,
+    pub(crate) midpoint: Point3,
+    pub(crate) uses: usize,
+    pub(crate) brep: &'a Brep,
+    pub(crate) edge: engine_ids::Edge,
 }
 
 impl EdgeRef<'_> {
-    pub(crate) fn new(
-        id: EdgeId,
-        kind: CurveKind,
-        ends: [Point3; 2],
-        convex: Option<bool>,
-        length: f64,
-        midpoint: Point3,
-    ) -> EdgeRef<'static> {
-        EdgeRef { id, kind, ends, convex, length, midpoint, solid: PhantomData }
-    }
     /// The edge's id.
     pub fn id(&self) -> EdgeId {
         self.id
@@ -278,7 +279,7 @@ impl EdgeRef<'_> {
         self.ends
     }
     /// Whether the solid is convex (`Some(true)`) or concave (`Some(false)`) across the edge at
-    /// its midpoint; `None` where its faces meet tangentially.
+    /// its midpoint; `None` where its faces meet tangentially, or more than two faces use it.
     pub fn convex(&self) -> Option<bool> {
         self.convex
     }
@@ -289,6 +290,33 @@ impl EdgeRef<'_> {
     /// The point halfway along the edge.
     pub fn midpoint(&self) -> Point3 {
         self.midpoint
+    }
+    /// How many face uses the edge has: 2 on a manifold edge, 4 where two pieces touch along it.
+    /// A face that runs along both sides of the edge counts twice.
+    pub fn uses(&self) -> usize {
+        self.uses
+    }
+    /// `n` points spaced evenly in the edge's parameter, ends included.
+    pub fn points(&self, n: usize) -> Vec<Point3> {
+        api::edge_points(self.brep, self.edge, n).into_iter().map(engine::point).collect()
+    }
+}
+
+/// A read-only view of one vertex, from [`Solid::vertex`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VertexRef {
+    pub(crate) id: VertexId,
+    pub(crate) point: Point3,
+}
+
+impl VertexRef {
+    /// The vertex's id.
+    pub fn id(&self) -> VertexId {
+        self.id
+    }
+    /// Where it is.
+    pub fn point(&self) -> Point3 {
+        self.point
     }
 }
 
@@ -349,6 +377,25 @@ pub struct Mesh {
     pub positions: Vec<Point3>,
     /// Triangles as three indices into `positions`, counter-clockwise seen from outside.
     pub triangles: Vec<[u32; 3]>,
+}
+
+impl Mesh {
+    /// The volume the mesh encloses (mm³), assuming it is closed and outward.
+    pub fn volume(&self) -> f64 {
+        yack_math::mesh_volume(&self.positions, &self.triangles)
+    }
+
+    /// Whether every directed triangle edge is matched by exactly one opposite one: the mesh is
+    /// closed and consistently oriented.
+    pub fn is_watertight(&self) -> bool {
+        let mut count: std::collections::BTreeMap<(u32, u32), i64> = std::collections::BTreeMap::new();
+        for &[a, b, c] in &self.triangles {
+            for (p, q) in [(a, b), (b, c), (c, a)] {
+                *count.entry((p, q)).or_default() += 1;
+            }
+        }
+        count.iter().all(|(&(p, q), &n)| n == 1 && count.get(&(q, p)) == Some(&1))
+    }
 }
 
 /// One face of a [`Display`].

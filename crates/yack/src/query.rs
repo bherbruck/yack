@@ -106,6 +106,18 @@ impl Solid {
         })
     }
 
+    /// The least distance between the two solids and where it is reached: `(distance, on self,
+    /// on other)`. `Invalid` if either solid is empty.
+    pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> {
+        let op = "closest_pair";
+        let (a, b) = (self.need(op)?, other.brep().ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
+        firewall::run(op, || {
+            distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
+                .map(|c| (c.distance, engine::point(c.on_a), engine::point(c.on_b)))
+                .map_err(|e| engine::error(op, e))
+        })
+    }
+
     /// The volume shared with `other` and the gap between them.
     pub fn interference(&self, other: &Solid) -> Result<Interference> {
         let (Some(a), Some(b)) = (self.brep(), other.brep()) else {

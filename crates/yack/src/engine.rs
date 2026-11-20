@@ -56,6 +56,11 @@ pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
     }
 }
 
+/// Whether a face feature name is one yack made up for an unnamed operation.
+pub(crate) fn is_internal_feature(name: &str) -> bool {
+    name.starts_with("yack#")
+}
+
 /// A springrep result whose new faces carry `feature`, as a solid that remembers it.
 pub(crate) fn made(feature: &str, op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
     r.map(|b| Solid::from_springrep(b).with_feature(feature)).map_err(|e| error(op, e))

@@ -6,10 +6,10 @@ use yack_springrep::{facade::api, geom, measure};
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
 use crate::{
-    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, SurfaceKind, Tag, VertexId,
+    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, SurfaceKind, Tag, VertexId, VertexRef,
 };
 
-fn face_ref<'a>(s: &'a Solid, b: &Brep, f: engine_ids::Face) -> FaceRef<'a> {
+fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
     let face = b.face(f);
     let outward = |z: yack_springrep::math::Vec3| if face.reversed { engine::vec(-z) } else { engine::vec(z) };
     let (kind, normal) = match &face.surface {
@@ -25,17 +25,21 @@ fn face_ref<'a>(s: &'a Solid, b: &Brep, f: engine_ids::Face) -> FaceRef<'a> {
         geom::Surface::Nurbs(_) => (SurfaceKind::Spline, None),
     };
     let bb = measure::face_bbox(b, f);
-    FaceRef::new(
-        s.face_id(f),
+    let tags: BTreeSet<&str> = face.names.iter().map(|n| n.feature.as_str()).filter(|t| !engine::is_internal_feature(t)).collect();
+    FaceRef {
+        id: s.face_id(f),
         kind,
         normal,
-        measure::face_area(b, f),
-        engine::point(measure::face_centroid(b, f)),
-        Aabb::new(engine::point(bb.min), engine::point(bb.max)),
-    )
+        area: measure::face_area(b, f),
+        centroid: engine::point(measure::face_centroid(b, f)),
+        bbox: Aabb::new(engine::point(bb.min), engine::point(bb.max)),
+        tags: tags.into_iter().map(Tag::from).collect(),
+        brep: b,
+        face: f,
+    }
 }
 
-fn edge_ref<'a>(s: &'a Solid, b: &Brep, e: engine_ids::Edge) -> Option<EdgeRef<'a>> {
+fn edge_ref<'a>(s: &Solid, b: &'a Brep, e: engine_ids::Edge) -> Option<EdgeRef<'a>> {
     let edge = b.edge(e);
     let curve = edge.curve.as_ref()?;
     let kind = match curve {
@@ -46,7 +50,17 @@ fn edge_ref<'a>(s: &'a Solid, b: &Brep, e: engine_ids::Edge) -> Option<EdgeRef<'
     };
     let ends = [engine::point(b.vertex(edge.start).point), engine::point(b.vertex(edge.end).point)];
     let mid = engine::point(curve.eval(yack_math::mean(edge.range.0, edge.range.1)));
-    Some(EdgeRef::new(s.edge_id(e), kind, ends, api::convexity(b, e), measure::edge_length(b, e), mid))
+    Some(EdgeRef {
+        id: s.edge_id(e),
+        kind,
+        ends,
+        convex: api::convexity(b, e),
+        length: measure::edge_length(b, e),
+        midpoint: mid,
+        uses: b.edge_uses(e).len(),
+        brep: b,
+        edge: e,
+    })
 }
 
 impl Solid {
@@ -156,6 +170,13 @@ impl Solid {
 
     fn sr_edges_of(b: &Brep, f: engine_ids::Face) -> BTreeSet<engine_ids::Edge> {
         b.face(f).loops.iter().flat_map(|&l| b.lp(l).coedges.iter().map(|&c| b.coedge(c).edge)).collect()
+    }
+
+    /// A view of vertex `id`.
+    pub fn vertex(&self, id: VertexId) -> Result<VertexRef> {
+        let v = self.sr_vertex("vertex", "id", id)?;
+        let b = self.need("vertex")?;
+        Ok(VertexRef { id, point: engine::point(b.vertex(v).point) })
     }
 
     /// The edges bounding face `f`.

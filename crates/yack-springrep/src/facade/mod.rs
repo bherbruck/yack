@@ -3,5 +3,6 @@
 //! computes. Each one does only the arithmetic the protocol's argument shapes need.
 
 pub mod api;
+pub mod bridge;
 pub mod edit;
 pub mod exchange;

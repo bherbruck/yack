@@ -59,13 +59,16 @@ pub enum Segment {
         /// Optional positive weights, one per control point.
         weights: Option<Vec<f64>>,
     },
-    /// A periodic B-spline that forms the whole loop on its own.
+    /// A periodic B-spline that forms the whole loop on its own, in the protocol's convention:
+    /// `n` control points followed by the first `degree` of them again, and
+    /// `ctrl.len() + degree + 1` knots `u₋ₚ … u_{n+p}` with `u_{i+n} = u_i + period`. Only cubics
+    /// are built yet. [`Loop::through`] makes one through given points.
     PeriodicSpline {
         /// Degree, `≥ 1`.
         degree: u32,
         /// Knot vector, non-decreasing.
         knots: Vec<f64>,
-        /// Control points (not repeated).
+        /// Control points, the first `degree` repeated at the end.
         ctrl: Vec<Point2>,
     },
 }
@@ -203,6 +206,23 @@ impl Loop {
         let segments = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(&a, &b)| Segment::Line { a, b }).collect();
         let labels = vec![None; corners.len()];
         Loop::labelled("Loop::polygon", segments, labels)
+    }
+
+    /// The closed curvature-continuous cubic through `points` in the order given (chord-length
+    /// spacing), as one [`Segment::PeriodicSpline`].
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let blob = Loop::through(&[[0.0, 0.0], [4.0, -1.0], [6.0, 2.0], [3.0, 5.0], [-1.0, 3.0]])?;
+    /// assert!(blob.is_ccw());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn through(points: &[[f64; 2]]) -> Result<Loop> {
+        let op = "Loop::through";
+        let (knots, ctrl) =
+            yack_springrep::facade::api::periodic_through(points).map_err(|e| crate::engine::error(op, e))?;
+        let ctrl = ctrl.into_iter().map(Point2::from).collect();
+        Loop::labelled(op, vec![Segment::PeriodicSpline { degree: 3, knots, ctrl }], vec![None])
     }
 
     /// Start drawing a loop at `p`.

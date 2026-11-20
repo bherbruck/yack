@@ -37,7 +37,7 @@ pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline
 pub use solid::Solid;
 pub use values::{
     CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh,
-    Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId,
+    Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,
 };
 pub use yack_base::{Error, ErrorKind, Result, Stage};
 pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3};

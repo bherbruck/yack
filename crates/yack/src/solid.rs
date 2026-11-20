@@ -114,6 +114,15 @@ impl Solid {
         b.edge_ids().nth(id.index() as usize).ok_or_else(|| Error::not_found(op, arg, format!("no {id}")))
     }
 
+    /// The engine vertex for `id`: `ForeignId` from another solid, `NotFound` if out of range.
+    pub(crate) fn sr_vertex(&self, op: &'static str, arg: &'static str, id: VertexId) -> Result<engine_ids::Vertex> {
+        if id.stamp() != self.stamp() {
+            return Err(Error::foreign_id(op, arg));
+        }
+        let b = self.need(op)?;
+        b.vertex_ids().nth(id.index() as usize).ok_or_else(|| Error::not_found(op, arg, format!("no {id}")))
+    }
+
     pub(crate) fn sr_edges(&self, op: &'static str, arg: &'static str, ids: &[EdgeId]) -> Result<Vec<engine_ids::Edge>> {
         ids.iter().map(|&e| self.sr_edge(op, arg, e)).collect()
     }
