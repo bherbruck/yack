@@ -58,8 +58,9 @@ impl Frame {
         if x.cross(y).dot(z) <= 0.0 {
             return Err(Error::invalid(op, "z", "the frame is left-handed: x × y points along -z"));
         }
-        let unit = |v: Vec3| Dir3::new(v).map_err(|e| e.in_op(op));
-        Ok(Frame { origin, x: unit(x)?, y: unit(y)?, z: unit(z)? })
+        // Valid axes are kept bit for bit (never rescaled): an engine reads the frame exactly as
+        // the caller wrote it, as each engine's own adapter would.
+        Ok(Frame { origin, x: Dir3::unchecked(x), y: Dir3::unchecked(y), z: Dir3::unchecked(z) })
     }
 
     /// The world axes moved to `origin`.
@@ -165,6 +166,13 @@ mod tests {
         assert_eq!(g.x(), Dir3::Y);
         let q = Frame::WORLD.turned(crate::deg(90.0));
         assert!((q.x().vec() - Vec3::new(0.0, 1.0, 0.0)).length() < yack_tol::LINEAR);
+    }
+
+    #[test]
+    fn valid_axes_keep_their_bits() {
+        let x = Vec3::new(0.6000000000000001, 0.8, 0.0);
+        let f = Frame::new([0.0; 3], x, [-0.8, 0.6, 0.0], [0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(f.x().vec().to_array(), x.to_array());
     }
 
     #[test]

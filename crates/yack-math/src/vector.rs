@@ -168,6 +168,10 @@ impl Dir3 {
         }
         Ok(Dir3(v * (1.0 / l)))
     }
+    /// `v` taken as already unit (the caller has checked it within tolerance), kept bit for bit.
+    pub(crate) const fn unchecked(v: Vec3) -> Dir3 {
+        Dir3(v)
+    }
     /// The unit vector.
     pub const fn vec(self) -> Vec3 {
         self.0
