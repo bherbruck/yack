@@ -1,0 +1,16 @@
+# Workspace clippy settings (PLAN §6.5, §6.6). crates/yack/clippy.toml repeats these plus the
+# facade maths ban, because clippy reads only the nearest clippy.toml.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "nondeterministic iteration: use BTreeMap (R9)" },
+    { path = "std::collections::HashSet", reason = "nondeterministic iteration: use BTreeSet (R9)" },
+]
+disallowed-methods = [
+    { path = "std::env::var", reason = "no hidden state in kernel crates (R9)" },
+    { path = "std::env::var_os", reason = "no hidden state in kernel crates (R9)" },
+    { path = "std::time::Instant::now", reason = "no wall-clock time in kernel crates (R9)" },
+    { path = "std::time::SystemTime::now", reason = "no wall-clock time in kernel crates (R9)" },
+]

@@ -1,0 +1,276 @@
+# yack crate DAG (PLAN §3). `cargo xtask gate` enforces it (PLAN §6.6).
+#
+# Each [crate.<name>] entry:
+#   layer      = n          a crate may depend only on crates of strictly lower layer
+#   kind       = "kernel" | "public" | "tool" | "temporary"
+#   owner      = "<agent or lead>"   the only one who edits it (AGENTS.md rule 3)
+#   deps       = [..]       the allow-list of internal dependencies (package names)
+#   delete_by  = "Mn"       temporary crates only: the gate fails once tag `mn` exists
+#   license    = ".."       expected Cargo `license`; "Apache-2.0" iff it holds Apache-only code
+#   external   = [..]       tool crates only: the external packages it may use
+# In deps, "*kernel" means every crate of kind "kernel".
+#
+# A crate listed here need not exist yet (crates are created when first needed). A crate under
+# crates/ that is not listed fails the gate. Tool crates sit outside the kernel DAG: nothing in
+# the kernel may depend on them.
+
+[reexport]
+# The only internal items `yack` may re-export as they are (from yack-math).
+items = ["Point2", "Point3", "Vec3", "Dir3", "Frame", "Angle", "Aabb", "Rigid", "Similarity", "Affine"]
+
+# ---- layer 0 ----
+[crate.yack-base]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-tol]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-ssi]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-gridmesh]
+layer = 0
+kind = "kernel"
+owner = "lead"
+deps = []
+license = "Apache-2.0"
+
+# ---- layer 1 ----
+[crate.yack-numeric]
+layer = 1
+kind = "kernel"
+owner = "lead"
+deps = ["yack-base", "yack-tol"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-p21]
+layer = 1
+kind = "kernel"
+owner = "lead"
+deps = ["yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 2 ----
+[crate.yack-math]
+layer = 2
+kind = "kernel"
+owner = "lead"
+deps = ["yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 3 ----
+[crate.yack-geom]
+layer = 3
+kind = "kernel"
+owner = "lead"
+deps = ["yack-math", "yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 4 ----
+[crate.yack-intersect]
+layer = 4
+kind = "kernel"
+owner = "lead"
+deps = ["yack-geom", "yack-ssi", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-profile]
+layer = 4
+kind = "kernel"
+owner = "lead"
+deps = ["yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-topo]
+layer = 4
+kind = "kernel"
+owner = "lead"
+deps = ["yack-geom", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 5 ----
+[crate.yack-locate]
+layer = 5
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-intersect", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-measure]
+layer = 5
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-intersect", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-codec]
+layer = 5
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-geom", "yack-math", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 6 ----
+[crate.yack-check]
+layer = 6
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-locate", "yack-measure", "yack-intersect", "yack-geom", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-mesh]
+layer = 6
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-locate", "yack-gridmesh", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 7 ----
+[crate.yack-tweak]
+layer = 7
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-intersect", "yack-locate", "yack-check", "yack-geom", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-heal]
+layer = 7
+kind = "kernel"
+owner = "lead"
+deps = ["yack-topo", "yack-locate", "yack-check", "yack-intersect", "yack-geom", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-build]
+layer = 7
+kind = "kernel"
+owner = "lead"
+deps = ["yack-profile", "yack-topo", "yack-check", "yack-locate", "yack-measure", "yack-intersect", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 8 ----
+[crate.yack-boolean]
+layer = 8
+kind = "kernel"
+owner = "lead"
+deps = ["yack-build", "yack-tweak", "yack-heal", "yack-check", "yack-mesh", "yack-measure", "yack-locate", "yack-intersect", "yack-profile", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 9 ----
+[crate.yack-blend]
+layer = 9
+kind = "kernel"
+owner = "lead"
+deps = ["yack-boolean", "yack-build", "yack-tweak", "yack-heal", "yack-check", "yack-measure", "yack-locate", "yack-intersect", "yack-profile", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-swept]
+layer = 9
+kind = "kernel"
+owner = "lead"
+deps = ["yack-boolean", "yack-build", "yack-intersect", "yack-locate", "yack-check", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- layer 10 ----
+[crate.yack-edit]
+layer = 10
+kind = "kernel"
+owner = "lead"
+deps = ["yack-blend", "yack-swept", "yack-boolean", "yack-build", "yack-tweak", "yack-heal", "yack-check", "yack-measure", "yack-locate", "yack-intersect", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-step]
+layer = 10
+kind = "kernel"
+owner = "lead"
+deps = ["yack-p21", "yack-heal", "yack-boolean", "yack-check", "yack-mesh", "yack-topo", "yack-geom", "yack-math", "yack-tol", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-view]
+layer = 10
+kind = "kernel"
+owner = "lead"
+deps = ["yack-boolean", "yack-locate", "yack-measure", "yack-mesh", "yack-intersect", "yack-topo", "yack-geom", "yack-math", "yack-base"]
+license = "MIT OR Apache-2.0"
+
+# ---- temporary engines (PLAN §3.2) ----
+[crate.yack-springrep]
+layer = 10
+kind = "temporary"
+owner = "lead"
+deps = []
+delete_by = "M3"
+license = "MIT OR Apache-2.0"
+
+[crate.yack-shim]
+layer = 9
+kind = "temporary"
+owner = "lead"
+deps = []
+delete_by = "M4"
+license = "MIT OR Apache-2.0"
+
+[crate.yack-cadrs]
+layer = 10
+kind = "temporary"
+owner = "lead"
+deps = ["yack-shim"]
+delete_by = "M4"
+license = "MIT OR Apache-2.0"
+
+[crate.yack-bridge]
+layer = 10
+kind = "temporary"
+owner = "lead"
+deps = ["yack-springrep", "yack-cadrs"]
+delete_by = "M4"
+license = "MIT OR Apache-2.0"
+
+# ---- the public crate ----
+[crate.yack]
+layer = 11
+kind = "public"
+owner = "api-owner"
+deps = ["*kernel", "yack-springrep", "yack-cadrs", "yack-bridge"]
+license = "MIT OR Apache-2.0"
+
+# ---- tools (outside the kernel DAG; never a dependency of a kernel crate) ----
+[crate.xtask]
+layer = 12
+kind = "tool"
+owner = "harness-owner"
+deps = []
+license = "MIT OR Apache-2.0"
+
+[crate.yack-testkit]
+layer = 12
+kind = "tool"
+owner = "harness-owner"
+deps = ["yack"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-conformance]
+layer = 12
+kind = "tool"
+owner = "api-owner"
+deps = ["yack"]
+external = ["brep-protocol"]
+license = "MIT OR Apache-2.0"
+
+[crate.yack-bench]
+layer = 12
+kind = "tool"
+owner = "api-owner"
+deps = ["yack"]
+license = "MIT OR Apache-2.0"

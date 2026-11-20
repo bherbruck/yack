@@ -1,2 +1,6 @@
+# One target dir for everyone (PLAN R7). Never override it with CARGO_TARGET_DIR.
 [build]
 target-dir = "bin"
+
+[alias]
+xtask = "run -q -p xtask --"

@@ -1,0 +1,30 @@
+yack
+Copyright (c) 2026 yack contributors
+
+yack's own code is licensed under the MIT license or the Apache License, Version 2.0, at your
+option (LICENSE-MIT, LICENSE-APACHE). A crate that contains Apache-2.0-only donor code says
+`license = "Apache-2.0"` in its Cargo.toml, and the combined work is then
+`(MIT OR Apache-2.0) AND Apache-2.0`; `cargo xtask gate` prints the exact SPDX expression of the
+`yack` crate's dependency closure.
+
+Every file adapted from another project begins with a provenance header naming the project,
+revision, path, licence and copyright holder. This file lists each project whose code is in the
+tree. An entry is added in the same commit that brings that project's first file in.
+
+Donor projects (code in this tree)
+----------------------------------
+(none yet)
+
+Donor projects planned (PLAN.md §9), with the notices to copy when their first file arrives:
+- springrep @ a03e8a1, MIT, Copyright (c) 2026 Springcraft, Inc.
+- cadrs (crates/cadrs_kernel) @ eb5899ef, MIT OR Apache-2.0, Copyright (c) 2026 Rouan van der Ende
+- geomsolver / cad-kernel @ 694cb72, MIT, Copyright (c) 2026 Brandon Martin-Anderson
+  (its util/fmath.rs carries a musl/FreeBSD notice, which is kept verbatim here when copied)
+- ssi (solidcraft-main/solidcore/crates/ssi @ 4b1a170b), MIT OR Apache-2.0, Copyright (c) 2026 h0witzer
+- solidcore (solidcraft-main/solidcore @ 4b1a170b), Apache-2.0, a derivative of NVIDIA USD BRep
+  SMLib/SM_API; its NOTICE is reproduced here when its first file arrives
+- solidcraft (solidcraft-main @ 4b1a170b), MIT OR Apache-2.0, Copyright (c) 2026 SolidCraft contributors
+- brep-conformance protocol @ 12ffc75 (yack-conformance only, not shipped), MIT,
+  Copyright (c) 2026 Springcraft, Inc.
+- brep-bench @ d522d62 (case texts used as test oracles), MIT OR Apache-2.0,
+  Copyright (c) 2026 the brep-bench contributors

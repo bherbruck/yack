@@ -1,0 +1,24 @@
+# yack facade: routes, never computes (PLAN §6.6 check 13, DECISIONS D21). Same as the root
+# clippy.toml, plus a ban on the maths a facade must never do.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "nondeterministic iteration: use BTreeMap (R9)" },
+    { path = "std::collections::HashSet", reason = "nondeterministic iteration: use BTreeSet (R9)" },
+]
+disallowed-methods = [
+    { path = "std::env::var", reason = "no hidden state (R9)" },
+    { path = "std::env::var_os", reason = "no hidden state (R9)" },
+    { path = "std::time::Instant::now", reason = "no wall-clock time (R9)" },
+    { path = "std::time::SystemTime::now", reason = "no wall-clock time (R9)" },
+    { path = "f64::sqrt", reason = "the facade routes, never computes" },
+    { path = "f64::sin", reason = "the facade routes, never computes" },
+    { path = "f64::cos", reason = "the facade routes, never computes" },
+    { path = "f64::tan", reason = "the facade routes, never computes" },
+    { path = "f64::atan2", reason = "the facade routes, never computes" },
+    { path = "f64::powi", reason = "the facade routes, never computes" },
+    { path = "f64::powf", reason = "the facade routes, never computes" },
+    { path = "f64::hypot", reason = "the facade routes, never computes" },
+]
