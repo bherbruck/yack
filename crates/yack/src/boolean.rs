@@ -108,6 +108,7 @@ impl Solid {
 
     /// The parts on each side of `plane`; `front` is on the normal's side. Either may be empty.
     pub fn split(&self, plane: &Plane) -> Result<Split> {
+        ladder::allowed("split", "springrep")?;
         firewall::run("split", || {
             let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };
             let (front, back) = sr::split(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))

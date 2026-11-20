@@ -23,7 +23,7 @@ use crate::{Angle, Error, Frame, PathPiece, Point3, Profile, Result, Solid, Spli
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
-    firewall::run("block", || {
+    ladder::springrep_only("block", || {
         let feature = engine::feature();
         engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
     })
@@ -31,7 +31,7 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
 
 /// A cylinder of `radius` on the frame's z axis, from z = 0 to z = `height`.
 pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
-    firewall::run("cylinder", || {
+    ladder::springrep_only("cylinder", || {
         let feature = engine::feature();
         engine::made_as(&feature, "cylinder", &[("side", "seg:side")], primitive::cylinder(&engine::frame(frame), radius, height, &feature))
     })
@@ -39,7 +39,7 @@ pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
 
 /// A sphere of `radius` centred at the frame origin.
 pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
-    firewall::run("sphere", || {
+    ladder::springrep_only("sphere", || {
         let feature = engine::feature();
         engine::made(&feature, "sphere", primitive::sphere(&engine::frame(frame), radius, &feature))
     })
@@ -62,7 +62,7 @@ pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 
 /// A cone (or frustum) on the frame's z axis: radius `bottom` at z = 0, `top` at z = `height`.
 pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> {
-    firewall::run("cone", || {
+    ladder::springrep_only("cone", || {
         let feature = engine::feature();
         engine::made_as(&feature, "cone", &[("bottom", "start"), ("top", "end"), ("side", "seg:side")], primitive::cone(&engine::frame(frame), bottom, top, height, &feature))
     })
@@ -79,7 +79,7 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
             format!("height {height} is negative; to extrude the other way, flip the frame: Frame::new(origin, x, -y, -z)"),
         ));
     }
-    firewall::run("extrude", || {
+    ladder::springrep_only("extrude", || {
         let feature = engine::feature();
         let op = "extrude";
         engine::made(&feature, op, sweep::extrude(&engine::profile(op, profile, None)?, &engine::frame(frame), height, &feature))
@@ -89,7 +89,7 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
 /// `profile` revolved about the frame's z axis by `angle`. The profile is drawn in the frame's xz
 /// plane: profile x along the frame's x (out from the axis, x ≥ 0), profile y along the frame's z.
 pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> {
-    firewall::run("revolve", || {
+    ladder::springrep_only("revolve", || {
         let feature = engine::feature();
         let op = "revolve";
         let sketch = engine::profile(op, profile, None)?;
@@ -104,7 +104,7 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
 /// `profile` (drawn as for [`revolve`]) screwed about the frame's z axis by `angle` while rising
 /// `rise` mm per radian.
 pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Result<Solid> {
-    firewall::run("screw", || {
+    ladder::springrep_only("screw", || {
         let feature = engine::feature();
         let op = "screw";
         let sketch = engine::profile(op, profile, None)?;
@@ -117,7 +117,7 @@ pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Resul
 /// `profile` scaled by `scale` about the frame's z axis, sent ready-made; yack lofts to `top` as
 /// given and does not scale it again.
 pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid> {
-    firewall::run("loft", || {
+    ladder::springrep_only("loft", || {
         let _ = scale; // recorded by the protocol; `top` is already the scaled copy
         let feature = engine::feature();
         let op = "loft";
@@ -132,7 +132,7 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Pro
 
 /// A loft through `sections`, each a profile at a height along the frame's z.
 pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid> {
-    firewall::run("loft_through", || {
+    ladder::springrep_only("loft_through", || {
         let feature = engine::feature();
         let op = "loft_through";
         let counts: BTreeSet<usize> = sections.iter().map(|(_, p)| p.outer().segments().len()).collect();
@@ -163,7 +163,7 @@ pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<
 /// `profile` swept along a path of lines and arcs starting along the frame's z. A positive arc
 /// angle turns toward the frame's +x.
 pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid> {
-    firewall::run("sweep", || {
+    ladder::springrep_only("sweep", || {
         let feature = engine::feature();
         let op = "sweep";
         let axis = engine::v3(frame.y().vec());
@@ -181,7 +181,7 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
 /// `profile` swept along a spline `path` given in the frame's coordinates (it starts at the
 /// profile), twisting by `twist` over its length.
 pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid> {
-    firewall::run("sweep_path", || {
+    ladder::springrep_only("sweep_path", || {
         let feature = engine::feature();
         let op = "sweep_path";
         let (curve, domain) = engine::spline(op, path, |c| frame.point(c.to_array()))?;
@@ -193,7 +193,7 @@ pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle
 /// A slab over the `size` rectangle with a spline top: `heights[i][j]` over knots `knots_u[i]`,
 /// `knots_v[j]`.
 pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid> {
-    firewall::run("slab", || {
+    ladder::springrep_only("slab", || {
         let feature = engine::feature();
         engine::made(&feature, "slab", primitive::slab(&engine::frame(frame), size, (knots_u, knots_v), heights, &feature))
     })

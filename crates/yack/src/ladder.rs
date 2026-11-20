@@ -88,3 +88,20 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
         Err(Error { kind: ErrorKind::Failed, op, arg: None, stage, detail })
     }
 }
+
+/// An op only springrep builds, still through the ladder (so `bakeoff::force(Cadrs)` refuses it
+/// rather than letting springrep build behind the switch), behind the panic firewall.
+pub(crate) fn springrep_only(op: &'static str, run: impl Fn() -> Result<Solid>) -> Result<Solid> {
+    crate::firewall::run(op, || ladder(op, &[Rung { name: "springrep", run: &run }]))
+}
+
+/// Whether the engine `name` may run (always, unless the bake-off forced another): for ops whose
+/// result is not one solid.
+pub(crate) fn allowed(op: &'static str, name: &'static str) -> Result<()> {
+    #[cfg(feature = "bakeoff")]
+    if !crate::bakeoff::allows(name) {
+        return Err(Error::new(ErrorKind::Unsupported, op, format!("bakeoff: {name} not forced")));
+    }
+    let _ = (op, name);
+    Ok(())
+}

@@ -204,13 +204,13 @@ impl Solid {
     pub fn transform(&self, m: &Similarity) -> Result<Solid> {
         let op = "transform";
         let Some(b) = self.brep() else { return Ok(Solid::empty()) };
-        firewall::run(op, || engine::solid(op, sr::transform(b, m.rows())))
+        ladder::springrep_only(op, || engine::solid(op, sr::transform(b, m.rows())))
     }
 
     /// The image under an invertible affine map (protocol `affine`).
     pub fn transform_affine(&self, m: &Affine) -> Result<Solid> {
         let op = "transform_affine";
         let Some(b) = self.brep() else { return Ok(Solid::empty()) };
-        firewall::run(op, || engine::solid(op, sr::affine(b, m.rows())))
+        ladder::springrep_only(op, || engine::solid(op, sr::affine(b, m.rows())))
     }
 }
