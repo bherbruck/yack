@@ -53,18 +53,21 @@ pub(crate) fn meridian(f: &Frame) -> sr::math::Frame {
     sr::math::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
 }
 
-/// springrep's refusal as yack's error, from `op`.
+/// springrep's refusal as yack's error, from `op`: `Invalid` only where the input breaks a stated
+/// requirement of the op ([`sr::facade::api::breaks_requirement`]); springrep's other "invalid"
+/// refusals are its own limits ("an offset closes a torus to nothing", an extrusion of zero inside
+/// a face deletion) and come out `Failed`, so another engine may try.
 pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
     let detail = e.to_string();
-    match e {
-        sr::Error::InvalidInput(_) => Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(Stage::Validate), detail },
+    let invalid = |stage| Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(stage), detail: detail.clone() };
+    match &e {
+        sr::Error::InvalidInput(_) if sr::facade::api::breaks_requirement(op, &detail) => invalid(Stage::Validate),
+        sr::Error::InvalidResult(_) if sr::facade::api::breaks_requirement(op, &detail) => invalid(Stage::Check),
+        // springrep could not build a request that breaks no requirement: a failure, not a refusal
+        // of the request (so it still counts as a refusal where one is due)
+        sr::Error::InvalidInput(_) => Error::failed(op, Stage::Validate, detail),
         sr::Error::Unsupported(_) => Error::new(ErrorKind::Unsupported, op, detail),
         sr::Error::Numerical(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: None, detail },
-        // A moved face turned inside out is the act the input does not allow (a shell as thick as
-        // the part, a step raised past the next): the contract's invalid, not a failure.
-        sr::Error::InvalidResult(issues) if issues.iter().any(|i| i.contains("turns inside out")) => {
-            Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(Stage::Check), detail }
-        }
         sr::Error::InvalidResult(_) => Error::failed(op, Stage::Check, detail),
     }
 }

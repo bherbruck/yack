@@ -178,6 +178,9 @@ impl Solid {
     /// wall); [`shell`](Solid::shell) joins them sharp.
     pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_rounded";
+        if !(thickness.is_finite() && thickness > 0.0) {
+            return Err(Error::invalid(op, "thickness", format!("thickness {thickness} is not positive")));
+        }
         self.sr_faces(op, "open", open)?;
         let ix = indices(open);
         firewall::run(op, || {
@@ -188,6 +191,9 @@ impl Solid {
     /// (every point within `thickness` of the solid).
     pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_outward_rounded";
+        if !(thickness.is_finite() && thickness > 0.0) {
+            return Err(Error::invalid(op, "thickness", format!("thickness {thickness} is not positive")));
+        }
         self.sr_faces(op, "open", open)?;
         let ix = indices(open);
         firewall::run(op, || {

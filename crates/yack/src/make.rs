@@ -175,6 +175,12 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Pro
 
 /// A loft through `sections`, each a profile at a height along the frame's z.
 pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid> {
+    if sections.len() < 2 {
+        return Err(Error::invalid("loft_through", "sections", "a loft needs two sections or more"));
+    }
+    if sections.windows(2).any(|w| matches!(w, [(a, _), (b, _)] if b.partial_cmp(a) != Some(core::cmp::Ordering::Greater))) {
+        return Err(Error::invalid("loft_through", "sections", "the sections' heights must rise"));
+    }
     ladder::springrep_only("loft_through", || {
         let feature = engine::feature();
         let op = "loft_through";

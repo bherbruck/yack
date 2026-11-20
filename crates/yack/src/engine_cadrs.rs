@@ -32,10 +32,13 @@ fn lock(s: &Mutex<DefaultKernel>) -> MutexGuard<'_, DefaultKernel> {
 pub(crate) fn error(op: &'static str, e: KernelError) -> Error {
     let detail = format!("cadrs: {e}");
     match e {
+        // cadrs's "invalid" verdicts are taken as its own limits: whether an input breaks an op's
+        // requirement is decided by springrep's error map and by the facade's validation (the
+        // cadrs-only ops check their stated requirements before running), never by cadrs alone.
         KernelError::InvalidProfile(_)
         | KernelError::InvalidParameter(_)
         | KernelError::InvalidInput(_)
-        | KernelError::UnknownBody(_) => Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(Stage::Validate), detail },
+        | KernelError::UnknownBody(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: Some(Stage::Validate), detail },
         KernelError::Unsupported(_) => Error::new(ErrorKind::Unsupported, op, detail),
         KernelError::BudgetExhausted { .. } => Error { kind: ErrorKind::Budget, op, arg: None, stage: None, detail },
         KernelError::InvalidResult { .. } => Error::failed(op, Stage::Check, detail),

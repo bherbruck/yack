@@ -190,6 +190,12 @@ impl Solid {
     /// `angle` to that face (cadrs only).
     pub fn chamfer_angle(&self, edge: EdgeId, face: FaceId, distance: f64, angle: Angle) -> Result<Solid> {
         let op = "chamfer_angle";
+        if !(distance.is_finite() && distance > 0.0) {
+            return Err(crate::Error::invalid(op, "distance", format!("distance {distance} is not positive")));
+        }
+        if !(angle.radians() > 0.0 && angle.radians() < core::f64::consts::FRAC_PI_2) {
+            return Err(crate::Error::invalid(op, "angle", "the bevel's angle to the face must be between 0 and 90 degrees"));
+        }
         self.sr_edge(op, "edge", edge)?;
         self.sr_face(op, "face", face)?;
         let (ei, fi, a) = (u64::from(edge), u64::from(face), angle.radians());

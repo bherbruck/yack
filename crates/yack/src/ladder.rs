@@ -1,7 +1,7 @@
 // yack: the M1 strategy ladder over the two temporary engines (PLAN §3.5, DECISIONS D9, M1.10).
 //
-// Rules: a fixed order per op; springrep's `Invalid` (and NotFound/Ambiguous/ForeignId, and a
-// caught panic, `Internal`) is final, cadrs's `Invalid` falls through; Unsupported/Failed/Budget declines and the next rung runs; the first
+// Rules: a fixed order per op; `Invalid` (and NotFound/Ambiguous/ForeignId, and a caught panic,
+// `Internal`) is final; Unsupported/Failed/Budget declines and the next rung runs; the first
 // result wins (each engine's result has passed its own checker: springrep's ops end in its check,
 // and a cadrs result is carried back only through the bridge, which checks it). When every rung
 // declined: Unsupported if all were, else Failed with every rung's reason.
@@ -23,33 +23,6 @@ pub(crate) struct Rung<'a> {
 const CADRS_FIRST: &[&str] =
     &["swept", "delete_faces", "move_faces", "offset_faces", "shell", "shell_outward", "thicken", "draft", "fillet_variable"];
 
-/// The springrep refusals that mean "this request is invalid" in the protocol's sense, by op
-/// (`"*"`: any op) and a phrase of springrep's message. Only these are final; every other
-/// springrep `Invalid` is springrep stating its own limit ("extrusion distance must be nonzero"
-/// inside a delete, "an offset closes a torus to nothing", a draft that "turns inside out"), and
-/// falls through so cadrs gets a turn (if cadrs fails too, the answer is still `Invalid`).
-/// Derived from springrep's refusal texts in the conformance invalid-* families (runs/yack-m1-seed0..3).
-const INVALID_PER_PROTOCOL: &[(&str, &str)] = &[
-    ("*", "must be positive"),
-    ("*", "takes a whole face"),
-    ("*", "runs past the end of an edge"),
-    ("*", "does not fit on its faces"),
-    ("fillet", "the faces are parallel"),
-    ("cone", "needs a positive height"),
-    ("extrude", "must be nonzero"),
-    ("loft_through", "do not come in order"),
-    ("revolve", "axis crosses the profile"),
-    ("screw", "coils met"),
-    ("torus", "clear of its axis"),
-    ("offset_faces", "turns inside out"),
-    ("move_faces", "turns inside out"),
-    ("shell", "turns inside out"),
-];
-
-/// Whether springrep's `Invalid` refusal `e` from `op` is the protocol's invalid (final).
-fn invalid_per_protocol(op: &str, e: &Error) -> bool {
-    INVALID_PER_PROTOCOL.iter().any(|&(o, phrase)| (o == "*" || o == op) && e.detail.contains(phrase))
-}
 
 /// Whether cadrs leads `op`'s ladder.
 pub(crate) fn cadrs_first(op: &str) -> bool {
@@ -72,7 +45,6 @@ pub(crate) fn two<'a>(op: &'static str, springrep: &'a dyn Fn() -> Result<Solid>
             return Ok(built);
         }
         if let Err(e) = springrep()
-            && is_final(op, "springrep", &e)
             && e.kind == ErrorKind::Invalid
         {
             return Err(e);
@@ -81,16 +53,10 @@ pub(crate) fn two<'a>(op: &'static str, springrep: &'a dyn Fn() -> Result<Solid>
     Ok(built)
 }
 
-/// Whether a rung's refusal ends the ladder. springrep's validation is the reference: its
-/// `Invalid` (and an id or pick refusal, which comes before any engine) is final; cadrs's
-/// `Invalid` falls through, as cadrs refuses some inputs springrep builds. A caught panic is
-/// always final.
-fn is_final(op: &str, rung: &str, e: &Error) -> bool {
-    match e.kind {
-        ErrorKind::Internal | ErrorKind::NotFound | ErrorKind::Ambiguous | ErrorKind::ForeignId => true,
-        ErrorKind::Invalid => rung == "springrep" && invalid_per_protocol(op, e),
-        _ => false,
-    }
+/// Whether a rung's refusal ends the ladder: `Invalid` (the input breaks a stated requirement of
+/// the op, as each engine's error map decides), an id or pick refusal, or a caught panic.
+fn is_final(e: &Error) -> bool {
+    matches!(e.kind, ErrorKind::Invalid | ErrorKind::Internal | ErrorKind::NotFound | ErrorKind::Ambiguous | ErrorKind::ForeignId)
 }
 
 /// Runs `rungs` in order (see the module comment). Each rung runs behind its own panic
@@ -110,7 +76,7 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
             Ok(s) if s.suspected().is_some() && held.is_none() => held = Some(s.with_strategy(rung.name)),
             Ok(s) if s.suspected().is_some() => {}
             Ok(s) => return Ok(s.with_strategy(rung.name)),
-            Err(e) if is_final(op, rung.name, &e) => {
+            Err(e) if is_final(&e) => {
                 return match held {
                     Some(h) => Ok(h.trusted()),
                     None => Err(e),
