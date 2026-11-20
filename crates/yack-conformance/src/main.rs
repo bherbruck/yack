@@ -197,10 +197,10 @@ impl Kernel for Yack {
             Side::On => model::Side::On,
             Side::Out => model::Side::Out,
         };
-        Ok(s.classify(at).into_iter().map(side).collect())
+        Ok(s.classify(at).map_err(r)?.into_iter().map(side).collect())
     }
     fn closest(&self, s: &Solid, at: &[V]) -> Res<Vec<V>> {
-        Ok(arrays(s.closest(at)))
+        Ok(arrays(s.closest(at).map_err(r)?))
     }
     fn normal(&self, s: &Solid, at: &[V]) -> Res<Vec<Option<V>>> {
         Ok(s.normal_at(at).into_iter().map(|n| n.map(yack::Vec3::to_array)).collect())
@@ -222,7 +222,7 @@ impl Kernel for Yack {
         Ok(s.betti())
     }
     fn distance(&self, a: &Solid, b: &Solid) -> Res<f64> {
-        Ok(a.distance(b))
+        a.distance(b).map_err(r)
     }
     fn interference(&self, a: &Solid, b: &Solid) -> Res<Meeting> {
         let m = a.interference(b).map_err(r)?;

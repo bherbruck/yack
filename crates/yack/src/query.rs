@@ -2,7 +2,7 @@
 // take a tolerance or build geometry.
 use yack_springrep::{check, distance, draw, measure, mesh, overlap, rays};
 
-use crate::engine;
+use crate::{engine, firewall};
 use crate::solid::Body;
 use crate::{
     Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
@@ -53,25 +53,31 @@ impl Solid {
         })
     }
 
-    /// Where each point lies: `In`, `On` (within `tol::LINEAR`) or `Out`. Empty if the solid's
-    /// ray caster could not be built (never for a valid solid).
-    pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Side> {
-        let Some(b) = self.brep() else { return vec![Side::Out; pts_.len()] };
-        let Ok(caster) = rays::Rays::new(b) else { return Vec::new() };
-        pts(pts_)
-            .map(|p| match caster.side(p) {
-                rays::Side::Inside => Side::In,
-                rays::Side::On => Side::On,
-                rays::Side::Outside => Side::Out,
-            })
-            .collect()
+    /// Where each point lies: `In`, `On` (within `tol::LINEAR`) or `Out`.
+    pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> {
+        let op = "classify";
+        let Some(b) = self.brep() else { return Ok(vec![Side::Out; pts_.len()]) };
+        firewall::run(op, || {
+            let caster = rays::Rays::new(b).map_err(|e| engine::error(op, e))?;
+            Ok(pts(pts_)
+                .map(|p| match caster.side(p) {
+                    rays::Side::Inside => Side::In,
+                    rays::Side::On => Side::On,
+                    rays::Side::Outside => Side::Out,
+                })
+                .collect())
+        })
     }
 
-    /// The closest boundary point to each point; empty for the empty solid, or if a search fails.
-    pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Point3> {
-        let Some(b) = self.brep() else { return Vec::new() };
-        let Ok(nearest) = distance::Nearest::solid(b) else { return Vec::new() };
-        pts(pts_).map(|p| nearest.to(p).map(|c| engine::point(c.on_b))).collect::<core::result::Result<_, _>>().unwrap_or_default()
+    /// For each point, the nearest point on the solid's boundary (not its inside: a point inside
+    /// the solid gets the nearest boundary point too). Empty for the empty solid.
+    pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> {
+        let op = "closest";
+        let Some(b) = self.brep() else { return Ok(Vec::new()) };
+        firewall::run(op, || {
+            let nearest = distance::Nearest::solid(b).map_err(|e| engine::error(op, e))?;
+            pts(pts_).map(|p| nearest.to(p).map(|c| engine::point(c.on_b)).map_err(|e| engine::error(op, e))).collect()
+        })
     }
 
     /// The outward unit normal at each boundary point; `None` at a crease or off the boundary.
@@ -89,15 +95,15 @@ impl Solid {
     }
 
     /// The least distance between the two solids: zero if they touch or overlap, infinite if
-    /// either is empty, NaN if the search fails.
-    pub fn distance(&self, other: &Solid) -> f64 {
-        match (self.brep(), other.brep()) {
-            (Some(a), Some(b)) => {
-                distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
-                    .map_or(f64::NAN, |c| c.distance)
-            }
-            _ => f64::INFINITY,
-        }
+    /// either is empty.
+    pub fn distance(&self, other: &Solid) -> Result<f64> {
+        let op = "distance";
+        let (Some(a), Some(b)) = (self.brep(), other.brep()) else { return Ok(f64::INFINITY) };
+        firewall::run(op, || {
+            distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
+                .map(|c| c.distance)
+                .map_err(|e| engine::error(op, e))
+        })
     }
 
     /// The volume shared with `other` and the gap between them.

@@ -88,11 +88,11 @@ yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
 yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
 yack::query: impl Solid { pub fn centroid(&self) -> Option<Point3> }
 yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
-yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Side> }
-yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Point3> }
+yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> }
+yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> }
 yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Vec<Option<[f64; 2]>> }
 yack::query: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
-yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> f64 }
+yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
 yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
 yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
 yack::query: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }

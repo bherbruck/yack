@@ -177,7 +177,7 @@ mod tests {
         assert!(s.is_empty());
         assert_eq!(s.volume(), 0.0);
         assert_eq!(s.betti(), [0, 0, 0]);
-        assert_eq!(s.classify(&[[0.0, 0.0, 0.0]]), vec![Side::Out]);
+        assert_eq!(s.classify(&[[0.0, 0.0, 0.0]]).unwrap(), vec![Side::Out]);
         assert!(s.face_at([0.0, 0.0, 0.0]).is_err());
         assert!(s.mesh(0.1).unwrap().triangles.is_empty());
         let bytes = crate::codec::encode(&s);

@@ -63,7 +63,7 @@ fn queries_on_a_block() {
     let a = cube([1.0, 2.0, 3.0]);
     let bb = a.bounding_box().unwrap();
     assert!((bb.min.x - 1.0).abs() < 1e-9 && (bb.max.z - 5.0).abs() < 1e-9);
-    assert_eq!(a.classify(&[[2.0, 3.0, 4.0], [9.0, 9.0, 9.0], [1.0, 3.0, 4.0]]), vec![Side::In, Side::Out, Side::On]);
+    assert_eq!(a.classify(&[[2.0, 3.0, 4.0], [9.0, 9.0, 9.0], [1.0, 3.0, 4.0]]).unwrap(), vec![Side::In, Side::Out, Side::On]);
     let hits = a.raycast(&[Ray::new([0.0, 3.0, 4.0], [1.0, 0.0, 0.0]).unwrap()]).unwrap();
     assert_eq!(hits[0].len(), 2);
     assert!(a.mesh(0.01).unwrap().triangles.len() >= 12);

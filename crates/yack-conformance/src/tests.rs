@@ -5,7 +5,12 @@ use brep_protocol::{FUNCTIONS, Kind, model::Frame, path::PathCurve, profile::Seg
 const ID: [[f64; 4]; 3] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
 
 fn square() -> profile::Profile {
-    let c = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+    square_at(0.0)
+}
+
+/// The 4 × 4 square from (x0, 0).
+fn square_at(x0: f64) -> profile::Profile {
+    let c = [[x0, 0.0], [x0 + 4.0, 0.0], [x0 + 4.0, 4.0], [x0, 4.0]];
     let seg = |i: usize| Seg::Line { a: c[i], b: c[(i + 1) % 4] };
     profile::Profile { loops: vec![(0..4).map(seg).collect()] }
 }
@@ -23,6 +28,8 @@ fn smoke(k: &Yack, name: &str) -> Res<()> {
     let s = || block(k);
     let ball = || k.make(&Primitive::Sphere { frame: Frame::at([30.0, 0.0, 0.0]), radius: 5.0 });
     let sq = square;
+    // The three edges meeting at the origin corner.
+    let corner = [e, [0.0, 10.0, 0.0], [0.0, 0.0, 15.0]];
     match name {
         "box" => s().map(drop),
         "cylinder" => make(Primitive::Cylinder { frame: at, radius: 2.0, height: 5.0 }),
@@ -31,7 +38,7 @@ fn smoke(k: &Yack, name: &str) -> Res<()> {
         "cone" => make(Primitive::Cone { frame: at, bottom: 3.0, top: 1.0, height: 4.0 }),
         "extrude" => make(Primitive::Extrude { frame: at, profile: sq(), height: 2.0 }),
         "revolve" => make(Primitive::Revolve { frame: at, profile: sq(), angle: 1.0 }),
-        "screw" => make(Primitive::Screw { frame: at, profile: sq(), rise: 1.0, angle: 1.0 }),
+        "screw" => make(Primitive::Screw { frame: at, profile: square_at(1.0), rise: 1.0, angle: 1.0 }),
         "loft" => {
             make(Primitive::Loft { frame: at, profile: sq(), scale: 1.0, height: 3.0, top: sq() })
         }
@@ -64,8 +71,8 @@ fn smoke(k: &Yack, name: &str) -> Res<()> {
         "fillet_variable" => k.fillet_variable(&s()?, e, [0.0; 3], 1.0, 2.0).map(drop),
         "fillet_conic" => k.fillet_conic(&s()?, &[e], 1.0, 0.5).map(drop),
         "fillet_g2" => k.fillet_g2(&s()?, &[e], 1.0, 1.0).map(drop),
-        "fillet_setback" => k.fillet_setback(&s()?, &[e], 1.0, 2.0).map(drop),
-        "fillet_setback_g2" => k.fillet_setback_g2(&s()?, &[e], 1.0, 2.0).map(drop),
+        "fillet_setback" => k.fillet_setback(&s()?, &corner, 1.0, 2.0).map(drop),
+        "fillet_setback_g2" => k.fillet_setback_g2(&s()?, &corner, 1.0, 2.0).map(drop),
         "fillet_faces" => k.fillet_faces(&s()?, f, [5.0, 0.0, 15.0], 1.0).map(drop),
         "full_round" => {
             k.full_round(&s()?, [0.0, 10.0, 15.0], [5.0, 10.0, 30.0], [10.0, 10.0, 15.0]).map(drop)
@@ -123,15 +130,18 @@ fn supports_names_only_protocol_functions() {
 #[test]
 fn supports_is_what_answers() {
     let listed = Yack.supports();
+    let mut wrong = Vec::new();
     for &name in FUNCTIONS {
         let got = smoke(&Yack, name);
         if listed.iter().any(|l| l == name) {
-            assert!(got.is_ok(), "`{name}` is listed but its smoke case refused: {got:?}");
-        } else {
-            let kind = got.as_ref().err().map(|e| e.kind);
-            assert_eq!(kind, Some(Kind::Unsupported), "`{name}` is unlisted but gave {got:?}");
+            if let Err(e) = got {
+                wrong.push(format!("`{name}` is listed but its smoke case refused: {e}"));
+            }
+        } else if got.as_ref().err().map(|e| e.kind) != Some(Kind::Unsupported) {
+            wrong.push(format!("`{name}` is unlisted but gave {got:?}"));
         }
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
