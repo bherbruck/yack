@@ -1,0 +1,19 @@
+# yack: temporary crate holding springrep's kernel verbatim (PLAN §3.2); deleted by M3.
+# Adapted from springrep@a03e8a1 Cargo.toml (MIT, (c) 2026 Springcraft, Inc.).
+# Changes: renamed to yack-springrep; version kept 1.0.1; workspace edition/rust-version/publish; licence per
+#   layers.toml; workspace lints not inherited (verbatim donor code; M2/M3 brings it under them).
+[package]
+name = "yack-springrep"
+description = "Temporary: springrep v1.0.1 kernel, copied verbatim (deleted by M3)"
+version = "1.0.1"  # springrep's own: `yack_springrep::VERSION` reads it
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+repository.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -13,10 +13,13 @@ tree. An entry is added in the same commit that brings that project's first file
 
 Donor projects (code in this tree)
 ----------------------------------
-(none yet)
+- springrep (https://github.com/springcraft-ai/springrep) @ a03e8a1 (v1.0.1), MIT,
+  Copyright (c) 2026 Springcraft, Inc.
+  In: crates/yack-springrep (src/, tests/, build.rs, README.md; temporary, deleted by M3).
+  The full MIT licence text is crates/yack-springrep/LICENSE-springrep; every copied file
+  carries a provenance header.
 
 Donor projects planned (PLAN.md §9), with the notices to copy when their first file arrives:
-- springrep @ a03e8a1, MIT, Copyright (c) 2026 Springcraft, Inc.
 - cadrs (crates/cadrs_kernel) @ eb5899ef, MIT OR Apache-2.0, Copyright (c) 2026 Rouan van der Ende
 - geomsolver / cad-kernel @ 694cb72, MIT, Copyright (c) 2026 Brandon Martin-Anderson
   (its util/fmath.rs carries a musl/FreeBSD notice, which is kept verbatim here when copied)
