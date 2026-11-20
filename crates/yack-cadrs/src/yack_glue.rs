@@ -343,3 +343,64 @@ pub fn split(k: &mut DefaultKernel, body: BodyId, origin: [f64; 3], normal: [f64
     };
     Ok((gather(front)?, gather(back)?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Pick;
+    use nalgebra::Point3;
+
+    fn cube(k: &mut DefaultKernel) -> BodyId {
+        k.primitive(&Primitive::Box { min: Point3::new(0.0, 0.0, 0.0), max: Point3::new(10.0, 10.0, 10.0) })
+            .and_then(|r| r.first())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_split_sorts_its_sides() {
+        let mut k = DefaultKernel::new();
+        let b = cube(&mut k);
+        let (front, back) = split(&mut k, b, [0.0, 0.0, 4.0], [0.0, 0.0, 1.0]).unwrap();
+        let v = |k: &DefaultKernel, m: Option<Made>| k.mass_properties(m.unwrap().0).unwrap().volume;
+        assert!((v(&k, front) - 600.0).abs() < 1e-9);
+        assert!((v(&k, back) - 400.0).abs() < 1e-9);
+        let (front, back) = split(&mut k, b, [0.0, 0.0, 20.0], [0.0, 0.0, 1.0]).unwrap_or((None, None));
+        assert!(front.is_none() || back.is_none());
+    }
+
+    #[test]
+    fn a_chamfer_of_every_edge_cuts_its_corners_flat() {
+        let mut k = DefaultKernel::new();
+        let b = cube(&mut k);
+        let all: Vec<u64> = (0..k.edges(b).unwrap().len() as u64).collect();
+        let (c, _) = chamfer(&mut k, b, &all, 1.0).unwrap();
+        // 6 faces, 12 bevels, 8 flat corner triangles (as cadrs's runner's Flat corners).
+        assert_eq!(k.get(c).unwrap().faces.len(), 26);
+    }
+
+    #[test]
+    fn a_shell_is_sharp_and_a_rounded_shell_rounds() {
+        let mut k = DefaultKernel::new();
+        let b = cube(&mut k);
+        let top = k.face_at(b, Point3::new(5.0, 5.0, 10.0)).unwrap().0;
+        let (s, _) = shell(&mut k, b, &[top], 1.0, true).unwrap();
+        // Sharp outward: the 12 × 12 × 11 box less the 10 × 10 × 10 cavity, open at the top.
+        let v = k.mass_properties(s).unwrap().volume;
+        assert!((v - (12.0 * 12.0 * 11.0 - 1000.0)).abs() < 1e-6, "{v}");
+        let (r, _) = shell_rounded(&mut k, b, &[top], 1.0, true).unwrap();
+        assert!(k.mass_properties(r).unwrap().volume < v);
+    }
+
+    #[test]
+    fn a_fillet_takes_the_whole_tangent_chain() {
+        let mut k = DefaultKernel::new();
+        let b = k
+            .primitive(&Primitive::cylinder(Point3::origin(), nalgebra::Vector3::z(), 5.0, 10.0))
+            .and_then(|r| r.first())
+            .unwrap();
+        let rim = k.edge_at(b, Point3::new(5.0, 0.0, 10.0)).unwrap().0;
+        let chain = chained(&k, b, &[rim]).unwrap();
+        assert!(chain.iter().all(|&(_, n)| n == 0) && chain.iter().any(|&(e, _)| e == rim));
+        assert!(fillet(&mut k, b, &[rim], 1.0).is_ok());
+    }
+}

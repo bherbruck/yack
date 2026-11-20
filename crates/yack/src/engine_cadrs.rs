@@ -74,6 +74,9 @@ fn into_session(op: &'static str, a: &CadrsRef, b: &CadrsRef) -> Result<BodyId> 
 struct Naming<'a> {
     inputs: Vec<(BodyId, &'a Brep)>,
     edges: &'a [u64],
+    /// The edges the blend actually ran along (each edge's tangent chain), with the index in
+    /// `edges` of the edge whose chain it is on.
+    seeds: Vec<(u64, usize)>,
     blend: &'a str,
 }
 
@@ -91,7 +94,8 @@ fn names(feature: &str, n: usize, history: &History, how: &Naming) -> Vec<BTreeS
     for (f, origin) in &history.generated {
         let part = match origin {
             Origin::FromEdge { edge, .. } if !how.blend.is_empty() => {
-                how.edges.iter().position(|&e| e == edge.0).map(|n| format!("{}_{n}", how.blend))
+                let seed = how.seeds.iter().find(|(e, _)| *e == edge.0).map(|&(_, n)| n);
+                seed.or_else(|| how.edges.iter().position(|&e| e == edge.0)).map(|n| format!("{}_{n}", how.blend))
             }
             Origin::FromVertex { .. } => Some("corner".to_string()),
             Origin::StartCap { .. } => Some("start".to_string()),
@@ -211,8 +215,9 @@ pub(crate) fn blend(
 ) -> Result<Solid> {
     let c = of(name, s)?;
     let feature = engine::feature();
+    let seeds = if edges.is_empty() { Vec::new() } else { yack_glue::chained(&lock(&c.session), c.id, edges).unwrap_or_default() };
     let r = f(&mut lock(&c.session), c.id);
-    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), edges, blend: kind };
+    let how = Naming { inputs: s.brep().map(|b| vec![(c.id, b)]).unwrap_or_default(), edges, seeds, blend: kind };
     result(name, &feature, &c.session, r, &how)
 }
 
@@ -222,4 +227,16 @@ pub(crate) fn make(name: &'static str, f: impl FnOnce(&mut DefaultKernel) -> yac
     let feature = engine::feature();
     let r = f(&mut lock(&session));
     result(name, &feature, &session, r, &Naming::default())
+}
+
+/// `s` split by the plane through `origin` square to `normal`: (front, back), either empty.
+pub(crate) fn split(s: &Solid, origin: [f64; 3], normal: [f64; 3]) -> Result<(Solid, Solid)> {
+    let op = "split";
+    let c = of(op, s)?;
+    let (front, back) = yack_glue::split(&mut lock(&c.session), c.id, origin, normal).map_err(|e| error(op, e))?;
+    let side = |m: Option<Made>| match m {
+        None => Ok(Solid::empty()),
+        Some(m) => result(op, &engine::feature(), &c.session, Ok(m), &Naming::default()),
+    };
+    Ok((side(front)?, side(back)?))
 }

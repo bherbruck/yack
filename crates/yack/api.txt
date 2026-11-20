@@ -86,10 +86,11 @@ yack::make: pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Re
 yack::make: pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Result<Solid>
 yack::make: pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid>
 yack::make: pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid>
+yack::make: pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid>
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
-yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sphere, sweep, sweep_path, torus,}
+yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sphere, spindle_torus, sweep, sweep_path, torus,}
 yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }

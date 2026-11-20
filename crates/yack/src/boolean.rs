@@ -108,22 +108,31 @@ impl Solid {
 
     /// The parts on each side of `plane`; `front` is on the normal's side. Either may be empty.
     pub fn split(&self, plane: &Plane) -> Result<Split> {
-        ladder::allowed("split", "springrep")?;
-        firewall::run("split", || {
-            let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };
-            let (front, back) = sr::split(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
-                .map_err(|e| engine::error("split", e))?;
+        let op = "split";
+        let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };
+        let (o, n) = (plane.origin(), plane.normal().vec());
+        let springrep = || -> Result<Split> {
+            ladder::allowed(op, "springrep")?;
+            let (front, back) = sr::split(b, engine::p3(o), engine::v3(n)).map_err(|e| engine::error(op, e))?;
             let (front, back) = (Solid::from_springrep(front), Solid::from_springrep(back));
-            if (front.is_empty() || back.is_empty())
-                && yack_springrep::facade::api::plane_cuts(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
-            {
+            if (front.is_empty() || back.is_empty()) && yack_springrep::facade::api::plane_cuts(b, engine::p3(o), engine::v3(n)) {
                 return Err(crate::Error::failed(
-                    "split",
+                    op,
                     crate::Stage::Split,
                     "springrep lost one side of a plane that passes through the solid (a sliver it snapped away)",
                 ));
             }
             Ok(Split { front, back })
+        };
+        let cadrs = || -> Result<Split> {
+            ladder::allowed(op, "cadrs")?;
+            let (front, back) = engine_cadrs::split(self, o.to_array(), n.to_array())?;
+            Ok(Split { front: front.with_strategy("cadrs"), back: back.with_strategy("cadrs") })
+        };
+        firewall::run(op, || match springrep() {
+            Ok(s) => Ok(s),
+            Err(e) if matches!(e.kind, crate::ErrorKind::Invalid | crate::ErrorKind::Internal) => Err(e),
+            Err(first) => cadrs().map_err(|second| crate::Error { detail: format!("springrep: {first}; cadrs: {second}"), ..second }),
         })
     }
 }

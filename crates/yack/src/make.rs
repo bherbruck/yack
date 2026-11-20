@@ -46,8 +46,16 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
 }
 
 /// A torus about the frame's z axis: tube centre at `major` from the axis, tube radius `minor`.
-/// The tube must clear the axis (`minor < major`); a horn or spindle torus is refused as Invalid.
+/// The tube must clear the axis (`minor < major`); a horn or spindle torus is refused as Invalid,
+/// pointing at [`spindle_torus`].
 pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
+    if major > 0.0 && minor >= major {
+        return Err(Error::invalid(
+            "torus",
+            "minor",
+            format!("tube radius {minor} reaches the axis (major {major}); for the solid such a tube sweeps use make::spindle_torus"),
+        ));
+    }
     firewall::run("torus", || {
         let feature = engine::feature();
         let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
@@ -57,6 +65,21 @@ pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
             &|| engine::made_as(&feature, "torus", &[("tube", "skin")], primitive::torus(&engine::frame(frame), major, minor, &feature)),
             &|| engine_cadrs::make("torus", |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor)),
         )
+    })
+}
+
+/// The solid a tube of radius `minor` sweeps as its centre circle of radius `major` turns about the
+/// frame's z axis, for a tube that reaches the axis (`minor ≥ major > 0`; a horn torus when equal):
+/// every point within `minor` of that circle, the core the tube crosses itself in counted once.
+/// A ring torus (`minor < major`) is [`torus`].
+pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
+    let op = "spindle_torus";
+    if !(major > 0.0 && minor >= major) {
+        return Err(Error::invalid(op, "minor", format!("tube radius {minor} clears the axis (major {major}): that is make::torus")));
+    }
+    let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
+    firewall::run(op, || {
+        ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::make(op, |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor)) }])
     })
 }
 

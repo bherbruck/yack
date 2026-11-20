@@ -178,5 +178,12 @@ fn a_shell_as_thick_as_the_part_is_refused() {
 
 #[test]
 fn a_torus_tube_across_its_axis_is_invalid() {
-    assert_eq!(torus(&Frame::WORLD, 1.0, 2.0).unwrap_err().kind, ErrorKind::Invalid);
+    let e = torus(&Frame::WORLD, 1.0, 2.0).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Invalid);
+    assert!(e.detail.contains("spindle_torus"), "{e}");
+    match spindle_torus(&Frame::WORLD, 1.0, 2.0) {
+        Ok(s) => assert!(s.volume() > 0.0 && s.strategy() == "cadrs"),
+        Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
+    }
+    assert_eq!(spindle_torus(&Frame::WORLD, 3.0, 1.0).unwrap_err().kind, ErrorKind::Invalid);
 }

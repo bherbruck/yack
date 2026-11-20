@@ -8,7 +8,8 @@ use yack_cadrs::yack_glue as glue;
 use crate::{Angle, EdgeId, FaceId, Point3, Result, Solid};
 
 impl Solid {
-    /// Rounds `edges` with a constant `radius` (mm).
+    /// Rounds `edges` with a constant `radius` (mm). Each edge brings its whole tangent chain (the
+    /// edges it runs on into smoothly, seams aside): the round runs on along it.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -46,11 +47,16 @@ impl Solid {
     /// the other.
     pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> {
         let from: Point3 = from.into();
-        ladder::springrep_only("fillet_variable", || {
+        firewall::run("fillet_variable", || {
             let feature = engine::feature();
             let op = "fillet_variable";
             let e = self.sr_edge(op, "edge", edge)?;
-            engine::made(&feature, op, sr::fillet_variable(self.need(op)?, e, engine::p3(from), r_from, r_to, &feature))
+            let ei = u64::from(edge);
+            ladder::two(
+                op,
+                &|| engine::made(&feature, op, sr::fillet_variable(self.need(op)?, e, engine::p3(from), r_from, r_to, &feature)),
+                &|| engine_cadrs::blend(op, self, &[ei], "round", |k, id| glue::fillet_variable(k, id, ei, from.to_array(), r_from, r_to)),
+            )
         })
     }
 
@@ -117,7 +123,8 @@ impl Solid {
     }
 
     /// Bevels `edges` by `distance`: a setback from the edge along each face, measured in the
-    /// plane normal to the edge (never a face offset).
+    /// plane normal to the edge (never a face offset). Each edge brings its whole tangent chain, as
+    /// for [`fillet`](Solid::fillet).
     pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> {
         firewall::run("chamfer", || {
             let feature = engine::feature();

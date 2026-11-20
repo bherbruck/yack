@@ -60,7 +60,7 @@ pub fn rad(r: f64) -> Angle {
 pub mod prelude {
     pub use crate::make::{
         block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab,
-        sphere, sweep, sweep_path, torus,
+        sphere, spindle_torus, sweep, sweep_path, torus,
     };
     pub use crate::{
         Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2,
