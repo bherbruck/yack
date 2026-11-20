@@ -1,0 +1,22 @@
+# yack: the brep-conformance adapter (PLAN §5.1); a tool crate, never shipped.
+[package]
+name = "yack-conformance"
+description = "yack's adapter for the brep-conformance protocol: each protocol function is one yack call"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "yack-conformance"
+path = "src/main.rs"
+
+[dependencies]
+yack = { path = "../yack" }
+# The one external dependency in the workspace (layers.toml `external`), pinned per PLAN §5.1.
+brep-protocol = { git = "https://github.com/springcraft-ai/brep-conformance", rev = "12ffc75d305451004e12a24862dc092f6df0529b" }
+
+[lints]
+workspace = true
