@@ -133,3 +133,16 @@ fn a_slid_block_is_a_longer_block() {
     close(s.volume(), 8.0 + 2.0 * 2.0 * 3.0);
     assert_eq!(s.strategy(), "cadrs");
 }
+
+#[test]
+fn the_same_program_twice_gives_the_same_digest() {
+    let run = || {
+        let plate = block(&Frame::at([-6.0, -6.0, -8.0]), [42.0, 32.0, 8.0]).unwrap();
+        let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
+        let tool = sphere(&Frame::WORLD, 3.0).unwrap().swept(&Motion::Along { path, law: FrameLaw::Fixed }).unwrap();
+        let cut = plate.difference(&tool).unwrap();
+        let e = cut.edge_at([36.0, 26.0, -4.0]).unwrap();
+        cut.fillet(&[e], 1.0).unwrap().named("done").digest()
+    };
+    assert_eq!(run(), run());
+}

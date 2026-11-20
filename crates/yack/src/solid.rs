@@ -146,12 +146,17 @@ impl Solid {
         &self.0.history
     }
 
-    /// A content digest: equal solids (same topology and geometry, bit for bit) have equal
-    /// digests. The empty solid's is all zeros.
+    /// A content digest of topology and geometry (face names and tags aside): equal solids, bit for
+    /// bit, have equal digests, and running the same program again gives the same digest. The empty solid's is all zeros.
     pub fn digest(&self) -> [u8; 32] {
         match &self.0.body {
             Body::Empty => [0; 32],
-            Body::Springrep(b) => engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(b.as_ref()))),
+            Body::Springrep(b) => {
+                // Geometry and topology only: face names carry per-process operation numbers.
+                let mut bare = (**b).clone();
+                bare.rename_faces(|_| None::<yack_springrep::topo::FaceName>);
+                engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(&bare)))
+            }
         }
     }
 
