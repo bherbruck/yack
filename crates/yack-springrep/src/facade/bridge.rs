@@ -60,6 +60,12 @@ impl Builder {
         self.b.add_solid_of(shells, outer)
     }
 
+    /// The `Brep` so far, unchecked (to read back what springrep made of it, such as a projected
+    /// pcurve's parameters, before building it again).
+    pub fn peek(&self) -> &Brep {
+        &self.b
+    }
+
     /// The built `Brep`, or `InvalidResult` with springrep's checker's issues.
     pub fn finish(self) -> Result<Brep> {
         let issues = check::check(&self.b);
