@@ -1,0 +1,16 @@
+# yack: zero-dependency facades shaped like nalgebra, rayon, rustc-hash, web-time and uuid, for the
+#   temporary yack-cadrs crate only (PLAN §3.2); deleted by M4.
+[package]
+name = "yack-shim"
+description = "Temporary: nalgebra/rayon/rustc-hash/web-time/uuid-shaped facades for yack-cadrs (deleted by M4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

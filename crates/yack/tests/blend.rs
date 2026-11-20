@@ -102,3 +102,15 @@ fn face_refs_carry_tags_normals_and_samples() {
     let e = r.edge(r.edges_of(round).unwrap()[0]).unwrap();
     assert_eq!(e.points(9).len(), 9);
 }
+
+#[test]
+fn a_rim_point_on_a_holes_seam_picks_the_rim() {
+    let b = ten();
+    let hole = cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0).unwrap();
+    let d = b.difference(&hole).unwrap();
+    // (7, 5, 10) is where the rim circle starts, at the top of the hole's seam
+    let rim = d.edge_at([7.0, 5.0, 10.0]).unwrap();
+    assert!(matches!(d.edge(rim).unwrap().kind(), CurveKind::Circle { .. }));
+    let r = d.fillet(&[rim], 0.5).unwrap();
+    assert!(r.check().is_empty());
+}

@@ -81,35 +81,44 @@ impl Solid {
         self.brep().map_or_else(Vec::new, |b| b.vertex_ids().map(|v| self.vertex_id(v)).collect())
     }
 
-    /// The one face within `tol::PICK` of `p`: `NotFound` if none, `Ambiguous` if several (a
-    /// point on an edge touches both its faces; yack never chooses).
+    /// The face within `tol::PICK` of `p`, nearer than any other by at least `tol::PICK`:
+    /// `NotFound` if none, `Ambiguous` if two are equally near (a point on an edge touches both
+    /// its faces; yack never chooses).
     pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> {
         let op = "face_at";
         let p = p.into();
         let found = match self.brep() {
-            None => Vec::new(),
-            Some(b) => api::faces_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+            None => api::Pick::None,
+            Some(b) => api::face_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };
-        match found.as_slice() {
-            [f] => Ok(self.face_id(*f)),
-            [] => Err(Error::not_found(op, "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
-            many => Err(Error::ambiguous(op, "p", format!("{} faces pass within tol::PICK of ({}, {}, {})", many.len(), p.x, p.y, p.z))),
+        match found {
+            api::Pick::One(x) => Ok(self.face_id(x)),
+            api::Pick::None => Err(Error::not_found(op, "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            api::Pick::Ambiguous(n) => Err(Error::ambiguous(
+                op,
+                "p",
+                format!("{n} faces lie within tol::PICK of ({}, {}, {}) at distances that differ by less than tol::PICK", p.x, p.y, p.z),
+            )),
         }
     }
 
-    /// The one edge within `tol::PICK` of `p`: `NotFound` if none, `Ambiguous` if several (a
-    /// vertex touches all its edges).
+    /// The edge within `tol::PICK` of `p`, nearer than any other by at least `tol::PICK`:
+    /// `NotFound` if none, `Ambiguous` if two are equally near (a vertex touches all its edges).
     pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> {
         let op = "edge_at";
         let p = p.into();
         let found = match self.brep() {
-            None => Vec::new(),
-            Some(b) => api::edges_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+            None => api::Pick::None,
+            Some(b) => api::edge_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };
-        match found.as_slice() {
-            [e] => Ok(self.edge_id(*e)),
-            [] => Err(Error::not_found(op, "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
-            many => Err(Error::ambiguous(op, "p", format!("{} edges pass within tol::PICK of ({}, {}, {})", many.len(), p.x, p.y, p.z))),
+        match found {
+            api::Pick::One(x) => Ok(self.edge_id(x)),
+            api::Pick::None => Err(Error::not_found(op, "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            api::Pick::Ambiguous(n) => Err(Error::ambiguous(
+                op,
+                "p",
+                format!("{n} edges lie within tol::PICK of ({}, {}, {}) at distances that differ by less than tol::PICK", p.x, p.y, p.z),
+            )),
         }
     }
 

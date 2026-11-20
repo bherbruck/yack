@@ -1,0 +1,436 @@
+// yack: The native (pure Rust) B-rep kernel: exact curves and surfaces, boundary representation,.
+// Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/mod.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
+// Changes: CADRS_* environment switches fixed at their unset defaults; crate paths cadrs_kernel::
+//   -> yack_cadrs::.
+//! The native (pure Rust) B-rep kernel: exact curves and surfaces, boundary representation,
+//! booleans, features, tessellation and exchange, with no C or C++ dependency.
+//!
+//! The stable surface (the README's "Curated API") is what this module re-exports: the session
+//! [`NativeKernel`]; the B-rep data model ([`Body`] with its [`Vertex`], [`Edge`], [`Coedge`],
+//! [`Face`], [`Shell`], [`Solid`] and [`Wire`], checked at a [`CheckLevel`]); its geometry
+//! ([`Curve`], [`Surface`] and its derivatives [`D2`], [`NurbsCurve`], [`NurbsSurface`]) and
+//! vector types ([`P3`], [`V3`], [`Frame`], [`Affine`]); the tolerance model [`tol`]; and the
+//! exact body format [`bodyio`]. That is what a direct-edit or analysis tool built on the
+//! kernel needs.
+//!
+//! Every other module is the kernel's internals: private to the crate, and public only with the
+//! `testkit` feature, which the crate's own tests and tools turn on (they reach the internals
+//! through `yack_cadrs::testkit`, or through `native::<module>` while they move there).
+
+pub mod bodyio;
+pub mod tol;
+
+/// Whether environment variable `$name` (a debugging switch, read in hot paths) is set: read
+/// once per process.
+macro_rules! env_flag {
+    ($name:literal) => {{
+        // yack: no environment is read; every switch takes its unset default.
+        let _ = $name;
+        false
+    }};
+}
+pub(crate) use env_flag;
+
+/// yack: the value of environment switch `name`: always unset (yack reads no
+/// environment, so every `CADRS_*` switch takes its unset default; see
+/// crates/yack-cadrs/IMPORT.md).
+#[allow(dead_code, reason = "some switches are read only by the test kit")]
+pub(crate) fn switch(name: &str) -> Result<String, ()> {
+    let _ = name;
+    Err(())
+}
+
+/// yack: [`switch`] for the `var_os` readers: always unset.
+#[allow(dead_code, reason = "some switches are read only by the test kit")]
+pub(crate) fn switch_os(name: &str) -> Option<std::ffi::OsString> {
+    let _ = name;
+    None
+}
+
+// The kernel's internal modules: `pub(crate)`, or `pub` with the `testkit` feature.
+// Without it, what only the test kit reaches (the DRAW harness's commands: the OCCT BRep and
+// SMLib readers, 2D offsets, tails, faces from edges, ...) is unused; with it (the crate's
+// tests and clippy gate) dead code is found as before.
+// Written out (not through a macro) so that rustfmt and other tools see the modules.
+#[cfg(feature = "testkit")]
+pub mod affine;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod affine;
+#[cfg(feature = "testkit")]
+pub mod axes;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod axes;
+#[cfg(feature = "testkit")]
+pub mod blend;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod blend;
+#[cfg(feature = "testkit")]
+pub mod blend_chain;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod blend_chain;
+#[cfg(feature = "testkit")]
+pub mod blend_corner;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod blend_corner;
+#[cfg(feature = "testkit")]
+pub mod boolean;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod boolean;
+#[cfg(feature = "testkit")]
+pub mod boolean_kinds;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod boolean_kinds;
+#[cfg(feature = "testkit")]
+pub mod brep_occt;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod brep_occt;
+#[cfg(feature = "testkit")]
+pub mod brep_write;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod brep_write;
+#[cfg(feature = "testkit")]
+pub mod build;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod build;
+#[cfg(feature = "testkit")]
+pub mod bvh;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod bvh;
+#[cfg(feature = "testkit")]
+pub mod cells;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod cells;
+#[cfg(feature = "testkit")]
+pub mod check_faces;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod check_faces;
+#[cfg(feature = "testkit")]
+pub mod classify;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod classify;
+#[cfg(feature = "testkit")]
+pub mod convex_chamfer;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod convex_chamfer;
+#[cfg(feature = "testkit")]
+pub mod curve;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod curve;
+#[cfg(feature = "testkit")]
+pub mod curve_loft;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod curve_loft;
+#[cfg(feature = "testkit")]
+pub mod curve_split;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod curve_split;
+#[cfg(feature = "testkit")]
+pub mod decimate;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod decimate;
+#[cfg(feature = "testkit")]
+pub mod defeature;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod defeature;
+#[cfg(feature = "testkit")]
+pub mod distance;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod distance;
+#[cfg(feature = "testkit")]
+pub mod edge_bop;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod edge_bop;
+#[cfg(feature = "testkit")]
+pub mod edges_faces;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod edges_faces;
+#[cfg(feature = "testkit")]
+pub mod evolved;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod evolved;
+#[cfg(feature = "testkit")]
+pub mod exchange;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod exchange;
+#[cfg(feature = "testkit")]
+pub mod face_blend;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod face_blend;
+#[cfg(feature = "testkit")]
+pub mod face_build;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod face_build;
+#[cfg(feature = "testkit")]
+pub mod features;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod features;
+#[cfg(feature = "testkit")]
+pub mod fillet;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod fillet;
+#[cfg(feature = "testkit")]
+pub mod fillet_geom;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod fillet_geom;
+#[cfg(feature = "testkit")]
+pub mod fingerprint;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod fingerprint;
+#[cfg(feature = "testkit")]
+pub mod flat_union;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod flat_union;
+#[cfg(feature = "testkit")]
+pub mod heal;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod heal;
+#[cfg(feature = "testkit")]
+pub mod heal_split;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod heal_split;
+#[cfg(feature = "testkit")]
+pub mod hlr;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod hlr;
+#[cfg(feature = "testkit")]
+pub mod iges;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod iges;
+#[cfg(feature = "testkit")]
+pub mod kernel;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod kernel;
+#[cfg(feature = "testkit")]
+pub mod local;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod local;
+#[cfg(feature = "testkit")]
+pub mod loft_build;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod loft_build;
+#[cfg(feature = "testkit")]
+pub mod mass;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod mass;
+#[cfg(feature = "testkit")]
+pub mod math;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod math;
+#[cfg(feature = "testkit")]
+pub mod mesh_distance;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod mesh_distance;
+#[cfg(feature = "testkit")]
+pub mod meshsolid;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod meshsolid;
+#[cfg(feature = "testkit")]
+pub mod nurbs;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod nurbs;
+#[cfg(feature = "testkit")]
+pub mod offset;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod offset;
+#[cfg(feature = "testkit")]
+pub mod ops;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod ops;
+pub(crate) mod par;
+#[cfg(feature = "testkit")]
+pub mod pcurve;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod pcurve;
+#[cfg(feature = "testkit")]
+pub mod profile;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod profile;
+#[cfg(feature = "testkit")]
+pub mod recognize;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod recognize;
+pub(crate) mod rim_blend;
+#[cfg(feature = "testkit")]
+pub mod silhouette;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod silhouette;
+#[cfg(feature = "testkit")]
+pub mod smb;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod smb;
+#[cfg(feature = "testkit")]
+pub mod split;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod split;
+#[cfg(feature = "testkit")]
+pub mod split_area;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod split_area;
+#[cfg(feature = "testkit")]
+pub mod ssi;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod ssi;
+#[cfg(feature = "testkit")]
+pub mod ssi_cci;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod ssi_cci;
+#[cfg(feature = "testkit")]
+pub mod ssi_coincident;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod ssi_coincident;
+mod ssi_graph;
+#[cfg(feature = "testkit")]
+pub mod ssi_numeric;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod ssi_numeric;
+#[cfg(feature = "testkit")]
+pub mod step;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod step;
+#[cfg(feature = "testkit")]
+pub mod surface;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod surface;
+#[cfg(feature = "testkit")]
+pub mod surfacing;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod surfacing;
+#[cfg(feature = "testkit")]
+pub mod sweep;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep;
+pub(crate) mod sweep_ball_pass;
+pub(crate) mod sweep_cache;
+#[cfg(feature = "testkit")]
+pub mod sweep_faces;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_faces;
+pub(crate) mod sweep_generate;
+pub(crate) mod sweep_mill;
+#[cfg(feature = "testkit")]
+pub mod sweep_moving;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_moving;
+pub(crate) mod sweep_pipe;
+#[cfg(feature = "testkit")]
+pub mod sweep_planar;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_planar;
+#[cfg(feature = "testkit")]
+pub mod sweep_solid;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_solid;
+#[cfg(feature = "testkit")]
+pub mod sweep_tube;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_tube;
+#[cfg(feature = "testkit")]
+pub mod tails;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod tails;
+#[cfg(feature = "testkit")]
+pub mod tess;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod tess;
+#[cfg(feature = "testkit")]
+pub mod topo;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod topo;
+#[cfg(feature = "testkit")]
+pub mod unify;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod unify;
+#[cfg(feature = "testkit")]
+pub mod uvdomain;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod uvdomain;
+#[cfg(feature = "testkit")]
+pub mod xbuild;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod xbuild;
+
+/// The DRAW test harness the generated OCCT suites run on (a test kit, not kernel API): built
+/// for tests and with the `testkit` feature.
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw;
+/// Bodies for the SMLib test oracle (test kit, as `draw`).
+#[cfg(any(test, feature = "testkit"))]
+pub mod oracle;
+
+pub use boolean::take_invalid_results;
+pub use curve::Curve;
+pub use kernel::NativeKernel;
+pub use math::{Affine, Frame, P3, V3};
+pub use nurbs::{NurbsCurve, NurbsSurface};
+pub use surface::{D2, Surface};
+pub use tess::keep_meshes;
+pub use topo::{Body, BodyBuilder, CheckLevel, Coedge, Edge, Face, Shell, Solid, Vertex, Wire};

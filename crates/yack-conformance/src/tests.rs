@@ -83,7 +83,9 @@ fn smoke(k: &Yack, name: &str) -> Res<()> {
         "offset" => k.offset(&s()?, 1.0).map(drop),
         "offset_faces" => k.offset_faces(&s()?, &[f], 1.0).map(drop),
         "delete_faces" => {
-            k.delete_faces(&k.fillet(&s()?, &[e], 1.0)?, &[[5.0, 0.3, 0.3]]).map(drop)
+            // A point on the round of radius 1 along the edge through `e`, at 45°.
+            let q = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
+            k.delete_faces(&k.fillet(&s()?, &[e], 1.0)?, &[[5.0, q, q]]).map(drop)
         }
         "move_faces" => k.move_faces(&s()?, &[f], ID).map(drop),
         "thicken" => k.thicken(&s()?, &[f], 1.0).map(drop),

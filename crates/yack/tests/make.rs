@@ -112,7 +112,8 @@ fn a_revolved_rectangle_is_a_tube() {
 #[test]
 fn a_loft_between_a_square_and_its_half() {
     let sq = Profile::rectangle([-2.0, -2.0], [2.0, 2.0]).unwrap();
-    let s = loft(&Frame::WORLD, &sq, 0.5, 3.0, &sq).unwrap();
+    let half = Profile::rectangle([-1.0, -1.0], [1.0, 1.0]).unwrap();
+    let s = loft(&Frame::WORLD, &sq, 0.5, 3.0, &half).unwrap();
     assert!(s.check().is_empty());
     // a frustum of a square pyramid: h/3 (A1 + A2 + sqrt(A1 A2))
     close(s.volume(), 3.0 / 3.0 * (16.0 + 4.0 + 8.0));

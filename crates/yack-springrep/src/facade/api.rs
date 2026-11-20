@@ -20,32 +20,68 @@ fn near(b: &Aabb, p: Point3, d: f64) -> bool {
         && p.z <= b.max.z + d
 }
 
-/// Every face of `b` passing within `d` of `p`.
-pub fn faces_within(b: &Brep, p: Point3, d: f64) -> Result<Vec<FaceId>> {
-    let mut out = Vec::new();
+/// What a pick within a tolerance found.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pick<T> {
+    /// Nothing within the tolerance.
+    None,
+    /// One entity, nearer than any other by at least the tolerance.
+    One(T),
+    /// This many entities within the tolerance whose distances differ by less than it: no telling
+    /// which is meant.
+    Ambiguous(usize),
+}
+
+fn pick<T: Copy>(mut found: Vec<(f64, T)>, d: f64) -> Pick<T> {
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    match found.as_slice() {
+        [] => Pick::None,
+        [(_, one)] => Pick::One(*one),
+        [(d0, one), (d1, _), ..] => {
+            if d1 - d0 >= d {
+                Pick::One(*one)
+            } else {
+                Pick::Ambiguous(found.iter().filter(|(x, _)| x - d0 < d).count())
+            }
+        }
+    }
+}
+
+/// The face of `b` within `d` of `p`, by the pick rule.
+pub fn face_within(b: &Brep, p: Point3, d: f64) -> Result<Pick<FaceId>> {
+    let mut found = Vec::new();
     for f in b.face_ids() {
         if !near(&measure::face_bbox(b, f), p, d) {
             continue;
         }
-        if Nearest::of(b, &Selection::face(f))?.to(p)?.distance <= d {
-            out.push(f);
+        let dist = Nearest::of(b, &Selection::face(f))?.to(p)?.distance;
+        if dist <= d {
+            found.push((dist, f));
         }
     }
-    Ok(out)
+    Ok(pick(found, d))
 }
 
-/// Every edge of `b` (poles aside) passing within `d` of `p`.
-pub fn edges_within(b: &Brep, p: Point3, d: f64) -> Result<Vec<EdgeId>> {
-    let mut out = Vec::new();
+/// Whether every use of `e` is by one face: a seam, where a closed surface meets itself.
+fn is_seam(b: &Brep, e: EdgeId) -> bool {
+    let mut faces = b.edge_uses(e).iter().map(|&c| b.coedge_face(c));
+    faces.next().is_some_and(|f| faces.all(|g| g == f))
+}
+
+/// The edge of `b` (poles aside) within `d` of `p`, by the pick rule. Seams count only when no
+/// other edge is in reach: a point where a rim circle meets a cylinder's seam picks the rim.
+pub fn edge_within(b: &Brep, p: Point3, d: f64) -> Result<Pick<EdgeId>> {
+    let (mut found, mut seams) = (Vec::new(), Vec::new());
     for e in b.edge_ids() {
         if b.edge(e).is_degenerate() {
             continue;
         }
-        if Nearest::of(b, &Selection::edge(e))?.to(p)?.distance <= d {
-            out.push(e);
+        let dist = Nearest::of(b, &Selection::edge(e))?.to(p)?.distance;
+        if dist <= d {
+            if is_seam(b, e) { seams.push((dist, e)) } else { found.push((dist, e)) }
         }
     }
-    Ok(out)
+    Ok(pick(if found.is_empty() { seams } else { found }, d))
 }
 
 /// How the two faces meet along `e`, at its midpoint: `Some(true)` convex (material in a wedge

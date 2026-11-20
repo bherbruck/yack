@@ -95,16 +95,18 @@ pub fn screw(frame: &Frame, profile: &Profile, rise: f64, angle: Angle) -> Resul
     })
 }
 
-/// A loft from `profile` at z = 0 to `top` scaled by `scale` (about the frame's z axis) at
-/// z = `height`.
+/// A ruled loft from `profile` at z = 0 to `top` at z = `height`. As in the protocol, `top` is
+/// `profile` scaled by `scale` about the frame's z axis, sent ready-made; yack lofts to `top` as
+/// given and does not scale it again.
 pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid> {
     firewall::run("loft", || {
+        let _ = scale; // recorded by the protocol; `top` is already the scaled copy
         let feature = engine::feature();
         let op = "loft";
         let up = Frame::new(frame.point([0.0, 0.0, height]), frame.x(), frame.y(), frame.z()).map_err(|e| e.in_op(op))?;
         let sections = [
             sr_loft::Section { profile: engine::profile(op, profile, None)?, frame: engine::frame(frame) },
-            sr_loft::Section { profile: engine::profile(op, top, Some(scale))?, frame: engine::frame(&up) },
+            sr_loft::Section { profile: engine::profile(op, top, None)?, frame: engine::frame(&up) },
         ];
         engine::made(&feature, op, sr_loft::loft(&sections, true, &feature))
     })

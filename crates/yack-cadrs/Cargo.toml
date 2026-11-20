@@ -1,0 +1,33 @@
+# yack: temporary crate holding cadrs_kernel's source (PLAN §3.2); deleted by M4.
+# Adapted from cadrs@eb5899ef crates/cadrs_kernel/Cargo.toml (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
+# Changes: renamed yack-cadrs; external dependencies replaced by yack-shim (one package, renamed
+#   `nalgebra`; src/lib.rs aliases it as rayon, rustc_hash, uuid and web_time; tess.rs reaches its
+#   spade facade); serde, the optional GPU crate and proptest dropped; testkit on by default (was
+#   a self dev-dependency); workspace lints not inherited (donor code; M4 re-hosts it).
+[package]
+name = "yack-cadrs"
+description = "Temporary: the cadrs_kernel B-rep kernel, copied from cadrs (deleted by M4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+repository.workspace = true
+publish = false
+
+[dependencies]
+nalgebra = { path = "../yack-shim", package = "yack-shim" }
+
+[features]
+# The test kit (the DRAW harness, the SMLib oracle's body writer; every module public) is on by
+# default: cadrs turned it on for its integration tests through a dev-dependency on itself,
+# which the crate DAG gate refuses.
+default = ["testkit"]
+testkit = []
+
+[lints.rust]
+unsafe_code = "forbid"
+# cadrs's `gpu` feature (a GPU quadrature crate) is not carried over; its cfg stays in the source.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("gpu"))'] }
+
+[lints.clippy]
+neg_cmp_op_on_partial_ord = "allow"
