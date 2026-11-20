@@ -21,4 +21,9 @@ disallowed-methods = [
     { path = "f64::powi", reason = "the facade routes, never computes" },
     { path = "f64::powf", reason = "the facade routes, never computes" },
     { path = "f64::hypot", reason = "the facade routes, never computes" },
+    { path = "yack_math::Vec3::dot", reason = "the facade routes, never computes" },
+    { path = "yack_math::Vec3::cross", reason = "the facade routes, never computes" },
+    { path = "yack_math::Vec3::length", reason = "the facade routes, never computes" },
+    { path = "yack_math::Point2::distance", reason = "the facade routes, never computes" },
+    { path = "yack_math::Point3::distance", reason = "the facade routes, never computes" },
 ]

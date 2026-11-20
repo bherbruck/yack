@@ -9,6 +9,9 @@ repository.workspace = true
 publish = true
 
 [dependencies]
+yack-base = { path = "../yack-base" }
+yack-math = { path = "../yack-math" }
+yack-tol = { path = "../yack-tol" }
 
 [lints]
 workspace = true

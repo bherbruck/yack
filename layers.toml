@@ -15,8 +15,9 @@
 # the kernel may depend on them.
 
 [reexport]
-# The only internal items `yack` may re-export as they are (from yack-math).
-items = ["Point2", "Point3", "Vec3", "Dir3", "Frame", "Angle", "Aabb", "Rigid", "Similarity", "Affine"]
+# The only internal items `yack` may re-export as they are (values from yack-math; Error, ErrorKind,
+# Stage and Result from yack-base, because value constructors return them).
+items = ["Point2", "Point3", "Vec3", "Dir3", "Frame", "Angle", "Aabb", "Rigid", "Similarity", "Affine", "Error", "ErrorKind", "Stage", "Result"]
 
 # ---- layer 0 ----
 [crate.yack-base]

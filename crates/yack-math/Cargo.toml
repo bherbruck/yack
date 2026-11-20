@@ -1,0 +1,16 @@
+[package]
+name = "yack-math"
+description = "yack internal crate (not published; use the `yack` crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack-base = { path = "../yack-base" }
+yack-tol = { path = "../yack-tol" }
+
+[lints]
+workspace = true
