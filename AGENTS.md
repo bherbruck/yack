@@ -1,6 +1,6 @@
 # AGENTS.md: rules for coding agents working on yack
 
-yack is an exact B-rep kernel in pure, safe Rust, under the MIT licence.
+yack is an exact B-rep kernel in pure, safe Rust, licensed MIT OR Apache-2.0.
 
 - The plan is `plan/PLAN.md`, and it is authoritative.
 - The settled design questions are in `plan/DECISIONS.md`. Do not reopen them in code. Ask the
@@ -45,23 +45,43 @@ yack is an exact B-rep kernel in pure, safe Rust, under the MIT licence.
      `// tol: <reason>`.
    - No file over 1,500 lines.
    - Only `yack` calls `catch_unwind`.
-7. **Every result is valid or an error.** Operations end in `finish()`, which runs the checker.
+7. **Strategy ladders** (`plan/PLAN.md` §3.5). When two donors implement one op, each is a
+   private `Strategy` module in that op's crate.
+   - Strategies never call each other.
+   - `Invalid` is final, and `Declined` falls through to the next strategy.
+   - The order comes from `doc/donors.md`. Do not reorder it without new bake-off numbers.
+8. **Every result is valid or an error.** Operations end in `finish()`, which runs the checker.
    Return a refusal (`Unsupported` or `Failed`) rather than a doubtful solid. On brep-bench, a
    wrong answer is worse than a refusal.
-8. **Benchmark honesty.**
+9. **Benchmark honesty.**
    - Case programs and the adapter use the public `yack` API only.
    - Never compute an expected answer.
    - Never hand-build geometry.
    - Never catch a panic to turn it into a refusal.
    - Never special-case a test id.
    - `workarounds.toml` stays empty.
+   - A `wrong` result can never be waived.
+   - A case program over 10 lines is an API issue for the API owner, not a helper.
    - A missing feature is an API gap: file it with the API owner.
-9. **Licences and provenance.**
-   - Allowed code donors: springrep (MIT), cadrs (MIT OR Apache, used as MIT), cad-kernel /
-     geomsolver (MIT), solidcore **only** `crates/ssi` and `crates/nurbs-grid-mesh`, and solidcraft
-     own code (**never** `vendor/truck`).
-   - **Never open next.BREP source** (`$YACK_REF/next.BREP.io_RUST_BREP_KERNEL`). Use only
-     `$YACK_REF/analysis/next-brep.md`.
+10. **Licences and provenance.**
+   - yack's own code is `MIT OR Apache-2.0`.
+   - Allowed donors:
+     - springrep (MIT)
+     - cadrs (MIT OR Apache)
+     - cad-kernel / geomsolver (MIT)
+     - all of solidcore, including the SMLib-port kernel and STEP crates (Apache-2.0)
+     - solidcraft's current kernel
+     - truck (Apache-2.0)
+     - the SMLib corpus (Apache-2.0, fetched)
+   - A crate that contains **any Apache-2.0-only code** must say `license = "Apache-2.0"` in its
+     `Cargo.toml`, and its donor must be in `NOTICE`.
+   - **Never use:**
+     - next.BREP code (copyright-assignment clause). Never open
+       `$YACK_REF/next.BREP.io_RUST_BREP_KERNEL`; use only `$YACK_REF/analysis/next-brep.md`.
+     - files without a licence (e.g. cadrs `tests/data/docs/*.body`).
+     - OCCT-derived LGPL data.
+   - Extra donors (solidcore kernel, solidcraft, truck) enter only as ladder strategies that win a
+     measured bake-off row (`doc/donors.md`).
    - Every adapted file starts with a provenance header:
      ```rust
      // yack: <one-line purpose>
@@ -72,7 +92,7 @@ yack is an exact B-rep kernel in pure, safe Rust, under the MIT licence.
    - When porting, the first commit changes only paths, types and the header. Behaviour changes
      go in later commits.
    - Add the donor to `NOTICE` if it is not already listed.
-10. **No external posting.** Do not open PRs, issues or comments on GitHub or brepbench.org.
+11. **No external posting.** Do not open PRs, issues or comments on GitHub or brepbench.org.
     Draft them in `swarm/done/` and let the orchestrator post.
 
 ## Build and run
@@ -93,7 +113,7 @@ These commands are for the builder, or for an agent working alone.
 | `cargo xtask bench` | brep-bench through `$YACK_REF/brep-bench/harness/run.py`, ratcheted against `scores/bench.json` |
 | `cargo xtask bench --cases 'swept/*'` | Restrict to matching cases |
 | `cargo xtask bench ... --bless` | Accept improvements |
-| `cargo xtask modgraph --crate yack-kernel` | Module-level DAG check (M3) |
+| `cargo xtask modgraph --crate yack-springrep` | Module-level DAG check (M2) |
 | `cargo xtask fuzz --seconds 60` | Seeded robustness fuzz |
 | `cargo xtask corpus <name>` | Run a corpus |
 

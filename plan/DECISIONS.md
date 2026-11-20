@@ -1,6 +1,7 @@
 # Decisions
 
-This file records the conflicts between the three architect plans and how each was settled:
+This file records the conflicts between the three architect plans (their final revisions: A rev 2, B
+rev 2, C rev 2) and how each was settled:
 
 - A: `yack-ref/plans/A-refactor.md`
 - B: `yack-ref/plans/B-layered.md`
@@ -11,7 +12,7 @@ get the lead's approval.
 
 | # | Question | A | B | C | **Decision** | Why |
 |---|---|---|---|---|---|---|
-| D1 | Milestone strategy | Wrap springrep wholesale behind the final API, score it, then carve with a digest gate | Port module by module into the planned layers | Write API stubs and the harness first, then port | **A's order, with C's M0.** Stubs, adapter and runner come first (half a day). Then springrep goes in wholesale, then the carve, with digests bit-identical | We get a scored kernel in about a day, and the carve never sits on the critical path. The digest gate proves the carve changed no behaviour |
+| D1 | Milestone strategy | M1a: springrep wholesale behind the API. M1b: cadrs under a shim, plus a bridge. Then carve with a digest gate | Interfaces first, then donors moved into place | Stubs and harness first; all 506 cases written against the stubs | **C's M0, then A's M1a and M1b in parallel with C's M1c (506 cases against the stubs). Then the carve, with digests bit-identical, then re-hosting cadrs** | Both benchmarks get scored in about 2 days, and the carve is never on the critical path. Writing cases first tests how obvious the API is before any kernel code exists |
 | D2 | Crate count and names | 22 | 26 | 19 | **25 internal + `yack`** (PLAN §3.1). Names are single words with the `yack-` prefix | B's `ssi` and `gridmesh` stay as their own crates to keep provenance intact. A's `tweak` sits below `boolean`, which keeps the snap move mechanical (C and B rewrote it). B's `heal` and `swept` are their own crates. A's `locate`/`measure` split is kept. A's `spatial` merges into `math` (as B did). `nurbs` merges into `geom` (as A and C did). C's `naming` is data in `topo`. `inspect`/`draw` become `view` |
 | D3 | Where operations live | Free functions in `build`, `combine`, `finish`, `modify` and `measure` | `make::` constructors; everything else a method on `Solid` | Spec structs with `.build(frame, tag)`; methods on `Solid` | **B.** Constructors are free functions in `yack::make`. Every op and query is a method on `Solid` | Method chains give the shortest case programs (the brep-bench `loc` target). There is one obvious place for each call. C's spec structs add a type and a line per constructor |
 | D4 | Blend API | One method per protocol function, `fillet_setback(.., g2: bool)` | Same as A | A `Fillet`/`Chamfer` spec builder | **One method per protocol function, names identical, including `fillet_setback_g2`** | Rule 3 asks for a trivial 1:1 adapter. A boolean flag or a builder makes the adapter (and the reader) translate |
@@ -19,23 +20,32 @@ get the lead's approval.
 | D6 | Angles | `Angle` | `Angle` | `Angle` | **`Angle`, via `deg()`/`rad()`; no `From<f64>`** | Everyone agreed. brep-bench uses degrees and the protocol uses radians, which makes this the real unit trap |
 | D7 | Error type | An enum: Invalid, Unsupported, Failed, InvalidResult, Budget, Internal | A struct with `kind`, `op`, `input`, `stage`, `reason` | A rich enum with NotFound, Ambiguous, ForeignId | **A struct `Error { kind, op, arg, stage, detail }`, with C's eight kinds** | One `Display` and one adapter `match` on `kind`. Payloads can grow without breaking callers. C's kinds map 1:1 onto refusal kinds. A checker rejection is `Internal { stage: Check }` |
 | D8 | `Internal` in the adapter | Crash | Mapped to `failed` | Crash | **Crash (`resume_unwind`)** | An honest score. A bug never passes as a refusal |
-| D9 | Closing the brep-bench gap (swept, edit, offset, shell) | Grafts in M5, cadrs `defeature` and `offset` only | A new `yack-swept` from geomsolver; cad-kernel offsets | cadrs and cad-kernel ideas in M3 | **A temporary `yack-cadrs` engine (M2) behind `yack` routing, used only when springrep refuses. M5 re-hosts it into DAG crates and deletes it** | cadrs scores 504/506 live with 0 wrong. Routing only refusals cannot lower the pass count. It gets about 500 within days instead of weeks. The quarantine and the LOC ratchet keep it from becoming permanent. **Needs the user's sign-off (see the end of this file)** |
+| D9 | Two donors for one op | Bake-off picks exactly one donor per op; no runtime fallback | Strategy ladder: each donor is a private `Strategy` in the op's crate | One primary per op; the other donor's cases gate it | **B's ladder as the long-term mechanism, with A's bake-off (`doc/donors.md`) setting the order.** `Invalid` is final, `Declined` falls through, and the first result that passes `check` wins. Strategies never call each other. Each result records its strategy. A strategy that wins nothing for two milestones is deleted. In M1b–M3 the ladder lives in the facade over the temporary engines. M4 moves each rung into its op crate | Each donor keeps the cases it wins (cadrs: 504 bench; springrep: 100% conformance) without coupling the donors together. The bake-off keeps the order measured, not guessed |
+| D9b | Temporary engines | `yack-springrep`, `yack-cadrs`, `yack-shim` (nalgebra-shaped, via Cargo renames), `yack-bridge` | No temporaries; port directly | Port directly | **A's four temporaries, marked `temporary = true` with `delete_by` (springrep: M3; cadrs, shim and bridge: M4), enforced by the gate** | Fastest route to ≥ 500 bench and 100% conformance. The gate makes sure they disappear |
+| D9c | Primary donor per layer | springrep skeleton; cadrs for modify and sweeps | springrep core; cadrs for swept, edit, measure, heal, chamfer | the same | **B's table** (PLAN §3.5); the bake-off may reorder it | All three agree |
 | D10 | Frame constructor | `Frame::new(origin, x, y)` | Same as A | `Frame::new(origin, x, y, z)`, all checked | **C** | The protocol `Frame` carries x, y and z, so the adapter maps it 1:1. A left-handed or skewed frame is refused, never repaired |
 | D11 | Offset sign | Signed | Signed | `Offset::Grow/Shrink` | **Signed `f64`, with positive growing** | The protocol is signed, so the adapter maps 1:1. The convention is documented on each method |
-| D12 | Tags and naming in signatures | None (labels on profiles) | `Role` on faces | A `Tag` argument on every face-creating call | **No `Tag` argument.** Profile segment labels and `History` (M5.7) cover naming, and name resolution comes later | Fewer arguments, shorter programs. Persistent naming is not scored by either benchmark. History is still required by M5 |
+| D12 | Tags and naming in signatures | None (labels on profiles) | `Role` on faces | A `Tag` argument (`impl Into<Tag>`) on every face-creating call | **No `Tag` argument on ops.** An optional `Solid::named(impl Into<Tag>)` takes C's form. Profile segment labels and `History` (M4.11) cover the rest | Every op call is shorter. Naming stays available but is never mandatory |
+| D12b | Line-cutting API forms | – | – | `Loop::polygon_mm`, a pen builder, `Spline3::bezier_mm`, `Solid::swept(&Motion)`, `impl Into<Tag>` | **Adopted, minus the `_mm` suffix:** `Loop::polygon(&[[f64;2]])`, `Loop::starting_at(..)` pen, `Spline3::bezier(&[[f64;3]])`, `swept(&Motion)`. Every point parameter is `impl Into<Point3>`, so `[x, y, z]` literals work | Lengths are plain mm (D5), so a suffix adds nothing. Array literals remove the `p3()` helper |
+| D12c | Bench line targets | – | < 40 lines per case | mean ≤ 8; total ≤ 14; > 10 lines → API issue; no wrappers | **C** | The lowest mean on the board, earned by the API rather than by helper files |
+| D12d | Wrong results | – | – | never waivable | **Never waivable** | A refusal ranks above a wrong result |
 | D13 | `split` result | `[Solid; 2]` | `[Solid; 2]` | `Split { front, back }` | **`Split { front, back }`** | Named fields say which side is which. The adapter orders them |
 | D14 | Proptest | Zero-dependency testkit | Zero-dependency testkit | proptest as a dev-dependency | **Zero-dependency `yack-testkit::gen`** | Rule 4 in spirit. It also keeps `Cargo.lock` free of external packages, which is simple to gate |
 | D15 | brep-protocol in the adapter | Allowed | Allowed (the only exception) | Allowed | **Allowed, `yack-conformance` only, git-pinned** | Reusing the suite's own wire binding removes a class of scoring bugs. It never ships |
 | D16 | How to publish one crate | `xtask bundle` | Unstated | `yack-internal-*` crates | **`xtask bundle` first, `yack-internal-*` as the fallback** | "Exactly one public crate" read strictly |
+| D16b | Licence (user, 2026-11-20) | MIT | MIT | MIT | **Own code `MIT OR Apache-2.0`. A crate holding Apache-only donor code is `Apache-2.0`, with a header on each file plus `NOTICE`. The effective licence of `yack` is its closure's SPDX expression, printed by the gate** | The user allows Apache donors: solidcore's whole kernel and STEP crates, truck, SMLib data. Still banned: next.BREP, files with no licence, OCCT LGPL data |
+| D16c | Extra donors (solidcore SMLib port, current solidcraft, truck) | – | – | – | **Ladder strategies only, and only where one wins a bake-off row. No wholesale import** | solidcore scores 49.5% on conformance with a 2.4 s median; solidcraft has 39 wrong on bench. Neither is a skeleton |
+| D16d | Final targets | conformance ≥ 99.8% | bench ≥ 505, conformance ≥ 99.9% (M7) | 100% on 4 seeds, ≥ 505/506, LOC ≤ 8, ≤ 3.2 ms (M5) | **C's M5 targets as the M5 exit; B's per-category M6/M6b targets as the M4 exit** | The most ambitious targets that are still measurable |
 | D17 | API surface check | `xtask api` from source | rustdoc JSON | rustdoc JSON | **Source-level extraction to `api.txt`** | rustdoc JSON needs nightly, and the toolchain is stable |
 | D18 | Toolchain | 1.99.0 | – | – | **1.98.0 (installed) unless M1.1 finds 1.99 features** | The disk and one-tree rules: no extra toolchains unless they are needed |
+| D18b | cadrs revision | `eb5899ef` | `eb5899ef` (board pin) | – | **`eb5899ef`**. The local checkout is already at `eb5899e` | It matches the live 504 |
 | D19 | Headline seed | Seeds 0–3 gated | Seeds 1–4 as the headline | Seed 0 as the headline | **Seeds 0–3 all gated, each at 100%** | The goal is 100% on seeds 0–3. Seed 0 alone overfits |
 | D20 | Where swarms coordinate | – | – | – | **`swarm/` at the repo root, git-ignored** | One-tree-swarm layout. One file per entry |
 
 ## Waiting on the user
 
-- **D9.** Accept a temporary second engine (`yack-cadrs`, code from cadrs under MIT) inside the
-  tree from M2 to M5. If you decline, the M2 packages become direct re-hosts, as in M5 of the plan.
-  That costs about one to two weeks before brep-bench passes 500.
-- **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M6.1. If
-  it is not confirmed, cadrs `ssi_numeric` becomes the free-form backend instead.
+- **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M5.1. If it
+  is not confirmed, cadrs `ssi_numeric` becomes the free-form backend.
+- **The effective licence of `yack`.** If any Apache-only donor wins a ladder rung, the combined
+  `yack` becomes `(MIT OR Apache-2.0) AND Apache-2.0`. The user has accepted this. It is recorded
+  here so that nobody is surprised.
