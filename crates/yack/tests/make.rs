@@ -157,3 +157,10 @@ fn named_faces_survive_later_operations() {
     let base = block(&Frame::WORLD, [1.0, 1.0, 1.0]).unwrap().named("base");
     assert_eq!(base.faces_tagged("base").len(), 6);
 }
+
+#[test]
+fn a_negative_extrusion_points_at_the_frame() {
+    let e = extrude(&Frame::WORLD, &Profile::rectangle([0.0, 0.0], [1.0, 1.0]).unwrap(), -2.0).unwrap_err();
+    assert_eq!((e.kind, e.arg), (ErrorKind::Invalid, Some("height")));
+    assert!(e.detail.contains("flip the frame"));
+}

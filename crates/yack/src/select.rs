@@ -6,7 +6,7 @@ use yack_springrep::{facade::api, geom, measure};
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
 use crate::{
-    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, SurfaceKind, Tag, VertexId, VertexRef,
+    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, Role, SurfaceKind, Tag, VertexId, VertexRef,
 };
 
 fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
@@ -34,6 +34,14 @@ fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
         centroid: engine::point(measure::face_centroid(b, f)),
         bbox: Aabb::new(engine::point(bb.min), engine::point(bb.max)),
         tags: tags.into_iter().map(Tag::from).collect(),
+        roles: face
+            .names
+            .iter()
+            .filter(|n| !engine::is_internal_feature(&n.feature))
+            .filter_map(|n| Some((Tag::from(n.feature.as_str()), engine::role(&n.face)?)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
         brep: b,
         face: f,
     }
@@ -150,6 +158,38 @@ impl Solid {
             .filter(|&f| b.face(f).names.iter().any(|n| n.feature == tag.as_str()))
             .map(|f| self.face_id(f))
             .collect()
+    }
+
+    /// The faces playing `role` in the operation named `tag`.
+    pub fn faces_by(&self, tag: impl Into<Tag>, role: Role) -> Vec<FaceId> {
+        let tag = tag.into();
+        self.faces_where(|f| f.roles().iter().any(|(t, r)| *t == tag && *r == role))
+    }
+
+    /// The one face playing `role` in the operation named `tag`: `NotFound` if none,
+    /// `Ambiguous` if several (a side a boolean cut in two).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let slot = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_ccw_to([10.0, 4.0], [10.0, 2.0]).label("bend")
+    ///     .line_to([0.0, 4.0]).arc_ccw_to([0.0, 0.0], [0.0, 2.0]).close()?;
+    /// let plate = extrude(&Frame::WORLD, &Profile::new(slot, vec![])?, 3.0)?.named("plate");
+    /// let bend = plate.face_by("plate", Role::Side("bend".into()))?;
+    /// assert!(matches!(plate.face(bend)?.kind(), SurfaceKind::Cylinder { .. }));
+    /// // the top rim is one tangent chain: its round runs all the way round, in several faces
+    /// let r = plate.fillet(&[plate.edge_at([5.0, 0.0, 3.0])?], 0.5)?.named("r");
+    /// assert!(!r.faces_by("r", Role::Round(0)).is_empty());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn face_by(&self, tag: impl Into<Tag>, role: Role) -> Result<FaceId> {
+        let op = "face_by";
+        let tag = tag.into();
+        let found = self.faces_by(tag.clone(), role.clone());
+        match found.as_slice() {
+            [f] => Ok(*f),
+            [] => Err(Error::not_found(op, "role", format!("no face plays {role:?} in `{tag}`"))),
+            many => Err(Error::ambiguous(op, "role", format!("{} faces play {role:?} in `{tag}`", many.len()))),
+        }
     }
 
     /// The faces for which `keep` is true.

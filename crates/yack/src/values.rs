@@ -195,6 +195,50 @@ pub enum CurveKind {
     Spline,
 }
 
+/// What part a face plays in the operation that made it. Every engine fills the same roles; each
+/// variant says which operations produce it. A face can play a role in several operations (a face
+/// two operations' faces merged into has one from each); a face an operation made with no
+/// meaningful part (a boolean's trimmed copy keeps its original role instead) has none.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 10.0, 4.0])?.named("box");
+/// let s = b.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 6.0)?)?;
+/// let top = s.face_by("box", Role::End)?; // still box's end cap after the drilling
+/// assert_eq!(s.face(top)?.normal().map(|n| n.z > 0.99), Some(true));
+/// assert_eq!(s.faces_by("box", Role::Side("x_min".into())).len(), 1);
+/// # Ok::<(), yack::Error>(())
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Role {
+    /// The cap a sweep starts from: the profile's own face of `extrude`, `sweep`, `sweep_path`,
+    /// a partial `revolve` or `screw`; a loft's first section; the z = 0 face of `block`,
+    /// `cylinder` and `cone`.
+    Start,
+    /// The cap it ends on: the far face of the same operations; the top of `block`, `cylinder` and
+    /// `cone` (none at a cone's apex).
+    End,
+    /// A side swept from one profile segment (`extrude`, `revolve`, `screw`, `sweep`,
+    /// `sweep_path`): its label from [`Pen::label`](crate::Pen::label), or `s{n}` for the n-th
+    /// segment counted through the profile's loops, outer first. A `block`'s sides are `x_min`,
+    /// `x_max`, `y_min`, `y_max` along its frame; a `cylinder`'s, `cone`'s or loft's sides are
+    /// `side`.
+    Side(Tag),
+    /// The one face of a `sphere` or a `torus`.
+    Skin,
+    /// The round a fillet (`fillet`, `fillet_radii`, `fillet_variable`, `fillet_conic`,
+    /// `fillet_g2`, `fillet_setback*`) made along the call's n-th edge.
+    Round(u32),
+    /// The bevel a chamfer (`chamfer`, `chamfer_two`, `chamfer_distances`) made along the call's
+    /// n-th edge.
+    Bevel(u32),
+    /// A corner patch where a blend's rounds or bevels meet.
+    Corner,
+    /// A wall of the cavity a `shell` made.
+    Inner,
+}
+
 /// A read-only view of one face, from [`Solid::face`] or [`Solid::faces_where`].
 #[derive(Clone, Debug)]
 pub struct FaceRef<'a> {
@@ -205,6 +249,7 @@ pub struct FaceRef<'a> {
     pub(crate) centroid: Point3,
     pub(crate) bbox: Aabb,
     pub(crate) tags: Vec<Tag>,
+    pub(crate) roles: Vec<(Tag, Role)>,
     pub(crate) brep: &'a Brep,
     pub(crate) face: engine_ids::Face,
 }
@@ -238,6 +283,15 @@ impl FaceRef<'_> {
     /// operations' faces merged into carries both.
     pub fn tags(&self) -> &[Tag] {
         &self.tags
+    }
+    /// The face's role in each named operation it came from, as `(tag, role)`, sorted.
+    pub fn roles(&self) -> &[(Tag, Role)] {
+        &self.roles
+    }
+    /// The face's role in the operation named `tag`, if it plays one there.
+    pub fn role(&self, tag: impl Into<Tag>) -> Option<Role> {
+        let tag = tag.into();
+        self.roles.iter().find(|(t, _)| *t == tag).map(|(_, r)| r.clone())
     }
     /// The outward unit normal of the face's own surface at the point of it nearest `p` (defined
     /// at creases too, unlike [`Solid::normal_at`]); `None` where the surface is singular.

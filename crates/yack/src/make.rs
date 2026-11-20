@@ -23,7 +23,7 @@ use crate::{Angle, Error, Frame, PathPiece, Point3, Profile, Result, Solid, Spli
 pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
     firewall::run("block", || {
         let feature = engine::feature();
-        engine::made(&feature, "block", primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
+        engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
     })
 }
 
@@ -31,7 +31,7 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
 pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
     firewall::run("cylinder", || {
         let feature = engine::feature();
-        engine::made(&feature, "cylinder", primitive::cylinder(&engine::frame(frame), radius, height, &feature))
+        engine::made_as(&feature, "cylinder", &[("side", "seg:side")], primitive::cylinder(&engine::frame(frame), radius, height, &feature))
     })
 }
 
@@ -47,7 +47,7 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
 pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
     firewall::run("torus", || {
         let feature = engine::feature();
-        engine::made(&feature, "torus", primitive::torus(&engine::frame(frame), major, minor, &feature))
+        engine::made_as(&feature, "torus", &[("tube", "skin")], primitive::torus(&engine::frame(frame), major, minor, &feature))
     })
 }
 
@@ -55,12 +55,21 @@ pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> {
     firewall::run("cone", || {
         let feature = engine::feature();
-        engine::made(&feature, "cone", primitive::cone(&engine::frame(frame), bottom, top, height, &feature))
+        engine::made_as(&feature, "cone", &[("bottom", "start"), ("top", "end"), ("side", "seg:side")], primitive::cone(&engine::frame(frame), bottom, top, height, &feature))
     })
 }
 
-/// `profile`, drawn in the frame's xy plane, extruded `height` along the frame's z.
+/// `profile`, drawn in the frame's xy plane, extruded `height` (`> 0`) along the frame's z. To
+/// extrude the other way, flip the frame (`Frame::new(origin, x, -y, -z)`); a negative height is
+/// refused.
 pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
+    if height < 0.0 {
+        return Err(Error::invalid(
+            "extrude",
+            "height",
+            format!("height {height} is negative; to extrude the other way, flip the frame: Frame::new(origin, x, -y, -z)"),
+        ));
+    }
     firewall::run("extrude", || {
         let feature = engine::feature();
         let op = "extrude";
@@ -108,7 +117,7 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Pro
             sr_loft::Section { profile: engine::profile(op, profile, None)?, frame: engine::frame(frame) },
             sr_loft::Section { profile: engine::profile(op, top, None)?, frame: engine::frame(&up) },
         ];
-        engine::made(&feature, op, sr_loft::loft(&sections, true, &feature))
+        engine::made_as(&feature, op, &[("side", "seg:side")], sr_loft::loft(&sections, true, &feature))
     })
 }
 
@@ -124,7 +133,7 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
                 Ok(sr_loft::Section { profile: engine::profile(op, p, None)?, frame: engine::frame(&at) })
             })
             .collect::<Result<Vec<_>>>()?;
-        engine::made(&feature, op, sr_loft::loft(&sections, false, &feature))
+        engine::made_as(&feature, op, &[("side", "seg:side")], sr_loft::loft(&sections, false, &feature))
     })
 }
 

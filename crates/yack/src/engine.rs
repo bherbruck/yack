@@ -56,6 +56,57 @@ pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
     }
 }
 
+/// The prefix of a face name that says the face was swept from a profile segment of that name.
+const SEGMENT: &str = "seg:";
+
+/// springrep's block faces renamed to yack's frame-axis side names.
+pub(crate) const BLOCK_SIDES: &[(&str, &str)] =
+    &[("u_min", "seg:x_min"), ("u_max", "seg:x_max"), ("v_min", "seg:y_min"), ("v_max", "seg:y_max")];
+
+/// A springrep result whose new faces carry `feature`, with that feature's face names renamed by
+/// `names` (engine names to yack's role vocabulary, see [`role`]).
+pub(crate) fn made_as(feature: &str, op: &'static str, names: &[(&str, &str)], r: sr::Result<Brep>) -> Result<Solid> {
+    made(
+        feature,
+        op,
+        r.map(|mut b| {
+            b.rename_faces(|n| {
+                let mut n = n.clone();
+                if n.feature == feature
+                    && let Some((_, to)) = names.iter().find(|(from, _)| *from == n.face)
+                {
+                    n.face = (*to).to_string();
+                }
+                Some(n)
+            });
+            b
+        }),
+    )
+}
+
+/// The role a face name says its face plays, in yack's vocabulary; `None` for a name with no role.
+pub(crate) fn role(face: &str) -> Option<crate::Role> {
+    use crate::Role;
+    if let Some(label) = face.strip_prefix(SEGMENT) {
+        return Some(Role::Side(label.into()));
+    }
+    let index = |rest: &str| rest.parse::<u32>().ok();
+    match face {
+        "start" => Some(Role::Start),
+        "end" => Some(Role::End),
+        "skin" => Some(Role::Skin),
+        "inner" => Some(Role::Inner),
+        _ if face.starts_with("corner") => Some(Role::Corner),
+        _ => {
+            if let Some(n) = face.strip_prefix("round_").and_then(index) {
+                Some(Role::Round(n))
+            } else {
+                face.strip_prefix("bevel_").and_then(index).map(Role::Bevel)
+            }
+        }
+    }
+}
+
 /// Whether a face feature name is one yack made up for an unnamed operation.
 pub(crate) fn is_internal_feature(name: &str) -> bool {
     name.starts_with("yack#")
@@ -121,8 +172,8 @@ pub(crate) fn profile(op: &'static str, p: &Profile, scale: Option<f64>) -> Resu
         let mut segments = Vec::new();
         for (s, label) in l.segments().iter().zip(l.labels()) {
             let name = match label {
-                Some(t) => t.as_str().to_string(),
-                None => format!("s{n}"),
+                Some(t) => format!("{SEGMENT}{}", t.as_str()),
+                None => format!("{SEGMENT}s{n}"),
             };
             n = n.saturating_add(1);
             segments.push(sr::profile::NamedSegment::new(segment(op, s, scale)?, name));

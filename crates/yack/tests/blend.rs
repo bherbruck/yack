@@ -114,3 +114,28 @@ fn a_rim_point_on_a_holes_seam_picks_the_rim() {
     let r = d.fillet(&[rim], 0.5).unwrap();
     assert!(r.check().is_empty());
 }
+
+#[test]
+fn roles_of_primitives_and_blends() {
+    let c = cylinder(&Frame::WORLD, 1.0, 2.0).unwrap().named("c");
+    assert!(c.face_by("c", Role::Start).is_ok() && c.face_by("c", Role::End).is_ok());
+    assert!(c.face_by("c", Role::Side("side".into())).is_ok());
+    let k = cone(&Frame::WORLD, 2.0, 0.0, 3.0).unwrap().named("k");
+    assert!(k.face_by("k", Role::Start).is_ok() && k.face_by("k", Role::End).is_err());
+    let s = sphere(&Frame::WORLD, 1.0).unwrap().named("s");
+    assert!(s.face_by("s", Role::Skin).is_ok());
+    let t = torus(&Frame::WORLD, 3.0, 1.0).unwrap().named("t");
+    assert!(t.face_by("t", Role::Skin).is_ok());
+    let b = ten().named("box");
+    for side in ["x_min", "x_max", "y_min", "y_max"] {
+        assert!(b.face_by("box", Role::Side(side.into())).is_ok(), "{side}");
+    }
+    let x_max = b.face(b.face_by("box", Role::Side("x_max".into())).unwrap()).unwrap();
+    assert!(x_max.normal().unwrap().x > 0.99);
+    let e = b.edges_at(&[[5.0, 0.0, 10.0], [10.0, 5.0, 0.0]]).unwrap();
+    let ch = b.chamfer(&e, 1.0).unwrap().named("ch");
+    let first = ch.face(ch.face_by("ch", Role::Bevel(0)).unwrap()).unwrap();
+    assert!(first.centroid().z > 5.0, "bevel 0 is along the first edge");
+    assert_eq!(first.role("ch"), Some(Role::Bevel(0)));
+    assert!(ch.face_by("ch", Role::Bevel(1)).is_ok());
+}

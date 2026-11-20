@@ -6,7 +6,7 @@ yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
 yack: pub use input::{FrameLaw, Loop, Motion, PathPiece, Pen, Profile, Segment, Spline3}
 yack: pub use solid::Solid
-yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
+yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
 yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
@@ -83,7 +83,7 @@ yack::make: pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sphere, sweep, sweep_path, torus,}
-yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
+yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Loop, Motion, PathPiece, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
 yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
@@ -113,8 +113,10 @@ yack::select: impl Solid { pub fn edges_of(&self, f: FaceId) -> Result<Vec<EdgeI
 yack::select: impl Solid { pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Vec<EdgeId> }
 yack::select: impl Solid { pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> }
 yack::select: impl Solid { pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> }
+yack::select: impl Solid { pub fn face_by(&self, tag: impl Into<Tag>, role: Role) -> Result<FaceId> }
 yack::select: impl Solid { pub fn faces(&self) -> Vec<FaceId> }
 yack::select: impl Solid { pub fn faces_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Result<Vec<FaceId>> }
+yack::select: impl Solid { pub fn faces_by(&self, tag: impl Into<Tag>, role: Role) -> Vec<FaceId> }
 yack::select: impl Solid { pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> }
 yack::select: impl Solid { pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> }
 yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Vec<FaceId> }
@@ -146,6 +148,8 @@ yack::values: impl FaceRef<'_> { pub fn id(&self) -> FaceId }
 yack::values: impl FaceRef<'_> { pub fn kind(&self) -> SurfaceKind }
 yack::values: impl FaceRef<'_> { pub fn normal(&self) -> Option<Vec3> }
 yack::values: impl FaceRef<'_> { pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> }
+yack::values: impl FaceRef<'_> { pub fn role(&self, tag: impl Into<Tag>) -> Option<Role> }
+yack::values: impl FaceRef<'_> { pub fn roles(&self) -> &[(Tag, Role)] }
 yack::values: impl FaceRef<'_> { pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> }
 yack::values: impl FaceRef<'_> { pub fn tags(&self) -> &[Tag] }
 yack::values: impl From<&str> for Tag

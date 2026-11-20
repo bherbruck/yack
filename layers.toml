@@ -207,7 +207,7 @@ license = "MIT OR Apache-2.0"
 
 # ---- temporary engines (PLAN §3.2) ----
 [crate.yack-springrep]
-layer = 10
+layer = 9
 kind = "temporary"
 owner = "lead"
 deps = []
@@ -215,7 +215,7 @@ delete_by = "M3"
 license = "MIT OR Apache-2.0"
 
 [crate.yack-shim]
-layer = 9
+layer = 8
 kind = "temporary"
 owner = "lead"
 deps = []
@@ -223,7 +223,7 @@ delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
 [crate.yack-cadrs]
-layer = 10
+layer = 9
 kind = "temporary"
 owner = "lead"
 deps = ["yack-shim"]
