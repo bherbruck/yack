@@ -12,9 +12,9 @@
 //!     let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]])?;
 //!     block.difference(&sphere(&Frame::WORLD, 3.0)?.swept(&Motion::Along { path, law: FrameLaw::Fixed })?)
 //! }
-//! // `swept` is not wired yet: it refuses with `Unsupported`, naming the operation.
-//! let e = build().unwrap_err();
-//! assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
+//! let grooved = build()?;
+//! assert!(grooved.volume() < 42.0 * 32.0 * 8.0);
+//! # Ok::<(), yack::Error>(())
 //! ```
 #![deny(missing_docs)]
 #![deny(clippy::float_arithmetic)]

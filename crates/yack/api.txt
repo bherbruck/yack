@@ -41,6 +41,7 @@ yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
+yack::engine_cadrs: impl fmt::Debug for CadrsRef
 yack::input: impl Loop { pub fn is_ccw(&self) -> bool }
 yack::input: impl Loop { pub fn labels(&self) -> &[Option<Tag>] }
 yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }

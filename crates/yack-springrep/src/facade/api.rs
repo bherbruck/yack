@@ -173,3 +173,108 @@ pub fn nearest_face(b: &Brep, p: Point3) -> Result<Option<(FaceId, f64)>> {
 pub fn edge_point(b: &Brep, e: EdgeId, t: f64) -> Option<Point3> {
     b.edge(e).curve.as_ref().map(|c| c.eval(t))
 }
+
+// ---- guards: shapes springrep would build wrong, which its rung must decline (M1.10) ----
+
+/// Whether `a` and `b` have the same face count, volume and area (to the linear tolerance,
+/// relative): an edit that "succeeded" without changing the solid.
+pub fn same_shape(a: &Brep, b: &Brep) -> bool {
+    let close = |x: f64, y: f64| (x - y).abs() <= crate::tol::LINEAR * x.abs().max(y.abs()).max(1.0);
+    a.face_count() == b.face_count()
+        && close(measure::volume(a), measure::volume(b))
+        && close(measure::area(a), measure::area(b))
+}
+
+/// Whether moving the faces of `b` (all, or those in `only`) `by` mm, into the material when
+/// `into` (a shell's walls) else out of it (an offset growing; a negative `by` reverses either),
+/// collapses a round face: a convex cylinder, sphere or torus tube of radius at most the inward
+/// move, or a concave one (a hole) of radius at most the outward move.
+pub fn radius_collapses(b: &Brep, only: Option<&[FaceId]>, by: f64, into: bool) -> bool {
+    let inward = if into { by } else { -by };
+    use crate::geom::Surface;
+    b.face_ids().filter(|f| only.is_none_or(|o| o.contains(f))).any(|f| {
+        let face = b.face(f);
+        let r = match &face.surface {
+            Surface::Cylinder(c) => c.radius,
+            Surface::Sphere(s) => s.radius,
+            Surface::Torus(t) => t.minor,
+            _ => return false,
+        };
+        let convex = !face.reversed;
+        if convex { inward >= r } else { -inward >= r }
+    })
+}
+
+/// Whether an inward shell of `thickness` makes two flat walls cross: two planar faces (not
+/// `open`) facing each other across material, nearer than twice the thickness, whose boxes
+/// overlap across the gap.
+pub fn walls_cross(b: &Brep, open: &[FaceId], thickness: f64) -> bool {
+    use crate::geom::Surface;
+    let planes: Vec<(FaceId, Point3, Vec3)> = b
+        .face_ids()
+        .filter(|f| !open.contains(f))
+        .filter_map(|f| {
+            let face = b.face(f);
+            let Surface::Plane(p) = &face.surface else { return None };
+            let n = if face.reversed { -p.frame.z } else { p.frame.z };
+            Some((f, p.frame.origin, n))
+        })
+        .collect();
+    let gap = 2.0 * thickness;
+    planes.iter().enumerate().any(|(i, &(f, o, n))| {
+        planes.iter().skip(i + 1).any(|&(g, q, m)| {
+            if n.dot(m) > -1.0 + crate::tol::TANGENT {
+                return false;
+            }
+            let d = -(q - o).dot(n);
+            if d <= 0.0 || d >= gap {
+                return false;
+            }
+            let (bf, bg) = (measure::face_bbox(b, f), measure::face_bbox(b, g));
+            let pad = d + crate::tol::LINEAR;
+            bf.min.x <= bg.max.x + pad
+                && bg.min.x <= bf.max.x + pad
+                && bf.min.y <= bg.max.y + pad
+                && bg.min.y <= bf.max.y + pad
+                && bf.min.z <= bg.max.z + pad
+                && bg.min.z <= bf.max.z + pad
+        })
+    })
+}
+
+/// Whether the plane through `origin` square to `normal` passes through `b`'s interior extent
+/// (more than the linear tolerance into it on both sides), so a split must leave two parts.
+pub fn plane_cuts(b: &Brep, origin: Point3, normal: Vec3) -> bool {
+    let Some(n) = normal.unit() else { return false };
+    let (lo, hi) = measure::extent(b, n);
+    let at = origin.dot(n);
+    lo < at - crate::tol::LINEAR && hi > at + crate::tol::LINEAR
+}
+
+/// Whether every rim of the sheet `faces` meets its neighbour square to the sheet (the sheet's
+/// normal lies in the neighbour face at the rim's midpoint), as springrep's thicken assumes when
+/// it sweeps the rims along the neighbours.
+pub fn rims_square(b: &Brep, faces: &[FaceId]) -> bool {
+    for &f in faces {
+        for &l in &b.face(f).loops {
+            for &c in &b.lp(l).coedges {
+                let e = b.coedge(c).edge;
+                let edge = b.edge(e);
+                let Some(curve) = &edge.curve else { continue };
+                let p = curve.eval(0.5 * (edge.range.0 + edge.range.1));
+                let Some(n) = face_normal_at(b, f, p) else { return false };
+                for &u in b.edge_uses(e) {
+                    let g = b.coedge_face(u);
+                    if g == f || faces.contains(&g) {
+                        continue;
+                    }
+                    let Some(m) = face_normal_at(b, g, p) else { return false };
+                    if n.dot(m).abs() > crate::tol::TANGENT {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
