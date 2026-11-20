@@ -42,10 +42,24 @@ get the lead's approval.
 | D19 | Headline seed | Seeds 0–3 gated | Seeds 1–4 as the headline | Seed 0 as the headline | **Seeds 0–3 all gated, each at 100%** | The goal is 100% on seeds 0–3. Seed 0 alone overfits |
 | D20 | Where swarms coordinate | – | – | – | **`swarm/` at the repo root, git-ignored** | One-tree-swarm layout. One file per entry |
 
-## Waiting on the user
+| D21 | Facade discipline (from solidcraft-current) | – | – | – | **`crates/yack` routes and never computes:** `deny(clippy::float_arithmetic)` plus a maths `disallowed-methods` list, checked as gate 13 | This is solidcore-ops' rule, and it keeps geometry out of the facade |
+| D22 | Failure replay, goldens vs certificates, shrinking ledgers | – | – | – | **Adopted** (PLAN §6.8) | Every failure becomes a standalone repro. "Unchanged" never stands in for "correct" |
+| D23 | Chamfer distance definition | – | – | – | **A setback from the edge along each face, in the plane normal to the edge. Not SMLib's face offset** | The offset definition caused 18 of solidcraft's wrong results on brep-bench |
+| D24 | Tolerance scale | absolute (springrep) | `Tolerances` in `Ctx` | absolute | **Absolute `LINEAR` stays for agreement checks, but coincidence and snap thresholds scale with the operands and never delete a feature larger than the tolerance** | 14 of solidcraft's wrong results came from an absolute snap |
+| D25 | `ssi` source | solidcore | solidcore | solidcore | **The `solidcraft-main/solidcore` snapshot @ `4b1a170b`**, under either licence | solidcore plans to delete `ssi` |
 
-- **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M5.1. If it
-  is not confirmed, cadrs `ssi_numeric` becomes the free-form backend.
-- **The effective licence of `yack`.** If any Apache-only donor wins a ladder rung, the combined
-  `yack` becomes `(MIT OR Apache-2.0) AND Apache-2.0`. The user has accepted this. It is recorded
-  here so that nobody is surprised.
+## Decided by the lead (2026-11-20)
+
+- **D9 / D9b: yes.** The temporary cadrs engine goes in, with the LOC ratchet, and is deleted at
+  the end of re-hosting (M4 in PLAN).
+- **Toolchain: 1.98.0.** Bump only if M1.1 proves 1.99 is needed.
+- **brep-protocol: OK** as a git dependency pinned at `12ffc75`, in the adapter only.
+- **Runner crate name:** `yack-bench`.
+- **Licence:** MIT OR Apache-2.0. Apache-only donors (the solidcore kernel and its STEP and tess
+  crates, truck, the SMLib corpus) are allowed in crates marked `Apache-2.0`, with NOTICE
+  entries. No separate corpus repo is needed.
+
+## Still open (not blocking)
+
+- **solidcore `ssi` provenance.** Confirm the "Form Studio" origin with h0witzer before M5.1. If
+  it is not confirmed, cadrs `ssi_numeric` is the fallback.

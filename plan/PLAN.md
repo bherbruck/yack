@@ -88,20 +88,20 @@ There are 25 internal crates plus `yack`. All are prefixed `yack-` except `yack`
 |---|---|---|---|---|
 | 0 | `base` | `Error`, `ErrorKind`, `Stage`, `Issue`; `Budget` (deterministic work units); `Limits` (allocation caps); ordered `par_map`; `guard()` panic firewall helper | – | springrep `error.rs`; cadrs `KernelError` stages; cad-kernel `util/{par,meter}.rs`; solidcraft taxonomy |
 | 0 | `tol` | Tolerance policy: `LINEAR = 1e-7` mm, `ANGULAR`, `TANGENT`, `RESOLVED`, `PICK = 10·LINEAR`, the named round-off ladder, `between`, `within`, and the ordered "same feature" rulebook | – | springrep `tol.rs`; cadrs `tol.rs` ladder; cad-kernel `tolerant.rs` rulebook |
-| 0 | `ssi` | Certified free-form surface/surface intersection on `Patch` (plain data) | – | solidcore `crates/ssi` **as is** (M5) |
-| 0 | `gridmesh` | Grid mesher for dense trimmed NURBS | – | solidcore `crates/nurbs-grid-mesh` **as is** (M5) |
+| 0 | `ssi` | Certified free-form surface/surface intersection on `Patch` (plain data) | – | `ssi` **as is**, from the `solidcraft-main/solidcore` snapshot (solidcore plans to delete it) (M5) |
+| 0 | `gridmesh` | Grid mesher for dense trimmed NURBS (`license = "Apache-2.0"`: solidcore now marks it Apache) | – | solidcore `crates/nurbs-grid-mesh` **as is** (M5) |
 | 1 | `numeric` | Quadrature, banded/cyclic solves, QR/SVD/LU, roots, intervals, certified root isolation (Krawczyk), Shewchuk predicates, deterministic `fmath` | base, tol | springrep `numeric.rs`, `mesh/predicates.rs`; cad-kernel `util/{interval,isolate,linalg,expansion,predicates,fmath}` (keep the musl/FreeBSD notice) |
 | 1 | `p21` | ISO 10303-21 lexer, parser and writer into a neutral entity graph, with `Limits`. No geometry types | base | springrep `step/part21.rs`; cadrs `step.rs` complex-entity and escape handling |
 | 2 | `math` | `Vec2/3`, `Point2/3`, `Dir3`, `Frame`, `Rigid`, `Similarity`, `Affine`, `Aabb`, `Angle`, BVH | numeric, tol, base | springrep `math.rs`, `mesh/bvh.rs`; cadrs `bvh.rs` |
 | 3 | `geom` | Analytic-first `Curve`, `Surface`, `Curve2`; one rational B-spline type; eval, derivatives, projection, periods; `Mapped` affine images; analytic recognition; `Enclose` | math, numeric, tol, base | springrep `geom/`; cadrs `nurbs.rs` checked constructors, `recognize.rs`; cad-kernel `affine.rs`, `enclose.rs` design |
 | 4 | `intersect` | CCI, CSI and SSI with contact classification, giving a plain `Meeting`: closed forms first, then swept-family, then marching, then certified free-form via `ssi` | geom, ssi, math, numeric, tol, base | springrep `boolean/{csi,ssi,ssi/*,contact,march}`; cadrs `ssi_graph`, `ssi_cci`, `ssi_coincident`, `ssi_numeric`; next.BREP tangent lane (idea) |
 | 4 | `profile` | 2-D segments, loops and profiles, with validation, segment labels and exact 2-D region booleans | geom, math, numeric, tol, base | springrep `profile/`; brep-protocol `profile.rs` Gn formulas; solidcraft `Region2` |
-| 4 | `topo` | `Brep` arena, typed ids, pcurves, seams, contacts, opaque `Memo` slots, `build::Parts` (the only builder), names/roles, `History` data, similarity maps | geom, math, tol, base | springrep `topo/` + `step/topology.rs::{Parts,solid_of,rebuilt}` + `blend::EdgeName`; solidcraft `history.rs` |
+| 4 | `topo` | `Brep` arena, typed ids, pcurves, seams, contacts, opaque `Memo` slots, `build::Parts` (the only builder), names/roles, `History` data, similarity maps | geom, math, tol, base | springrep `topo/` + `step/topology.rs::{Parts,solid_of,rebuilt}` + `blend::EdgeName`; solidcraft `crates/kernel` history + `crates/doc` naming |
 | 5 | `locate` | Point-in-face, point classification (in/on/out), rays, closest point, distance, entity at a point | topo, intersect, geom, math, numeric, tol, base | springrep `boolean/{domain,classify}.rs`, `rays.rs`, `distance.rs`; cadrs `distance.rs` |
 | 5 | `measure` | Exact integrals: volume, area, centroid, inertia, tight boxes, Betti numbers, normal and curvature | topo, intersect, geom, math, numeric, tol, base | springrep `measure.rs`; cadrs `mass.rs` (degree-matched Gauss rules); cad-kernel `props.rs` uv gap fix |
-| 5 | `codec` | Exact, versioned, capped binary format plus `digest()` | topo, geom, math, base | springrep `codec.rs` (`fields!`); solidcraft `docs/native-brep.md` as the spec |
+| 5 | `codec` | Exact, versioned, capped binary format plus `digest()` | topo, geom, math, base | springrep `codec.rs` (`fields!`); `solidcore-record` schema ideas |
 | 6 | `check` | Validity contract: incidence, closure, geometric agreement, orientation, nesting, face–face crossing (BVH) | topo, locate, measure, intersect, geom, math, tol, base | springrep `check.rs`; cadrs `check_faces.rs` |
-| 6 | `mesh` | Watertight tessellation (CDT in metric uv), display mesh with topology ids, tess plan | topo, locate, gridmesh, geom, numeric, math, tol, base | springrep `mesh/`; solidcraft `TessPlan` + mesh topology fields |
+| 6 | `mesh` | Watertight tessellation (CDT in metric uv), display mesh with topology ids, tess plan | topo, locate, gridmesh, geom, numeric, math, tol, base | springrep `mesh/`; `solidcore-tess` (Apache, SolidCraft's mesher) TessPlan + mesh topology fields |
 | 7 | `tweak` | Moves faces onto offset or moved surfaces and re-intersects their neighbours. No booleans | topo, intersect, locate, check, geom, math, tol, base | springrep `edit/tweak.rs`, `tweak/through.rs` |
 | 7 | `heal` | Sewing loose faces, the vertex pool, gap and same-parameter fixes, Gauss-Newton adjust | topo, locate, check, intersect, geom, math, tol, base | springrep `step/{heal,adjust}.rs`, `blend/sew.rs`; cadrs `heal.rs`; cad-kernel `sew.rs` |
 | 7 | `build` | Primitives, extrude, revolve, screw, loft, loft_through, sweep, sweep_path, slab, guided loft, NURBS-profile segments. Never unions pieces | profile, topo, check, locate, measure, intersect, geom, numeric, math, tol, base | springrep `primitive*`, `sweep*`, `loft/`; cadrs `loft_build`, `curve_loft`, `sweep_planar`, `sweep_pipe` |
@@ -129,9 +129,8 @@ depend on them:
 fails if any of them exists once the tag for that milestone is set. It also enforces these rules
 on them:
 
-- Only `yack`, the temporary crates themselves, and the `from_cadrs.rs` port modules may depend
-  on them.
-- `yack-cadrs` LOC may only fall from M3 onward (a ratchet).
+Only `yack`, the temporaries themselves and `from_cadrs.rs` port modules may depend on them, and
+`yack-cadrs` LOC may only fall from M3 onward.
 
 | Crate | Content | Delete by |
 |---|---|---|
@@ -469,41 +468,30 @@ Rules for case programs:
 
 ### 5.1 `crates/yack-conformance` (brep-conformance adapter)
 
-**Shape.**
-- The adapter implements `brep_protocol::Kernel` with `type Solid = yack::Solid`.
-- It is two files: `main.rs`, with one line per method, and `convert.rs`, for frames, profiles,
-  point-to-id lookups and matrices.
-- Target size is at most 500 lines. springrep's adapter is 895 lines and cadrs's about 1k.
-- It does only the four things the contract allows: translate form, address entities by point
-  (`edge_at`/`face_at`), supply the empty solid (`make::empty()`), and keep handles, which
-  immutability already gives.
+**Shape.** `impl brep_protocol::Kernel` with `type Solid = yack::Solid`, in `main.rs` (one line
+per method) and `convert.rs` (frames, profiles, point → id, matrices); ≤ 500 lines (springrep 895,
+cadrs ~1k). It does only the contract's four things: translate form, address by point
+(`edge_at`/`face_at`), the empty solid (`make::empty()`), and handles (immutability gives them).
 
 **Errors**, in one `fn r(e) -> Refusal`: `Invalid | NotFound | ForeignId` → invalid;
 `Ambiguous | Unsupported` → unsupported; `Failed | Budget` → failed; `Internal` → `resume_unwind`
 (a crash).
 
-**Tests.**
-- `supports()` returns `yack::SUPPORTS`, which must equal the set of methods the adapter
-  overrides.
-- Each listed function passes a smoke case.
-- xtask greps the adapter: no `if` or `match` on a returned value outside `r()`.
+**Tests.** `supports()` returns `yack::SUPPORTS`, equal to the overridden methods; each listed
+function passes a smoke case; xtask greps for any `if`/`match` on a returned value outside `r()`.
 
 **Dependency.** `brep-protocol` is a git dependency on `springcraft-ai/brep-conformance` at
 `12ffc75`.
 
 **`cargo xtask conformance [--seed N|--seeds 0-3] [--family F] [--bless] [--record-digests]`**
-1. Builds the adapter in release into `bin/`.
-2. Runs the pinned suite runner from `$YACK_REF/brep-conformance` (default `../yack-ref`).
-3. Writes `bin/conformance/seed<N>.json`.
-4. Ratchets the result against `scores/conformance/seed<N>.json`, which holds each case's
-   outcome, tier and `time_ms`.
+builds the adapter in release into `bin/`, runs the pinned runner from `$YACK_REF/brep-conformance`
+(default `../yack-ref`), writes `bin/conformance/seed<N>.json`, and ratchets it against
+`scores/conformance/seed<N>.json` (outcome, tier, `time_ms` per case).
 
 ### 5.2 `crates/yack-bench` (brep-bench runner)
 
-**Layout.** The crate copies the layout of brep-bench's `kernels/<k>/`:
-- `src/cases/{category}/{name_snake}.rs`, each exporting `pub fn build() -> yack::Result<Solid>`;
-- a `build.rs` that generates the dispatch table;
-- `src/main.rs`.
+**Layout** (as brep-bench's `kernels/<k>/`): `src/cases/{category}/{name_snake}.rs`, each
+`pub fn build() -> yack::Result<Solid>`; `build.rs` generates the dispatch table; `src/main.rs`.
 
 **CLI.** `yack-bench CASE OUT.stl [OUT.step]`, plus `--version` (prints `yack <VERSION> <SOURCE>`).
 
@@ -514,24 +502,17 @@ Rules for case programs:
 | The case refuses | Prints `{"status":"refused","reason":"<Error Display>"}` |
 | Unknown case | Exits non-zero |
 
-- JSON is written by hand, so the crate needs no dependencies.
-- Under `BREP_BENCH_WARM`, the runner stops itself after loading and again after replying, with
-  `kill -STOP` through `std::process::Command`.
-- The release profile is `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `strip = true`.
+Hand-written JSON (no deps). Under `BREP_BENCH_WARM` it stops itself (`kill -STOP` via
+`std::process::Command`) after loading and after replying. Release: fat LTO, 1 CGU, abort, strip.
 
 **`cargo xtask bench [--cases glob] [--bless]`**
-1. Builds `bin/release/yack-bench`.
-2. Keeps a local `yack` entry in `$YACK_REF/brep-bench/kernels.json`. That entry is never
-   committed.
-3. Runs `harness/run.py`.
-4. Ratchets outcome, time, `loc` and strategy per case against `scores/bench.json`.
-5. Prints mean and max `loc`, and runner lines ÷ cases.
+builds `bin/release/yack-bench`, keeps a local, never-committed `yack` entry in
+`$YACK_REF/brep-bench/kernels.json`, runs `harness/run.py`, ratchets outcome, time, `loc` and
+strategy per case against `scores/bench.json`, and prints mean/max `loc` and runner lines ÷ cases.
 
-**Own measures.** `yack-testkit` turns each case's TOML header into a test of yack's own
-measures. That tells "geometry right, writer wrong" apart from "geometry wrong".
-
-**Upstream.** The crate is copied as `kernels/yack/`, with `yack` pinned to a git rev. The
-orchestrator opens that PR; agents never post externally.
+**Own measures.** `yack-testkit` turns each case's TOML header into a test of yack's own measures
+("geometry right, writer wrong" vs "geometry wrong"). **Upstream:** the crate is copied as
+`kernels/yack/` with `yack` pinned to a git rev, and the orchestrator opens that PR.
 
 ---
 
@@ -631,6 +612,9 @@ a planted-violation fixture proving it fails.
     `.git/worktrees`.
 12. **Temporaries.** No `temporary = true` crate outlives its `delete_by` tag. Only `yack-cadrs`
     depends on `yack-shim`.
+13. **The facade routes and never computes** (the solidcore-ops rule). `crates/yack` has
+    `#![deny(clippy::float_arithmetic)]` plus `disallowed-methods` (`sqrt`, trig, `dot`, `cross`,
+    …) in its own `clippy.toml`. The gate checks that both are present.
 
 ### 6.7 Corpora
 
@@ -641,11 +625,30 @@ a planted-violation fixture proving it fails.
 | springrep `tests/` (215) + `grazing-tooth-{a,b}.step` + `doc/design.md` anecdotes | MIT | T1 port (M1.8), one regression per anecdote | `crates/yack/tests/` |
 | cadrs `metamorphic_*`, `stress_booleans`, `determinism`, `chamfer_generated`, `conformance.rs` (84), `ssi_robust`, `swept_exact`, `mass_exact`, `tess_quality`, `validity`, `fuzz_readers` | MIT | T1/T3 port (M5) | `crates/yack/tests/` |
 | cad-kernel `gcs-core/tests/{brep*,arrangement,booleans,mesh*}` (~150), `step_check.rs` | MIT | T1; STEP self-verifier | `crates/yack/tests/`, `yack-testkit` |
-| solidcraft `tests/oracle` (83), `examples/regressions` (25); step-conformance (17, CC0) | user's own MIT; CC0 | T5 | `crates/yack/tests/`, `corpus/step-cc0/` |
+| `solidcraft-main/tests/{oracle (92), kernel-cases, step-regressions (11)}`; `step-conformance` (18, CC0); `ssi-corpus` copy | MIT OR Apache; CC0 | T1/T5; ledgers that only shrink | `crates/yack/tests/`, `corpus/` |
+| solidcore `kernel_cases/` (2,188), `solidcore-ops/tests` | Apache-2.0 | scenarios re-derived in yack's format | `crates/yack/tests/` (NOTICE) |
 | ssi-corpus (jyviko `b04c8a6`, 119) | MIT OR Apache-2.0 (25 cases CC-BY: cite) | SSI gate ≥ 118/119 | fetched by `xtask corpus ssi`, SHA-256 manifest |
 | solidcore `fixtures/solidcraft` (128) | Apache (facts) | Re-expressed as our own tests. **Never copy the JSON** | `crates/yack/tests/` |
-| SMLib/usd-brep (237) | Apache-2.0 data | M6 nightly, via cadrs `smb.rs` | fetched by `xtask corpus smlib`, NOTICE kept |
+| SMLib/usd-brep (237) | Apache-2.0 data | M6 nightly, via cadrs `smb.rs` | fetched by `xtask corpus smlib` (no separate repo), NOTICE kept |
 | **Excluded** | – | cadrs `tests/data/docs/*.body` (no licence), `blend_tool_tolblend_c9.body` and the OCCT dataset (LGPL), STEP Tools files, all of next.BREP | never |
+
+### 6.8 Contract notes and practices (from solidcraft's 39 wrong; `analysis/solidcraft-current.md`)
+
+- **Chamfer distance is a setback from the edge along each face**, measured in the plane normal to
+  the edge. It is not SMLib's face-offset definition, which accounted for 18 of solidcraft's wrong
+  results. This is stated on the method doc. Tests run on a sphere rim and a cone, not only on planes.
+- **Tolerances scale with the model or the operands.** A fixed absolute 3-D intersection tolerance
+  must never snap away a feature larger than the tolerance (14 wrong). Tests: `small-cube-*` at
+  s = 0.0015, `thin-lens`, a 1e-6 wedge.
+- **Failure replay.** Every `Failed`/`Internal` error can capture its input solids as codec bytes
+  (`Error::replay() -> Option<Replay>`). `yack-testkit::replay(path)` re-runs the call alone, and
+  `xtask` saves a capture for every failing case.
+- **Goldens are not certificates.** "Unchanged" (digests, ratchets) never stands in for
+  "correct" (closed forms, certificates).
+- **Ledgers only shrink.** Known failures and quarantines live in `scores/*.txt`. A commit that
+  adds a line is refused.
+- **Reader fuzz.** solidcraft `crates/testkit` (294 lines, MIT OR Apache) is copied as is into
+  `yack-testkit`. A mutated STEP or codec file errors within its caps and never panics.
 
 ---
 
@@ -832,19 +835,20 @@ two strategies tie in the bake-off, the dual-licensed one wins.
 | Donor | Licence used | Revision |
 |---|---|---|
 | springrep | MIT, (c) 2026 Springcraft, Inc. | `a03e8a1` |
-| cadrs | MIT OR Apache-2.0, (c) 2026 Rouan van der Ende | `eb5899ef` |
+| cadrs | MIT OR Apache-2.0 (either), (c) 2026 Rouan van der Ende | `eb5899ef` |
 | geomsolver / cad-kernel | MIT, (c) 2026 Brandon Martin-Anderson | `694cb72` |
-| solidcore `crates/{ssi,nurbs-grid-mesh}` | MIT OR Apache-2.0, h0witzer et al. | pin at first use |
-| solidcore SMLib-port kernel, `step-import`/`-export`/`-brep` | **Apache-2.0** (NVIDIA derivative, multi-author) | pin at first use |
-| solidcraft, current kernel (solidcraft-kernel over solidcore-ops) | its own licence (MIT OR Apache-2.0) | pin at first use |
-| truck (and solidcraft's vendored copy) | Apache-2.0 | pin at first use |
+| `ssi`, from `solidcraft-main/solidcore` @ `4b1a170b` | MIT OR Apache-2.0 (either), h0witzer | `4b1a170b` |
+| solidcore (in solidcraft-main): SMLib-port kernel, `solidcore-record` (ideas), `-tess`, `-step`, `nurbs-grid-mesh` | **Apache-2.0** (NVIDIA derivative, multi-author) | `4b1a170b` |
+| solidcraft `crates/{kernel,doc,testkit}` (history, naming, fuzzer) | MIT OR Apache-2.0 | `4b1a170b` |
+| truck | Apache-2.0 (no longer in solidcraft) | pin at first use |
 | brep-conformance protocol | MIT, (c) 2026 Springcraft, Inc. | `12ffc75` |
 | brep-bench case texts | MIT OR Apache-2.0, (c) the brep-bench contributors | `d522d62` |
 
 `NOTICE` also keeps the musl/FreeBSD notice for `fmath`, word for word.
 
-The local solidcraft checkout was 2,428 commits stale and is being updated. The truck claims in
-`analysis/solidcraft.md` are outdated, so re-read solidcraft before using it as a donor.
+Current solidcraft (`yack-ref/solidcraft-main`) vendors solidcore and no longer uses truck.
+`analysis/solidcraft-current.md` supersedes `analysis/solidcraft.md` and `solidcore.md`.
+cadrs and `ssi` may be used under either of their licences.
 
 ### Per-file header
 
@@ -890,9 +894,7 @@ its NOTICE. It is not committed.
 | The bridge loses exactness (cone by slant, sphere by latitude, pcurve conventions) | M/H | An exact mapping per surface kind, plus `PCurve::Curve2`. Round trip on every benchmark result |
 | A ladder hides a wrong result, or doubles time when rung 1 declines slowly | M/H | Every rung's result passes the strict checker plus `audit()`. A `wrong` is never waivable. Each rung has a `Budget`. The bake-off order puts the cheaper winner first |
 | Porting cadrs onto springrep's boolean and SSI changes behaviour, since it was tuned against cadrs's own | H/H | The bridge comes first, so the score exists before any port. Ports go one module at a time against a per-case ratchet. A regression keeps the bridged rung and files a gap |
-| The `boolean/` untangle (T1/T2) is large | M/M | One owner for all of `boolean/`; a temporary `FaceImages` slot is allowed |
 | Apache-only code makes the combined `yack` Apache-2.0 | C/L | Allowed by the user. The SPDX closure is printed by the gate and stated in the bundle. MIT-compatible strategies win ties |
 | brep-bench grades our STEP writer | M/H | Own-measure tests per case. `step_check` on every write |
 | The LOC target pushes composition into `shared.rs` | M/L | No wrappers allowed. A second metric counts the helpers. API issues go to the API owner |
-| Toolchain 1.98 vs springrep's 1.99 pin | L/M | M1.1 verifies; install 1.99 once, shared, only if needed |
 | Single-crate publishing | C/M | `xtask bundle` at M6; fallback is `yack-internal-*` |

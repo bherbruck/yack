@@ -45,6 +45,10 @@ yack is an exact B-rep kernel in pure, safe Rust, licensed MIT OR Apache-2.0.
      `// tol: <reason>`.
    - No file over 1,500 lines.
    - Only `yack` calls `catch_unwind`.
+   - `crates/yack` **routes and never computes**. It has no float arithmetic and no maths calls
+     (`clippy::float_arithmetic` is denied there). Geometry belongs in a kernel crate.
+   - Chamfer distances are setbacks along each face, not face offsets.
+   - Snap and coincidence thresholds never delete a feature larger than the tolerance.
 7. **Strategy ladders** (`plan/PLAN.md` §3.5). When two donors implement one op, each is a
    private `Strategy` module in that op's crate.
    - Strategies never call each other.
@@ -70,7 +74,7 @@ yack is an exact B-rep kernel in pure, safe Rust, licensed MIT OR Apache-2.0.
      - cadrs (MIT OR Apache)
      - cad-kernel / geomsolver (MIT)
      - all of solidcore, including the SMLib-port kernel and STEP crates (Apache-2.0)
-     - solidcraft's current kernel
+     - current solidcraft (`$YACK_REF/solidcraft-main`; it vendors solidcore, no truck; take `ssi` from there)
      - truck (Apache-2.0)
      - the SMLib corpus (Apache-2.0, fetched)
    - A crate that contains **any Apache-2.0-only code** must say `license = "Apache-2.0"` in its
