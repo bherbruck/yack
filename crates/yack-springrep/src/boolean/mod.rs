@@ -469,6 +469,8 @@ pub(crate) struct FaceImages {
     bbox: Aabb,
 }
 
+impl crate::topo::MemoSlot for FaceImages {}
+
 #[derive(Debug)]
 struct TrimImage {
     t: (f64, f64),
@@ -928,7 +930,7 @@ impl<'a> Work<'a> {
         let b = self.breps[side];
         let face = b.face(f);
         let coedges = |lp: &crate::topo::LoopId| b.lp(*lp).coedges.iter();
-        if let Some(img) = b.memo(f).images.get() {
+        if let Some(img) = b.memo(f).slot::<FaceImages>() {
             let loops = face
                 .loops
                 .iter()
@@ -992,7 +994,7 @@ impl<'a> Work<'a> {
             .collect();
         let dom = Domain::new(face.surface.clone(), face.reversed, loops);
         let bbox = face_bbox(&dom);
-        let _ = b.memo(f).images.set(FaceImages {
+        b.memo(f).set_slot(FaceImages {
             trims,
             samples: dom.samples().to_vec(),
             boxes: dom.boxes().to_vec(),
@@ -2220,7 +2222,7 @@ impl<'a> Work<'a> {
     fn boundary_trims(&self, fi: usize) -> Vec<Vec<Trim>> {
         let face = &self.faces[fi];
         let b = self.breps[face.side];
-        let img = b.memo(face.id).images.get();
+        let img = b.memo(face.id).slot::<FaceImages>();
         let mut loops = Vec::new();
         for (li, &lp) in b.face(face.id).loops.iter().enumerate() {
             let mut trims = Vec::new();
@@ -2240,7 +2242,7 @@ impl<'a> Work<'a> {
                     }
                     ts.push(z);
                 }
-                let uvs = match img {
+                let uvs = match &img {
                     Some(img) if ps.len() == 1 => {
                         let w = img.trims[li][k].whole;
                         vec![w.0, w.1]

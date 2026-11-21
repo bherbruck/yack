@@ -1,7 +1,9 @@
 // yack: springrep module src/topo/memo.rs
 // Adapted from springrep@a03e8a1 src/topo/memo.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
-use std::collections::HashSet;
+// Changes: typed memo slots (MemoSlot, M2.2 T3) replace the boolean's own field, so topo names no
+// higher layer's type.
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,8 +32,9 @@ pub(crate) struct FaceMemo {
     pub pcurves: OnceLock<Vec<Vec<Vec<Vec2>>>>,
     /// The face's own loops lie on its surface, close in its parameters and run its way.
     pub clean: OnceLock<()>,
-    pub images: OnceLock<crate::boolean::FaceImages>,
-    /// The face's share of [`crate::measure::loose_bbox`].
+    /// What higher layers derive from the face and keep here, one value of each [`MemoSlot`] type.
+    pub slots: Slots,
+    /// The face's share of the arena's loose box (the measures' `loose_bbox`).
     pub loose_box: OnceLock<Aabb>,
     /// The memos of faces the checker found this one does not meet away from their shared edges
     /// and vertices.
@@ -50,10 +53,44 @@ impl Default for FaceMemo {
             moments: Mutex::new(None),
             pcurves: OnceLock::new(),
             clean: OnceLock::new(),
-            images: OnceLock::new(),
+            slots: Slots::default(),
             loose_box: OnceLock::new(),
             apart: Mutex::new(HashSet::new()),
         }
+    }
+}
+
+/// A value a higher layer derives from a face's geometry and keeps on its memo (PLAN §4.1): set
+/// once while the geometry is unchanged, read back by its type.
+pub(crate) trait MemoSlot: Any + Send + Sync {}
+
+/// A face memo's typed slots, at most one value of each type.
+#[derive(Default)]
+pub(crate) struct Slots(Mutex<BTreeMap<TypeId, Arc<dyn Any + Send + Sync>>>);
+
+impl fmt::Debug for Slots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = self.0.lock().map_or(0, |m| m.len());
+        write!(f, "Slots({n})")
+    }
+}
+
+impl FaceMemo {
+    /// The value of type `T` kept on this memo, if one was set.
+    pub(crate) fn slot<T: MemoSlot>(&self) -> Option<Arc<T>> {
+        let held = self.slot_any(TypeId::of::<T>())?;
+        held.downcast::<T>().ok()
+    }
+
+    /// Keeps `v` on this memo, unless a value of its type is already there (it then stays).
+    pub(crate) fn set_slot<T: MemoSlot>(&self, v: T) {
+        if let Ok(mut m) = self.slots.0.lock() {
+            m.entry(TypeId::of::<T>()).or_insert_with(|| Arc::new(v));
+        }
+    }
+
+    fn slot_any(&self, k: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.slots.0.lock().ok()?.get(&k).cloned()
     }
 }
 

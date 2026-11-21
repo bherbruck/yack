@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub use facts::{Facts, OnFace};
-pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey};
+pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey, MemoSlot};
 pub use names::FaceName;
 pub(crate) use parts::{Entities, Parts};
 pub use pcurve::PCurve;
