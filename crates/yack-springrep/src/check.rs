@@ -149,7 +149,7 @@ pub(crate) fn check_distances(b: &Brep) -> Vec<Issue> {
                         None => b.vertex(edge.start).point,
                     };
                     let d = face.surface.eval(uv.x, uv.y).dist(want);
-                    (!tol::within(d, within, want)).then_some(d)
+                    (!crate::math::within(d, within, want)).then_some(d)
                 });
                 if let Some(d) = far {
                     issue(format!("coedge {} of face {} is {d:e} mm off its surface", c.index(), f.index()));
@@ -428,7 +428,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                         None => b.vertex(edge.start).point,
                     };
                     let d = face.surface.eval(uv.x, uv.y).dist(want);
-                    if !tol::within(d, within, want) {
+                    if !crate::math::within(d, within, want) {
                         issue(format!(
                             "coedge {} of face {} is {d:e} mm off its surface",
                             c.index(),

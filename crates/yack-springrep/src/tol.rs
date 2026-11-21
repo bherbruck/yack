@@ -1,6 +1,7 @@
 // yack: The kernel's tolerances. Every geometric comparison uses one of these, or a value derived from
 // Adapted from springrep@a03e8a1 src/tol.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: `within`, which takes a point, moved to math (M2): tol keeps constants and scalar
+// compares.
 //! The kernel's tolerances. Every geometric comparison uses one of these, or a value derived from
 //! one in the place it is used; no module keeps a tolerance of its own.
 
@@ -33,11 +34,4 @@ pub fn param(speed: f64) -> f64 {
 /// solids graze, carry a tolerance above it.
 pub fn between(a: f64, b: f64) -> f64 {
     (a + b - LINEAR).max(LINEAR)
-}
-
-/// `d <= t`, read with a few ulps of the coordinates' size at `at` to spare, so that what lies at
-/// exactly a tolerance counts as within it however its coordinates round: a copy moved by exactly
-/// [`LINEAR`] lies 1e-7 mm plus a few ulps away.
-pub fn within(d: f64, t: f64, at: crate::math::Point3) -> bool {
-    d <= t + 16.0 * f64::EPSILON * (1.0 + at.x.abs().max(at.y.abs()).max(at.z.abs()))
 }

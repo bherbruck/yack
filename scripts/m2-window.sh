@@ -34,8 +34,12 @@ touched() {
   done
 }
 restore() {
-  for f in $TOUCHED; do if [ -f "$BK/$f" ]; then cp -a "$BK/$f" "$SR/$f"; else rm -f "$SR/$f"; fi; done
-  for f in "${EXT[@]}"; do cp -a "$BK/ext/$f" "$f"; done
+  # plain cp + touch: a restored file must look newer than what the build made from the moved one,
+  # or cargo keeps the stale artifacts (cp -a would restore the old mtime)
+  for f in $TOUCHED; do if [ -f "$BK/$f" ]; then cp "$BK/$f" "$SR/$f" && touch "$SR/$f"; else rm -f "$SR/$f"; fi; done
+  for f in "${EXT[@]}"; do cp "$BK/ext/$f" "$f" && touch "$f"; done
+  # a removed file's module may be the only change: touch the crate root so cargo rebuilds
+  touch "$SR/src/lib.rs"
   echo "$TAG restored its own files:" $TOUCHED "${EXT[@]}"
 }
 python3 $APPLY $SR "${APPLY_ARGS[@]}"; ARC=$?; TOUCHED=$(touched); echo "$TAG touched:" $TOUCHED "${EXT[@]}"

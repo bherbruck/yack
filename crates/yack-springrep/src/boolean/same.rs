@@ -63,7 +63,7 @@ fn match_vertices(x: &Brep, y: &Brep) -> Option<Vec<VertexId>> {
             }
             let d = y.vertex(w).point.dist(p);
             if !taken[k]
-                && tol::within(d, tol::between(tv, y.vertex_tolerance(w)), p)
+                && crate::math::within(d, tol::between(tv, y.vertex_tolerance(w)), p)
                 && best.is_none_or(|b| d < b.0)
             {
                 best = Some((d, k));
@@ -105,7 +105,7 @@ fn match_edges(x: &Brep, y: &Brep, vmap: &[VertexId]) -> Option<Vec<EdgeId>> {
                     let on = |c: &crate::geom::Curve, r: (f64, f64), d, s: (f64, f64)| {
                         (1..4).all(|k| {
                             let p = c.eval(r.0 + (r.1 - r.0) * k as f64 / 4.0);
-                            tol::within(csi::curve_distance(d, s, p).0, reach, p)
+                            crate::math::within(csi::curve_distance(d, s, p).0, reach, p)
                         })
                     };
                     on(c, edge.range, d, other.range) && on(d, other.range, c, edge.range)
@@ -174,7 +174,7 @@ fn on_each_other(a: &Domain, b: &Domain) -> bool {
         && pts.iter().take(n).all(|&uv| {
             let p = a.surface.eval(uv.x, uv.y);
             let w = b.surface.project(p);
-            tol::within(b.surface.eval(w.x, w.y).dist(p), tol::LINEAR, p)
+            crate::math::within(b.surface.eval(w.x, w.y).dist(p), tol::LINEAR, p)
                 && b.exact_side(p)
                     .is_some_and(|w| b.outward(w).dot(a.outward(uv)) > 0.0)
         })

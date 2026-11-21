@@ -1,12 +1,19 @@
 // yack: Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 // Adapted from springrep@a03e8a1 src/math.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: `within` moved in from tol.rs (M2), being the one tolerance compare that takes a point.
 //! Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 //! name at each use says which it is.
 
 use std::ops::{Add, AddAssign, Div, Index, Mul, Neg, Sub, SubAssign};
 
 use crate::{Result, error::invalid, tol};
+
+/// `d <= t`, read with a few ulps of the coordinates' size at `at` to spare, so that what lies at
+/// exactly a tolerance counts as within it however its coordinates round: a copy moved by exactly
+/// [`tol::LINEAR`] lies 1e-7 mm plus a few ulps away.
+pub fn within(d: f64, t: f64, at: Point3) -> bool {
+    d <= t + 16.0 * f64::EPSILON * (1.0 + at.x.abs().max(at.y.abs()).max(at.z.abs()))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vec3 {
