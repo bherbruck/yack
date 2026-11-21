@@ -4,3 +4,4 @@ bin/
 swarm/
 swarm/
 .playwright-mcp/
+__pycache__/
