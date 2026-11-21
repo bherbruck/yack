@@ -218,7 +218,7 @@ license = "MIT OR Apache-2.0"
 layer = 8
 kind = "temporary"
 owner = "lead"
-deps = []
+deps = ["yack-base"]
 delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
@@ -226,7 +226,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = ["yack-shim"]
+deps = ["yack-shim", "yack-tol"]
 delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
@@ -327,7 +327,7 @@ codec = ["firewall"]
 engine_cadrs = ["engine", "input"]
 solid = ["engine", "input", "engine_cadrs"]
 values = ["engine", "input", "engine_cadrs", "solid"]
-select = ["engine", "input", "engine_cadrs", "solid"]
+select = ["engine", "input", "engine_cadrs", "solid", "values"]
 query = ["engine", "input", "engine_cadrs", "solid", "firewall", "bakeoff", "ladder"]
 make = ["engine", "input", "engine_cadrs", "firewall", "bakeoff", "ladder"]
 boolean = ["engine", "input", "engine_cadrs", "firewall", "bakeoff", "ladder"]

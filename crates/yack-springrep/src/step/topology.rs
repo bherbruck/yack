@@ -1454,21 +1454,21 @@ pub(super) fn solid(geo: &mut Geometry, id: u64) -> Result<ReadSolid> {
         splits: HashMap::new(),
     };
     rd.solid(id)?;
-    let uncertainty = rd.geo.uncertainty();
     let file = join_contacts(without_split(rd.raw, &rd.splits));
     let mut raw = file.clone();
     let names = || file.faces.iter().map(|f| (f.id, f.name.clone())).collect();
+    let within = rd.geo.uncertainty().filter(|&u| u > tol::LINEAR);
+    if let Some(b) = heal::as_written(&file, within, |r, t| assemble(r, &t.ranges, Some(t)).ok()) {
+        return Ok((b, names(), None));
+    }
     let exact = heal::heal(&mut raw)
         .and_then(|(ranges, healed)| assemble(&raw, &ranges, None).map(|b| (b, healed)));
-    let within = uncertainty.filter(|&u| u > tol::LINEAR);
-    // Healing that moves geometry further than the file says its geometry meets has changed the
-    // shape, not closed it: the file's geometry is kept instead where tolerances can hold it.
+    // Healing past the file's stated uncertainty changed the shape: keep the file's geometry then.
     let why = match exact {
         Ok((b, healed)) if within.is_none_or(|w| healed.as_ref().is_none_or(|h| h.moved <= w)) => {
             return Ok((b, names(), healed));
         }
-        Ok((b, healed)) => Ok((b, healed)),
-        Err(e) => Err(e),
+        other => other,
     };
     // Geometry that cannot be made to meet within the kernel tolerance is kept as the file has
     // it, its edges and vertices given the tolerances it does meet within, whatever the file

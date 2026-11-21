@@ -974,7 +974,46 @@ pub fn loft(k: &mut DefaultKernel, frame: &Place, loops: &[&[Seg]], height: f64,
     };
     let spec = LoftSpec::through(vec![profile(xy_plane(frame), loops)?, profile(xy_plane(&up), top)?]);
     let r = k.loft_with(&spec)?;
-    Ok((r.first()?, r.history))
+    let out = r.first()?;
+    let made = flat_faces_as_planes(k, (out, r.history))?;
+    if made.0 != out {
+        k.release(out);
+    }
+    Ok(made)
+}
+
+/// `made` with each B-spline face that is flat (a ruled loft's side between two parallel lines)
+/// made the plane it lies on, its neighbours re-trimmed to it: cadrs cuts and sweeps a body of
+/// planes by its polyhedral paths exactly, a body with B-spline sides only as a mesh (a hypoid's
+/// lofted tooth). Kept only where the volume is the same; the body as it was otherwise. A new
+/// body leaves `out` to the caller to release.
+pub(crate) fn flat_faces_as_planes(k: &mut DefaultKernel, (out, history): Made) -> Result<Made> {
+    use crate::native::surface::Surface;
+    let swaps: Vec<crate::FaceReplacement> = {
+        let b = k.get(out)?;
+        b.faces
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| match &f.surf {
+                Surface::Nurbs(n) => match crate::native::recognize::surface(n) {
+                    Some(p @ Surface::Plane { .. }) => Some(crate::FaceReplacement { face: crate::FaceId(i as u64), surface: p, domain: None }),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    if swaps.is_empty() {
+        return Ok((out, history));
+    }
+    let v0 = k.mass_properties(out)?.volume;
+    let Ok(r) = k.replace_faces(out, &swaps).and_then(|r| r.first()) else { return Ok((out, history)) };
+    let v1 = k.mass_properties(r)?.volume;
+    if (v1 - v0).abs() > crate::native::tol::REL_POINT * v0.abs().max(1.0) {
+        k.release(r);
+        return Ok((out, history));
+    }
+    Ok((r, history))
 }
 
 #[cfg(test)]

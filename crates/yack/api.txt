@@ -203,4 +203,6 @@ yack::values: impl Ray { pub fn origin(&self) -> Point3 }
 yack::values: impl Tag { pub fn as_str(&self) -> &str }
 yack::values: impl VertexRef { pub fn id(&self) -> VertexId }
 yack::values: impl VertexRef { pub fn point(&self) -> Point3 }
+yack::values: impl core::fmt::Debug for EdgeRef<'_>
+yack::values: impl core::fmt::Debug for FaceRef<'_>
 yack::values: impl fmt::Display for Tag

@@ -548,6 +548,41 @@ fn an_l_step_pushed_level_is_the_box() {
 }
 
 #[test]
+fn a_hypoid_gear_cut_by_its_lofted_pinion_tooth() {
+    // brep-bench swept/hypoid-gear-cut-by-its-pinion: the tooth lofted between the inner and
+    // outer cone planes (its sides planes, not B-splines) cut by the pinion's and the gear's
+    // turns at once: cadrs's runner 11792.246457926205.
+    use crate::facade::motion::{cut_together, end_motion, Step};
+    use crate::facade::profile::{loft, revolve, Place, Seg};
+    let mut k = DefaultKernel::new();
+    let s5 = 5f64.sqrt();
+    let tan20 = 20f64.to_radians().tan();
+    let (g, d) = ([2.0 / s5, 0.0, 1.0 / s5], [-1.0 / s5, 0.0, 2.0 / s5]);
+    let ae = 15.0 * s5;
+    let w = |u: f64| std::f64::consts::FRAC_PI_2 - u * tan20;
+    let trap = |kk: f64| -> Vec<[f64; 2]> { [[2.5, -w(2.5)], [2.5, w(2.5)], [-2.5, w(-2.5)], [-2.5, -w(-2.5)]].iter().map(|[u, v]| [u * kk, v * kk]).collect() };
+    let seg = |p: &[[f64; 2]]| -> Vec<Seg<'static>> { (0..p.len()).map(|i| Seg::Line { a: p[i], b: p[(i + 1) % p.len()] }).collect() };
+    let (inner, outer) = (ae - 12.0, ae + 2.0);
+    let foot = Place { origin: g.map(|c| c * inner), x: d, y: [0.0, -1.0, 0.0], z: g };
+    let (sl, sh) = (seg(&trap(inner / ae)), seg(&trap(outer / ae)));
+    let (t, _) = loft(&mut k, &foot, &[&sl], outer - inner, &[&sh]).unwrap();
+    assert!(k.get(t).unwrap().faces.iter().all(|f| matches!(f.surf, crate::native::surface::Surface::Plane { .. })));
+    let at = |sv: f64, u: f64| [sv * g[0] + u * d[0], sv * g[2] + u * d[2]];
+    let ai = ae - 10.0;
+    let q = seg(&[at(ae, -2.0), at(ae, 6.0), at(ai, 6.0), at(ai, -2.0 * ai / ae)]);
+    let world = Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (blank, _) = revolve(&mut k, &world, &[&q], std::f64::consts::TAU).unwrap();
+    let phi = (24.0 / (75.0 - 5.0 * s5)).asin();
+    let m = end_motion(&Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: phi }).unwrap();
+    let tooth = k.transform_motion(t, &m).and_then(|r| r.first()).unwrap();
+    let (r70, gz) = (70f64.to_radians(), (98.0f64 / 3.0).to_radians());
+    let steps = [Step::Turn { point: [0.0, 12.0, 0.0], axis: [1.0, 0.0, 0.0], from: -r70, to: r70 }, Step::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], from: -gz, to: gz }];
+    let (cut, _) = cut_together(&mut k, blank, tooth, &steps).unwrap();
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - 11792.246457926205).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
 fn a_split_sorts_its_sides() {
     let mut k = DefaultKernel::new();
     let b = cube(&mut k);

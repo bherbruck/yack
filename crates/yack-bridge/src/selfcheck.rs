@@ -78,15 +78,18 @@ fn probes(body: &Body) -> Vec<P3> {
 pub(crate) fn same_sides(body: &Body, back: &Brep) -> Result<()> {
     let rays = Rays::new(back).map_err(|e| Error::Rejected(vec![format!("no ray caster for the body: {e}")]))?;
     let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(body, f)).collect();
+    // One classifier for every probe: its face boxes, box tree and ray grids are built once, not
+    // per point (bench spiroid-face-gear spent 23 s rebuilding them per probe).
+    let classifier = classify::Classifier::new(body, &polys);
     // A probe the boundary passes within half a probe step of is not asked: there the two engines'
     // casters may round either way (a pole, a tip, a tangent strip), and a disagreement says
     // nothing about the body (bench geometry/lemon, spline/rational-spheroid).
     let near = near_boundary(body);
     for p in probes(body) {
-        if matches!(classify::classify_point(body, &polys, &p, near), PointClass::OnBoundary) {
+        if matches!(classifier.classify(&p, near), PointClass::OnBoundary) {
             continue;
         }
-        let c = classify::classify_point(body, &polys, &p, yack_springrep::tol::LINEAR);
+        let c = classifier.classify(&p, yack_springrep::tol::LINEAR);
         let s = rays.side(Vec3::new(p.x, p.y, p.z));
         let apart = matches!((c, s), (PointClass::Inside, Side::Outside) | (PointClass::Outside, Side::Inside));
         if apart {

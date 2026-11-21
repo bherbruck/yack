@@ -5,4 +5,5 @@
 
 pub mod motion;
 pub mod names;
+pub mod pick;
 pub mod profile;

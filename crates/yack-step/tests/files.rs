@@ -1,6 +1,6 @@
 // yack: the STEP measurer on written files, against the volumes and areas the brep-bench grader reads.
 #![cfg(feature = "wip")]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
 use yack_step::measure_file;
 
@@ -39,8 +39,9 @@ fn sound_files_measure_as_the_grader_reads_them() {
 #[test]
 fn the_ring_pushed_past_its_fold_file_is_refused() {
     // Written from a body of volume 1907.0021203 (in memory); the grader reads it as 1930.17. Its
-    // edges' 3-D curves bound the right solid, but pcurves written in another frame of the torus
-    // disagree with them, and a reader that follows the pcurves gets another solid.
+    // edges' 3-D curves bound the right solid, but on its torus face only some edges carry pcurves:
+    // a reader that takes the pcurves and projects the rest itself draws loops that bound another
+    // region of the torus.
     match measure_file(&file("ring-pushed-bad.step")) {
         Err(e) => eprintln!("bad ring refused: {e}"),
         Ok(m) => panic!("bad ring measured as volume {} area {}", m.volume, m.area),

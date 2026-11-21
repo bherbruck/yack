@@ -15,7 +15,10 @@ use std::f64::consts::{PI, TAU};
 
 use yack_math::{Point3, Vec3};
 
+use yack_base::Result;
+
 use crate::bspline;
+use crate::read::bad;
 
 /// A right-handed frame: origin and unit axes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,9 +77,9 @@ impl Curve {
 
     /// The parameters strictly between `lo` and `hi` at which the curve's smoothness may break (a
     /// spline's knots) or past which one quadrature piece would be too long (an eighth of a turn).
-    pub(crate) fn breaks(&self, lo: f64, hi: f64) -> Vec<f64> {
+    pub(crate) fn breaks(&self, lo: f64, hi: f64) -> Result<Vec<f64>> {
         match self {
-            Curve::Line { .. } => Vec::new(),
+            Curve::Line { .. } => Ok(Vec::new()),
             Curve::Circle { .. } | Curve::Ellipse { .. } => angular(lo, hi),
             Curve::Spline(c) => knots_between(&c.basis.knots, c.basis.domain(), c.period, lo, hi),
         }
@@ -145,28 +148,43 @@ fn angle(y: f64, x: f64) -> f64 {
 /// The longest quadrature piece along an angle: an eighth of a turn.
 const ANGULAR_PIECE: f64 = PI / 4.0;
 
+/// The most quadrature pieces one run may be cut into: a file whose parameters would need more
+/// (a vast angle, a closed spline with a vanishing period) is refused, not integrated without end.
+const MAX_PIECES: f64 = 10_000.0;
+
+fn too_many(n: f64) -> yack_base::Error {
+    bad(format!("a parameter run would need {n} quadrature pieces (more than {MAX_PIECES})"))
+}
+
 /// Equal steps strictly between `lo` and `hi`, none longer than [`ANGULAR_PIECE`].
-fn angular(lo: f64, hi: f64) -> Vec<f64> {
+fn angular(lo: f64, hi: f64) -> Result<Vec<f64>> {
     let span = (hi - lo).abs();
     if !span.is_finite() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let n = (span / ANGULAR_PIECE).ceil().max(1.0) as usize;
-    (1..n).map(|i| lo + (hi - lo) * i as f64 / n as f64).collect()
+    let n = (span / ANGULAR_PIECE).ceil().max(1.0);
+    if n > MAX_PIECES {
+        return Err(too_many(n));
+    }
+    let n = n as usize;
+    Ok((1..n).map(|i| lo + (hi - lo) * i as f64 / n as f64).collect())
 }
 
 /// A spline's distinct knots strictly between `lo` and `hi` (with their copies a whole period on,
 /// for a closed spline).
-fn knots_between(knots: &[f64], domain: (f64, f64), period: Option<f64>, lo: f64, hi: f64) -> Vec<f64> {
+fn knots_between(knots: &[f64], domain: (f64, f64), period: Option<f64>, lo: f64, hi: f64) -> Result<Vec<f64>> {
     let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
     let mut inner: Vec<f64> = knots.iter().copied().filter(|k| *k > domain.0 && *k < domain.1).collect();
     inner.dedup();
     let mut out = Vec::new();
     match period {
         Some(p) if p > 0.0 && lo.is_finite() && hi.is_finite() => {
-            let first = ((lo - domain.0) / p).floor() as i64;
-            let last = ((hi - domain.0) / p).ceil() as i64;
-            for k in first..=last {
+            let (first, last) = (((lo - domain.0) / p).floor(), ((hi - domain.0) / p).ceil());
+            let pieces = (last - first + 1.0) * (inner.len() + 1) as f64;
+            if !pieces.is_finite() || pieces > MAX_PIECES {
+                return Err(too_many(pieces));
+            }
+            for k in (first as i64)..=(last as i64) {
                 let shift = k as f64 * p;
                 out.extend(inner.iter().map(|x| x + shift).chain(std::iter::once(domain.0 + shift)).filter(|x| *x > lo && *x < hi));
             }
@@ -175,7 +193,7 @@ fn knots_between(knots: &[f64], domain: (f64, f64), period: Option<f64>, lo: f64
     }
     out.sort_by(f64::total_cmp);
     out.dedup();
-    out
+    Ok(out)
 }
 
 /// `a` moved by whole turns to lie within half a turn of `hint`.
@@ -400,14 +418,14 @@ impl Surface {
 
     /// Parameters strictly between `lo` and `hi` along `axis` (0 = u, 1 = v) where the surface's
     /// smoothness may break or where a quadrature piece should end (see [`Curve::breaks`]).
-    pub(crate) fn breaks(&self, axis: usize, lo: f64, hi: f64) -> Vec<f64> {
+    pub(crate) fn breaks(&self, axis: usize, lo: f64, hi: f64) -> Result<Vec<f64>> {
         match (self, axis) {
-            (Surface::Plane { .. }, _) | (Surface::Cylinder { .. } | Surface::Cone { .. }, 1) => Vec::new(),
+            (Surface::Plane { .. }, _) | (Surface::Cylinder { .. } | Surface::Cone { .. }, 1) => Ok(Vec::new()),
             (Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Sphere { .. } | Surface::Torus { .. }, _) => angular(lo, hi),
             (Surface::Revolution { .. }, 0) => angular(lo, hi),
             (Surface::Revolution { c, .. }, _) => c.breaks(lo, hi),
             (Surface::Extrusion { c, .. }, 0) => c.breaks(lo, hi),
-            (Surface::Extrusion { .. }, _) => Vec::new(),
+            (Surface::Extrusion { .. }, _) => Ok(Vec::new()),
             (Surface::Spline(s), 0) => knots_between(&s.u.knots, s.u.domain(), s.periods[0], lo, hi),
             (Surface::Spline(s), _) => knots_between(&s.v.knots, s.v.domain(), s.periods[1], lo, hi),
         }
@@ -457,6 +475,15 @@ mod tests {
                 assert!(q.distance(p) < 1e-12, "{s:?} at {u},{v}: {iu},{iv}");
             }
         }
+    }
+
+    #[test]
+    fn runs_needing_endless_pieces_are_refused() {
+        // A closed spline with a vanishing period over an ordinary range, and a vast angle.
+        let knots = [0.0, 0.0, 1e-300, 1e-300];
+        assert!(knots_between(&knots, (0.0, 1e-300), Some(1e-300), 0.0, 1.0).is_err());
+        assert!(angular(0.0, 1e12).is_err());
+        assert!(knots_between(&knots, (0.0, 1e-300), Some(1e-300), 0.0, 1e-299).is_ok());
     }
 
     #[test]

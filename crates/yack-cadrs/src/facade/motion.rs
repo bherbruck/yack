@@ -213,7 +213,14 @@ fn together_exactly(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Resu
 /// turns about crossed axes at a ratio). Exact or refused (exact_only).
 pub fn cut_together(k: &mut DefaultKernel, target: BodyId, tool: BodyId, steps: &[Step]) -> Result<Made> {
     crate::yack_glue::exact(k, |k| {
-        let r = k.cut_swept(target, tool, &motion_of(steps)?)?;
+        // The tool's flat B-spline sides as planes (a lofted tooth's, often springrep's): cadrs
+        // cuts by a moving polyhedron exactly, by B-spline sides only as a mesh.
+        let (used, _) = crate::facade::profile::flat_faces_as_planes(k, (tool, crate::History::default()))?;
+        let r = k.cut_swept(target, used, &motion_of(steps)?);
+        if used != tool {
+            k.release(used);
+        }
+        let r = r?;
         Ok((r.first()?, r.history))
     })
 }

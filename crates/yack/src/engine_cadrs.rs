@@ -878,6 +878,122 @@ pub(crate) fn replace_face_fill(op: &'static str, s: &Solid, face: u64, boundary
     self::op(op, s, |k, id| yack_glue::replace_face_fill(k, id, face, &curves))
 }
 
+// ---- face and edge selection on a held solid (w-m17's pick glue, read-only on cadrs's body)
+
+use yack_cadrs::facade::pick as cpick;
+pub(crate) use yack_cadrs::facade::pick::Picked;
+
+/// A held face's facts, in yack's terms.
+pub(crate) struct HeldFace {
+    pub(crate) kind: crate::SurfaceKind,
+    pub(crate) normal: Option<crate::Vec3>,
+    pub(crate) area: f64,
+    pub(crate) centroid: crate::Point3,
+    pub(crate) bbox: crate::Aabb,
+}
+
+/// A held edge's facts, in yack's terms.
+pub(crate) struct HeldEdge {
+    pub(crate) kind: crate::CurveKind,
+    pub(crate) ends: [crate::Point3; 2],
+    pub(crate) convex: Option<bool>,
+    pub(crate) length: f64,
+    pub(crate) midpoint: crate::Point3,
+    pub(crate) uses: usize,
+}
+
+/// The held face within `tol` of `p` (cadrs's pick: one, none, or ambiguous).
+pub(crate) fn held_face_pick(op: &'static str, h: &Held, p: crate::Point3, tol: f64) -> Result<Picked> {
+    cpick::face_pick(&lock(&h.cadrs.session), h.cadrs.id, p.to_array(), tol).map_err(|e| error(op, e))
+}
+
+/// The held edge within `tol` of `p`.
+pub(crate) fn held_edge_pick(op: &'static str, h: &Held, p: crate::Point3, tol: f64) -> Result<Picked> {
+    cpick::edge_pick(&lock(&h.cadrs.session), h.cadrs.id, p.to_array(), tol).map_err(|e| error(op, e))
+}
+
+/// Held face `face`'s kind, plane normal, area, centroid and box.
+pub(crate) fn held_face_facts(op: &'static str, h: &Held, face: u64) -> Result<HeldFace> {
+    use crate::SurfaceKind as K;
+    let f = cpick::face_info(&lock(&h.cadrs.session), h.cadrs.id, face).map_err(|e| error(op, e))?;
+    let v = crate::Vec3::from;
+    let (kind, normal) = match f.kind {
+        cpick::FaceKind::Plane { normal } => (K::Plane { normal: v(normal) }, Some(v(normal))),
+        cpick::FaceKind::Cylinder { axis: (_, d), radius } => (K::Cylinder { axis: v(d), radius }, None),
+        cpick::FaceKind::Cone { .. } => (K::Cone, None),
+        cpick::FaceKind::Sphere { radius, .. } => (K::Sphere { radius }, None),
+        cpick::FaceKind::Torus { .. } => (K::Torus, None),
+        cpick::FaceKind::Swept => (K::Swept, None),
+        cpick::FaceKind::Spline => (K::Spline, None),
+    };
+    let (lo, hi) = f.bbox;
+    Ok(HeldFace {
+        kind,
+        normal,
+        area: f.area,
+        centroid: crate::Point3::from(f.centroid),
+        bbox: crate::Aabb::new(crate::Point3::from(lo), crate::Point3::from(hi)),
+    })
+}
+
+/// Held edge `edge`'s kind, ends, convexity, length, midpoint and face uses.
+pub(crate) fn held_edge_facts(op: &'static str, h: &Held, edge: u64) -> Result<HeldEdge> {
+    use crate::CurveKind as K;
+    let e = cpick::edge_info(&lock(&h.cadrs.session), h.cadrs.id, edge).map_err(|e| error(op, e))?;
+    let v = crate::Vec3::from;
+    let kind = match e.kind {
+        cpick::EdgeKind::Line { direction } => K::Line { direction: v(direction) },
+        cpick::EdgeKind::Circle { radius, axis: (_, n) } => K::Circle { radius, axis: v(n) },
+        cpick::EdgeKind::Ellipse => K::Ellipse,
+        cpick::EdgeKind::Spline => K::Spline,
+    };
+    let (a, b) = e.ends;
+    Ok(HeldEdge {
+        kind,
+        ends: [crate::Point3::from(a), crate::Point3::from(b)],
+        convex: e.convex,
+        length: e.length,
+        midpoint: crate::Point3::from(e.mid),
+        uses: e.uses,
+    })
+}
+
+/// The outward normal of held face `face`'s own surface at the point of it nearest `p`.
+pub(crate) fn held_face_normal_at(h: &Held, face: u64, p: crate::Point3) -> Option<crate::Vec3> {
+    cpick::face_normal_at(&lock(&h.cadrs.session), h.cadrs.id, face, p.to_array()).ok().flatten().map(crate::Vec3::from)
+}
+
+/// The nearest point of held face `face` to `p`.
+pub(crate) fn held_face_closest(h: &Held, face: u64, p: crate::Point3) -> Result<crate::Point3> {
+    cpick::face_closest(&lock(&h.cadrs.session), h.cadrs.id, face, p.to_array())
+        .map(crate::Point3::from)
+        .map_err(|e| error("FaceRef::closest", e))
+}
+
+/// An even `nu` × `nv` grid over held face `face`'s parameter box, rows along u (off-face points kept).
+pub(crate) fn held_face_grid(h: &Held, face: u64, nu: usize, nv: usize) -> Vec<Vec<crate::Point3>> {
+    cpick::face_grid(&lock(&h.cadrs.session), h.cadrs.id, face, nu, nv)
+        .map(|g| g.into_iter().map(|r| r.into_iter().map(crate::Point3::from).collect()).collect())
+        .unwrap_or_default()
+}
+
+/// Held edge `edge`'s curve parameter range.
+pub(crate) fn held_edge_range(h: &Held, edge: u64) -> [f64; 2] {
+    cpick::edge_range(&lock(&h.cadrs.session), h.cadrs.id, edge).unwrap_or([0.0, 0.0])
+}
+
+/// The point of held edge `edge`'s curve at parameter `t`.
+pub(crate) fn held_edge_point(h: &Held, edge: u64, t: f64) -> Option<crate::Point3> {
+    cpick::edge_point(&lock(&h.cadrs.session), h.cadrs.id, edge, t).ok().map(crate::Point3::from)
+}
+
+/// `n` points even in held edge `edge`'s parameter, ends included.
+pub(crate) fn held_edge_points(h: &Held, edge: u64, n: usize) -> Vec<crate::Point3> {
+    cpick::edge_points(&lock(&h.cadrs.session), h.cadrs.id, edge, n)
+        .map(|ps| ps.into_iter().map(crate::Point3::from).collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

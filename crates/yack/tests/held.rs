@@ -25,27 +25,22 @@ fn a_held_solid_is_measured_listed_and_refuses_springrep_queries() {
     assert!(s.check().is_empty(), "{:?}", s.check());
     // one piece; the tumble sweeps the ring through its own hole, closing it; no void
     assert_eq!(s.betti(), [1, 0, 0]);
-    let e = s.face_at([3.0, 0.0, 2.0]).unwrap_err();
-    assert_eq!(e.kind, ErrorKind::Unsupported, "{e}");
     let e = s.classify(&[[3.0, 0.0, 2.0]]).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Unsupported, "{e}");
-    assert_eq!(s.faces_where(|_| true).unwrap_err().kind, ErrorKind::Unsupported);
-    assert_eq!(s.edges_where(|_| true).unwrap_err().kind, ErrorKind::Unsupported);
     assert_eq!(s.normal_at(&[[3.0, 0.0, 2.0]]).unwrap_err().kind, ErrorKind::Unsupported);
     assert_eq!(s.curvature_at(&[[3.0, 0.0, 2.0]]).unwrap_err().kind, ErrorKind::Unsupported);
     assert_eq!(yack::codec::encode(&s).unwrap_err().kind, ErrorKind::Unsupported);
 }
 
 #[test]
-fn a_held_solid_digests_alike_and_refuses_a_step_our_reader_cannot_read() {
+fn a_held_solid_digests_alike_and_writes_cadrs_step() {
     let (a, b) = (tumbling_torus(), tumbling_torus());
     assert_eq!(a.digest(), b.digest());
     assert_ne!(a.digest(), [0; 32]);
-    // strict (lead ruling): a held solid's file must read back through our own step::read
-    // (springrep's reader), which cannot carry the folded swept face, so the write refuses
-    let e = yack::step::write(&a).unwrap_err();
-    assert_eq!(e.kind, ErrorKind::Failed, "{e}");
-    assert!(e.to_string().contains("step::read"), "{e}");
+    // cadrs's file, kept because cadrs's reader reads it back as the solid; our own step::read
+    // (springrep's reader) may refuse it, since springrep cannot carry the folded swept face
+    let text = yack::step::write(&a).unwrap();
+    assert!(text.starts_with("ISO-10303-21;"));
 }
 
 #[test]
@@ -88,3 +83,31 @@ fn a_notch_pushed_shut_reports_the_boxs_area_or_refuses() {
     }
 }
 
+
+/// Face and edge selection on a held solid come from cadrs's own topology, and never answer
+/// "nothing" for "can't look": every face and edge view has real geometry.
+#[test]
+fn a_held_solid_selects_faces_and_edges_through_cadrs() {
+    let s = tumbling_torus();
+    let faces = s.faces_where(|_| true).unwrap();
+    assert_eq!(faces.len(), s.faces().len());
+    for &id in &faces {
+        let f = s.face(id).unwrap();
+        assert!(f.area() > 0.0, "{f:?}");
+        let grid = f.sample(3, 3);
+        assert_eq!(grid.len(), 3);
+        let on = f.closest(f.centroid()).unwrap();
+        // a point of the face picks it, or an edge-near point is ambiguous: never another face
+        assert!(s.face_at(on).map_or(true, |hit| hit == id), "{id} at {on:?}");
+        let n = f.normal_at(on);
+        assert!(n.is_some_and(|n| (n.x * n.x + n.y * n.y + n.z * n.z - 1.0).abs() < 1e-6), "normal {n:?}");
+    }
+    let edges = s.edges_where(|_| true).unwrap();
+    assert!(!edges.is_empty());
+    for &id in &edges {
+        let e = s.edge(id).unwrap();
+        let [t0, t1] = e.range();
+        assert!(t0 < t1, "{e:?} {t0} {t1}");
+        assert!(e.length() > 0.0 && e.points(3).len() == 3, "{e:?}");
+    }
+}

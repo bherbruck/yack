@@ -64,10 +64,10 @@ pub(crate) fn model(file: &File) -> Result<Model> {
     for (&id, e) in &file.entities {
         let Some(p) = e.part("MANIFOLD_SOLID_BREP").or_else(|| e.part("BREP_WITH_VOIDS")) else { continue };
         solids += 1;
-        r.shell(ref_at(p, 1, id)?, 1.0, &mut m)?;
+        r.shell(ref_at(p, 1, id)?, 1.0, 0, &mut m)?;
         if e.is("BREP_WITH_VOIDS") {
             for v in list_at(p, 2, id)? {
-                r.shell(v.reference().ok_or_else(|| bad(format!("#{id}: a void is not a reference")))?, 1.0, &mut m)?;
+                r.shell(v.reference().ok_or_else(|| bad(format!("#{id}: a void is not a reference")))?, 1.0, 0, &mut m)?;
             }
         }
     }
@@ -96,6 +96,22 @@ fn angle_unit(file: &File) -> f64 {
         return 1.0;
     }
     1.0
+}
+
+/// How deep references may nest through oriented edges, oriented shells and surface curves before
+/// the file is refused (a cycle would otherwise recurse without end).
+const MAX_DEPTH: usize = 64;
+
+fn deeper(depth: usize, id: u64) -> Result<usize> {
+    if depth >= MAX_DEPTH { Err(bad(format!("#{id}: references nest deeper than {MAX_DEPTH} (a cycle?)"))) } else { Ok(depth + 1) }
+}
+
+/// A B-spline degree: an integer from 1 to `bspline::MAX_DEGREE`.
+fn degree_at(p: &[Param], i: usize, id: u64) -> Result<usize> {
+    match arg(p, i, id)?.int() {
+        Some(d) if d >= 1 && d <= bspline::MAX_DEGREE as i64 => Ok(d as usize),
+        other => Err(bad(format!("#{id}: degree {other:?} is not an integer from 1 to {}", bspline::MAX_DEGREE))),
+    }
 }
 
 fn arg(p: &[Param], i: usize, id: u64) -> Result<&Param> {
@@ -149,7 +165,7 @@ impl Reader<'_> {
         }
     }
 
-    fn shell(&self, id: u64, sign: f64, m: &mut Model) -> Result<()> {
+    fn shell(&self, id: u64, sign: f64, depth: usize, m: &mut Model) -> Result<()> {
         let (name, p) = self.simple(id)?;
         match name {
             "CLOSED_SHELL" | "OPEN_SHELL" => {
@@ -162,7 +178,7 @@ impl Reader<'_> {
             }
             "ORIENTED_CLOSED_SHELL" | "ORIENTED_OPEN_SHELL" => {
                 let s = if bool_at(p, 3, id)? { sign } else { -sign };
-                self.shell(ref_at(p, 2, id)?, s, m)
+                self.shell(ref_at(p, 2, id)?, s, deeper(depth, id)?, m)
             }
             other => Err(bad(format!("#{id}: {other} is not a shell"))),
         }
@@ -196,7 +212,7 @@ impl Reader<'_> {
                 let mut uses = Vec::new();
                 for e in list_at(lp, 1, lid)? {
                     let eid = e.reference().ok_or_else(|| bad(format!("#{lid}: an edge is not a reference")))?;
-                    uses.push(self.oriented_edge(eid, true, surf, m)?);
+                    uses.push(self.oriented_edge(eid, true, surf, 0, m)?);
                 }
                 uses
             }
@@ -212,12 +228,12 @@ impl Reader<'_> {
         Ok(Bound { uses })
     }
 
-    fn oriented_edge(&self, id: u64, forward: bool, surf: u64, m: &mut Model) -> Result<Use> {
+    fn oriented_edge(&self, id: u64, forward: bool, surf: u64, depth: usize, m: &mut Model) -> Result<Use> {
         let (name, p) = self.simple(id)?;
         match name {
             "ORIENTED_EDGE" => {
                 let f = if bool_at(p, 4, id)? { forward } else { !forward };
-                self.oriented_edge(ref_at(p, 3, id)?, f, surf, m)
+                self.oriented_edge(ref_at(p, 3, id)?, f, surf, deeper(depth, id)?, m)
             }
             "EDGE_CURVE" => {
                 let (a, b) = (ref_at(p, 1, id)?, ref_at(p, 2, id)?);
@@ -337,6 +353,10 @@ impl Reader<'_> {
     }
 
     fn curve(&self, id: u64) -> Result<Curve> {
+        self.curve_in(id, 0)
+    }
+
+    fn curve_in(&self, id: u64, depth: usize) -> Result<Curve> {
         if let Entity::Complex(_) = self.entity(id)? {
             return self.complex_curve(id);
         }
@@ -345,9 +365,9 @@ impl Reader<'_> {
             "LINE" => Ok(Curve::Line { p: self.point(ref_at(p, 1, id)?)?, v: self.vector(ref_at(p, 2, id)?)? }),
             "CIRCLE" => Ok(Curve::Circle { f: self.placement(ref_at(p, 1, id)?)?, r: real_at(p, 2, id)? }),
             "ELLIPSE" => Ok(Curve::Ellipse { f: self.placement(ref_at(p, 1, id)?)?, a: real_at(p, 2, id)?, b: real_at(p, 3, id)? }),
-            "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE" => self.curve(ref_at(p, 1, id)?),
+            "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE" => self.curve_in(ref_at(p, 1, id)?, deeper(depth, id)?),
             "B_SPLINE_CURVE_WITH_KNOTS" => {
-                let degree = real_at(p, 1, id)? as usize;
+                let degree = degree_at(p, 1, id)?;
                 let ctrl = self.points(list_at(p, 2, id)?, id)?;
                 let n = ctrl.len();
                 self.spline_curve(id, degree, ctrl, &ints(arg(p, 6, id)?, id)?, &reals(arg(p, 7, id)?, id)?, vec![1.0; n])
@@ -361,7 +381,7 @@ impl Reader<'_> {
         let (Some(b), Some(k)) = (e.part("B_SPLINE_CURVE"), e.part("B_SPLINE_CURVE_WITH_KNOTS")) else {
             return Err(bad(format!("#{id}: a complex curve that is not a knotted B-spline")));
         };
-        let degree = real_at(b, 0, id)? as usize;
+        let degree = degree_at(b, 0, id)?;
         let ctrl = self.points(list_at(b, 1, id)?, id)?;
         let weights = match e.part("RATIONAL_B_SPLINE_CURVE") {
             Some(r) => reals(arg(r, 0, id)?, id)?,
@@ -371,7 +391,8 @@ impl Reader<'_> {
     }
 
     fn spline_curve(&self, id: u64, degree: usize, ctrl: Vec<Point3>, mults: &[i64], knots: &[f64], weights: Vec<f64>) -> Result<Curve> {
-        let basis = bspline::Basis::from_multiplicities(degree, mults, knots).ok_or_else(|| bad(format!("#{id}: bad knots")))?;
+        let basis = bspline::Basis::from_multiplicities(degree, mults, knots, ctrl.len())
+            .ok_or_else(|| bad(format!("#{id}: knots that do not fit degree {degree} and {} control points", ctrl.len())))?;
         if basis.count() != ctrl.len() || weights.len() != ctrl.len() {
             return Err(bad(format!("#{id}: {} control points, {} weights for {} basis functions", ctrl.len(), weights.len(), basis.count())));
         }
@@ -379,6 +400,9 @@ impl Reader<'_> {
         let (a, b) = c.basis.domain();
         let size = c.ctrl.iter().map(|p| p.to_vec().length()).fold(1.0, f64::max);
         if b > a && c.d1(a).0.distance(c.d1(b).0) <= CLOSES * size {
+            if !long_enough(a, b) {
+                return Err(bad(format!("#{id}: a closed spline whose period {} is too small", b - a)));
+            }
             c.period = Some(b - a);
         }
         Ok(Curve::Spline(c))
@@ -415,7 +439,7 @@ impl Reader<'_> {
                 Ok(Surface::Revolution { c: self.curve(ref_at(p, 1, id)?)?, o, axis })
             }
             "B_SPLINE_SURFACE_WITH_KNOTS" => {
-                let (du, dv) = (real_at(p, 1, id)? as usize, real_at(p, 2, id)? as usize);
+                let (du, dv) = (degree_at(p, 1, id)?, degree_at(p, 2, id)?);
                 let ctrl = self.grid(list_at(p, 3, id)?, id)?;
                 let weights = ctrl.iter().map(|r| vec![1.0; r.len()]).collect();
                 let k = |i| arg(p, i, id);
@@ -430,7 +454,7 @@ impl Reader<'_> {
         let (Some(b), Some(k)) = (e.part("B_SPLINE_SURFACE"), e.part("B_SPLINE_SURFACE_WITH_KNOTS")) else {
             return Err(bad(format!("#{id}: a complex surface that is not a knotted B-spline")));
         };
-        let (du, dv) = (real_at(b, 0, id)? as usize, real_at(b, 1, id)? as usize);
+        let (du, dv) = (degree_at(b, 0, id)?, degree_at(b, 1, id)?);
         let ctrl = self.grid(list_at(b, 2, id)?, id)?;
         let weights = match e.part("RATIONAL_B_SPLINE_SURFACE") {
             Some(r) => list_at(r, 0, id)?.iter().map(|row| reals(row, id)).collect::<Result<Vec<_>>>()?,
@@ -446,8 +470,9 @@ impl Reader<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn spline_surface(&self, id: u64, (du, dv): (usize, usize), ctrl: Vec<Vec<Point3>>, weights: Vec<Vec<f64>>, mults: [&[i64]; 2], knots: [&[f64]; 2]) -> Result<Surface> {
-        let ub = bspline::Basis::from_multiplicities(du, mults[0], knots[0]).ok_or_else(|| bad(format!("#{id}: bad u knots")))?;
-        let vb = bspline::Basis::from_multiplicities(dv, mults[1], knots[1]).ok_or_else(|| bad(format!("#{id}: bad v knots")))?;
+        let (rows, cols) = (ctrl.len(), ctrl.first().map_or(0, Vec::len));
+        let ub = bspline::Basis::from_multiplicities(du, mults[0], knots[0], rows).ok_or_else(|| bad(format!("#{id}: u knots that do not fit degree {du} and {rows} rows")))?;
+        let vb = bspline::Basis::from_multiplicities(dv, mults[1], knots[1], cols).ok_or_else(|| bad(format!("#{id}: v knots that do not fit degree {dv} and {cols} columns")))?;
         let rows_ok = ctrl.len() == ub.count() && ctrl.iter().all(|r| r.len() == vb.count());
         let w_ok = weights.len() == ctrl.len() && weights.iter().zip(&ctrl).all(|(w, r)| w.len() == r.len());
         if !rows_ok || !w_ok {
@@ -465,6 +490,9 @@ impl Reader<'_> {
             let u = samples(i, 8, u0, u1);
             s.d1(u, v0).0.distance(s.d1(u, v1).0) <= CLOSES * size
         });
+        if (closes_u && !long_enough(u0, u1)) || (closes_v && !long_enough(v0, v1)) {
+            return Err(bad(format!("#{id}: a closed spline surface whose period is too small")));
+        }
         s.periods = [closes_u.then_some(u1 - u0), closes_v.then_some(v1 - v0)];
         Ok(Surface::Spline(s))
     }
@@ -472,6 +500,14 @@ impl Reader<'_> {
 
 /// A reference direction this close to the axis (as a unit-vector remainder) is along it.
 const REF_PARALLEL: f64 = 1e-12; // tol: a direction's remainder after removing the axis
+
+/// The shortest domain, relative to its parameters' size, a closed spline may have: a shorter
+/// period would cut parameter runs into endless pieces, so such a file is refused.
+const MIN_PERIOD: f64 = 1e-9; // tol: relative length of a spline's domain
+
+fn long_enough(a: f64, b: f64) -> bool {
+    b - a >= MIN_PERIOD * a.abs().max(b.abs()).max(1.0)
+}
 
 /// A spline whose ends are this close, relative to its size, closes on itself.
 const CLOSES: f64 = 1e-9; // tol: relative coincidence of a spline's two ends

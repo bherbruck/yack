@@ -21,7 +21,7 @@ use super::topology::{Raw, edge_range, param_of};
 use crate::{
     Error, Result,
     geom::{BSpline, Curve, IntersectionCurve, Surface, refine_onto_both},
-    math::{Point3, Vec3},
+    math::{Point3, Vec2, Vec3},
     numeric::solve_dense,
     tol,
 };
@@ -39,6 +39,30 @@ fn fail<T>(id: u64, what: &str) -> Result<T> {
 fn surface_gap(s: &Surface, p: Point3) -> f64 {
     let uv = s.project(p);
     s.eval(uv.x, uv.y).dist(p)
+}
+
+/// Distances to a surface from points taken in order along a curve, each projected from the
+/// last one's foot: [`Surface::project_near`] takes the local foot only where the surface passes
+/// within its near radius, which is the global foot, so the distances are [`surface_gap`]'s
+/// without a global search per point (refits measured 30% of a read in global projections).
+struct Along<'a> {
+    s: &'a Surface,
+    hint: Option<Vec2>,
+}
+
+impl<'a> Along<'a> {
+    fn new(s: &'a Surface) -> Self {
+        Along { s, hint: None }
+    }
+
+    fn gap(&mut self, p: Point3) -> f64 {
+        let uv = match self.hint {
+            Some(h) => self.s.project_near(p, h),
+            None => self.s.project(p),
+        };
+        self.hint = Some(uv);
+        self.s.eval(uv.x, uv.y).dist(p)
+    }
 }
 
 /// The even steps [`crate::check`] samples an edge at.
@@ -335,13 +359,14 @@ fn refit(
         };
         let params = chord_params(&pts, closed);
         let n_seg = params.len() - 1;
+        let (mut on_a, mut on_b) = (Along::new(a), Along::new(b));
         let err: Vec<f64> = (0..n_seg)
             .map(|i| {
                 [0.25, 0.5, 0.75]
                     .iter()
                     .map(|f| {
                         let m = approx.eval(params[i] + (params[i + 1] - params[i]) * f);
-                        surface_gap(a, m).max(surface_gap(b, m))
+                        on_a.gap(m).max(on_b.gap(m))
                     })
                     .fold(0.0, f64::max)
             })
@@ -350,15 +375,19 @@ fn refit(
             let dom = approx.domain();
             // A spline that stays on both faces everywhere is the edge as it is: evaluating it
             // costs nothing, where an intersection curve refines every point onto both faces.
+            let (mut on_a, mut on_b) = (Along::new(a), Along::new(b));
             let on_both = (0..n_seg).all(|i| {
                 (1..8).all(|k| {
                     let m = approx.eval(params[i] + (params[i + 1] - params[i]) * k as f64 / 8.0);
-                    surface_gap(a, m).max(surface_gap(b, m)) <= 0.5 * tol::LINEAR
+                    on_a.gap(m).max(on_b.gap(m)) <= 0.5 * tol::LINEAR
                 })
-            }) && (1..CHECK_SAMPLES).all(|k| {
-                let m = approx.eval(dom.0 + (dom.1 - dom.0) * k as f64 / CHECK_SAMPLES as f64);
-                surface_gap(a, m).max(surface_gap(b, m)) <= 0.5 * tol::LINEAR
-            });
+            }) && {
+                let (mut on_a, mut on_b) = (Along::new(a), Along::new(b));
+                (1..CHECK_SAMPLES).all(|k| {
+                    let m = approx.eval(dom.0 + (dom.1 - dom.0) * k as f64 / CHECK_SAMPLES as f64);
+                    on_a.gap(m).max(on_b.gap(m)) <= 0.5 * tol::LINEAR
+                })
+            };
             let curve = if on_both {
                 Curve::BSpline(approx)
             } else {
@@ -742,6 +771,30 @@ fn movement(file: &Raw, healed: &Raw, faces: &BTreeSet<usize>) -> Option<Healed>
 /// Vertices move onto their faces and edges are refitted onto theirs; where faces miss each
 /// other so that cannot work, [`adjust`] moves the surfaces of the faces involved. A solid whose
 /// geometry would move more than [`MAX_HEAL`] is an error naming the distance.
+/// Whether every edge of `raw` ends at its vertices and lies on its faces to [`tol::LINEAR`] as
+/// the file has it: then [`heal`] keeps the file as it is, at once.
+pub(super) fn fits_as_written(raw: &Raw) -> bool {
+    (0..raw.edges.len()).all(|e| edge_fits(raw, e, range_of(raw, e)))
+}
+
+/// The solid `build` makes of `file` kept as written, where its edges miss their faces by more
+/// than the kernel's tolerance but no more than the file's stated uncertainty `within` (a writer
+/// with a looser tolerance, such as cadrs's own): each edge and vertex is given the tolerance it
+/// meets within. Healing would refit every edge onto its faces and move surfaces to meet them,
+/// which on a fine thread's 546 spline edges took 80 s, for a shape no different within the
+/// file's own uncertainty. `None` where the file fits to the kernel's tolerance (it reads exactly,
+/// as before), states no uncertainty, or misses by more.
+pub(super) fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tolerated) -> Option<B>) -> Option<B> {
+    let w = within?;
+    if fits_as_written(file) {
+        return None;
+    }
+    let mut kept = file.clone();
+    let t = tolerate(&mut kept, Some(w)).ok()?;
+    let bound = GAP_MARGIN * w;
+    if t.edges.iter().chain(&t.vertices).all(|&x| x <= bound) { build(&kept, &t) } else { None }
+}
+
 pub(super) fn heal(raw: &mut Raw) -> Result<Ranges> {
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
     if (0..raw.edges.len()).all(|e| edge_fits(raw, e, ranges[e])) {
@@ -785,6 +838,8 @@ pub(super) fn heal(raw: &mut Raw) -> Result<Ranges> {
             }
             Err(f) => f,
         };
+        // The attempt moved no surface: keep its copies, whose projection seeds are worked out.
+        surfaces = work.faces.into_iter().map(|f| f.surface).collect();
         let before = chosen.len();
         for f in &failures {
             match f {

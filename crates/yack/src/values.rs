@@ -255,7 +255,7 @@ pub enum Role {
 }
 
 /// A read-only view of one face, from [`Solid::face`] or [`Solid::faces_where`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FaceRef<'a> {
     pub(crate) id: FaceId,
     pub(crate) kind: SurfaceKind,
@@ -265,9 +265,56 @@ pub struct FaceRef<'a> {
     pub(crate) bbox: Aabb,
     pub(crate) tags: Vec<Tag>,
     pub(crate) roles: Vec<(Tag, Role)>,
-    pub(crate) brep: &'a Brep,
-    pub(crate) face: engine_ids::Face,
+    pub(crate) at: FaceAt<'a>,
 }
+
+impl core::fmt::Debug for FaceRef<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FaceRef")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("normal", &self.normal)
+            .field("area", &self.area)
+            .field("centroid", &self.centroid)
+            .field("bbox", &self.bbox)
+            .field("tags", &self.tags)
+            .field("roles", &self.roles)
+            .finish_non_exhaustive()
+    }
+}
+
+impl core::fmt::Debug for EdgeRef<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EdgeRef")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("ends", &self.ends)
+            .field("convex", &self.convex)
+            .field("length", &self.length)
+            .field("midpoint", &self.midpoint)
+            .field("uses", &self.uses)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Which engine's face a [`FaceRef`] reads its geometry from.
+#[derive(Clone, Copy)]
+pub(crate) enum FaceAt<'a> {
+    Springrep(&'a Brep, engine_ids::Face),
+    /// A face of a solid held in cadrs form, by cadrs face index.
+    Cadrs(&'a crate::engine_cadrs::Held, u64),
+}
+
+
+/// Which engine's edge an [`EdgeRef`] reads its geometry from.
+#[derive(Clone, Copy)]
+pub(crate) enum EdgeAt<'a> {
+    Springrep(&'a Brep, engine_ids::Edge),
+    /// An edge of a solid held in cadrs form, by cadrs edge index.
+    Cadrs(&'a crate::engine_cadrs::Held, u64),
+}
+
+
 
 impl FaceRef<'_> {
     /// The face's id.
@@ -311,23 +358,32 @@ impl FaceRef<'_> {
     /// The outward unit normal of the face's own surface at the point of it nearest `p` (defined
     /// at creases too, unlike [`Solid::normal_at`]); `None` where the surface is singular.
     pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> {
-        api::face_normal_at(self.brep, self.face, engine::p3(p.into())).map(engine::vec)
+        match self.at {
+            FaceAt::Springrep(b, f) => api::face_normal_at(b, f, engine::p3(p.into())).map(engine::vec),
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_normal_at(h, f, p.into()),
+        }
     }
     /// The nearest point of this face alone to `p` (the rest of the solid ignored).
     pub fn closest(&self, p: impl Into<Point3>) -> Result<Point3> {
-        api::face_closest(self.brep, self.face, engine::p3(p.into()))
-            .map(engine::point)
-            .map_err(|e| engine::error("FaceRef::closest", e))
+        match self.at {
+            FaceAt::Springrep(b, f) => {
+                api::face_closest(b, f, engine::p3(p.into())).map(engine::point).map_err(|e| engine::error("FaceRef::closest", e))
+            }
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_closest(h, f, p.into()),
+        }
     }
     /// An even `nu` × `nv` grid over the face's surface parameter box, rows along u. The box spans
     /// the face's outline, so on a trimmed face some points lie off the face.
     pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
-        api::face_grid(self.brep, self.face, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect()
+        match self.at {
+            FaceAt::Springrep(b, f) => api::face_grid(b, f, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect(),
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_grid(h, f, nu, nv),
+        }
     }
 }
 
 /// A read-only view of one edge, from [`Solid::edge`] or [`Solid::edges_where`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EdgeRef<'a> {
     pub(crate) id: EdgeId,
     pub(crate) kind: CurveKind,
@@ -336,8 +392,7 @@ pub struct EdgeRef<'a> {
     pub(crate) length: f64,
     pub(crate) midpoint: Point3,
     pub(crate) uses: usize,
-    pub(crate) brep: &'a Brep,
-    pub(crate) edge: engine_ids::Edge,
+    pub(crate) at: EdgeAt<'a>,
 }
 
 impl EdgeRef<'_> {
@@ -374,17 +429,28 @@ impl EdgeRef<'_> {
     /// The edge's curve parameter range `[t0, t1]`, `t0 < t1`, running from `ends()[0]` to
     /// `ends()[1]`.
     pub fn range(&self) -> [f64; 2] {
-        let (t0, t1) = self.brep.edge(self.edge).range;
-        [t0, t1]
+        match self.at {
+            EdgeAt::Springrep(b, e) => {
+                let (t0, t1) = b.edge(e).range;
+                [t0, t1]
+            }
+            EdgeAt::Cadrs(h, e) => crate::engine_cadrs::held_edge_range(h, e),
+        }
     }
     /// The point of the edge's curve at parameter `t` (any `t`; within [`range`](EdgeRef::range)
     /// it lies on the edge).
     pub fn point(&self, t: f64) -> Point3 {
-        api::edge_point(self.brep, self.edge, t).map_or(self.ends[0], engine::point)
+        match self.at {
+            EdgeAt::Springrep(b, e) => api::edge_point(b, e, t).map_or(self.ends[0], engine::point),
+            EdgeAt::Cadrs(h, e) => crate::engine_cadrs::held_edge_point(h, e, t).unwrap_or(self.ends[0]),
+        }
     }
     /// `n` points spaced evenly in the edge's parameter, ends included.
     pub fn points(&self, n: usize) -> Vec<Point3> {
-        api::edge_points(self.brep, self.edge, n).into_iter().map(engine::point).collect()
+        match self.at {
+            EdgeAt::Springrep(b, e) => api::edge_points(b, e, n).into_iter().map(engine::point).collect(),
+            EdgeAt::Cadrs(h, e) => crate::engine_cadrs::held_edge_points(h, e, n),
+        }
     }
 }
 

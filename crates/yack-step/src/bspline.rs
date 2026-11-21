@@ -5,6 +5,9 @@
 
 use yack_math::{Point3, Vec3};
 
+/// The highest B-spline degree read (ISO 10303-42 sets none; real files stay well below it).
+pub(crate) const MAX_DEGREE: usize = 25;
+
 /// A knot vector with its degree.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Basis {
@@ -13,15 +16,31 @@ pub(crate) struct Basis {
 }
 
 impl Basis {
-    /// The knot vector from distinct knots and their multiplicities, as the standard writes it.
-    pub(crate) fn from_multiplicities(degree: usize, mults: &[i64], knots: &[f64]) -> Option<Basis> {
-        if degree == 0 || mults.len() != knots.len() {
+    /// The knot vector from distinct knots and their multiplicities, as the standard writes it, for
+    /// `ctrl` control points. `None` unless the degree is 1 to [`MAX_DEGREE`], every multiplicity
+    /// 1 to `degree + 1`, the knots finite and increasing, and their count `ctrl + degree + 1` (a
+    /// file is untrusted: nothing here may allocate more than the control points do).
+    pub(crate) fn from_multiplicities(degree: usize, mults: &[i64], knots: &[f64], ctrl: usize) -> Option<Basis> {
+        if degree == 0 || degree > MAX_DEGREE || mults.len() != knots.len() || ctrl <= degree {
             return None;
         }
-        let mut k = Vec::new();
-        for (&m, &x) in mults.iter().zip(knots) {
+        if knots.iter().any(|k| !k.is_finite()) || knots.windows(2).any(|w| w.first() >= w.last()) {
+            return None;
+        }
+        let mut total = 0usize;
+        for &m in mults {
             let m = usize::try_from(m).ok()?;
-            k.extend(std::iter::repeat_n(x, m));
+            if m == 0 || m > degree + 1 {
+                return None;
+            }
+            total += m;
+        }
+        if total != ctrl + degree + 1 {
+            return None;
+        }
+        let mut k = Vec::with_capacity(total);
+        for (&m, &x) in mults.iter().zip(knots) {
+            k.extend(std::iter::repeat_n(x, usize::try_from(m).ok()?));
         }
         Some(Basis { degree, knots: k })
     }
@@ -243,10 +262,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hostile_knots_are_refused() {
+        // A multiplicity past degree + 1, a huge one, zero, a count that does not match, a
+        // degree past the limit, decreasing knots.
+        assert!(Basis::from_multiplicities(2, &[4, 3], &[0.0, 1.0], 4).is_none());
+        assert!(Basis::from_multiplicities(2, &[i64::MAX, 3], &[0.0, 1.0], 3).is_none());
+        assert!(Basis::from_multiplicities(2, &[0, 3], &[0.0, 1.0], 3).is_none());
+        assert!(Basis::from_multiplicities(2, &[3, 3], &[0.0, 1.0], 4).is_none());
+        assert!(Basis::from_multiplicities(MAX_DEGREE + 1, &[27, 27], &[0.0, 1.0], 27).is_none());
+        assert!(Basis::from_multiplicities(1, &[2, 2], &[1.0, 0.0], 2).is_none());
+        assert!(Basis::from_multiplicities(1, &[2, 2], &[0.0, f64::NAN], 2).is_none());
+    }
+
+    #[test]
     fn a_quarter_circle_as_a_rational_quadratic() {
         let w = std::f64::consts::FRAC_1_SQRT_2;
         let c = Curve {
-            basis: Basis::from_multiplicities(2, &[3, 3], &[0.0, 1.0]).unwrap(),
+            basis: Basis::from_multiplicities(2, &[3, 3], &[0.0, 1.0], 3).unwrap(),
             ctrl: vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
             weights: vec![1.0, w, 1.0],
             period: None,
@@ -263,7 +295,7 @@ mod tests {
 
     #[test]
     fn a_bilinear_patch_and_its_partials() {
-        let b = Basis::from_multiplicities(1, &[2, 2], &[0.0, 1.0]).unwrap();
+        let b = Basis::from_multiplicities(1, &[2, 2], &[0.0, 1.0], 2).unwrap();
         let s = Surface {
             u: b.clone(),
             v: b,

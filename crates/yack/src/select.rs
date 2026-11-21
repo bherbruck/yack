@@ -9,6 +9,65 @@ use crate::{
     Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, Role, SurfaceKind, Tag, VertexId, VertexRef,
 };
 
+/// The tags and roles a face's names give it (internal feature names left out).
+fn tags_roles(names: &BTreeSet<yack_springrep::topo::FaceName>) -> (Vec<Tag>, Vec<(Tag, Role)>) {
+    let tags: BTreeSet<&str> = names.iter().map(|n| n.feature.as_str()).filter(|t| !engine::is_internal_feature(t)).collect();
+    let roles = names
+        .iter()
+        .filter(|n| !engine::is_internal_feature(&n.feature))
+        .filter_map(|n| Some((Tag::from(n.feature.as_str()), engine::role(&n.face)?)))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    (tags.into_iter().map(Tag::from).collect(), roles)
+}
+
+/// A view of face `i` of a solid held in cadrs form.
+fn held_face_ref<'a>(s: &Solid, h: &'a crate::engine_cadrs::Held, i: u64, op: &'static str) -> Result<FaceRef<'a>> {
+    let f = crate::engine_cadrs::held_face_facts(op, h, i)?;
+    let (tags, roles) = usize::try_from(i).ok().and_then(|n| h.names.get(n)).map(tags_roles).unwrap_or_default();
+    Ok(FaceRef {
+        id: FaceId::new(s.stamp(), u32::try_from(i).unwrap_or(u32::MAX)),
+        kind: f.kind,
+        normal: f.normal,
+        area: f.area,
+        centroid: f.centroid,
+        bbox: f.bbox,
+        tags,
+        roles,
+        at: crate::values::FaceAt::Cadrs(h, i),
+    })
+}
+
+/// A view of edge `i` of a solid held in cadrs form.
+fn held_edge_ref<'a>(s: &Solid, h: &'a crate::engine_cadrs::Held, i: u64, op: &'static str) -> Result<EdgeRef<'a>> {
+    let e = crate::engine_cadrs::held_edge_facts(op, h, i)?;
+    Ok(EdgeRef {
+        id: EdgeId::new(s.stamp(), u32::try_from(i).unwrap_or(u32::MAX)),
+        kind: e.kind,
+        ends: e.ends,
+        convex: e.convex,
+        length: e.length,
+        midpoint: e.midpoint,
+        uses: e.uses,
+        at: crate::values::EdgeAt::Cadrs(h, i),
+    })
+}
+
+/// A pick's answer as an id or the refusal `face_at`/`edge_at` give.
+fn picked<T>(op: &'static str, what: &str, p: Point3, found: crate::engine_cadrs::Picked, id: impl Fn(u64) -> T) -> Result<T> {
+    use crate::engine_cadrs::Picked as P;
+    match found {
+        P::One(i) => Ok(id(i)),
+        P::None => Err(Error::not_found(op, "p", format!("no {what} passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+        P::Ambiguous(n) => Err(Error::ambiguous(
+            op,
+            "p",
+            format!("{n} {what}s lie within tol::PICK of ({}, {}, {}) at distances that differ by less than tol::PICK", p.x, p.y, p.z),
+        )),
+    }
+}
+
 fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
     let face = b.face(f);
     let outward = |z: yack_springrep::math::Vec3| if face.reversed { engine::vec(-z) } else { engine::vec(z) };
@@ -25,7 +84,7 @@ fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
         geom::Surface::Nurbs(_) => (SurfaceKind::Spline, None),
     };
     let bb = measure::face_bbox(b, f);
-    let tags: BTreeSet<&str> = face.names.iter().map(|n| n.feature.as_str()).filter(|t| !engine::is_internal_feature(t)).collect();
+    let (tags, roles) = tags_roles(&face.names);
     FaceRef {
         id: s.face_id(f),
         kind,
@@ -33,17 +92,9 @@ fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
         area: measure::face_area(b, f),
         centroid: engine::point(measure::face_centroid(b, f)),
         bbox: Aabb::new(engine::point(bb.min), engine::point(bb.max)),
-        tags: tags.into_iter().map(Tag::from).collect(),
-        roles: face
-            .names
-            .iter()
-            .filter(|n| !engine::is_internal_feature(&n.feature))
-            .filter_map(|n| Some((Tag::from(n.feature.as_str()), engine::role(&n.face)?)))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-        brep: b,
-        face: f,
+        tags,
+        roles,
+        at: crate::values::FaceAt::Springrep(b, f),
     }
 }
 
@@ -66,8 +117,7 @@ fn edge_ref<'a>(s: &Solid, b: &'a Brep, e: engine_ids::Edge) -> Option<EdgeRef<'
         length: measure::edge_length(b, e),
         midpoint: mid,
         uses: b.edge_uses(e).len(),
-        brep: b,
-        edge: e,
+        at: crate::values::EdgeAt::Springrep(b, e),
     })
 }
 
@@ -107,6 +157,10 @@ impl Solid {
     pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> {
         let op = "face_at";
         let p = p.into();
+        if let Some(h) = self.held() {
+            let found = crate::engine_cadrs::held_face_pick(op, h, p, yack_tol::PICK)?;
+            return picked(op, "face", p, found, |i| FaceId::new(self.stamp(), u32::try_from(i).unwrap_or(u32::MAX)));
+        }
         let found = match self.form(op)? {
             None => api::Pick::None,
             Some(b) => api::face_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
@@ -127,6 +181,10 @@ impl Solid {
     pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> {
         let op = "edge_at";
         let p = p.into();
+        if let Some(h) = self.held() {
+            let found = crate::engine_cadrs::held_edge_pick(op, h, p, yack_tol::PICK)?;
+            return picked(op, "edge", p, found, |i| EdgeId::new(self.stamp(), u32::try_from(i).unwrap_or(u32::MAX)));
+        }
         let found = match self.form(op)? {
             None => api::Pick::None,
             Some(b) => api::edge_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
@@ -213,24 +271,62 @@ impl Solid {
 
     /// The faces for which `keep` is true.
     pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Result<Vec<FaceId>> {
+        if let Some(h) = self.held() {
+            let mut out = Vec::new();
+            for id in self.faces() {
+                let r = held_face_ref(self, h, u64::from(id.index()), "faces_where")?;
+                if keep(&r) {
+                    out.push(id);
+                }
+            }
+            return Ok(out);
+        }
         let Some(b) = self.form("faces_where")? else { return Ok(Vec::new()) };
         Ok(b.face_ids().map(|f| face_ref(self, b, f)).filter(|r| keep(r)).map(|r| r.id()).collect())
     }
 
     /// The edges (poles aside) for which `keep` is true.
     pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Result<Vec<EdgeId>> {
+        if let Some(h) = self.held() {
+            let mut out = Vec::new();
+            for id in self.edges() {
+                let r = held_edge_ref(self, h, u64::from(id.index()), "edges_where")?;
+                if keep(&r) {
+                    out.push(id);
+                }
+            }
+            return Ok(out);
+        }
         let Some(b) = self.form("edges_where")? else { return Ok(Vec::new()) };
         Ok(b.edge_ids().filter_map(|e| edge_ref(self, b, e)).filter(|r| keep(r)).map(|r| r.id()).collect())
     }
 
     /// A view of face `id`.
     pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> {
+        if let Some(h) = self.held() {
+            if id.stamp() != self.stamp() {
+                return Err(Error::foreign_id("face", "id"));
+            }
+            if !self.faces().contains(&id) {
+                return Err(Error::not_found("face", "id", format!("no {id}")));
+            }
+            return held_face_ref(self, h, u64::from(id.index()), "face");
+        }
         let f = self.sr_face("face", "id", id)?;
         Ok(face_ref(self, self.need("face")?, f))
     }
 
     /// A view of edge `id`.
     pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> {
+        if let Some(h) = self.held() {
+            if id.stamp() != self.stamp() {
+                return Err(Error::foreign_id("edge", "id"));
+            }
+            if !self.edges().contains(&id) {
+                return Err(Error::not_found("edge", "id", format!("no {id}")));
+            }
+            return held_edge_ref(self, h, u64::from(id.index()), "edge");
+        }
         let e = self.sr_edge("edge", "id", id)?;
         let b = self.need("edge")?;
         edge_ref(self, b, e).ok_or_else(|| Error::not_found("edge", "id", format!("{id} is a pole")))

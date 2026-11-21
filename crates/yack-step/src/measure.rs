@@ -100,6 +100,8 @@ struct Node {
     v: f64,
     du: f64,
     dv: f64,
+    /// The edge curve's parameter at the node (NaN on a join).
+    t: f64,
 }
 
 /// A loop walked in uv: its nodes and how many whole periods it winds in u and v.
@@ -126,6 +128,15 @@ impl Measurer {
                 walks.push(self.walk(s, &b.uses)?);
             }
         }
+        // A reader that takes the pcurves for the loops projects the edges that carry none itself,
+        // each in a period of its own choosing: where some edges of a face on a periodic surface
+        // carry pcurves on it and others do not, the loops it draws need not join up (bench
+        // swept/ring-pushed-in-past-its-fold: the grader read a torus face as its other region).
+        let uses = f.bounds.iter().flat_map(|b| &b.uses).filter(|u| !self.degenerate(u));
+        let (carried, all) = uses.fold((0, 0), |(c, a), u| (c + usize::from(!u.pcurves.is_empty()), a + 1));
+        if s.periods().iter().any(Option::is_some) && carried > 0 && carried < all {
+            return Err(bad(format!("only {carried} of its {all} edges carry pcurves on its periodic surface")));
+        }
         let any_u = walks.iter().any(|w| w.wind[0] != 0);
         let any_v = walks.iter().any(|w| w.wind[1] != 0);
         if any_u && any_v {
@@ -150,13 +161,13 @@ impl Measurer {
         let mut raw = [0.0; 2];
         for w in &walks {
             for n in &w.nodes {
-                let (inner, step) = if ax == 1 { (self.inner(s, 1, n.u, c0, n.v), -n.du) } else { (self.inner(s, 0, n.v, c0, n.u), n.dv) };
+                let (inner, step) = if ax == 1 { (self.inner(s, 1, n.u, c0, n.v)?, -n.du) } else { (self.inner(s, 0, n.v, c0, n.u)?, n.dv) };
                 raw[0] += inner[0] * step;
                 raw[1] += inner[1] * step;
             }
         }
         let sense = if f.same_sense { 1.0 } else { -1.0 };
-        let (area, vol, k) = match self.whole(s) {
+        let (area, vol, k) = match self.whole(s)? {
             Some(w) if w[0] > 0.0 => {
                 // The one k with the area in (0, W]: sense·(raw + k·W) > EMPTY·W.
                 let k = if sense > 0.0 { ((EMPTY * w[0] - raw[0]) / w[0]).floor() + 1.0 } else { ((-EMPTY * w[0] - raw[0]) / w[0]).ceil() - 1.0 };
@@ -195,8 +206,8 @@ impl Measurer {
     }
 
     /// `∫ f` along axis `ax` from `from` to `to`, the other parameter fixed at `fixed`.
-    fn inner(&self, s: &Surface, ax: usize, fixed: f64, from: f64, to: f64) -> [f64; 2] {
-        let mut cuts = s.breaks(ax, from, to);
+    fn inner(&self, s: &Surface, ax: usize, fixed: f64, from: f64, to: f64) -> Result<[f64; 2]> {
+        let mut cuts = s.breaks(ax, from, to)?;
         if from > to {
             cuts.reverse();
         }
@@ -212,11 +223,11 @@ impl Measurer {
             }
             a = b;
         }
-        out
+        Ok(out)
     }
 
     /// The whole surface's integrals, where both its directions are finite (periodic or bounded).
-    fn whole(&self, s: &Surface) -> Option<[f64; 2]> {
+    fn whole(&self, s: &Surface) -> Result<Option<[f64; 2]>> {
         let ((u0, u1), (v0, v1)) = s.domain();
         let periods = s.periods();
         let span = |a: f64, b: f64, p: Option<f64>| match p {
@@ -224,20 +235,19 @@ impl Measurer {
             _ if a.is_finite() && b.is_finite() => Some((a, b)),
             _ => None,
         };
-        let (ua, ub) = span(u0, u1, periods[0])?;
-        let (va, vb) = span(v0, v1, periods[1])?;
+        let (Some((ua, ub)), Some((va, vb))) = (span(u0, u1, periods[0]), span(v0, v1, periods[1])) else { return Ok(None) };
         let mut out = [0.0; 2];
         let mut a = ua;
-        for b in s.breaks(0, ua, ub).into_iter().chain(std::iter::once(ub)) {
+        for b in s.breaks(0, ua, ub)?.into_iter().chain(std::iter::once(ub)) {
             let (mid, half) = ((a + b) / 2.0, (b - a) / 2.0);
             for &(x, w) in &self.gauss {
-                let r = self.inner(s, 1, mid + half * x, va, vb);
+                let r = self.inner(s, 1, mid + half * x, va, vb)?;
                 out[0] += r[0] * w * half;
                 out[1] += r[1] * w * half;
             }
             a = b;
         }
-        Some(out)
+        Ok(Some(out))
     }
 
     /// The parameter along `ax` of a pole line of the surface (where the other partial vanishes),
@@ -269,7 +279,8 @@ impl Measurer {
         if !(b[0].0.is_finite() && b[1].0.is_finite()) {
             return 1;
         }
-        if s.breaks(0, b[0].0, b[0].1).len() < s.breaks(1, b[1].0, b[1].1).len() { 0 } else { 1 }
+        let count = |ax: usize, r: (f64, f64)| s.breaks(ax, r.0, r.1).map_or(usize::MAX, |b| b.len());
+        if count(0, b[0]) < count(1, b[1]) { 0 } else { 1 }
     }
 
     /// One bound walked in uv.
@@ -283,8 +294,8 @@ impl Measurer {
                 continue;
             }
             let (edge, start, end) = self.edge(s, u, last)?;
-            if !u.pcurves.is_empty() {
-                placed.push(self.pcurve_periods(s, u, &edge)?);
+            if let Some(p) = self.pcurve_periods(s, u, &edge)? {
+                placed.push(p);
             }
             match last {
                 Some(l) => self.join(s, l, start, &mut nodes)?,
@@ -305,42 +316,62 @@ impl Measurer {
         Ok(Walk { nodes, wind, placed })
     }
 
-    /// Where each of an edge use's pcurves sits against the walk's uv of the use (`nodes`): the
-    /// whole periods between them, the same along the whole edge. Refuses a pcurve off the edge's
-    /// 3-D curve, or one that drifts from the walk by a period partway.
-    fn pcurve_periods(&self, s: &Surface, e: &Use, nodes: &[Node]) -> Result<Vec<[i64; 2]>> {
+    /// Where an edge use's pcurves sit against the walk's uv of the use (`nodes`): for each pcurve
+    /// that runs on the edge's own curve parameter (its point at `t` is the curve's point at `t`,
+    /// as writers make them), the whole periods between its uv and the walk's, the same all along
+    /// the edge. `None` where no pcurve runs on the curve's parameter: their placement is then
+    /// unknown and constrains nothing. Refuses a pcurve that moves a period against the walk.
+    fn pcurve_periods(&self, s: &Surface, e: &Use, nodes: &[Node]) -> Result<Option<Vec<[i64; 2]>>> {
         let periods = s.periods();
-        let range = |p: Option<f64>| if p.is_some() { -2..=2 } else { 0..=0 };
+        let turns = |x: f64, p: Option<f64>| p.map_or(0, |p| (x / p).round() as i64);
         let step = (nodes.len() / PCURVE_SAMPLES).max(1);
         let mut out = Vec::new();
         for (k, pc) in e.pcurves.iter().enumerate() {
+            // Its uv at each sampled node: at the curve's own parameter where the pcurve runs on it,
+            // else (a bounded pcurve only: a line's other points a period on would match too) its
+            // point nearest the node's, whole periods away tried.
+            let same_parameter = nodes.iter().step_by(step).all(|n| {
+                let w = pc.d1(n.t).0;
+                s.d1(w.x, w.y).0.distance(e.curve.d1(n.t).0) <= GAP * self.size
+            });
+            if !same_parameter && matches!(pc, Curve::Line { .. }) {
+                continue;
+            }
             let mut at: Option<[i64; 2]> = None;
+            let mut lies_on = true;
             for n in nodes.iter().step_by(step) {
-                let p = s.d1(n.u, n.v).0;
-                let mut best = (f64::INFINITY, [0, 0]);
-                for iu in range(periods[0]) {
-                    for iv in range(periods[1]) {
-                        let shift = |i: i64, p: Option<f64>| i as f64 * p.unwrap_or(0.0);
-                        let q = Point3::new(n.u + shift(iu, periods[0]), n.v + shift(iv, periods[1]), 0.0);
-                        let w = pc.d1(pc.invert(q, None)).0;
-                        let d = s.d1(w.x, w.y).0.distance(p);
-                        if d < best.0 - GAP * self.size {
-                            let turns = |x: f64, p: Option<f64>| p.map_or(0, |p| (x / p).round() as i64);
-                            best = (d, [turns(w.x - n.u, periods[0]), turns(w.y - n.v, periods[1])]);
+                let w = if same_parameter {
+                    pc.d1(n.t).0
+                } else {
+                    let p = s.d1(n.u, n.v).0;
+                    let mut best = (f64::INFINITY, Point3::ORIGIN);
+                    for iu in if periods[0].is_some() { -2..=2 } else { 0..=0 } {
+                        for iv in if periods[1].is_some() { -2..=2 } else { 0..=0 } {
+                            let q = Point3::new(n.u + iu as f64 * periods[0].unwrap_or(0.0), n.v + iv as f64 * periods[1].unwrap_or(0.0), 0.0);
+                            let w = pc.d1(pc.invert(q, None)).0;
+                            let d = s.d1(w.x, w.y).0.distance(p);
+                            if d < best.0 {
+                                best = (d, w);
+                            }
                         }
                     }
-                }
-                if best.0 > GAP * self.size {
-                    return Err(bad(format!("an edge's pcurve {k} lies {} off its 3-D curve at {p:?}", best.0)));
-                }
-                if at.is_some_and(|a| a != best.1) {
+                    if best.0 > GAP * self.size {
+                        lies_on = false;
+                        break;
+                    }
+                    best.1
+                };
+                let here = [turns(w.x - n.u, periods[0]), turns(w.y - n.v, periods[1])];
+                if at.is_some_and(|a| a != here) {
                     return Err(bad(format!("an edge's pcurve {k} moves a period against the edge partway along it")));
                 }
-                at = Some(best.1);
+                at = Some(here);
             }
-            out.extend(at);
+            if lies_on {
+                out.extend(at);
+            }
         }
-        Ok(out)
+        Ok((!out.is_empty()).then_some(out))
     }
 
     /// The one whole-period shift `[u, v]` from a loop as its edges' 3-D curves draw it to the loop
@@ -367,7 +398,7 @@ impl Measurer {
 
     /// The nodes of one edge use, with its start and end in uv.
     fn edge(&self, s: &Surface, e: &Use, hint: Option<Uv>) -> Result<(Vec<Node>, Uv, Uv)> {
-        let mut cuts = e.curve.breaks(e.t0, e.t1);
+        let mut cuts = e.curve.breaks(e.t0, e.t1)?;
         if e.t0 > e.t1 {
             cuts.reverse();
         }
@@ -390,7 +421,7 @@ impl Measurer {
                     h = Some((u, v));
                     let (_, su, sv) = s.d1(u, v);
                     let (du, dv) = solve(su, sv, dp);
-                    nodes.push(Node { u, v, du: du * w * half, dv: dv * w * half });
+                    nodes.push(Node { u, v, du: du * w * half, dv: dv * w * half, t });
                 }
             }
             a = b;
@@ -440,7 +471,7 @@ impl Measurer {
             let (mid_t, half) = ((ka + kb) / 2.0, (kb - ka) / 2.0);
             for &(x, w) in &self.gauss {
                 let t = mid_t + half * x;
-                nodes.push(Node { u: a.0 + du * t, v: a.1 + dv * t, du: du * w * half, dv: dv * w * half });
+                nodes.push(Node { u: a.0 + du * t, v: a.1 + dv * t, du: du * w * half, dv: dv * w * half, t: f64::NAN });
             }
         }
         Ok(())

@@ -17,13 +17,15 @@ pub fn write(s: &Solid) -> Result<String> {
         return Err(Error::invalid(op, "s", "the solid is empty"));
     }
     if s.held().is_some() {
-        // held in cadrs form: cadrs writes it, and our own reader (springrep's, as step::read)
-        // must read it back, with cadrs's reader as an extra check; else the write is refused
+        // Held in cadrs form: cadrs writes it, and the file is kept when cadrs's reader reads it
+        // back as the solid. It is legitimate STEP, but our own step::read (springrep's reader)
+        // may refuse it: a solid is held exactly because springrep cannot carry its faces (a
+        // swept face folded in (u, v), say). Graded on the held bench cases (lemon,
+        // rational-spheroid, paraboloid tips, the tumbling family): no wrong answer (lead ruling).
         let (v, a) = (s.volume(), s.area());
         return firewall::run(op, || {
             ladder::allowed(op, "cadrs")?;
             let text = engine_cadrs::write_step(op, s)?;
-            sr::check_written(&text, v, a).map_err(|e| Error::failed(op, Stage::Check, format!("springrep (step::read): {e}")))?;
             yack_bridge::check_written_cadrs(&text, v, a).map_err(|e| Error::failed(op, Stage::Check, format!("cadrs: {e}")))?;
             Ok(text)
         });
