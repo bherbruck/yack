@@ -205,7 +205,109 @@ pub fn together(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<T
 
 fn together_exactly(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<Together> {
     let r = k.sweep_solid(body, &motion_of(steps)?)?;
-    Ok(Together { made: (r.first()?, r.history) })
+    let made = (r.first()?, r.history);
+    // (Only a step that turns a whole turn or more sweeps back through itself; the check costs
+    // a tessellation, a few percent of such a sweep.)
+    let whole_turn = steps.iter().any(|s| match *s {
+        Step::Turn { from, to, .. } | Step::Screw { from, to, .. } => (to - from).abs() >= TAU * (1.0 - crate::native::tol::REL),
+        Step::Slide { .. } => false,
+    });
+    if !whole_turn || crate::yack_glue::inner_faces(k, made.0)?.is_empty() {
+        return Ok(Together { made });
+    }
+    match in_halves(k, body, steps, made.0)? {
+        Some(halves) => {
+            k.release(made.0);
+            Ok(Together { made: halves })
+        }
+        None => Ok(Together { made }),
+    }
+}
+
+/// `union`'s history (its faces from the `parts`' faces) read through the parts' own: each face
+/// as the face or the origin of the parts' input it came from, as one sweep's history says it.
+fn through(union: &crate::History, parts: &[(BodyId, crate::History)]) -> crate::History {
+    let mut out = crate::History::default();
+    let source = |from: &crate::InputFace| parts.iter().find(|(b, _)| *b == from.body).map(|(_, h)| h);
+    for &(f, ref from) in &union.modified {
+        let Some(h) = source(from) else { continue };
+        for (g, input) in &h.modified {
+            if *g == from.face {
+                out.modified.push((f, *input));
+            }
+        }
+        for (g, origin) in &h.generated {
+            if *g == from.face {
+                out.generated.push((f, *origin));
+            }
+        }
+    }
+    out.generated.extend(union.generated.iter().copied());
+    for (_, h) in parts {
+        for d in &h.deleted {
+            if !out.modified.iter().any(|(_, i)| i == d) && !out.deleted.contains(d) {
+                out.deleted.push(*d);
+            }
+        }
+    }
+    out
+}
+
+/// The steps over the first and the second half of their run.
+fn halves(steps: &[Step]) -> [Vec<Step>; 2] {
+    let half = |s: &Step, second: bool| {
+        let cut = |a: f64, b: f64| if second { ((a + b) * 0.5, b) } else { (a, (a + b) * 0.5) };
+        match *s {
+            Step::Slide { from, to } => {
+                let mid: [f64; 3] = std::array::from_fn(|i| (from[i] + to[i]) * 0.5);
+                if second { Step::Slide { from: mid, to } } else { Step::Slide { from, to: mid } }
+            }
+            Step::Turn { point, axis, from, to } => {
+                let (from, to) = cut(from, to);
+                Step::Turn { point, axis, from, to }
+            }
+            Step::Screw { point, axis, from, to, rise_per_turn } => {
+                let (from, to) = cut(from, to);
+                Step::Screw { point, axis, from, to, rise_per_turn }
+            }
+        }
+    };
+    [steps.iter().map(|s| half(s, false)).collect(), steps.iter().map(|s| half(s, true)).collect()]
+}
+
+/// `body` swept by `steps` as its two halves united, where `whole` (the sweep made at once) has
+/// a face with the solid on both sides: a full tumble's envelope runs back through what it
+/// swept (brep-bench swept/tumbling-torus-full-turn). Kept only where the union is clean (no
+/// such face, cadrs's Full check passed) and its volume is `whole`'s, to `REL_POINT`; `None`
+/// otherwise, `whole` then left to be refused as before.
+fn in_halves(k: &mut DefaultKernel, body: BodyId, steps: &[Step], whole: BodyId) -> Result<Option<Made>> {
+    use crate::native::topo::CheckLevel;
+    let mut parts: Vec<(BodyId, crate::History)> = Vec::new();
+    for h in halves(steps) {
+        match k.sweep_solid(body, &motion_of(&h)?).and_then(|r| Ok((r.first()?, r.history))) {
+            Ok(p) => parts.push(p),
+            Err(_) => break,
+        }
+    }
+    let united = match parts.as_slice() {
+        [(a, _), (b, _)] => crate::yack_glue::boolean(k, crate::BoolOp::Union, *a, &[*b]).ok(),
+        _ => None,
+    };
+    for (p, _) in &parts {
+        k.release(*p);
+    }
+    let Some(united) = united else { return Ok(None) };
+    let united = (united.0, through(&united.1, &parts));
+    let (v, w) = (k.mass_properties(united.0)?.volume, k.mass_properties(whole)?.volume);
+    let clean = crate::yack_glue::inner_faces(k, united.0)?.is_empty()
+        && k.get(united.0)?.check_with(CheckLevel::Full).is_empty()
+        && (v - w).abs() <= crate::native::tol::REL_POINT * w.abs();
+    if clean {
+        Ok(Some(united))
+    } else {
+        k.release(united.0);
+        Ok(None)
+    }
 }
 
 /// `target` less everything `tool` passes through as `steps` all run at once (cadrs's cut by a
@@ -271,6 +373,41 @@ mod tests {
     use super::*;
     use crate::Primitive;
     use nalgebra::Point3;
+
+    /// A union's history read through its parts' gives each face its part's input face or
+    /// origin; the parts' deletions stay, but not of a face still continued.
+    #[test]
+    fn a_union_history_reads_through_its_parts() {
+        use crate::{FaceId as F, History, InputFace as I, Origin};
+        let (orig, a, b) = (BodyId(1), BodyId(2), BodyId(3));
+        let part_a = History { generated: vec![(F(0), Origin::StartCap { region: 0 })], modified: vec![(F(1), I { body: orig, face: F(5) })], deleted: vec![I { body: orig, face: F(6) }] };
+        let part_b = History { generated: vec![(F(0), Origin::EndCap { region: 0 })], modified: vec![(F(1), I { body: orig, face: F(6) })], deleted: vec![I { body: orig, face: F(7) }] };
+        let union = History {
+            generated: vec![],
+            modified: vec![(F(10), I { body: a, face: F(0) }), (F(11), I { body: a, face: F(1) }), (F(12), I { body: b, face: F(0) }), (F(13), I { body: b, face: F(1) })],
+            deleted: vec![],
+        };
+        let h = through(&union, &[(a, part_a), (b, part_b)]);
+        assert_eq!(h.generated, vec![(F(10), Origin::StartCap { region: 0 }), (F(12), Origin::EndCap { region: 0 })]);
+        assert_eq!(h.modified, vec![(F(11), I { body: orig, face: F(5) }), (F(13), I { body: orig, face: F(6) })]);
+        assert_eq!(h.deleted, vec![I { body: orig, face: F(7) }]);
+    }
+
+    /// The full tumble swept at once leaves a face through the solid, found as one (at every
+    /// step [`crate::yack_glue::inner_faces`] tries): what sends [`together`] to its halves.
+    #[test]
+    fn a_full_tumble_at_once_leaves_a_face_through_itself() {
+        let (l, a, h) = (30f64.to_radians(), 20f64.to_radians(), 0.7071);
+        let (q, u) = ([0.0, h * l.cos(), h * l.sin()], [a.cos(), a.sin() * l.cos(), a.sin() * l.sin()]);
+        let mut k = DefaultKernel::new();
+        let (ring, _) = crate::yack_glue::torus(&mut k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.16).unwrap();
+        let steps = [
+            Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -67.5f64.to_radians(), to: 67.5f64.to_radians() },
+            Step::Turn { point: q, axis: u, from: 180f64.to_radians(), to: -180f64.to_radians() },
+        ];
+        let whole = crate::yack_glue::exact(&mut k, |k| k.sweep_solid(ring, &motion_of(&steps)?)?.first()).unwrap();
+        assert_eq!(crate::yack_glue::inner_faces(&k, whole).unwrap().len(), 1);
+    }
 
     #[test]
     fn whole_turns_end_where_they_started() {

@@ -183,6 +183,43 @@ fn piece(op: &'static str, s: &Segment, alone: bool) -> Result<Piece> {
 }
 
 impl Loop {
+    /// This loop with every corner between two segments filleted at `radius`, convex and concave
+    /// alike (corners already tangent kept). Refused where a round does not fit between its
+    /// neighbours; a neighbour is never trimmed past its end.
+    pub fn rounded(&self, radius: f64) -> Result<Loop> {
+        let op = "Loop::rounded";
+        let segs = crate::engine::loop_segments(op, self)?;
+        let out = yack_springrep::facade::loops::round_loop(&segs, radius).map_err(|e| crate::engine::error(op, e))?;
+        Loop::new(crate::engine::segments_back(op, out)?)
+    }
+
+    /// This loop offset by `distance`: outward (away from the region it bounds when it runs
+    /// counter-clockwise) for a positive distance, inward for a negative one; corners it grows
+    /// round become arcs about them (a tool's path round a part). An offset that would cross
+    /// itself is refused, never trimmed.
+    pub fn offset(&self, distance: f64) -> Result<Loop> {
+        let op = "Loop::offset";
+        let segs = crate::engine::loop_segments(op, self)?;
+        let out = yack_springrep::facade::loops::offset_loop(&segs, distance).map_err(|e| crate::engine::error(op, e))?;
+        Loop::new(crate::engine::segments_back(op, out)?)
+    }
+
+    /// The closed loop round a chain of circles, taken in order counter-clockwise, each joined to
+    /// the next by their common tangent: a positive radius is a tip (the loop wraps round the
+    /// circle's outside), a negative one a fillet (it curves in round the circle's inside). See
+    /// [`Profile::tangent_chain`] for the profile it bounds.
+    pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Loop> {
+        let op = "Loop::tangent_chain";
+        let ends = yack_math::planar::tangent_chain(op, circles)?;
+        let Some(&(_, start)) = ends.first() else { return Err(Error::invalid(op, "circles", "no circles")) };
+        let mut pen = Loop::starting_at(start);
+        for ((c, r), (arrive, leave)) in circles.iter().zip(&ends).skip(1).chain(circles.iter().zip(&ends).take(1)) {
+            pen = pen.line_to(*arrive);
+            pen = if *r > 0.0 { pen.arc_ccw_to(*leave, *c) } else { pen.arc_cw_to(*leave, *c) };
+        }
+        pen.close()
+    }
+
     /// A loop from segments. Refuses gaps between consecutive segments, zero-length pieces, zero
     /// area, and pieces that cross or touch, naming the segments.
     pub fn new(segments: Vec<Segment>) -> Result<Loop> {
@@ -333,15 +370,7 @@ impl Profile {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Profile> {
-        let op = "Profile::tangent_chain";
-        let ends = yack_math::planar::tangent_chain(op, circles)?;
-        let Some(&(_, start)) = ends.first() else { return Err(Error::invalid(op, "circles", "no circles")) };
-        let mut pen = Loop::starting_at(start);
-        for ((c, r), (arrive, leave)) in circles.iter().zip(&ends).skip(1).chain(circles.iter().zip(&ends).take(1)) {
-            pen = pen.line_to(*arrive);
-            pen = if *r > 0.0 { pen.arc_ccw_to(*leave, *c) } else { pen.arc_cw_to(*leave, *c) };
-        }
-        Profile::new(pen.close()?, Vec::new())
+        Profile::new(Loop::tangent_chain(circles)?, Vec::new())
     }
 
     /// A profile from an outer loop and holes. The outer loop must run counter-clockwise and the
@@ -585,6 +614,33 @@ impl Motion {
     /// These motions one after another, each starting where the last left the solid.
     pub fn then(legs: Vec<Motion>) -> Motion {
         Motion(MotionKind::Then(legs))
+    }
+    /// A tool carried once round `path`, drawn in `frame`'s xy plane, from the loop's start:
+    /// a slide along each line and a turn about each arc's centre (CAM's contour pass).
+    /// `Unsupported` where the loop has a conic or spline segment.
+    pub fn along_loop(frame: &crate::Frame, path: &Loop) -> Result<Motion> {
+        let op = "Motion::along_loop";
+        let pieces = path.segments().iter().map(|s| piece(op, s, path.segments().len() == 1)).collect::<Result<Vec<_>>>()?;
+        let legs = frame.loop_legs(&pieces)?;
+        Ok(Motion::then(
+            legs.into_iter()
+                .map(|l| match l {
+                    yack_math::LoopLeg::Slide(by) => Motion::slide(by),
+                    yack_math::LoopLeg::Turn { at, axis, by } => Motion::turn(at, axis, crate::rad(0.0), by),
+                })
+                .collect(),
+        ))
+    }
+    /// A toolpath through the absolute points `points`, in order: the solid starts where it is
+    /// drawn, at `points[0]`, and slides straight to each next point in turn (a [`then`] of
+    /// slides). `Invalid` for fewer than two points.
+    ///
+    /// [`then`]: Motion::then
+    pub fn through(points: &[Point3]) -> Result<Motion> {
+        if points.len() < 2 {
+            return Err(Error::invalid("Motion::through", "points", "a toolpath needs two points or more"));
+        }
+        Ok(Motion::then(yack_math::steps(points).into_iter().map(Motion::slide).collect()))
     }
     /// These motions all at once: one parameter `t` runs 0 → 1, each leg is at fraction `t` of
     /// itself, applied in order at each instant (a rack's slide and its pinion's turn). Such a

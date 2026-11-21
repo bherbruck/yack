@@ -22,6 +22,10 @@ pub const fn rad(r: f64) -> Angle {
 }
 
 impl Angle {
+    /// A whole turn, counter-clockwise (`ccw`) or clockwise.
+    pub const fn full_turn(ccw: bool) -> Angle {
+        if ccw { rad(core::f64::consts::TAU) } else { rad(-core::f64::consts::TAU) }
+    }
     /// The angle in radians.
     pub const fn radians(self) -> f64 {
         self.0

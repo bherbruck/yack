@@ -249,3 +249,16 @@ fn a_negative_height_extrudes_the_other_way() {
     assert_eq!(up.classify(&[[5.0, -1.5, 1.0], [5.0, -1.5, 3.0]]).unwrap(), vec![Side::In, Side::Out]);
     assert_eq!(down.classify(&[[5.0, 1.5, 1.0], [5.0, 1.5, 3.0]]).unwrap(), vec![Side::In, Side::Out]);
 }
+
+/// Loop::rounded and Loop::offset on a 10 mm square (w-m11's closed forms): rounded at 2, area
+/// 100 − (4 − π)·4; rounded at 6, refused; offset +1, area 140 + π; offset −1, area 64.
+#[test]
+fn a_square_loop_rounds_and_offsets() {
+    let sq = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]).unwrap();
+    let area = |l: Loop| extrude(&Frame::WORLD, &Profile::new(l, vec![]).unwrap(), 1.0).unwrap().volume();
+    let near = |got: f64, want: f64| assert!((got - want).abs() < 1e-9 * want, "{got} vs {want}");
+    near(area(sq.rounded(2.0).unwrap()), 100.0 - (4.0 - PI) * 4.0);
+    assert!(sq.rounded(6.0).is_err());
+    near(area(sq.offset(1.0).unwrap()), 140.0 + PI);
+    near(area(sq.offset(-1.0).unwrap()), 64.0);
+}

@@ -1959,6 +1959,6 @@ REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{t}) SHAPE_REPRESENTATION_RELAT
         "ISO-10303-21;\nHEADER;\nFILE_NAME('a','',(''),(''),'','other','');\nENDSEC;\nDATA;\n\
          {data}ENDSEC;\nEND-ISO-10303-21;\n"
     );
-    let e = read(text.as_bytes(), "imp").err().expect("refused");
+    let e = read(text.as_bytes(), "imp").expect_err("refused");
     assert!(e.to_string().contains("product and representation uses"), "{e}");
 }

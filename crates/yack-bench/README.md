@@ -17,7 +17,7 @@ the limit is 10. Documented exceptions:
 | cnc/flat-end-mill-profile | 31 | data: the cross's rounded-corner toolpath (tangent points and arc centres) computed inline; one `cut_swept` over `Motion::Then` of slides and turns |
 | cnc/bull-nose-profile | 24 | data: the flower's lobe/valley centres and arc sweeps computed inline; one `cut_swept` over `Motion::Then` of turns |
 | cnc/pocket-with-an-island | 78 | data: a ~400-move 2.5-axis program (raster intervals, rounded wall path, island circle, bore, pecked holes) for three tools; three `cut_swept` calls |
-| cnc/ball-end-surface-raster | 20 | data: 944 raster points sampled from the surface f(x, y); one `cut_swept` over `Motion::Then` of slides |
+| cnc/ball-end-surface-raster | 16 | data: 944 raster points sampled from the surface f(x, y); one `cut_swept` over `Motion::through` them |
 | cnc/five-axis-dome | 58 | data: the five-axis program (8 roughing levels, 180 meridians, 15 pole circles, 12 seats and holes) as slides and turns for four tools; four `cut_swept` calls |
 | swept/tumbling-torus-crossed-union | 12 | two sweeps of one torus (A and B), then the boolean |
 | swept/tumbling-torus-crossed-difference | 12 | two sweeps of one torus (A and B), then the boolean |

@@ -108,6 +108,57 @@ pub fn check(b: &Brep) -> Vec<Issue> {
 /// [`check`] without the search for faces passing through each other: the structure, the geometry
 /// each entity lies on, and every loop's closure and direction. An imported solid is refused for
 /// these; one passing through itself is kept and reported by [`self_crossings`].
+/// The checks that see nothing of a shell's facing: each edge's range and how far its curve ends
+/// from its vertices, and how far each coedge lies from its face's surface. A body these refuse
+/// is refused whichever way its shells face, so a reader can refuse it before working out their
+/// facing, which takes a volume per shell (bench swept/ring-carried-along-a-spline).
+pub(crate) fn check_distances(b: &Brep) -> Vec<Issue> {
+    let mut out = Vec::new();
+    let mut issue = |m: String| out.push(Issue { message: m });
+    for e in b.edge_ids() {
+        let edge = b.edge(e);
+        if edge.range.0.partial_cmp(&edge.range.1) != Some(std::cmp::Ordering::Less) {
+            issue(format!("edge {} has an empty range", e.index()));
+            continue;
+        }
+        if let Some(c) = &edge.curve {
+            for (t, v) in [(edge.range.0, edge.start), (edge.range.1, edge.end)] {
+                let d = c.eval(t).dist(b.vertex(v).point);
+                if d > b.vertex_tolerance(v) {
+                    issue(format!("edge {} ends {d:e} mm from vertex {}", e.index(), v.index()));
+                }
+            }
+        }
+    }
+    for f in b.face_ids() {
+        let face = b.face(f);
+        for &lp in &face.loops {
+            for &c in &b.lp(lp).coedges {
+                let ts = coedge_params(b, c, SAMPLES);
+                let uvs = b.coedge_uvs(c, &ts);
+                let e = b.coedge(c).edge;
+                let edge = b.edge(e);
+                let within = match edge.curve {
+                    Some(_) => b.edge_tolerance(e),
+                    None => b.vertex_tolerance(edge.start),
+                };
+                let far = ts.iter().zip(&uvs).find_map(|(t, uv)| {
+                    let want = match &edge.curve {
+                        Some(curve) => curve.eval(*t),
+                        None => b.vertex(edge.start).point,
+                    };
+                    let d = face.surface.eval(uv.x, uv.y).dist(want);
+                    (!tol::within(d, within, want)).then_some(d)
+                });
+                if let Some(d) = far {
+                    issue(format!("coedge {} of face {} is {d:e} mm off its surface", c.index(), f.index()));
+                }
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn check_structure(b: &Brep) -> Vec<Issue> {
     check_with(b, false, None, false)
 }

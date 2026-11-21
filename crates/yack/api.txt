@@ -58,14 +58,19 @@ yack::input: impl Lead { pub fn polynomial(coefficients: Vec<f64>) -> Lead }
 yack::input: impl Loop { pub fn is_ccw(&self) -> bool }
 yack::input: impl Loop { pub fn labels(&self) -> &[Option<Tag>] }
 yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
+yack::input: impl Loop { pub fn offset(&self, distance: f64) -> Result<Loop> }
 yack::input: impl Loop { pub fn polygon(corners: &[[f64; 2]]) -> Result<Loop> }
+yack::input: impl Loop { pub fn rounded(&self, radius: f64) -> Result<Loop> }
 yack::input: impl Loop { pub fn segments(&self) -> &[Segment] }
 yack::input: impl Loop { pub fn starting_at(p: impl Into<Point2>) -> Pen }
+yack::input: impl Loop { pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Loop> }
 yack::input: impl Loop { pub fn through(points: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Motion { pub fn along(path: Spline3, law: FrameLaw) -> Motion }
+yack::input: impl Motion { pub fn along_loop(frame: &crate::Frame, path: &Loop) -> Result<Motion> }
 yack::input: impl Motion { pub fn screw(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle, lead: Lead) -> Motion }
 yack::input: impl Motion { pub fn slide(by: impl Into<Vec3>) -> Motion }
 yack::input: impl Motion { pub fn then(legs: Vec<Motion>) -> Motion }
+yack::input: impl Motion { pub fn through(points: &[Point3]) -> Result<Motion> }
 yack::input: impl Motion { pub fn together(legs: Vec<Motion>) -> Motion }
 yack::input: impl Motion { pub fn turn(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle) -> Motion }
 yack::input: impl Pen { pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }

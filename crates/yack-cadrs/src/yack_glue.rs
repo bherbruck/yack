@@ -332,7 +332,12 @@ pub fn inner_faces(k: &DefaultKernel, body: BodyId) -> Result<Vec<u64>> {
         let sn = face.surf.normal(u, v);
         let n = if sn.norm() > 0.0 { sn.normalize() } else { n };
         let side = |q: Point3<f64>| matches!(k.classify(body, q, crate::native::tol::POINT), Ok(crate::PointClass::Inside));
-        if side(p + n * step) && side(p - n * step) {
+        // Inside on both sides at the step and at a tenth and a hundredth of it (not under ten
+        // times the point tolerance): a face across a gap narrower than the step from another
+        // part of the solid has the outside a smaller step off it (brep-bench
+        // swept/tumbling-torus-crossed-intersection: a gap of 1.3e-3 against a step of 3.2e-3).
+        let lo = 10.0 * crate::native::tol::POINT;
+        if [step, step * 0.1, step * 0.01].iter().map(|s| s.max(lo)).all(|s| side(p + n * s) && side(p - n * s)) {
             out.push(f);
         }
     }

@@ -17,6 +17,11 @@ pub(super) fn assemble(
     tolerated: Option<&heal::Tolerated>,
 ) -> Result<Brep> {
     let mut b = build(raw, ranges, tolerated)?;
+    // What no turn can mend is refused before the shells' facing is worked out (a volume each).
+    let far = check::check_distances(&b);
+    if !far.is_empty() {
+        return Err(Error::InvalidResult(far.into_iter().map(|i| i.to_string()).collect()));
+    }
     // Some systems write a void's faces facing into it and turn its shell as well, which reads
     // inside out: a shell is the way the volume it encloses says, outer positive, void negative.
     let turned = check::turned_shells(&b);

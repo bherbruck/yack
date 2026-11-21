@@ -26,6 +26,29 @@ pub(crate) fn p3(p: Point3) -> SrVec3 {
     SrVec3::new(p.x, p.y, p.z)
 }
 
+/// A loop's segments as springrep's (unscaled).
+pub(crate) fn loop_segments(op: &'static str, l: &crate::Loop) -> Result<Vec<sr::profile::Segment>> {
+    l.segments().iter().map(|s| segment(op, s, None)).collect()
+}
+
+/// springrep's lines, arcs and circles (a rounded or offset loop) as yack's segments.
+pub(crate) fn segments_back(op: &'static str, segs: Vec<sr::profile::Segment>) -> Result<Vec<Segment>> {
+    use sr::profile::Segment as S;
+    let pt = |v: SrVec2| Point2::new(v.x, v.y);
+    segs.into_iter()
+        .map(|s| match s {
+            S::Line { a, b } => Ok(Segment::Line { a: pt(a), b: pt(b) }),
+            S::Arc { center, radius, start, sweep } => {
+                Ok(Segment::Arc { center: pt(center), radius, start: yack_math::rad(start), sweep: yack_math::rad(sweep) })
+            }
+            S::Circle { center, radius, ccw } => {
+                Ok(Segment::Arc { center: pt(center), radius, start: yack_math::rad(0.0), sweep: yack_math::Angle::full_turn(ccw) })
+            }
+            _ => Err(unsupported(op, "a rounded or offset loop of other than lines and arcs")),
+        })
+        .collect()
+}
+
 fn p2(p: Point2) -> SrVec2 {
     SrVec2::new(p.x, p.y)
 }

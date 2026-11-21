@@ -864,6 +864,8 @@ fn a_crossed_boolean_of_swept_tori_records_its_gaps_as_tolerances() {
     let most = b.edges.iter().map(|e| e.tol).fold(0.0, f64::max);
     assert!(most > 6e-5 && most < 1e-4, "{most}");
     assert!((k.mass_properties(r).unwrap().volume - 4.616577580202968).abs() < 1e-6);
+    // Its face across a 1.3e-3 gap from another part of it isn't taken for one inside it.
+    assert!(inner_faces(&k, r).unwrap().is_empty());
     // A boolean that passes as it is keeps its tolerances.
     let at = |o: [f64; 3]| crate::facade::profile::Place { origin: o, x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
     let (x, _) = primitive(&mut k, &at([0.0; 3]), Prim::Block { size: [2.0; 3] }).unwrap();
@@ -888,3 +890,31 @@ fn a_crossed_boolean_of_swept_tori_records_its_gaps_as_tolerances() {
     assert!(why.contains("beyond the merge distance"), "{why}");
     assert_eq!(super::blocked(&v, &was, 1e-3), None);
 }
+
+#[test]
+fn a_full_tumble_is_swept_as_two_halves_united() {
+    // brep-bench swept/tumbling-torus-full-turn: swept at once, one envelope face runs back
+    // through the solid; its halves united are clean, with the same volume.
+    use crate::facade::motion::{together, Step};
+    use crate::native::topo::CheckLevel;
+    let (l, a, h) = (30f64.to_radians(), 20f64.to_radians(), 0.7071);
+    let q = [0.0, h * l.cos(), h * l.sin()];
+    let u = [a.cos(), a.sin() * l.cos(), a.sin() * l.sin()];
+    let mut k = DefaultKernel::new();
+    let (ring, _) = torus(&mut k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.16).unwrap();
+    let steps = [
+        Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -67.5f64.to_radians(), to: 67.5f64.to_radians() },
+        Step::Turn { point: q, axis: u, from: 180f64.to_radians(), to: -180f64.to_radians() },
+    ];
+    let (s, history) = together(&mut k, ring, &steps).unwrap().made;
+    assert!(inner_faces(&k, s).unwrap().is_empty());
+    // Its history as one sweep's (cadrs's sweep of a solid reports none), no released half
+    // named in it.
+    assert!(history.modified.iter().all(|(_, i)| i.body == ring), "{history:?}");
+    assert_eq!(history, crate::History::default());
+    assert!(k.get(s).unwrap().check_with(CheckLevel::Full).is_empty());
+    let v = k.mass_properties(s).unwrap().volume;
+    assert!((v - 23.6738854823).abs() < 1e-6, "{v}");
+}
+
+

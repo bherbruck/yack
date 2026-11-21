@@ -126,3 +126,16 @@ fn a_held_solid_meshes_and_displays_through_cadrs() {
     assert!(d.faces.iter().all(|f| !f.triangles.is_empty() && f.normals.len() == f.positions.len()));
     assert!(!d.edges.is_empty());
 }
+
+/// HIGH-priority API gap (lead, 2026-11-21): the same motion on the same solid value twice gives
+/// two different solids. A cadrs result depends on the session state its lineage carries, and the
+/// first sweep changes it. Same input, same output must hold; ignored until the session is fixed.
+#[test]
+#[ignore = "API gap: a cadrs sweep depends on its lineage's session state (w-m17 costing a fix)"]
+fn the_same_sweep_twice_is_the_same_solid() {
+    let ball = sphere(&Frame::WORLD, 1.0).unwrap();
+    let m = Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 1.0])]);
+    let first = ball.swept(&m).unwrap();
+    let second = ball.swept(&m).unwrap();
+    assert_eq!(first.digest(), second.digest(), "the second sweep of one solid differs from the first");
+}

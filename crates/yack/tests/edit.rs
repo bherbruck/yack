@@ -271,3 +271,52 @@ fn a_block_top_replaced_by_a_fill() {
     assert!(s.check().is_empty());
     assert!((s.volume() - 1000.0).abs() < 1e-6 * 1000.0, "{}", s.volume());
 }
+
+/// Motion::through is exactly the then of the slides between its points (same solid, bit for bit).
+#[test]
+fn a_toolpath_through_points_is_its_slides() {
+    let pts = [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [5.0, 3.0, 1.0]].map(Point3::from);
+    // each from its own ball: a cadrs sweep can depend on its lineage's session
+    let ball = || sphere(&Frame::WORLD, 1.0).unwrap();
+    let by_points = ball().swept(&Motion::through(&pts).unwrap()).unwrap();
+    let by_slides = ball().swept(&Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 1.0])])).unwrap();
+    assert_eq!(by_points.digest(), by_slides.digest());
+    assert_eq!(Motion::through(&pts[..1]).unwrap_err().kind, ErrorKind::Invalid);
+}
+
+/// Loop::tangent_chain bounds exactly the profile Profile::tangent_chain makes.
+#[test]
+fn a_tangent_chain_loop_bounds_its_profile() {
+    let c = [
+        ([30.0, 0.0].into(), 4.0),
+        ([10.0, 10.0].into(), -3.0),
+        ([0.0, 30.0].into(), 4.0),
+        ([-10.0, 10.0].into(), -3.0),
+        ([-30.0, 0.0].into(), 4.0),
+        ([-10.0, -10.0].into(), -3.0),
+        ([0.0, -30.0].into(), 4.0),
+        ([10.0, -10.0].into(), -3.0),
+    ];
+    let l = Loop::tangent_chain(&c).unwrap();
+    assert_eq!(l.segments().len(), 16);
+    let a = extrude(&Frame::WORLD, &Profile::new(l, vec![]).unwrap(), 1.0).unwrap();
+    let b = extrude(&Frame::WORLD, &Profile::tangent_chain(&c).unwrap(), 1.0).unwrap();
+    assert_eq!(a.digest(), b.digest());
+}
+
+/// Motion::along_loop is the then of a slide per line and a turn per arc, from the loop's start.
+#[test]
+fn a_tool_carried_round_a_loop_is_its_slides_and_turns() {
+    let l = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_ccw_to([10.0, 4.0], [10.0, 2.0]).line_to([0.0, 4.0]).arc_ccw_to([0.0, 0.0], [0.0, 2.0]).close().unwrap();
+    let ball = sphere(&Frame::WORLD, 0.5).unwrap();
+    let by_loop = ball.swept(&Motion::along_loop(&Frame::WORLD, &l).unwrap()).unwrap();
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let by_hand = ball.swept(&Motion::then(vec![
+        Motion::slide([10.0, 0.0, 0.0]),
+        Motion::turn([10.0, 2.0, 0.0], z, rad(0.0), deg(180.0)),
+        Motion::slide([-10.0, 0.0, 0.0]),
+        Motion::turn([0.0, 2.0, 0.0], z, rad(0.0), deg(180.0)),
+    ]))
+    .unwrap();
+    assert!((by_loop.volume() - by_hand.volume()).abs() < 1e-9 * by_hand.volume(), "{} {}", by_loop.volume(), by_hand.volume());
+}

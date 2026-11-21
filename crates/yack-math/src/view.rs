@@ -44,6 +44,14 @@ pub fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
         / 6.0
 }
 
+/// The steps between consecutive points: `points[i + 1] − points[i]`.
+pub fn steps(points: &[Point3]) -> Vec<Vec3> {
+    points.windows(2).filter_map(|w| match w {
+        [a, b] => Some(Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z)),
+        _ => None,
+    }).collect()
+}
+
 /// A rise per radian as the rise per whole turn.
 pub fn per_turn_of(per_radian: f64) -> f64 {
     per_radian * core::f64::consts::TAU

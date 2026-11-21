@@ -6,3 +6,4 @@ pub mod api;
 pub mod bridge;
 pub mod edit;
 pub mod exchange;
+pub mod loops;

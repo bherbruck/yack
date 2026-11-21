@@ -194,3 +194,46 @@ mod tests {
         assert_eq!(Frame::new(w.origin(), w.x(), w.y(), w.z()).unwrap(), w);
     }
 }
+
+/// One leg of a tool carried along a planar loop: a slide, or a turn by a positive angle about a
+/// line (the arc's clockwise sense carried by the axis's sign).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LoopLeg {
+    /// A straight run.
+    Slide(Vec3),
+    /// A turn about the line through `at` along `axis` by `by` (positive).
+    Turn {
+        /// A point of the axis (the arc's centre).
+        at: Point3,
+        /// The axis: the frame's z for a counter-clockwise arc, its −z for a clockwise one.
+        axis: Vec3,
+        /// The angle turned, positive.
+        by: crate::Angle,
+    },
+}
+
+impl Frame {
+    /// The legs that carry a tool round the loop of `pieces` drawn in this frame's xy plane: a
+    /// slide per line (the end's world point less the start's) and a turn per circular arc.
+    /// `Unsupported` for a conic or spline piece, which no slide or turn traces.
+    pub fn loop_legs(&self, pieces: &[crate::planar::Piece]) -> Result<Vec<LoopLeg>> {
+        use crate::planar::Piece;
+        let at = |p: crate::Point2| self.point([p.x, p.y, 0.0]);
+        pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Line { a, b } => Ok(LoopLeg::Slide(at(*b) - at(*a))),
+                Piece::Arc { center, sweep, .. } => {
+                    let z = self.z.vec();
+                    let (axis, by) = if sweep.radians() < 0.0 { (z * -1.0, crate::rad(-sweep.radians())) } else { (z, *sweep) };
+                    Ok(LoopLeg::Turn { at: at(*center), axis, by })
+                }
+                Piece::Conic { .. } | Piece::Hull(_) => Err(Error::new(
+                    yack_base::ErrorKind::Unsupported,
+                    "Motion::along_loop",
+                    "a conic or spline piece (a tool is carried only along lines and circular arcs)",
+                )),
+            })
+            .collect()
+    }
+}
