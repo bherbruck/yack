@@ -17,7 +17,7 @@ use yack_springrep::{
     geom::Surface,
     math::{Frame, Vec2, Vec3},
     measure,
-    pick::faces_named,
+    blend::faces_named,
     profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
     topo::{Brep, FaceId},

@@ -14,7 +14,7 @@ use yack_springrep::{
     loft::{Section, loft},
     math::{Frame, Vec2, Vec3},
     measure,
-    pick::faces_named,
+    blend::faces_named,
     profile::Profile,
     sweep::extrude,
     topo::{Brep, FaceId},

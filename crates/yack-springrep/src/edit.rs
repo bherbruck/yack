@@ -1,6 +1,6 @@
 // yack: Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 // Adapted from springrep@a03e8a1 src/edit.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: convex_edges moved in from pick.rs (M2.5, T8).
 //! Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 //! distance or stretched, and the slab a face sweeps. Each builds exact tools and combines them
 //! with the booleans, blends and face moves.
@@ -17,7 +17,6 @@ use crate::{
     geom::{Curve, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
     measure,
-    pick::convex_edges,
     profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
     tol,
@@ -47,6 +46,39 @@ fn merged(m: crate::tweak::Moved) -> Result<Brep> {
         None => Ok(m.brep),
         Some(e) => boolean::unify(&m.brep).map_err(|_| e),
     }
+}
+
+/// The edges of `b` where its faces meet convexly, the solid's inside a wedge narrower than a half
+/// turn. A face's material lies left of its coedge seen from outside, along `n × t`; the edge is
+/// convex where the other face's outward normal leans away from that side.
+pub fn convex_edges(b: &Brep) -> Result<Vec<EdgeId>> {
+    let outward = |f: FaceId, p: Point3| {
+        let s = &b.face(f).surface;
+        let uv = s.project(p);
+        let n = s.normal(uv.x, uv.y);
+        if b.face(f).reversed { -n } else { n }
+    };
+    let mut out = Vec::new();
+    for e in b.edge_ids() {
+        let edge = b.edge(e);
+        let Some(c) = &edge.curve else { continue };
+        let uses: Vec<_> = b.coedge_ids().filter(|&o| b.coedge(o).edge == e).collect();
+        let [cf, cg] = uses[..] else { continue };
+        let (f, g) = (b.coedge_face(cf), b.coedge_face(cg));
+        if f == g {
+            continue;
+        }
+        let (p, dp) = c.d1(0.5 * (edge.range.0 + edge.range.1));
+        let (n, m) = (outward(f, p), outward(g, p));
+        if n.cross(m).norm() <= 1e-7 {
+            continue;
+        }
+        let t = if b.coedge(cf).reversed { -dp } else { dp };
+        if m.dot(n.cross(t)) < 0.0 {
+            out.push(e);
+        }
+    }
+    Ok(out)
 }
 
 fn named(segment: Segment, name: &str) -> NamedSegment {

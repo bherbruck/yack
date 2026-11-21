@@ -28,7 +28,6 @@ pub mod measure;
 pub mod mesh;
 mod numeric;
 pub mod overlap;
-pub mod pick;
 pub mod primitive;
 pub mod probe;
 pub mod profile;

@@ -1,6 +1,7 @@
 // yack: Chamfers and fillets on solid edges. Each comes three ways: `fillet` and `chamfer` pick every
 // Adapted from springrep@a03e8a1 src/blend.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: faces_named and edges_named moved in from pick.rs (to blend/named.rs), EdgeName out to
+// topo::names (M2.5, T8).
 //! Chamfers and fillets on solid edges. Each comes three ways: `fillet` and `chamfer` pick every
 //! edge where the surfaces of two named faces meet; the `_named` forms take [`EdgeName`]s, which
 //! can also pick only where the faces carrying the names meet; the `_edges` forms take the edges
@@ -40,11 +41,13 @@ mod saddle_patch;
 #[cfg(test)]
 #[cfg(test)]
 pub(crate) use saddle::corner as saddle_corner;
+mod named;
 mod rolling;
 mod run;
 mod sew;
 
-use crate::pick::faces_named;
+pub use crate::topo::EdgeName;
+pub use named::{edges_named, faces_named};
 use crate::{
     Error, Result, boolean, check,
     error::invalid,
@@ -72,15 +75,6 @@ impl Kind {
     }
 }
 
-/// One edge pair of a blend: the faces named `a` and `b` (as `feature.face`). It picks every edge
-/// where a face on `a`'s surface meets one on `b`'s, or with `exact` only where the faces carrying
-/// those names meet, so a pair on two surfaces that meet more than once picks one of the edges.
-#[derive(Clone, Copy, Debug)]
-pub struct EdgeName<'a> {
-    pub a: &'a str,
-    pub b: &'a str,
-    pub exact: bool,
-}
 
 fn by_surface<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<EdgeName<'a>> {
     pairs

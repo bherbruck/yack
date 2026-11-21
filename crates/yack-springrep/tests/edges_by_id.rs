@@ -10,7 +10,7 @@ use yack_springrep::{
     edit,
     math::{Frame, Vec2},
     measure,
-    pick::edges_named,
+    blend::edges_named,
     profile::Profile,
     sweep::extrude,
     topo::{Brep, EdgeId},

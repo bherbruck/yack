@@ -1,6 +1,6 @@
 // yack: springrep module src/topo/names.rs
 // Adapted from springrep@a03e8a1 src/topo/names.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: EdgeName moved here from blend.rs (M2.5, T8), so pick's dissolving leaves no loop.
 use std::fmt;
 
 /// The name a feature gave a face: `feature.face`. A face can
@@ -42,4 +42,14 @@ impl fmt::Display for FaceName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}", self.feature, self.face)
     }
+}
+
+/// One edge pair of a blend: the faces named `a` and `b` (as `feature.face`). It picks every edge
+/// where a face on `a`'s surface meets one on `b`'s, or with `exact` only where the faces carrying
+/// those names meet, so a pair on two surfaces that meet more than once picks one of the edges.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeName<'a> {
+    pub a: &'a str,
+    pub b: &'a str,
+    pub exact: bool,
 }
