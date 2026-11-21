@@ -23,7 +23,7 @@ snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 # The apply deletes files and edits others: back up the crate's src, tests and IMPORT.md.
 BK=$(mktemp -d); cp -a $C/src $C/tests $C/IMPORT.md $BK/
 restore() {
-  rm -rf $C/src $C/tests; cp -a $BK/src $BK/tests $C/; cp -a $BK/IMPORT.md $C/IMPORT.md
+  rm -rf $C/src $C/tests; cp -a $BK/src $BK/tests $C/; cp -a $BK/IMPORT.md $C/IMPORT.md; find $C/src $C/tests -type f -exec touch {} +
   echo "$TAG restored crates/yack-cadrs (src, tests, IMPORT.md)"
 }
 M40B_ROOT=$C python3 scripts/m40b.py || { restore; exit 1; }

@@ -178,15 +178,15 @@ fn meshed(solid: &Solid, volume: f64, area: f64) -> yack::Result<Tris> {
     }
 }
 
-/// The engine that built `solid` (the bake-off's attribution); without `bakeoff`, the engine
-/// answering its queries, which is all a plain build can tell.
+/// The engine that built `solid` (the bake-off's attribution); without `bakeoff`, `unknown`, so a
+/// plain build never passes for one.
 #[cfg(feature = "bakeoff")]
-fn built_by(solid: &Solid) -> &str {
+fn built_by(solid: &Solid) -> &'static str {
     yack::bakeoff::built_by(solid)
 }
 #[cfg(not(feature = "bakeoff"))]
-fn built_by(solid: &Solid) -> &str {
-    solid.strategy()
+fn built_by(_: &Solid) -> &'static str {
+    "unknown"
 }
 
 /// The reply for a solid built. With `out_step`, the solid is written there and that is the whole

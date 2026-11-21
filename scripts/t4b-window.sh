@@ -16,7 +16,7 @@ build || { echo "T4B pre build failed"; exit 1; }
 snap t4b-pre-$PFP; echo "T4B PRE=$PFP others=$O1"
 
 BK=$(mktemp -d); cp -a $SR/src $BK/src
-restore() { rm -rf $SR/src; cp -a $BK/src $SR/src; echo "T4B restored yack-springrep"; }
+restore() { rm -rf $SR/src; cp -a $BK/src $SR/src; find $SR/src -type f -exec touch {} +; echo "T4B restored yack-springrep"; }
 python3 scripts/t4b-apply.py $SR || { restore; exit 1; }
 QFP=$(fp)
 build || { echo "T4B post build failed"; restore; exit 1; }

@@ -22,7 +22,7 @@ build || { echo "$TAG pre build failed"; exit 1; }
 snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 
 BK=$(mktemp -d); cp -a $C/src $C/import.py $BK/
-restore() { rm -rf $C/src; cp -a $BK/src $C/src; cp -a $BK/import.py $C/import.py; echo "$TAG restored crates/yack-cadrs (src, import.py)"; }
+restore() { rm -rf $C/src; cp -a $BK/src $C/src; cp -a $BK/import.py $C/import.py; find $C/src $C/import.py -type f -exec touch {} +; echo "$TAG restored crates/yack-cadrs (src, import.py)"; }
 M40A_ROOT=$C python3 scripts/m40a.py || { echo "$TAG m40a.py failed"; restore; exit 1; }
 if ! diff -r $C/src $POSTCOPY/src || ! diff $C/import.py $POSTCOPY/import.py; then echo "$TAG ABORT: the in-tree result differs from the dry-run copy"; restore; exit 1; fi
 echo "$TAG in-tree result identical to $POSTCOPY"

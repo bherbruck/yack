@@ -70,4 +70,34 @@ impl Angle {
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
+    /// The angle's sine.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert!((deg(30.0).sin() - 0.5).abs() < 1e-15);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn sin(self) -> f64 {
+        self.0.sin()
+    }
+    /// The angle's cosine.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert!((deg(60.0).cos() - 0.5).abs() < 1e-15);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn cos(self) -> f64 {
+        self.0.cos()
+    }
+    /// The angle's tangent.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert!((deg(45.0).tan() - 1.0).abs() < 1e-15);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn tan(self) -> f64 {
+        self.0.tan()
+    }
 }

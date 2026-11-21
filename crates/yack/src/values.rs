@@ -105,8 +105,13 @@ impl Ray {
     }
 }
 
-/// A feature name, attached to faces with [`Solid::named`] or to profile segments with
-/// [`Pen::label`](crate::Pen::label).
+/// A name. One type serves two purposes:
+///
+/// - a **feature name**: [`Solid::named`] gives it to the faces the operation that made the solid
+///   created; [`Solid::tag`] reads it back, [`Solid::faces_tagged`] finds those faces, and
+///   [`Solid::faces_by`] the ones playing a [`Role`] in that feature;
+/// - a **segment label**: [`Pen::label`](crate::Pen::label) gives it to a profile segment, and the
+///   side that segment sweeps plays [`Role::Side`] with that label.
 ///
 /// ```
 /// use yack::prelude::*;
@@ -715,8 +720,8 @@ pub struct Interference {
     pub gap: f64,
 }
 
-/// A view along a direction: visible and hidden edges as 2-D polylines, in the protocol's view
-/// axes (`u` across, `v` up).
+/// A view along a direction: visible and hidden edges as 2-D polylines in the view plane's
+/// `u` (across) and `v` (up) axes, as [`Solid::project`] defines them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Drawing {
     /// Polylines the viewer sees.

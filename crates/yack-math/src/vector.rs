@@ -80,6 +80,18 @@ impl Point2 {
     pub const fn new(x: f64, y: f64) -> Point2 {
         Point2 { x, y }
     }
+    /// The point `radius` from the origin at `angle` counter-clockwise from the x axis:
+    /// `(radius·cos angle, radius·sin angle)`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let p = Point2::polar(2.0, deg(90.0));
+    /// assert!(p.x.abs() < 1e-15 && (p.y - 2.0).abs() < 1e-15);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn polar(radius: f64, angle: crate::Angle) -> Point2 {
+        Point2 { x: radius * angle.cos(), y: radius * angle.sin() }
+    }
     /// Whether both coordinates are finite.
     ///
     /// (Its example is on [`Point2`].)

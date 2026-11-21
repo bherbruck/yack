@@ -20,11 +20,11 @@ yack::bakeoff: pub fn roundtrip(s: &Solid) -> Vec<String>
 yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn chamfer_angle(&self, edge: EdgeId, face: FaceId, distance: f64, angle: Angle) -> Result<Solid> }
 yack::blend: impl Solid { pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
-yack::blend: impl Solid { pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, d1: f64, d2: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, along_face: f64, along_other: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet(&self, edges: &[EdgeId], radius: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> }
-yack::blend: impl Solid { pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center: f64) -> Result<Solid> }
+yack::blend: impl Solid { pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center_radius: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_radii(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
 yack::blend: impl Solid { pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> }
@@ -126,20 +126,20 @@ yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
 yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
 yack::query: impl Solid { pub fn centroid(&self) -> Option<Point3> }
 yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
-yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> }
-yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> }
+yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Side>> }
+yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Point3>> }
 yack::query: impl Solid { pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> }
-yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<[f64; 2]>>> }
-yack::query: impl Solid { pub fn display(&self, chord: f64) -> Result<Display> }
+yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<[f64; 2]>>> }
+yack::query: impl Solid { pub fn display(&self, tolerance: f64) -> Result<Display> }
 yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
 yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
 yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
-yack::query: impl Solid { pub fn mesh(&self, chord: f64) -> Result<Mesh> }
+yack::query: impl Solid { pub fn mesh(&self, tolerance: f64) -> Result<Mesh> }
 yack::query: impl Solid { pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> }
-yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<Vec3>>> }
-yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> }
-yack::query: impl Solid { pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> }
-yack::query: impl Solid { pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> }
+yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<Vec3>>> }
+yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, tolerance: f64) -> Result<Drawing> }
+yack::query: impl Solid { pub fn raycast(&self, rays: &[Ray]) -> Result<Vec<Vec<f64>>> }
+yack::query: impl Solid { pub fn section(&self, plane: &Plane, tolerance: f64) -> Result<Vec<Vec<Point3>>> }
 yack::query: impl Solid { pub fn section_area(&self, plane: &Plane) -> Result<f64> }
 yack::query: impl Solid { pub fn volume(&self) -> f64 }
 yack::select: impl Solid { pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> }

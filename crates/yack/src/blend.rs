@@ -127,7 +127,11 @@ impl Solid {
         })
     }
 
-    /// A curvature-continuous blend `offset` from the edge, with `center` controlling its depth.
+    /// A curvature-continuous blend: it meets each face where a ball of radius `offset` (mm)
+    /// rolling along the edge would touch it, sharing the face's tangent plane and curvature there,
+    /// and bends with radius of curvature `center_radius` (mm) at its middle. At a square edge the
+    /// blend that takes off what a round of `offset` does has `center_radius` about 1.389 ×
+    /// `offset`; `center_radius` must be one the blend can take.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -138,12 +142,12 @@ impl Solid {
     /// }
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center: f64) -> Result<Solid> {
+    pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center_radius: f64) -> Result<Solid> {
         ladder::springrep_only("fillet_g2", || {
             let feature = engine::feature();
             let op = "fillet_g2";
             let ids = self.sr_edges(op, "edges", edges)?;
-            engine::made(&feature, op, sr::fillet_g2(self.need(op)?, &ids, offset, center, &feature))
+            engine::made(&feature, op, sr::fillet_g2(self.need(op)?, &ids, offset, center_radius, &feature))
         })
     }
 
@@ -255,8 +259,9 @@ impl Solid {
         })
     }
 
-    /// Bevels `edge` with setback `d1` along `face` (one of the edge's two faces) and `d2` along
-    /// the other.
+    /// Bevels `edge` unevenly: the cut meets `face` (one of the edge's two faces) `along_face` mm
+    /// back from the edge, and the edge's other face `along_other` mm back. Each setback must fit
+    /// on its face.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -266,7 +271,7 @@ impl Solid {
     /// assert!((c.volume() - 990.0).abs() < 1e-9);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, d1: f64, d2: f64) -> Result<Solid> {
+    pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, along_face: f64, along_other: f64) -> Result<Solid> {
         firewall::run("chamfer_two", || {
             let feature = engine::feature();
             let op = "chamfer_two";
@@ -275,8 +280,8 @@ impl Solid {
             let (ei, fi) = (u64::from(edge), u64::from(face));
             ladder::two(
                 op,
-                &|| engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, d1, d2, &feature)),
-                &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, d1, d2)),
+                &|| engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, along_face, along_other, &feature)),
+                &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, along_face, along_other)),
             )
         })
     }

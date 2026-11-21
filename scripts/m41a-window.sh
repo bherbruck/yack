@@ -25,7 +25,7 @@ build || { echo "$TAG pre build failed"; exit 1; }
 snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 
 BK=$(mktemp -d); for c in $TOUCHED; do mkdir -p $BK/$c; cp -a $c/. $BK/$c/; done
-restore() { for c in $TOUCHED; do rm -rf $c; mkdir -p $c; cp -a $BK/$c/. $c/; done; echo "$TAG restored $TOUCHED"; }
+restore() { for c in $TOUCHED; do rm -rf $c; mkdir -p $c; cp -a $BK/$c/. $c/; done; for c in $TOUCHED; do [ -d $c ] && find $c -type f -exec touch {} +; done; echo "$TAG restored $TOUCHED (new mtimes: cargo rebuilds)"; }
 python3 scripts/m41a.py $STAGE || { echo "$TAG m41a.py failed"; restore; exit 1; }
 for c in $TOUCHED; do
   if ! diff -r $c $DRY/$c; then echo "$TAG ABORT: the in-tree $c differs from the dry run"; restore; exit 1; fi

@@ -8,8 +8,8 @@ use crate::{
     Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
 };
 
-fn pts<P: Into<Point3> + Copy>(pts: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
-    pts.iter().map(|&p| engine::p3(p.into()))
+fn sr_points<P: Into<Point3> + Copy>(points: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
+    points.iter().map(|&p| engine::p3(p.into()))
 }
 
 impl Solid {
@@ -136,12 +136,12 @@ impl Solid {
     /// assert_eq!(b.classify(&[[5.0, 5.0, 5.0], [10.0, 5.0, 5.0], [15.0, 5.0, 5.0]])?, vec![Side::In, Side::On, Side::Out]);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> {
+    pub fn classify<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Side>> {
         let op = "classify";
-        let Some(b) = self.form(op)? else { return Ok(vec![Side::Out; pts_.len()]) };
+        let Some(b) = self.form(op)? else { return Ok(vec![Side::Out; points.len()]) };
         firewall::run(op, || {
             let caster = rays::Rays::new(b).map_err(|e| engine::error(op, e))?;
-            Ok(pts(pts_)
+            Ok(sr_points(points)
                 .map(|p| match caster.side(p) {
                     rays::Side::Inside => Side::In,
                     rays::Side::On => Side::On,
@@ -162,12 +162,12 @@ impl Solid {
     /// assert_eq!(b.closest(&[[15.0, 5.0, 5.0], [5.0, 5.0, 5.0]])?, vec![Point3::new(10.0, 5.0, 5.0), Point3::new(5.0, 5.0, 5.0)]);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> {
+    pub fn closest<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Point3>> {
         let op = "closest";
         let Some(b) = self.form(op)? else { return Ok(Vec::new()) };
         firewall::run(op, || {
             let nearest = distance::Nearest::solid(b).map_err(|e| engine::error(op, e))?;
-            pts(pts_).map(|p| nearest.to(p).map(|c| engine::point(c.on_b)).map_err(|e| engine::error(op, e))).collect()
+            sr_points(points).map(|p| nearest.to(p).map(|c| engine::point(c.on_b)).map_err(|e| engine::error(op, e))).collect()
         })
     }
 
@@ -180,10 +180,10 @@ impl Solid {
     /// assert_eq!(b.normal_at(&[[5.0, 0.0, 10.0]])?, vec![None]); // a crease
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<Vec3>>> {
-        let Some(b) = self.form("normal_at")? else { return Ok(vec![None; pts_.len()]) };
+    pub fn normal_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<Vec3>>> {
+        let Some(b) = self.form("normal_at")? else { return Ok(vec![None; points.len()]) };
         let outlines = measure::Outlines::new(b);
-        Ok(pts(pts_).map(|p| outlines.normal_at(p, yack_tol::PICK).map(engine::vec)).collect())
+        Ok(sr_points(points).map(|p| outlines.normal_at(p, yack_tol::PICK).map(engine::vec)).collect())
     }
 
     /// The principal curvatures at each boundary point; `None` at a crease or off the boundary.
@@ -195,10 +195,10 @@ impl Solid {
     /// assert!(k[0].is_some_and(|[a, b]| (a.abs() - 0.5).abs() < 1e-9 && (b.abs() - 0.5).abs() < 1e-9));
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<[f64; 2]>>> {
-        let Some(b) = self.form("curvature_at")? else { return Ok(vec![None; pts_.len()]) };
+    pub fn curvature_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<[f64; 2]>>> {
+        let Some(b) = self.form("curvature_at")? else { return Ok(vec![None; points.len()]) };
         let outlines = measure::Outlines::new(b);
-        Ok(pts(pts_).map(|p| outlines.curvature(p)).collect())
+        Ok(sr_points(points).map(|p| outlines.curvature(p)).collect())
     }
 
     /// The least distance between the two solids: zero if they touch or overlap, infinite if
@@ -301,8 +301,8 @@ impl Solid {
             .map_err(|e| engine::error("section_area", e))
     }
 
-    /// The cross-section by `plane` as closed polylines (each ends on its first point) with chord
-    /// error at most `chord`.
+    /// The cross-section by `plane` as closed polylines (each ends on its first point), no point of
+    /// a polyline farther than `tolerance` (mm) from the true section.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -312,14 +312,17 @@ impl Solid {
     /// assert_eq!(loops[0].first(), loops[0].last()); // each closed
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> {
+    pub fn section(&self, plane: &Plane, tolerance: f64) -> Result<Vec<Vec<Point3>>> {
         let Some(b) = self.form("section")? else { return Ok(Vec::new()) };
-        let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), chord)
+        let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), tolerance)
             .map_err(|e| engine::error("section", e))?;
         Ok(curves.into_iter().map(|c| c.iter().chain(c.first()).map(|&p| engine::point(p)).collect()).collect())
     }
 
-    /// The visible and hidden edges looking along `direction`, in the protocol's view axes.
+    /// The visible and hidden edges looking along `direction`, as polylines no farther than
+    /// `tolerance` (mm) from the true edges, drawn in the view plane: `u` (across) is
+    /// `direction × z` made unit (`direction × x` when `direction` runs along z) and `v` (up) is
+    /// `u × direction`.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -328,7 +331,7 @@ impl Solid {
     /// assert!(!d.visible.is_empty());
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> {
+    pub fn project(&self, direction: impl Into<Vec3>, tolerance: f64) -> Result<Drawing> {
         let op = "project";
         let d = direction.into();
         let (u, v) = yack_math::view_axes(d)?;
@@ -336,7 +339,7 @@ impl Solid {
             return Ok(Drawing::default());
         }
         let springrep = || -> Result<Drawing> {
-            let drawn = draw::hidden_lines(self.need(op)?, engine::v3(d), chord).map_err(|e| engine::error(op, e))?;
+            let drawn = draw::hidden_lines(self.need(op)?, engine::v3(d), tolerance).map_err(|e| engine::error(op, e))?;
             let flat = |lines: Vec<Vec<yack_springrep::math::Vec3>>| {
                 lines.into_iter().map(|l| l.into_iter().map(|p| yack_math::view_point(engine::point(p), u, v)).collect()).collect()
             };
@@ -356,10 +359,10 @@ impl Solid {
     /// assert!((hits[0][0] - 1.0).abs() < 1e-9 && (hits[0][1] - 11.0).abs() < 1e-9);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> {
-        let Some(b) = self.form("raycast")? else { return Ok(vec![Vec::new(); rays_.len()]) };
+    pub fn raycast(&self, rays: &[Ray]) -> Result<Vec<Vec<f64>>> {
+        let Some(b) = self.form("raycast")? else { return Ok(vec![Vec::new(); rays.len()]) };
         let caster = rays::Rays::new(b).map_err(|e| engine::error("raycast", e))?;
-        rays_
+        rays
             .iter()
             .map(|r| {
                 let hits = caster
@@ -370,7 +373,9 @@ impl Solid {
             .collect()
     }
 
-    /// A closed, outward, welded triangle mesh with chord error at most `chord`.
+    /// A closed, outward, welded triangle mesh, no triangle farther than `tolerance` (mm) from the
+    /// boundary. A fine tolerance on a large curved model can need more points than a face may
+    /// have (Unsupported).
     ///
     /// ```
     /// use yack::prelude::*;
@@ -379,17 +384,18 @@ impl Solid {
     /// assert!(m.is_watertight() && (m.volume() - 1000.0).abs() < 1e-6);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn mesh(&self, chord: f64) -> Result<Mesh> {
+    pub fn mesh(&self, tolerance: f64) -> Result<Mesh> {
         if let Some(h) = self.held() {
-            let (positions, triangles) = engine_cadrs::held_mesh("mesh", h, chord)?;
+            let (positions, triangles) = engine_cadrs::held_mesh("mesh", h, tolerance)?;
             return Ok(Mesh { positions, triangles });
         }
         let Some(b) = self.form("mesh")? else { return Ok(Mesh::default()) };
-        let m = mesh::tessellate(b, &mesh::MeshOptions::within(chord)).map_err(|e| engine::error("mesh", e))?;
+        let m = mesh::tessellate(b, &mesh::MeshOptions::within(tolerance)).map_err(|e| engine::error("mesh", e))?;
         Ok(Mesh { positions: m.positions.into_iter().map(engine::point).collect(), triangles: m.triangles })
     }
 
-    /// Per-face triangles with exact normals, and crease edges as polylines.
+    /// Per-face triangles with exact normals, and crease edges as polylines, none farther than
+    /// `tolerance` (mm) from the boundary.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -399,11 +405,11 @@ impl Solid {
     /// assert!(d.faces.iter().all(|f| f.normals.len() == f.positions.len()));
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn display(&self, chord: f64) -> Result<Display> {
+    pub fn display(&self, tolerance: f64) -> Result<Display> {
         let b = match self.body() {
             Body::Empty => return Ok(Display::default()),
             Body::Cadrs(h) => {
-                let (faces, edges) = engine_cadrs::held_display("display", h, chord)?;
+                let (faces, edges) = engine_cadrs::held_display("display", h, tolerance)?;
                 return Ok(Display {
                     faces: faces.into_iter().map(|(positions, normals, triangles)| DisplayFace { positions, normals, triangles }).collect(),
                     edges,
@@ -411,7 +417,7 @@ impl Solid {
             }
             Body::Springrep(_) => self.need("display")?,
         };
-        let d = mesh::display::display_within(b, chord, chord).map_err(|e| engine::error("display", e))?;
+        let d = mesh::display::display_within(b, tolerance, tolerance).map_err(|e| engine::error("display", e))?;
         let wide = |p: [f32; 3]| p.map(f64::from);
         Ok(Display {
             faces: d

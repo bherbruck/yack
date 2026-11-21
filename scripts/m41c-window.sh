@@ -26,7 +26,7 @@ snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 
 # (crates/yack-linalg does not exist before: restoring removes it, so no manifest-less crate dir stays)
 BK=$(mktemp -d); for c in $TOUCHED; do if [ -d $c ]; then mkdir -p $BK/$c; cp -a $c/. $BK/$c/; fi; done
-restore() { for c in $TOUCHED; do rm -rf $c; if [ -d $BK/$c ]; then mkdir -p $c; cp -a $BK/$c/. $c/; fi; done; echo "$TAG restored $TOUCHED"; }
+restore() { for c in $TOUCHED; do rm -rf $c; if [ -d $BK/$c ]; then mkdir -p $c; cp -a $BK/$c/. $c/; fi; done; for c in $TOUCHED; do [ -d $c ] && find $c -type f -exec touch {} +; done; echo "$TAG restored $TOUCHED (new mtimes: cargo rebuilds)"; }
 python3 scripts/m41c.py $STAGE || { echo "$TAG m41c.py failed"; restore; exit 1; }
 for c in $TOUCHED; do
   if ! diff -r $c $DRY/$c; then echo "$TAG ABORT: the in-tree $c differs from the dry run"; restore; exit 1; fi

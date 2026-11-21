@@ -7,7 +7,7 @@ use yack_cadrs::BoolOp;
 use crate::{Plane, Result, Solid, Split};
 
 impl Solid {
-    /// Everything in either solid.
+    /// Everything in either solid. To join many solids in one operation, [`Solid::union_all`].
     ///
     /// ```
     /// use yack::prelude::*;
@@ -59,7 +59,7 @@ impl Solid {
         })
     }
 
-    /// This solid less `tool`.
+    /// This solid less `tool`. To cut many tools in one operation, [`Solid::difference_all`].
     ///
     /// ```
     /// use yack::prelude::*;

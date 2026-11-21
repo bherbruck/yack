@@ -20,7 +20,7 @@ snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
 BK=$(mktemp -d); cp -a $SR/src $BK/src
 # Restore only the files this window's apply touched (never the whole crate: others edit it too).
 touched() { ( cd $SR/src && find . -type f; cd $BK/src && find . -type f ) | sort -u | while read -r f; do cmp -s "$SR/src/$f" "$BK/src/$f" || echo "$f"; done; }
-restore() { for f in $TOUCHED; do if [ -f "$BK/src/$f" ]; then cp -a "$BK/src/$f" "$SR/src/$f"; else rm -f "$SR/src/$f"; fi; done; echo "$TAG restored its own files:" $TOUCHED; }
+restore() { for f in $TOUCHED; do if [ -f "$BK/src/$f" ]; then cp "$BK/src/$f" "$SR/src/$f" && touch "$SR/src/$f"; else rm -f "$SR/src/$f"; fi; done; touch "$SR/src/lib.rs"; echo "$TAG restored its own files:" $TOUCHED; }
 python3 $APPLY $SR; ARC=$?; TOUCHED=$(touched); echo "$TAG touched:" $TOUCHED
 [ $ARC -eq 0 ] || { restore; exit 1; }
 QFP=$(fp)
