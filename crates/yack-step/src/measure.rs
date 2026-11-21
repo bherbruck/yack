@@ -335,7 +335,17 @@ impl Measurer {
             Some(p) if p > 0.0 => (d / p).round() as i64,
             _ => 0,
         };
-        let wind = [turns(z.0 - a.0, periods[0]), turns(z.1 - a.1, periods[1])];
+        let mut wind = [turns(z.0 - a.0, periods[0]), turns(z.1 - a.1, periods[1])];
+        // Closing on a pole line (a spindle torus's apex, a seam's two sides met at a sphere's
+        // pole), a whole period between the ends is a run along the line, not a winding.
+        let (_, su, sv) = s.d1(z.0, z.1);
+        let (lu, lv) = (su.length(), sv.length());
+        if lu <= SINGULAR * lv.max(self.size) {
+            wind[0] = 0;
+        }
+        if lv <= SINGULAR * lu.max(self.size) {
+            wind[1] = 0;
+        }
         let target = (a.0 + wind[0] as f64 * periods[0].unwrap_or(0.0), a.1 + wind[1] as f64 * periods[1].unwrap_or(0.0));
         self.join(s, z, target, &mut nodes)?;
         Ok(Walk { nodes, wind, placed })

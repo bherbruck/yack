@@ -220,6 +220,10 @@ impl Solid {
 
     /// A closed, outward, welded triangle mesh with chord error at most `chord`.
     pub fn mesh(&self, chord: f64) -> Result<Mesh> {
+        if let Some(h) = self.held() {
+            let (positions, triangles) = engine_cadrs::held_mesh("mesh", h, chord)?;
+            return Ok(Mesh { positions, triangles });
+        }
         let Some(b) = self.form("mesh")? else { return Ok(Mesh::default()) };
         let m = mesh::tessellate(b, &mesh::MeshOptions::within(chord)).map_err(|e| engine::error("mesh", e))?;
         Ok(Mesh { positions: m.positions.into_iter().map(engine::point).collect(), triangles: m.triangles })
@@ -229,7 +233,14 @@ impl Solid {
     pub fn display(&self, chord: f64) -> Result<Display> {
         let b = match self.body() {
             Body::Empty => return Ok(Display::default()),
-            _ => self.need("display")?,
+            Body::Cadrs(h) => {
+                let (faces, edges) = engine_cadrs::held_display("display", h, chord)?;
+                return Ok(Display {
+                    faces: faces.into_iter().map(|(positions, normals, triangles)| DisplayFace { positions, normals, triangles }).collect(),
+                    edges,
+                });
+            }
+            Body::Springrep(_) => self.need("display")?,
         };
         let d = mesh::display::display_within(b, chord, chord).map_err(|e| engine::error("display", e))?;
         let wide = |p: [f32; 3]| p.map(f64::from);

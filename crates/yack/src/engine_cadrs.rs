@@ -994,6 +994,25 @@ pub(crate) fn held_edge_points(h: &Held, edge: u64, n: usize) -> Vec<crate::Poin
         .unwrap_or_default()
 }
 
+/// A held solid's closed, outward, welded mesh within `chord` mm of it (as springrep's).
+pub(crate) fn held_mesh(op: &'static str, h: &Held, chord: f64) -> Result<(Vec<crate::Point3>, Vec<[u32; 3]>)> {
+    let (positions, triangles) = yack_glue::mesh(&lock(&h.cadrs.session), h.cadrs.id, chord).map_err(|e| error(op, e))?;
+    Ok((positions.into_iter().map(crate::Point3::from).collect(), triangles))
+}
+
+/// One face of a held solid's display mesh: positions, outward normals, triangles.
+pub(crate) type HeldDisplayFace = (Vec<crate::Point3>, Vec<crate::Vec3>, Vec<[u32; 3]>);
+
+/// A held solid as a viewer draws it, faces and edges within `chord` mm (as springrep's).
+pub(crate) fn held_display(op: &'static str, h: &Held, chord: f64) -> Result<(Vec<HeldDisplayFace>, Vec<Vec<crate::Point3>>)> {
+    let (faces, edges) = yack_glue::display(&lock(&h.cadrs.session), h.cadrs.id, chord, chord).map_err(|e| error(op, e))?;
+    let p = |ps: Vec<[f64; 3]>| ps.into_iter().map(crate::Point3::from).collect::<Vec<_>>();
+    Ok((
+        faces.into_iter().map(|(ps, ns, ts)| (p(ps), ns.into_iter().map(crate::Vec3::from).collect(), ts)).collect(),
+        edges.into_iter().map(p).collect(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

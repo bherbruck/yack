@@ -111,3 +111,18 @@ fn a_held_solid_selects_faces_and_edges_through_cadrs() {
         assert!(e.length() > 0.0 && e.points(3).len() == 3, "{e:?}");
     }
 }
+
+/// Solid::mesh and Solid::display on a held solid come from cadrs, with springrep's chord
+/// meaning: closed and welded, and the mesh's volume close to the solid's.
+#[test]
+fn a_held_solid_meshes_and_displays_through_cadrs() {
+    let s = tumbling_torus();
+    let m = s.mesh(0.01).unwrap();
+    assert!(!m.triangles.is_empty());
+    assert!(m.is_watertight(), "the held mesh has cracks");
+    assert!((m.volume() - s.volume()).abs() < 1e-2 * s.volume(), "{} vs {}", m.volume(), s.volume());
+    let d = s.display(0.01).unwrap();
+    assert_eq!(d.faces.len(), s.faces().len());
+    assert!(d.faces.iter().all(|f| !f.triangles.is_empty() && f.normals.len() == f.positions.len()));
+    assert!(!d.edges.is_empty());
+}

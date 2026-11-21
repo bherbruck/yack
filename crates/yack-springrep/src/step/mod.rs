@@ -7,6 +7,7 @@
 //! solids, each with its product's name and its colour.
 
 mod adjust;
+mod assemble;
 mod geometry;
 mod heal;
 mod part21;

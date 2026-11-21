@@ -799,3 +799,42 @@ fn a_conic_of_shoulder_root_two_less_one_is_a_quarter_circle() {
     let want = 9.0 * (1.0 - std::f64::consts::FRAC_PI_4) * 10.0;
     assert!((removed - want).abs() < 1e-6, "{removed} {want}");
 }
+
+#[test]
+fn held_meshes_close_and_lie_within_their_chord() {
+    let mut k = DefaultKernel::new();
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (s, _) = primitive(&mut k, &world, Prim::Sphere { radius: 2.0 }).unwrap();
+    let (cy, _) = primitive(&mut k, &world, Prim::Cylinder { radius: 1.0, height: 3.0 }).unwrap();
+    for (b, chord) in [(s, 1e-3), (cy, 1e-2)] {
+        let (p, t) = mesh(&k, b, chord).unwrap();
+        // Closed and welded: every side twice, once each way; Euler characteristic 2.
+        let mut sides = std::collections::BTreeMap::new();
+        for tri in &t {
+            for i in 0..3 {
+                *sides.entry((tri[i], tri[(i + 1) % 3])).or_insert(0) += 1;
+            }
+        }
+        assert!(sides.iter().all(|(&(a, b), &n)| n == 1 && sides.get(&(b, a)) == Some(&1)));
+        assert_eq!(p.len() as i64 - sides.len() as i64 / 2 + t.len() as i64, 2);
+        // Outward: the signed volume is the solid's, near enough.
+        let v: f64 = t.iter().map(|&[a, b, c]| {
+            let (a, b, c) = (p[a as usize], p[b as usize], p[c as usize]);
+            (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
+        }).sum();
+        let exact = k.mass_properties(b).unwrap().volume;
+        assert!((v - exact).abs() < 0.01 * exact, "{v} {exact}");
+    }
+    // The sphere's points on it, its triangles' middles within the chord.
+    let (p, t) = mesh(&k, s, 1e-3).unwrap();
+    assert!(p.iter().all(|q| ((q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt() - 2.0).abs() < 1e-9));
+    assert!(t.iter().all(|&[a, b, c]| {
+        let m: Vec<f64> = (0..3).map(|i| (p[a as usize][i] + p[b as usize][i] + p[c as usize][i]) / 3.0).collect();
+        2.0 - (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt() <= 1e-3
+    }));
+    assert!(mesh(&k, s, 0.0).is_err() && mesh(&k, s, f64::NAN).is_err());
+    let (faces, edges) = display(&k, cy, 1e-2, 1e-3).unwrap();
+    assert_eq!(faces.len(), k.get(cy).unwrap().faces.len());
+    assert!(faces.iter().all(|(p, n, t)| p.len() == n.len() && !t.is_empty() && n.iter().all(|v| ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-9)));
+    assert!(edges.len() >= 2 && edges.iter().all(|e| e.len() >= 2));
+}

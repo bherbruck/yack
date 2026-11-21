@@ -10,15 +10,16 @@
 
 use std::collections::HashMap;
 
+use super::assemble::assemble;
 use super::geometry::Geometry;
 use super::heal;
 use super::part21::Param;
 use crate::{
-    Error, Result, check,
+    Error, Result,
     geom::{Circle, Curve, Line, Surface},
     math::{Frame, Point3, Vec2},
     tol,
-    topo::{Brep, CoedgeSpec, EdgeId, FaceId, PCurve, ShellId, SolidId, VertexId, project_on},
+    topo::{Brep, CoedgeSpec, EdgeId, FaceId, PCurve, VertexId, project_on},
 };
 
 fn bad<T>(id: u64, what: &str) -> Result<T> {
@@ -1504,45 +1505,8 @@ pub(super) fn solid(geo: &mut Geometry, id: u64) -> Result<ReadSolid> {
     }
 }
 
-/// The checked arena of a solid read as `raw`, its edges over `ranges`, and its vertices and edges
-/// given the local tolerances of `tolerated` where it is given.
-fn assemble(raw: &Raw, ranges: &[(f64, f64)], tolerated: Option<&heal::Tolerated>) -> Result<Brep> {
-    let mut b = build(raw, ranges, tolerated)?;
-    // Some systems write a void's faces facing into it and turn its shell as well, which reads
-    // inside out: a shell is the way the volume it encloses says, outer positive, void negative.
-    let turned = check::turned_shells(&b);
-    if !turned.is_empty() {
-        b = build(&turned_round(raw, &turned), ranges, tolerated)?;
-    }
-    let issues = check::check_structure(&b);
-    if !issues.is_empty() {
-        return Err(Error::InvalidResult(
-            issues.into_iter().map(|i| i.to_string()).collect(),
-        ));
-    }
-    Ok(b)
-}
-
-/// `raw` with the faces of each of `turned`'s shells facing the other way.
-fn turned_round(raw: &Raw, turned: &[(SolidId, ShellId, bool)]) -> Raw {
-    let mut raw = raw.clone();
-    for &(_, sh, _) in turned {
-        for &f in &raw.shells[sh.index()].clone() {
-            let face = &mut raw.faces[f];
-            face.reversed = !face.reversed;
-            for (_, uses) in &mut face.bounds {
-                uses.reverse();
-                for u in uses.iter_mut() {
-                    u.reversed = !u.reversed;
-                }
-            }
-        }
-    }
-    raw
-}
-
 /// The arena of a solid read as `raw`, as the file orients it, unchecked.
-fn build(raw: &Raw, ranges: &[(f64, f64)], tolerated: Option<&heal::Tolerated>) -> Result<Brep> {
+pub(super) fn build(raw: &Raw, ranges: &[(f64, f64)], tolerated: Option<&heal::Tolerated>) -> Result<Brep> {
     let mut bld = Builder::new(raw, ranges);
     if let Some(t) = tolerated {
         for (v, &x) in t.vertices.iter().enumerate() {
