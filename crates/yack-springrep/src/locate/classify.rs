@@ -6,7 +6,7 @@
 //! direction is tried. A piece of face whose point lies on the solid's boundary, touching it, is
 //! decided by the contact instead, since no ray from there has a parity.
 
-use super::domain::{Domain, OnBoundary, Where};
+use crate::topo::domain::{Domain, OnBoundary, Where};
 use crate::intersect::{
     contact,
     csi::{ray_surface, signed_distance},

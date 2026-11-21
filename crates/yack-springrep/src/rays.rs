@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 
 use crate::{
     intersect::csi::curve_surface,
-    locate::{
-        classify::DIRECTIONS,
+    locate::classify::DIRECTIONS,
+    topo::{
         domain::{Domain, Where},
         face_domain,
     },

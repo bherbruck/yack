@@ -5,12 +5,14 @@
 //! edge by one face. Every entity lives in one [`Brep`] and is referred to by a typed id.
 
 mod facts;
+pub(crate) mod domain;
 mod memo;
 mod names;
 mod parts;
 pub(crate) mod pcurve;
 pub(crate) mod radial;
 mod similar;
+mod trims;
 mod walks;
 
 use std::collections::BTreeMap;
@@ -22,6 +24,7 @@ pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey, MemoSlot};
 pub use names::FaceName;
 pub(crate) use parts::{Entities, Parts};
 pub use pcurve::PCurve;
+pub(crate) use trims::{coedge_trim_with, coedge_uv_at, face_domain};
 pub(crate) use walks::{coedge_params, fans_at_vertices};
 pub(crate) use pcurve::project_on;
 

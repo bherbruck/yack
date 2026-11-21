@@ -16,8 +16,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    locate::{
-        classify,
+    locate::classify,
+    topo::{
         domain::{Domain, Where},
         face_domain,
     },

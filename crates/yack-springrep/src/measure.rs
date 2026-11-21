@@ -896,7 +896,7 @@ fn material_regions(b: &Brep, v: VertexId, fans: &[Vec<FaceId>], scale: f64) -> 
 /// A point inside one of the faces `faces`, about `step` from their vertex at `p`.
 fn point_near(b: &Brep, faces: &[FaceId], p: Point3, step: f64) -> Option<Point3> {
     for &f in faces {
-        let dom = crate::locate::face_domain(b, f);
+        let dom = crate::topo::face_domain(b, f);
         let uv0 = dom.surface.project(p);
         let (_, su, sv) = dom.surface.d1(uv0.x, uv0.y);
         let speed = su.norm().max(sv.norm());
@@ -907,7 +907,7 @@ fn point_near(b: &Brep, faces: &[FaceId], p: Point3, step: f64) -> Option<Point3
             let a = TAU * (k as f64 + 0.5) / 16.0;
             let uv = uv0 + Vec2::new(a.cos(), a.sin()) * (step / speed);
             let q = dom.surface.eval(uv.x, uv.y);
-            if let crate::locate::domain::Where::Inside(_) = dom.locate(q) {
+            if let crate::topo::domain::Where::Inside(_) = dom.locate(q) {
                 return Some(q);
             }
         }
@@ -918,7 +918,7 @@ fn point_near(b: &Brep, faces: &[FaceId], p: Point3, step: f64) -> Option<Point3
 /// Whether `q`, near vertex `v`, lies on the material side of the fan of `faces` there: behind
 /// the nearest of the faces, or, nearest an edge of theirs at `v`, behind the faces either side.
 fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<bool> {
-    use crate::locate::domain::Where;
+    use crate::topo::domain::Where;
     let mut best: Option<(f64, Point3, Vec3)> = None;
     fn keep(best: &mut Option<(f64, Point3, Vec3)>, d: f64, r: Point3, n: Vec3) {
         if best.is_none_or(|x| d < x.0) {
@@ -926,7 +926,7 @@ fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<b
         }
     }
     for &f in faces {
-        let dom = crate::locate::face_domain(b, f);
+        let dom = crate::topo::face_domain(b, f);
         let uv = dom.surface.project(q);
         let r = dom.surface.eval(uv.x, uv.y);
         if dom.locate(r) != Where::Outside {
@@ -1379,7 +1379,7 @@ impl<'a> Outlines<'a> {
 /// The face nearest `p` among those whose own region, not just their surface, holds the point of
 /// their surface nearest `p`; with that distance.
 pub fn face_at(b: &Brep, p: Point3) -> Option<(FaceId, f64)> {
-    use crate::locate::{domain::Where, face_domain};
+    use crate::topo::{domain::Where, face_domain};
     b.face_ids()
         .filter_map(|f| {
             let s = &b.face(f).surface;

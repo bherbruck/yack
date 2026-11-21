@@ -6,7 +6,7 @@
 
 use super::{face_area, face_box, reached_patches, stationary, uv_polygons};
 use crate::{
-    locate::face_domain,
+    topo::face_domain,
     geom::Surface,
     math::{Aabb, Point3, Vec2, Vec3},
     numeric::integrate,

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::{
     intersect::{csi, ssi::same_domain},
-    locate::{domain::Domain, face_domain},
+    topo::{domain::Domain, face_domain},
 };
 use crate::{
     tol,

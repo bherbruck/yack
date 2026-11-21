@@ -9,7 +9,8 @@ use std::fmt;
 
 use crate::{
     intersect::csi::{curve_surface, signed_distance},
-    locate::{classify, domain::Domain, face_domain},
+    locate::classify,
+    topo::{domain::Domain, face_domain},
     geom::{Curve, Surface, distance_to},
     math::{Aabb, Point3, Vec2, Vec3},
     measure, tol,
@@ -532,7 +533,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         let inside = |f: FaceId, p: Point3| {
             matches!(
                 face_domain(b, f).locate(p),
-                crate::locate::domain::Where::Inside(_)
+                crate::topo::domain::Where::Inside(_)
             )
         };
         // Whether some point inside face `f` lies inside face `g` too.

@@ -12,11 +12,8 @@ use std::sync::Arc;
 
 use crate::{
     intersect::ssi::same_domain,
-    locate::{
-        classify,
-        domain::{Domain, Trim, UvMap, polygon_area},
-        same_domain_faces,
-    },
+    locate::{classify, same_domain_faces},
+    topo::domain::{Domain, Trim, UvMap, polygon_area},
 };
 use crate::{
     Error, Result, check,

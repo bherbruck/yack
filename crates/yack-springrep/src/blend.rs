@@ -1001,14 +1001,14 @@ fn shared_edges(a: &Brep, b: &Brep) -> Facts {
     for (side, own, other) in [(0, a, b), (1, b, a)] {
         for f in other.face_ids() {
             let s = &other.face(f).surface;
-            let dom = crate::locate::face_domain(other, f);
+            let dom = crate::topo::face_domain(other, f);
             for e in own.edge_ids() {
                 let x = own.edge(e);
                 let Some(c) = &x.curve else { continue };
                 let at = |k: usize| c.eval(x.range.0 + (x.range.1 - x.range.0) * k as f64 / 16.0);
                 let on = (0..=16)
                     .all(|k| crate::intersect::csi::signed_distance(s, at(k)).abs() <= 0.1 * tol::LINEAR);
-                if on && dom.locate(at(8)) != crate::locate::domain::Where::Outside {
+                if on && dom.locate(at(8)) != crate::topo::domain::Where::Outside {
                     facts.on_face.push(OnFace {
                         side,
                         edge: e,
@@ -1077,12 +1077,12 @@ fn sides_on_body(mut tool: Brep, body: &Brep, picked: &[Picked], out: &Brep) -> 
         // Faces apart on one surface (two plates' rounds on one cylinder) each hold only their
         // own stretch of it: an edge lies on a face only where its middle lies inside it.
         for &face in &on {
-            let dom = crate::locate::face_domain(out, face);
+            let dom = crate::topo::face_domain(out, face);
             for &edge in &edges {
                 let x = tool.edge(edge);
                 let Some(c) = &x.curve else { continue };
                 if dom.locate(c.eval(0.5 * (x.range.0 + x.range.1)))
-                    == crate::locate::domain::Where::Outside
+                    == crate::topo::domain::Where::Outside
                 {
                     continue;
                 }

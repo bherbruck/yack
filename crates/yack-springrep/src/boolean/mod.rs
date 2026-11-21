@@ -41,10 +41,10 @@ use crate::{
         contact, csi,
         ssi::{self, Ssi},
     },
-    locate::{
-        classify, coedge_trim_with, coedge_uv_at,
+    locate::{classify, same_domain_faces},
+    topo::{
+        coedge_trim_with, coedge_uv_at,
         domain::{Domain, Trim, UvMap, Where},
-        same_domain_faces,
     },
 };
 use crate::{

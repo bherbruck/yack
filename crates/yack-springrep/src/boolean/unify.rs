@@ -12,7 +12,7 @@ use super::{
     sew::{self, OutFace, PieceGeom},
     solids_of,
 };
-use crate::locate::{
+use crate::topo::{
     coedge_uv_at,
     domain::{Trim, UvMap},
 };

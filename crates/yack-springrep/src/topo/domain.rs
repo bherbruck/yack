@@ -1,6 +1,7 @@
 // yack: A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 // Adapted from springrep@a03e8a1 src/boolean/domain.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/domain.rs to locate/domain.rs (M2.1, T1); paths only.
+// Changes: moved from boolean/domain.rs to locate/domain.rs (M2.1, T1), then to topo/domain.rs
+// (M2, measure and locate both use it); paths only.
 //! A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 //! images), point-in-face classification by an exact winding number, and interior points.
 

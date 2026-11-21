@@ -6,7 +6,7 @@ use std::f64::consts::{PI, TAU};
 use super::*;
 use crate::{
     intersect::march,
-    locate::{classify, face_domain},
+    locate::classify, topo::face_domain,
 };
 use crate::{
     geom::Cylinder,
