@@ -87,6 +87,15 @@ pub enum Segment {
 /// assert!(bitten.is_ccw());
 /// assert_eq!(slot.segments().len(), 4);
 /// ```
+///
+/// ```
+/// use yack::prelude::*;
+/// let l = Loop::starting_at([0.0, 0.0]).line_to([4.0, 0.0]).label("floor").line_to([0.0, 3.0]).close()?;
+/// assert_eq!(l.segments().len(), 3);
+/// assert_eq!(l.labels(), &[Some(Tag::from("floor")), None, None]);
+/// assert!(l.is_ccw());
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Loop {
     segments: Vec<Segment>,
@@ -117,6 +126,15 @@ pub struct Pen {
 /// )?;
 /// assert_eq!(washer.holes().len(), 1);
 /// assert!(Profile::rectangle([0.0, 0.0], [0.0, 1.0]).is_err());
+/// # Ok::<(), yack::Error>(())
+/// ```
+///
+/// ```
+/// use yack::prelude::*;
+/// let outer = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])?;
+/// let hole = Loop::polygon(&[[4.0, 4.0], [4.0, 6.0], [6.0, 6.0], [6.0, 4.0]])?;
+/// let p = Profile::new(outer, vec![hole])?;
+/// assert_eq!((p.outer().segments().len(), p.holes().len()), (4, 1));
 /// # Ok::<(), yack::Error>(())
 /// ```
 #[derive(Clone, Debug, PartialEq)]
@@ -186,6 +204,14 @@ impl Loop {
     /// This loop with every corner between two segments filleted at `radius`, convex and concave
     /// alike (corners already tangent kept). Refused where a round does not fit between its
     /// neighbours; a neighbour is never trimmed past its end.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let sq = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])?;
+    /// assert_eq!(sq.rounded(2.0)?.segments().len(), 8); // four sides, four corner arcs
+    /// assert!(sq.rounded(6.0).is_err()); // a round that does not fit is refused
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn rounded(&self, radius: f64) -> Result<Loop> {
         let op = "Loop::rounded";
         let segs = crate::engine::loop_segments(op, self)?;
@@ -197,6 +223,15 @@ impl Loop {
     /// counter-clockwise) for a positive distance, inward for a negative one; corners it grows
     /// round become arcs about them (a tool's path round a part). An offset that would cross
     /// itself is refused, never trimmed.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let sq = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])?;
+    /// let out = Profile::new(sq.offset(1.0)?, vec![])?; // its corners grown round: 140 + π
+    /// let plate = extrude(&Frame::WORLD, &out, 1.0)?;
+    /// assert!((plate.volume() - (140.0 + std::f64::consts::PI)).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn offset(&self, distance: f64) -> Result<Loop> {
         let op = "Loop::offset";
         let segs = crate::engine::loop_segments(op, self)?;
@@ -208,6 +243,14 @@ impl Loop {
     /// the next by their common tangent: a positive radius is a tip (the loop wraps round the
     /// circle's outside), a negative one a fillet (it curves in round the circle's inside). See
     /// [`Profile::tangent_chain`] for the profile it bounds.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // two tips joined by their outer tangents: a stadium
+    /// let slot = Loop::tangent_chain(&[([0.0, 0.0].into(), 1.0), ([5.0, 0.0].into(), 1.0)])?;
+    /// assert_eq!(slot.segments().len(), 4);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn tangent_chain(circles: &[(Point2, f64)]) -> Result<Loop> {
         let op = "Loop::tangent_chain";
         let ends = yack_math::planar::tangent_chain(op, circles)?;
@@ -222,6 +265,17 @@ impl Loop {
 
     /// A loop from segments. Refuses gaps between consecutive segments, zero-length pieces, zero
     /// area, and pieces that cross or touch, naming the segments.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let tri = Loop::new(vec![
+    ///     Segment::Line { a: [0.0, 0.0].into(), b: [1.0, 0.0].into() },
+    ///     Segment::Line { a: [1.0, 0.0].into(), b: [0.0, 1.0].into() },
+    ///     Segment::Line { a: [0.0, 1.0].into(), b: [0.0, 0.0].into() },
+    /// ])?;
+    /// assert!(tri.is_ccw());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn new(segments: Vec<Segment>) -> Result<Loop> {
         let labels = vec![None; segments.len()];
         Loop::labelled("Loop::new", segments, labels)
@@ -235,6 +289,13 @@ impl Loop {
     }
 
     /// A polygon through `corners`, in the order given (closed back to the first).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let l = Loop::polygon(&[[0.0, 0.0], [4.0, 0.0], [4.0, 1.0], [1.0, 1.0], [1.0, 3.0], [0.0, 3.0]])?;
+    /// assert_eq!(l.segments().len(), 6);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn polygon(corners: &[[f64; 2]]) -> Result<Loop> {
         if corners.len() < 3 {
             return Err(Error::invalid("Loop::polygon", "corners", format!("{} corners given, 3 needed", corners.len())));
@@ -263,20 +324,34 @@ impl Loop {
     }
 
     /// Start drawing a loop at `p`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let slot = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_ccw_to([10.0, 4.0], [10.0, 2.0])
+    ///     .line_to([0.0, 4.0]).arc_ccw_to([0.0, 0.0], [0.0, 2.0]).close()?;
+    /// assert_eq!(slot.segments().len(), 4);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn starting_at(p: impl Into<Point2>) -> Pen {
         let p = p.into();
         Pen { start: p, at: p, segments: Vec::new(), labels: Vec::new(), error: None }
     }
 
     /// The segments.
+    ///
+    /// (Its example is on [`Loop`].)
     pub fn segments(&self) -> &[Segment] {
         &self.segments
     }
     /// Each segment's label, if one was given with [`Pen::label`].
+    ///
+    /// (Its example is on [`Loop`].)
     pub fn labels(&self) -> &[Option<Tag>] {
         &self.labels
     }
     /// Whether the loop runs counter-clockwise.
+    ///
+    /// (Its example is on [`Loop`].)
     pub fn is_ccw(&self) -> bool {
         self.shape.area > 0.0
     }
@@ -291,6 +366,13 @@ impl Pen {
     }
 
     /// A line from the current point to `p`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let tri = Loop::starting_at([0.0, 0.0]).line_to([1.0, 0.0]).line_to([0.0, 1.0]).close()?;
+    /// assert_eq!(tri.segments().len(), 3); // close adds the last side
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn line_to(self, p: impl Into<Point2>) -> Pen {
         let b = p.into();
         let a = self.at;
@@ -310,18 +392,42 @@ impl Pen {
     /// A counter-clockwise arc from the current point to `end` about `center`. Both ends must lie
     /// at the same distance from `center` (within `tol::LINEAR`); `end` equal to the current point
     /// draws a full circle.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let half = Loop::starting_at([1.0, 0.0]).arc_ccw_to([-1.0, 0.0], [0.0, 0.0]).close()?;
+    /// assert!(half.is_ccw());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen {
         self.arc("Pen::arc_ccw_to", end.into(), center.into(), true)
     }
 
     /// A clockwise arc from the current point to `end` about `center`, as
     /// [`arc_ccw_to`](Pen::arc_ccw_to) otherwise.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a notch curving into a square's top side
+    /// let l = Loop::starting_at([0.0, 0.0]).line_to([4.0, 0.0]).line_to([4.0, 4.0]).line_to([3.0, 4.0])
+    ///     .arc_cw_to([1.0, 4.0], [2.0, 4.0]).line_to([0.0, 4.0]).close()?;
+    /// assert_eq!(l.segments().len(), 6);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen {
         self.arc("Pen::arc_cw_to", end.into(), center.into(), false)
     }
 
     /// A conic from the current point to `end`, tangent to the lines through `apex`, with apex
     /// weight `weight`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a parabola (weight 1) from its vertex to (8, 8), its end tangents meeting at (4, 0)
+    /// let side = Loop::starting_at([0.0, 0.0]).conic_to([8.0, 8.0], [4.0, 0.0], 1.0).line_to([0.0, 8.0]).close()?;
+    /// assert_eq!(side.segments().len(), 3);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn conic_to(self, end: impl Into<Point2>, apex: impl Into<Point2>, weight: f64) -> Pen {
         let (b, apex) = (end.into(), apex.into());
         let a = self.at;
@@ -329,6 +435,13 @@ impl Pen {
     }
 
     /// Labels the last segment drawn; the faces it sweeps carry the label in history.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let l = Loop::starting_at([0.0, 0.0]).line_to([4.0, 0.0]).label("floor").line_to([0.0, 3.0]).close()?;
+    /// assert_eq!(l.labels()[0], Some(Tag::from("floor")));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn label(mut self, l: impl Into<Tag>) -> Pen {
         match self.labels.last_mut() {
             Some(slot) => *slot = Some(l.into()),
@@ -340,6 +453,14 @@ impl Pen {
     }
 
     /// Closes the loop with a line back to the start (unless already there) and validates it.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // an open pen closes with a line back to its start; a gapless one needs none
+    /// let l = Loop::starting_at([0.0, 0.0]).line_to([2.0, 0.0]).line_to([2.0, 2.0]).close()?;
+    /// assert_eq!(l.segments().len(), 3);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn close(self) -> Result<Loop> {
         if let Some(e) = self.error {
             return Err(e);
@@ -376,6 +497,15 @@ impl Profile {
     /// A profile from an outer loop and holes. The outer loop must run counter-clockwise and the
     /// holes clockwise, strictly inside it and apart from each other; anything else is refused,
     /// never repaired.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let outer = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])?;
+    /// let hole = Loop::polygon(&[[4.0, 4.0], [4.0, 6.0], [6.0, 6.0], [6.0, 4.0]])?; // clockwise
+    /// let washer = Profile::new(outer, vec![hole])?;
+    /// assert!((extrude(&Frame::WORLD, &washer, 1.0)?.volume() - 96.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn new(outer: Loop, holes: Vec<Loop>) -> Result<Profile> {
         let shapes: Vec<LoopShape> = holes.iter().map(|h| h.shape.clone()).collect();
         planar::check_profile("Profile::new", &outer.shape, &shapes)?;
@@ -383,6 +513,13 @@ impl Profile {
     }
 
     /// The rectangle with corners `min` and `max` (`min < max` on both axes).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let r = Profile::rectangle([0.0, 0.0], [3.0, 2.0])?;
+    /// assert!((extrude(&Frame::WORLD, &r, 1.0)?.volume() - 6.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn rectangle(min: impl Into<Point2>, max: impl Into<Point2>) -> Result<Profile> {
         let (lo, hi) = (min.into(), max.into());
         if !(lo.x < hi.x && lo.y < hi.y) {
@@ -396,6 +533,13 @@ impl Profile {
     }
 
     /// The disc of `radius` about `center`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let c = Profile::circle([0.0, 0.0], 2.0)?;
+    /// assert!((extrude(&Frame::WORLD, &c, 1.0)?.volume() - 4.0 * std::f64::consts::PI).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn circle(center: impl Into<Point2>, radius: f64) -> Result<Profile> {
         let arc = Segment::Arc {
             center: center.into(),
@@ -433,6 +577,13 @@ impl Profile {
     }
 
     /// The polygon through `corners`, in either order (it is made counter-clockwise).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let tri = Profile::polygon(&[[0.0, 0.0], [4.0, 0.0], [0.0, 3.0]])?;
+    /// assert!((extrude(&Frame::WORLD, &tri, 1.0)?.volume() - 6.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn polygon(corners: &[[f64; 2]]) -> Result<Profile> {
         let mut l = Loop::polygon(corners)?;
         if !l.is_ccw() {
@@ -443,10 +594,14 @@ impl Profile {
     }
 
     /// The outer loop.
+    ///
+    /// (Its example is on [`Profile`].)
     pub fn outer(&self) -> &Loop {
         &self.outer
     }
     /// The holes.
+    ///
+    /// (Its example is on [`Profile`].)
     pub fn holes(&self) -> &[Loop] {
         &self.holes
     }
@@ -476,6 +631,15 @@ pub enum PathPiece {
 /// let s = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 20.0, 0.0], [30.0, 20.0, 0.0]]).unwrap();
 /// assert_eq!(s.degree(), 3);
 /// ```
+///
+/// ```
+/// use yack::prelude::*;
+/// let s = Spline3::bezier(&[[0.0, 0.0, 0.0], [1.0, 1.0, 0.0], [2.0, 0.0, 0.0]])?;
+/// assert_eq!(s.degree(), 2);
+/// assert_eq!(s.knots(), &[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+/// assert_eq!(s.ctrl()[1], Point3::new(1.0, 1.0, 0.0));
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spline3 {
     degree: u32,
@@ -485,6 +649,15 @@ pub struct Spline3 {
 
 impl Spline3 {
     /// A clamped B-spline of `degree` with `ctrl.len() + degree + 1` non-decreasing knots.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a clamped cubic through four control points: knots 0 0 0 0 1 1 1 1
+    /// let pts = [[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 2.0, 0.0], [4.0, 0.0, 0.0]].map(Point3::from).to_vec();
+    /// let s = Spline3::new(3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], pts)?;
+    /// assert_eq!(s.degree(), 3);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn new(degree: u32, knots: Vec<f64>, ctrl: Vec<Point3>) -> Result<Spline3> {
         knots_ok("Spline3::new", degree, &knots, ctrl.len(), true)?;
         if !ctrl.iter().all(|p| p.is_finite()) {
@@ -494,6 +667,13 @@ impl Spline3 {
     }
 
     /// The Bézier curve with these control points (degree = points − 1).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let line = Spline3::bezier(&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]])?;
+    /// assert_eq!(line.degree(), 1);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn bezier(ctrl: &[[f64; 3]]) -> Result<Spline3> {
         let n = ctrl.len();
         let degree = u32::try_from(n.saturating_sub(1)).unwrap_or(0);
@@ -504,14 +684,20 @@ impl Spline3 {
     }
 
     /// The degree.
+    ///
+    /// (Its example is on [`Spline3`].)
     pub fn degree(&self) -> u32 {
         self.degree
     }
     /// The knots.
+    ///
+    /// (Its example is on [`Spline3`].)
     pub fn knots(&self) -> &[f64] {
         &self.knots
     }
     /// The control points.
+    ///
+    /// (Its example is on [`Spline3`].)
     pub fn ctrl(&self) -> &[Point3] {
         &self.ctrl
     }
@@ -551,15 +737,40 @@ pub(crate) enum LeadKind {
 
 impl Lead {
     /// A constant rise of `mm` along the axis each whole turn.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a thread rising 3 mm each turn
+    /// let thread = screw(&Frame::WORLD, &Profile::rectangle([4.0, 0.0], [5.0, 1.0])?, Lead::per_turn(3.0), deg(360.0))?;
+    /// assert!(thread.volume() > 0.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn per_turn(mm: f64) -> Lead {
         Lead(LeadKind::PerTurn(mm))
     }
     /// A constant rise of `mm` along the axis each radian turned.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // 0.5 mm of rise for each radian turned (π mm a whole turn)
+    /// let ball = sphere(&Frame::at([5.0, 0.0, 0.0]), 1.0)?;
+    /// let coil = ball.swept(&Motion::screw([0.0; 3], Dir3::Z, deg(0.0), deg(360.0), Lead::per_radian(0.5)))?;
+    /// assert!(coil.volume() > ball.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn per_radian(mm: f64) -> Lead {
         Lead(LeadKind::PerRadian(mm))
     }
     /// A rise that is a polynomial in the angle turned: `rise = Σ cₖ θᵏ`, θ in radians measured from
     /// the motion's start (`from`), `coefficients[k] = cₖ`. A lead that grows as a thread climbs.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a lead growing as it turns: rise = 0.5θ + 0.1θ² from the start angle
+    /// let growing = Lead::polynomial(vec![0.0, 0.5, 0.1]);
+    /// let _ = Motion::screw([0.0; 3], Dir3::Z, deg(0.0), deg(180.0), growing);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn polynomial(coefficients: Vec<f64>) -> Lead {
         Lead(LeadKind::Polynomial(coefficients))
     }
@@ -594,30 +805,89 @@ pub(crate) enum MotionKind {
 
 impl Motion {
     /// A straight slide by `by`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let capsule = sphere(&Frame::WORLD, 1.0)?.swept(&Motion::slide([4.0, 0.0, 0.0]))?;
+    /// assert!(capsule.volume() > sphere(&Frame::WORLD, 1.0)?.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn slide(by: impl Into<Vec3>) -> Motion {
         Motion(MotionKind::Slide { by: by.into() })
     }
     /// A turn about the line through `axis_point` along `axis`, from the angle `from` to `to`
     /// (counter-clockwise looking down `axis`). The solid is as given at angle 0.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a quarter turn about z of a bar off the axis sweeps a quarter ring
+    /// let bar = block(&Frame::at([2.0, -0.5, 0.0]), [1.0, 1.0, 1.0])?;
+    /// let arc = bar.swept(&Motion::turn([0.0; 3], Dir3::Z, deg(0.0), deg(90.0)))?;
+    /// assert!(arc.volume() > bar.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn turn(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle) -> Motion {
         Motion(MotionKind::Turn { axis_point: axis_point.into(), axis: axis.into(), from, to })
     }
     /// A turn as [`turn`](Motion::turn) while rising along the axis by `lead`. The solid is as
     /// given at angle 0 (a constant lead rises from there; a polynomial one from `from`).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let ball = sphere(&Frame::at([5.0, 0.0, 0.0]), 1.0)?;
+    /// let coil = ball.swept(&Motion::screw([0.0; 3], Dir3::Z, deg(0.0), deg(360.0), Lead::per_turn(4.0)))?;
+    /// assert!(coil.volume() > ball.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn screw(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle, lead: Lead) -> Motion {
         Motion(MotionKind::Screw { axis_point: axis_point.into(), axis: axis.into(), from, to, lead })
     }
     /// Along a spline path that starts at the solid's position, its frame following `law`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 10.0, 0.0]])?;
+    /// let groove = sphere(&Frame::WORLD, 1.0)?.swept(&Motion::along(path, FrameLaw::Fixed))?;
+    /// assert!(groove.volume() > 0.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn along(path: Spline3, law: FrameLaw) -> Motion {
         Motion(MotionKind::Along { path, law })
     }
     /// These motions one after another, each starting where the last left the solid.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // one leg after another; a then of thens is one flat sequence
+    /// let l = Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 5.0, 0.0])]);
+    /// let nested = Motion::then(vec![Motion::then(vec![Motion::slide([5.0, 0.0, 0.0])]), Motion::slide([0.0, 5.0, 0.0])]);
+    /// assert_eq!(l, nested);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn then(legs: Vec<Motion>) -> Motion {
-        Motion(MotionKind::Then(legs))
+        // a sequence of sequences is one sequence: an along_loop or through leg joins in place
+        let flat = legs
+            .into_iter()
+            .flat_map(|m| match m.0 {
+                MotionKind::Then(inner) => inner,
+                kind => vec![Motion(kind)],
+            })
+            .collect();
+        Motion(MotionKind::Then(flat))
     }
     /// A tool carried once round `path`, drawn in `frame`'s xy plane, from the loop's start:
     /// a slide along each line and a turn about each arc's centre (CAM's contour pass).
     /// `Unsupported` where the loop has a conic or spline segment.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a ball carried once round a 10 × 4 stadium in the xy plane
+    /// let track = Loop::starting_at([0.0, 0.0]).line_to([10.0, 0.0]).arc_ccw_to([10.0, 4.0], [10.0, 2.0])
+    ///     .line_to([0.0, 4.0]).arc_ccw_to([0.0, 0.0], [0.0, 2.0]).close()?;
+    /// let ring = sphere(&Frame::WORLD, 0.5)?.swept(&Motion::along_loop(&Frame::WORLD, &track)?)?;
+    /// assert!(ring.volume() > 0.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn along_loop(frame: &crate::Frame, path: &Loop) -> Result<Motion> {
         let op = "Motion::along_loop";
         let pieces = path.segments().iter().map(|s| piece(op, s, path.segments().len() == 1)).collect::<Result<Vec<_>>>()?;
@@ -636,6 +906,14 @@ impl Motion {
     /// slides). `Invalid` for fewer than two points.
     ///
     /// [`then`]: Motion::then
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a toolpath through absolute points: the slides between them
+    /// let pts = [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [5.0, 3.0, 0.0]].map(Point3::from);
+    /// assert_eq!(Motion::through(&pts)?, Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 0.0])]));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn through(points: &[Point3]) -> Result<Motion> {
         if points.len() < 2 {
             return Err(Error::invalid("Motion::through", "points", "a toolpath needs two points or more"));
@@ -646,6 +924,14 @@ impl Motion {
     /// itself, applied in order at each instant (a rack's slide and its pinion's turn). Such a
     /// sweep comes out as a valid closed solid that may be faceted: [`Solid::is_exact`] is false
     /// then (never claimed exact).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a rack's slide and its pinion's turn, run at once
+    /// let rolling = Motion::together(vec![Motion::slide([10.0, 0.0, 0.0]), Motion::turn([0.0; 3], Dir3::Z, deg(0.0), deg(30.0))]);
+    /// let _ = rolling;
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn together(legs: Vec<Motion>) -> Motion {
         Motion(MotionKind::Together(legs))
     }

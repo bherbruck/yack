@@ -11,6 +11,14 @@ type Writer<'a> = (&'static str, &'a dyn Fn() -> Result<String>);
 /// The solid as an AP214 STEP file. Written by the engine that built it, and kept only when the
 /// file reads back as the solid (volume and area); otherwise by the other engine, checked the same
 /// way; a file neither writes faithfully is refused (Failed), never returned.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 20.0, 30.0])?;
+/// let text = yack::step::write(&b)?;
+/// assert!(text.starts_with("ISO-10303-21;"));
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn write(s: &Solid) -> Result<String> {
     let op = "step::write";
     if s.is_empty() {
@@ -63,11 +71,27 @@ fn written(op: &'static str, volume: f64, area: f64, writers: &[Writer]) -> Resu
     Err(Error::failed(op, Stage::Check, why.join("; ")))
 }
 /// The solid in a STEP file.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 20.0, 30.0])?;
+/// let back = yack::step::read(&yack::step::write(&b)?)?;
+/// assert!((back.volume() - 6000.0).abs() < 1e-6);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn read(text: &str) -> Result<Solid> {
     let op = "step::read";
     crate::ladder::springrep_only(op, || engine::solid(op, sr::read_step(text)))
 }
 /// The solid sewn from the faces in a STEP file, closing gaps up to `tolerance` mm.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 20.0, 30.0])?;
+/// let sewn = yack::step::sew(&yack::step::write(&b)?, 1e-3)?;
+/// assert!((sewn.volume() - 6000.0).abs() < 1e-6);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sew(text: &str, tolerance: f64) -> Result<Solid> {
     let op = "step::sew";
     if !tolerance.is_finite() || tolerance < 0.0 {

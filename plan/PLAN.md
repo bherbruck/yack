@@ -563,7 +563,7 @@ frames at `k·LINEAR` offsets, `k·ANGULAR` angles, tangent and coincident. Fail
 | File | Fails CI when |
 |---|---|
 | `scores/conformance/seed{0..3}.json` | Any case gets a worse outcome or a looser tier. A case's median time exceeds 2× baseline (at 1.5× it warns) |
-| `scores/bench.json` | Any pass regresses, any `wrong` appears (**never waivable**: refused ranks above wrong), the mean `loc` rises, or a case's strategy changes without a bless |
+| `scores/bench.json` | Any pass regresses, any `wrong` appears (**never waivable**: refused ranks above wrong), the mean `loc` rises, or a case's median time exceeds 2× baseline (at 1.5× it warns). A change in a case's `strategy` (the engine that answers) or `built_by` is reported, not ratcheted |
 | `scores/digests/seed0.txt` | Used in M2 and M3 only: any digest changes. These milestones are pure moves, and the digests prove it |
 | `scores/waivers.toml` | Holds the only allowed exceptions. Each names the case, a reason, an owner and an expiry milestone |
 | `scores/eps.txt`, `scores/filesize.txt`, `scores/cadrs-loc.txt` | The count goes up |

@@ -31,6 +31,14 @@ impl Solid {
     }
 
     /// Everything in both solids.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let a = block(&Frame::WORLD, [2.0, 2.0, 2.0])?;
+    /// let b = block(&Frame::at([1.0, 0.0, 0.0]), [2.0, 2.0, 2.0])?;
+    /// assert!((a.intersection(&b)?.volume() - 4.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn intersection(&self, other: &Solid) -> Result<Solid> {
         firewall::run("intersection", || {
             match (self.is_empty(), other.is_empty()) {
@@ -52,6 +60,14 @@ impl Solid {
     }
 
     /// This solid less `tool`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let drilled = b.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0)?)?;
+    /// assert!((drilled.volume() - (1000.0 - 40.0 * std::f64::consts::PI)).abs() < 1e-9 * 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn difference(&self, tool: &Solid) -> Result<Solid> {
         firewall::run("difference", || {
             match (self.is_empty(), tool.is_empty()) {
@@ -67,6 +83,13 @@ impl Solid {
     }
 
     /// The union of all `solids` (empty for none).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let cubes: Vec<Solid> = (0..3).map(|i| block(&Frame::at([3.0 * f64::from(i), 0.0, 0.0]), [1.0, 1.0, 1.0])).collect::<Result<_>>()?;
+    /// assert!((Solid::union_all(&cubes)?.volume() - 3.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn union_all(solids: &[Solid]) -> Result<Solid> {
         firewall::run("union_all", || {
             let parts: Vec<&Solid> = solids.iter().filter(|s| !s.is_empty()).collect();
@@ -89,6 +112,15 @@ impl Solid {
     }
 
     /// This solid less every tool.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let holes = [cylinder(&Frame::at([3.0, 5.0, -1.0]), 1.0, 12.0)?, cylinder(&Frame::at([7.0, 5.0, -1.0]), 1.0, 12.0)?];
+    /// let plate = b.difference_all(&holes)?;
+    /// assert!((plate.volume() - (1000.0 - 20.0 * std::f64::consts::PI)).abs() < 1e-9 * 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> {
         firewall::run("difference_all", || {
             if self.is_empty() {
@@ -113,6 +145,16 @@ impl Solid {
     /// `self.difference(&tool.swept(motion)?)`, computed directly where cadrs can (an exact cut
     /// where the swept tool alone would come out faceted, a long screw trimmed to the reach of
     /// this solid), else as that difference.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // a 1 mm-radius end mill 1 deep into the top, slid 6 along x: a slot of area 12 + π
+    /// let mill = cylinder(&Frame::at([2.0, 5.0, 9.0]), 1.0, 3.0)?;
+    /// let slotted = b.cut_swept(&mill, &Motion::slide([6.0, 0.0, 0.0]))?;
+    /// assert!((slotted.volume() - (1000.0 - 12.0 - std::f64::consts::PI)).abs() < 1e-6 * 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn cut_swept(&self, tool: &Solid, motion: &crate::Motion) -> Result<Solid> {
         let op = "cut_swept";
         if self.is_empty() || tool.is_empty() {
@@ -131,6 +173,14 @@ impl Solid {
     }
 
     /// The parts on each side of `plane`; `front` is on the normal's side. Either may be empty.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let halves = b.split(&Plane::new([4.0, 0.0, 0.0], [1.0, 0.0, 0.0])?)?;
+    /// assert!((halves.front.volume() - 600.0).abs() < 1e-9 && (halves.back.volume() - 400.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn split(&self, plane: &Plane) -> Result<Split> {
         let op = "split";
         let Some(b) = self.brep() else { return Ok(Split { front: Solid::empty(), back: Solid::empty() }) };

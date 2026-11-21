@@ -204,12 +204,29 @@ impl Solid {
     }
 
     /// How this solid's faces came from its inputs.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
+    /// let _ = b.history(); // how this solid's faces came from its inputs
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn history(&self) -> &History {
         &self.0.history
     }
 
     /// A content digest of topology, geometry and face names: equal solids, bit for bit, have equal
     /// digests, and running the same program again gives the same digest. The empty solid's is all zeros.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // the same program gives the same solid, bit for bit
+    /// let a = block(&Frame::WORLD, [1.0, 2.0, 3.0])?;
+    /// let b = block(&Frame::WORLD, [1.0, 2.0, 3.0])?;
+    /// assert_eq!(a.digest(), b.digest());
+    /// assert_ne!(a.digest(), block(&Frame::WORLD, [1.0, 2.0, 4.0])?.digest());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn digest(&self) -> [u8; 32] {
         match &self.0.body {
             Body::Empty => [0; 32],
@@ -219,6 +236,14 @@ impl Solid {
     }
 
     /// Whether the solid has no pieces.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let a = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
+    /// assert!(!a.is_empty());
+    /// assert!(a.intersection(&block(&Frame::at([5.0, 0.0, 0.0]), [1.0, 1.0, 1.0])?)?.is_empty());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn is_empty(&self) -> bool {
         matches!(self.0.body, Body::Empty)
     }

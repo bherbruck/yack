@@ -14,6 +14,13 @@ fn pts<P: Into<Point3> + Copy>(pts: &[P]) -> impl Iterator<Item = yack_springrep
 
 impl Solid {
     /// The volume (mm³).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!((b.volume() - 1000.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn volume(&self) -> f64 {
         match self.held() {
             Some(h) => engine_cadrs::held_mass(h).map_or(f64::NAN, |m| m.0),
@@ -22,6 +29,13 @@ impl Solid {
     }
 
     /// The surface area (mm²).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!((b.area() - 600.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn area(&self) -> f64 {
         match self.held() {
             Some(h) => engine_cadrs::held_mass(h).map_or(f64::NAN, |m| m.1),
@@ -30,6 +44,13 @@ impl Solid {
     }
 
     /// The volume centroid; `None` for the empty solid.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.centroid(), Some(Point3::new(5.0, 5.0, 5.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn centroid(&self) -> Option<Point3> {
         match self.held() {
             Some(h) => engine_cadrs::held_mass(h).map(|m| Point3::from(m.2)),
@@ -38,6 +59,15 @@ impl Solid {
     }
 
     /// The inertia tensor about the centroid, unit density (mm⁵).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // about the centroid, unit density: m(b² + c²)/12 on the diagonal
+    /// let i = b.inertia();
+    /// assert!((i[0][0] - 1000.0 * 200.0 / 12.0).abs() < 1e-6 && i[0][1].abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn inertia(&self) -> [[f64; 3]; 3] {
         match self.held() {
             Some(h) => engine_cadrs::held_mass(h).map_or([[f64::NAN; 3]; 3], |m| m.3),
@@ -46,6 +76,14 @@ impl Solid {
     }
 
     /// The bounding box; `None` for the empty solid.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let bb = b.bounding_box().unwrap();
+    /// assert_eq!((bb.min, bb.max), (Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 10.0, 10.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn bounding_box(&self) -> Option<Aabb> {
         if let Some(h) = self.held() {
             return engine_cadrs::held_bbox(h).map(|(lo, hi)| Aabb::new(Point3::from(lo), Point3::from(hi)));
@@ -57,6 +95,15 @@ impl Solid {
     }
 
     /// Betti numbers: pieces, tunnels, voids.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.betti(), [1, 0, 0]);
+    /// let drilled = b.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0)?)?;
+    /// assert_eq!(drilled.betti(), [1, 1, 0]); // one tunnel
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn betti(&self) -> [u64; 3] {
         match self.held() {
             Some(h) => engine_cadrs::held_betti(h),
@@ -65,6 +112,13 @@ impl Solid {
     }
 
     /// Validity problems; empty for anything yack built.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!(b.check().is_empty());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn check(&self) -> Vec<Issue> {
         if let Some(h) = self.held() {
             return engine_cadrs::held_check(h).into_iter().map(|detail| Issue { code: "cadrs", detail }).collect();
@@ -75,6 +129,13 @@ impl Solid {
     }
 
     /// Where each point lies: `In`, `On` (within `tol::LINEAR`) or `Out`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.classify(&[[5.0, 5.0, 5.0], [10.0, 5.0, 5.0], [15.0, 5.0, 5.0]])?, vec![Side::In, Side::On, Side::Out]);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn classify<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Side>> {
         let op = "classify";
         let Some(b) = self.form(op)? else { return Ok(vec![Side::Out; pts_.len()]) };
@@ -93,6 +154,14 @@ impl Solid {
     /// For each point, the nearest point of the solid with its inside counted, as the protocol's
     /// `closest` has it: a point the solid holds is its own nearest point; one outside gets the
     /// nearest boundary point. Empty for the empty solid.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // a point outside goes to the nearest boundary point; one inside is its own
+    /// assert_eq!(b.closest(&[[15.0, 5.0, 5.0], [5.0, 5.0, 5.0]])?, vec![Point3::new(10.0, 5.0, 5.0), Point3::new(5.0, 5.0, 5.0)]);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn closest<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Point3>> {
         let op = "closest";
         let Some(b) = self.form(op)? else { return Ok(Vec::new()) };
@@ -103,6 +172,14 @@ impl Solid {
     }
 
     /// The outward unit normal at each boundary point; `None` at a crease or off the boundary.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.normal_at(&[[5.0, 5.0, 10.0]])?, vec![Some(Vec3::new(0.0, 0.0, 1.0))]);
+    /// assert_eq!(b.normal_at(&[[5.0, 0.0, 10.0]])?, vec![None]); // a crease
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn normal_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<Vec3>>> {
         let Some(b) = self.form("normal_at")? else { return Ok(vec![None; pts_.len()]) };
         let outlines = measure::Outlines::new(b);
@@ -110,6 +187,14 @@ impl Solid {
     }
 
     /// The principal curvatures at each boundary point; `None` at a crease or off the boundary.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let ball = sphere(&Frame::WORLD, 2.0)?;
+    /// let k = ball.curvature_at(&[[0.0, 0.0, 2.0]])?;
+    /// assert!(k[0].is_some_and(|[a, b]| (a.abs() - 0.5).abs() < 1e-9 && (b.abs() - 0.5).abs() < 1e-9));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn curvature_at<P: Into<Point3> + Copy>(&self, pts_: &[P]) -> Result<Vec<Option<[f64; 2]>>> {
         let Some(b) = self.form("curvature_at")? else { return Ok(vec![None; pts_.len()]) };
         let outlines = measure::Outlines::new(b);
@@ -118,6 +203,14 @@ impl Solid {
 
     /// The least distance between the two solids: zero if they touch or overlap, infinite if
     /// either is empty.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let other = block(&Frame::at([15.0, 0.0, 0.0]), [1.0, 1.0, 1.0])?;
+    /// assert!((b.distance(&other)? - 5.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn distance(&self, other: &Solid) -> Result<f64> {
         let op = "distance";
         let (Some(a), Some(b)) = (self.form(op)?, other.form(op)?) else { return Ok(f64::INFINITY) };
@@ -131,6 +224,15 @@ impl Solid {
     /// The face nearest `p` and its distance, at any distance (unlike [`face_at`](Solid::face_at),
     /// which picks only within `tol::PICK`). A point nearest an edge goes to the face whose own
     /// surface it is nearer; `NotFound` for the empty solid.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let (f, d) = b.nearest_face([5.0, 5.0, 12.0])?;
+    /// assert_eq!(f, b.face_at([5.0, 5.0, 10.0])?);
+    /// assert!((d - 2.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> {
         let op = "nearest_face";
         let p = p.into();
@@ -145,6 +247,15 @@ impl Solid {
 
     /// The least distance between the two solids and where it is reached: `(distance, on self,
     /// on other)`. `Invalid` if either solid is empty.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let other = block(&Frame::at([15.0, 0.0, 0.0]), [1.0, 1.0, 1.0])?;
+    /// let (d, on_self, on_other) = b.closest_pair(&other)?;
+    /// assert!((d - 5.0).abs() < 1e-9 && on_self.x == 10.0 && on_other.x == 15.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> {
         let op = "closest_pair";
         let (a, b) = (self.need(op)?, other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
@@ -156,6 +267,15 @@ impl Solid {
     }
 
     /// The volume shared with `other` and the gap between them.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let other = block(&Frame::at([8.0, 0.0, 0.0]), [4.0, 10.0, 10.0])?;
+    /// let i = b.interference(&other)?;
+    /// assert!((i.volume - 200.0).abs() < 1e-9 && i.gap == 0.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn interference(&self, other: &Solid) -> Result<Interference> {
         let (Some(a), Some(b)) = (self.form("interference")?, other.form("interference")?) else {
             return Ok(Interference { volume: 0.0, gap: f64::INFINITY });
@@ -168,6 +288,13 @@ impl Solid {
     }
 
     /// The area of the solid's cross-section by `plane` (mm²).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!((b.section_area(&Plane::new([0.0, 0.0, 5.0], [0.0, 0.0, 1.0])?)? - 100.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn section_area(&self, plane: &Plane) -> Result<f64> {
         let Some(b) = self.form("section_area")? else { return Ok(0.0) };
         yack_springrep::boolean::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
@@ -176,6 +303,15 @@ impl Solid {
 
     /// The cross-section by `plane` as closed polylines (each ends on its first point) with chord
     /// error at most `chord`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let loops = b.section(&Plane::new([0.0, 0.0, 5.0], [0.0, 0.0, 1.0])?, 0.01)?;
+    /// assert_eq!(loops.len(), 1);
+    /// assert_eq!(loops[0].first(), loops[0].last()); // each closed
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn section(&self, plane: &Plane, chord: f64) -> Result<Vec<Vec<Point3>>> {
         let Some(b) = self.form("section")? else { return Ok(Vec::new()) };
         let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), chord)
@@ -184,6 +320,14 @@ impl Solid {
     }
 
     /// The visible and hidden edges looking along `direction`, in the protocol's view axes.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let d = b.project(Dir3::Z, 0.01)?;
+    /// assert!(!d.visible.is_empty());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn project(&self, direction: impl Into<Vec3>, chord: f64) -> Result<Drawing> {
         let op = "project";
         let d = direction.into();
@@ -204,6 +348,14 @@ impl Solid {
     }
 
     /// For each ray, the sorted distances at which it crosses the boundary.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let hits = b.raycast(&[Ray::new([-1.0, 5.0, 5.0], [1.0, 0.0, 0.0])?])?;
+    /// assert!((hits[0][0] - 1.0).abs() < 1e-9 && (hits[0][1] - 11.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn raycast(&self, rays_: &[Ray]) -> Result<Vec<Vec<f64>>> {
         let Some(b) = self.form("raycast")? else { return Ok(vec![Vec::new(); rays_.len()]) };
         let caster = rays::Rays::new(b).map_err(|e| engine::error("raycast", e))?;
@@ -219,6 +371,14 @@ impl Solid {
     }
 
     /// A closed, outward, welded triangle mesh with chord error at most `chord`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let m = b.mesh(0.01)?;
+    /// assert!(m.is_watertight() && (m.volume() - 1000.0).abs() < 1e-6);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn mesh(&self, chord: f64) -> Result<Mesh> {
         if let Some(h) = self.held() {
             let (positions, triangles) = engine_cadrs::held_mesh("mesh", h, chord)?;
@@ -230,6 +390,15 @@ impl Solid {
     }
 
     /// Per-face triangles with exact normals, and crease edges as polylines.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let d = b.display(0.01)?;
+    /// assert_eq!(d.faces.len(), 6);
+    /// assert!(d.faces.iter().all(|f| f.normals.len() == f.positions.len()));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn display(&self, chord: f64) -> Result<Display> {
         let b = match self.body() {
             Body::Empty => return Ok(Display::default()),

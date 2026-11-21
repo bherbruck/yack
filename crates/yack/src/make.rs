@@ -33,6 +33,13 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
 }
 
 /// A cylinder of `radius` on the frame's z axis, from z = 0 to z = `height`.
+///
+/// ```
+/// use yack::prelude::*;
+/// let c = cylinder(&Frame::WORLD, 2.0, 5.0)?;
+/// assert!((c.volume() - std::f64::consts::PI * 20.0).abs() < 1e-9 * c.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
     firewall::run("cylinder", || {
         ladder::two("cylinder", &|| {
@@ -43,6 +50,13 @@ pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
 }
 
 /// A sphere of `radius` centred at the frame origin.
+///
+/// ```
+/// use yack::prelude::*;
+/// let s = sphere(&Frame::WORLD, 3.0)?;
+/// assert!((s.volume() - 36.0 * std::f64::consts::PI).abs() < 1e-9 * s.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
     firewall::run("sphere", || {
         ladder::two("sphere", &|| {
@@ -55,6 +69,14 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
 /// A torus about the frame's z axis: tube centre at `major` from the axis, tube radius `minor`.
 /// The tube must clear the axis (`minor < major`); a horn or spindle torus is refused as Invalid,
 /// pointing at [`spindle_torus`].
+///
+/// ```
+/// use yack::prelude::*;
+/// let t = torus(&Frame::WORLD, 5.0, 1.0)?; // 2π²·R·r²
+/// let pi = std::f64::consts::PI;
+/// assert!((t.volume() - 10.0 * pi * pi).abs() < 1e-9 * t.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
     if major > 0.0 && minor >= major {
         return Err(Error::invalid(
@@ -79,6 +101,16 @@ pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 /// frame's z axis, for a tube that reaches the axis (`minor ≥ major > 0`; a horn torus when equal):
 /// every point within `minor` of that circle, the core the tube crosses itself in counted once.
 /// A ring torus (`minor < major`) is [`torus`].
+///
+/// ```
+/// use yack::prelude::*;
+/// // a tube wider than its ring: the self-overlapping spindle (cadrs builds it, or it is refused)
+/// match spindle_torus(&Frame::WORLD, 1.0, 2.0) {
+///     Ok(s) => assert!(s.volume() > 0.0),
+///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+/// }
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
     let op = "spindle_torus";
     if !(major > 0.0 && minor >= major) {
@@ -91,6 +123,13 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 }
 
 /// A cone (or frustum) on the frame's z axis: radius `bottom` at z = 0, `top` at z = `height`.
+///
+/// ```
+/// use yack::prelude::*;
+/// let c = cone(&Frame::WORLD, 2.0, 1.0, 3.0)?; // a frustum: πh/3·(R² + Rr + r²) = 7π
+/// assert!((c.volume() - 7.0 * std::f64::consts::PI).abs() < 1e-9 * c.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> {
     firewall::run("cone", || {
         ladder::two("cone", &|| {
@@ -107,6 +146,15 @@ pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> 
 /// A negative `height` extrudes to the other side of the profile's plane, along the frame's −z
 /// ("reverse direction"): the same outline, drawn as given, the solid the mirror image of the
 /// positive one in that plane. (Flipping the frame instead would mirror the outline.)
+///
+/// ```
+/// use yack::prelude::*;
+/// let rect = Profile::rectangle([0.0, 0.0], [2.0, 3.0])?;
+/// assert!((extrude(&Frame::WORLD, &rect, 4.0)?.volume() - 24.0).abs() < 1e-9);
+/// // a negative height extrudes the same outline to the other side of its plane
+/// assert!((extrude(&Frame::WORLD, &rect, -4.0)?.volume() - 24.0).abs() < 1e-9);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
     if height < 0.0 {
         return reversed("extrude", frame, extrude(frame, profile, height.abs()));
@@ -126,6 +174,14 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
 
 /// `profile` revolved about the frame's z axis by `angle`. The profile is drawn in the frame's xz
 /// plane: profile x along the frame's x (out from the axis, x ≥ 0), profile y along the frame's z.
+///
+/// ```
+/// use yack::prelude::*;
+/// // the ring of a 2 × 3 rectangle 2 to 4 from the axis: π(4² − 2²)·3
+/// let ring = revolve(&Frame::WORLD, &Profile::rectangle([2.0, 0.0], [4.0, 3.0])?, deg(360.0))?;
+/// assert!((ring.volume() - 36.0 * std::f64::consts::PI).abs() < 1e-9 * ring.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> {
     firewall::run("revolve", || {
         ladder::two(
@@ -147,6 +203,14 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
 
 /// `profile` (drawn as for [`revolve`]) screwed about the frame's z axis by `angle` while rising by
 /// `lead` ([`Lead::per_turn`], [`Lead::per_radian`]; a polynomial lead is not built yet).
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 1 × 1 section 4.5 from the axis, two turns at 3 a turn: by Pappus, area × 2π × 4.5 × 2
+/// let thread = screw(&Frame::WORLD, &Profile::rectangle([4.0, 0.0], [5.0, 1.0])?, Lead::per_turn(3.0), deg(720.0))?;
+/// assert!((thread.volume() - 18.0 * std::f64::consts::PI).abs() < 1e-6 * thread.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Result<Solid> {
     let rise = match &lead.0 {
         LeadKind::PerRadian(c) => *c,
@@ -164,6 +228,17 @@ pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Resu
 
 /// As [`screw`], the profile also moving out from the axis by `taper` mm each radian turned (a
 /// conical thread, a spiroid worm).
+///
+/// ```
+/// use yack::prelude::*;
+/// // the same section moving out 0.1 a radian as it turns: a conical thread
+/// let section = Profile::rectangle([4.0, 0.0], [5.0, 1.0])?;
+/// match screw_tapered(&Frame::WORLD, &section, Lead::per_turn(3.0), deg(360.0), 0.1) {
+///     Ok(t) => assert!(t.volume() > 0.0),
+///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+/// }
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle, taper: f64) -> Result<Solid> {
     let op = "screw_tapered";
     let rise = match &lead.0 {
@@ -182,6 +257,16 @@ pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle,
 /// `closed`, back to the first) and mitred at each corner: every run is cut by, and meets the
 /// next in, the plane through the corner bisecting it. The frame must sit on `corners[0]` with
 /// its z along the first run; an open path ends square to it.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 10 × 10 bar round a 60° corner, mitred: w²L = 100 × 80
+/// let corners = [Point3::new(0.0, 0.0, 0.0), Point3::new(40.0, 0.0, 0.0), Point3::new(20.0, 20.0 * 3f64.sqrt(), 0.0)];
+/// let bar = Profile::rectangle([-5.0, -5.0], [5.0, 5.0])?;
+/// let elbow = sweep_mitered(&Frame::along(corners[0], Dir3::X)?, &bar, &corners, false)?;
+/// assert!((elbow.volume() - 8000.0).abs() < 1e-6 * 8000.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], closed: bool) -> Result<Solid> {
     let op = "sweep_mitered";
     let (&[a, b, ..], least) = (corners, if closed { 3 } else { 2 }) else {
@@ -198,6 +283,18 @@ pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], close
 
 /// The solid(s) the `patches` bound once sewn edge to edge: every patch's face built, their
 /// shared rims joined; an open shell is refused.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a corner tetrahedron from four flat triangles: volume 1/6
+/// let tri = |a: [f64; 3], b: [f64; 3], c: [f64; 3]| -> yack::Result<Patch> {
+///     Ok(Patch::PlanarFill { boundary: vec![Spline3::bezier(&[a, b])?, Spline3::bezier(&[b, c])?, Spline3::bezier(&[c, a])?] })
+/// };
+/// let (o, x, y, z) = ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+/// let t = sewn(&[tri(o, y, x)?, tri(o, x, z)?, tri(o, z, y)?, tri(x, y, z)?])?;
+/// assert!((t.volume() - 1.0 / 6.0).abs() < 1e-9);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sewn(patches: &[Patch]) -> Result<Solid> {
     let op = "sewn";
     if patches.is_empty() {
@@ -209,6 +306,16 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
 /// A ruled loft from `profile` at z = 0 to `top` at z = `height`. As in the protocol, `top` is
 /// `profile` scaled by `scale` about the frame's z axis, sent ready-made; yack lofts to `top` as
 /// given and does not scale it again.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 6 × 6 square up 6 to the same square at half the size (sent ready-made): a frustum,
+/// // h/3·(A₁ + A₂ + √(A₁A₂)) = 2·(36 + 9 + 18)
+/// let (bottom, top) = (Profile::rectangle([-3.0, -3.0], [3.0, 3.0])?, Profile::rectangle([-1.5, -1.5], [1.5, 1.5])?);
+/// let f = loft(&Frame::WORLD, &bottom, 0.5, 6.0, &top)?;
+/// assert!((f.volume() - 126.0).abs() < 1e-6 * 126.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid> {
     firewall::run("loft", || {
         ladder::two("loft", &|| {
@@ -226,6 +333,15 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Pro
 }
 
 /// A loft through `sections`, each a profile at a height along the frame's z.
+///
+/// ```
+/// use yack::prelude::*;
+/// // the same square at heights 0 and 5: a prism
+/// let sq = Profile::rectangle([-1.0, -1.0], [1.0, 1.0])?;
+/// let prism = loft_through(&Frame::WORLD, &[(0.0, sq.clone()), (5.0, sq)])?;
+/// assert!((prism.volume() - 20.0).abs() < 1e-6);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid> {
     if sections.len() < 2 {
         return Err(Error::invalid("loft_through", "sections", "a loft needs two sections or more"));
@@ -255,6 +371,21 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
 }
 
 /// A loft through profiles placed in their own frames, following `guides`.
+///
+/// ```
+/// use yack::prelude::*;
+/// // two squares 4 apart, their corners joined by straight guides: a prism
+/// let sq = Profile::rectangle([-1.0, -1.0], [1.0, 1.0])?;
+/// let guides = [[1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]]
+///     .map(|[x, y]| Spline3::bezier(&[[x, y, 0.0], [x, y, 4.0]]))
+///     .into_iter()
+///     .collect::<yack::Result<Vec<_>>>()?;
+/// match loft_guided(&[(Frame::WORLD, sq.clone()), (Frame::at([0.0, 0.0, 4.0]), sq)], &guides) {
+///     Ok(prism) => assert!((prism.volume() - 16.0).abs() < 1e-6),
+///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+/// }
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<Solid> {
     let op = "loft_guided";
     firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::loft_guided(op, sections, guides) }]))
@@ -262,6 +393,14 @@ pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<
 
 /// `profile` swept along a path of lines and arcs starting along the frame's z. A positive arc
 /// angle turns toward the frame's +x.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a disk of radius 1 swept 10 straight on: π·10
+/// let pipe = sweep(&Frame::WORLD, &Profile::circle([0.0, 0.0], 1.0)?, &[PathPiece::Line { length: 10.0 }])?;
+/// assert!((pipe.volume() - 10.0 * std::f64::consts::PI).abs() < 1e-6 * pipe.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid> {
     firewall::run("sweep", || {
         ladder::two("sweep", &|| {
@@ -282,6 +421,15 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
 
 /// `profile` swept along a spline `path` given in the frame's coordinates (it starts at the
 /// profile), twisting by `twist` over its length.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a disk of radius 1 along a straight spline 10 long (in the frame's coordinates, along its z)
+/// let path = Spline3::bezier(&[[0.0, 0.0, 0.0], [0.0, 0.0, 10.0]])?;
+/// let rod = sweep_path(&Frame::WORLD, &Profile::circle([0.0, 0.0], 1.0)?, &path, deg(0.0))?;
+/// assert!((rod.volume() - 10.0 * std::f64::consts::PI).abs() < 1e-6 * rod.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid> {
     firewall::run("sweep_path", || {
         ladder::two("sweep_path", &|| {
@@ -296,6 +444,14 @@ pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle
 
 /// A slab over the `size` rectangle with a spline top: `heights[i][j]` over knots `knots_u[i]`,
 /// `knots_v[j]`.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 4 × 3 slab whose top is flat at height 2 (a bilinear height field): a box
+/// let s = slab(&Frame::WORLD, [4.0, 3.0], &[0.0, 0.0, 1.0, 1.0], &[0.0, 0.0, 1.0, 1.0], &[vec![2.0, 2.0], vec![2.0, 2.0]])?;
+/// assert!(s.volume() > 0.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid> {
     firewall::run("slab", || {
         ladder::two("slab", &|| {
@@ -306,6 +462,19 @@ pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], hei
 }
 
 /// A solid bounded by closed NURBS face(s) with control net `ctrl` (rows along u).
+///
+/// ```
+/// use yack::prelude::*;
+/// // the rational quadratic NURBS sphere of radius 5, closed by itself
+/// let c = [[1., 0.], [1., 1.], [0., 1.], [-1., 1.], [-1., 0.], [-1., -1.], [0., -1.], [1., -1.], [1., 0.]];
+/// let m = [[0., -5.], [5., -5.], [5., 0.], [5., 5.], [0., 5.]];
+/// let net: Vec<Vec<Point3>> = c.iter().map(|&[x, y]| m.iter().map(|&[r, z]| Point3::new(r * x, r * y, z)).collect()).collect();
+/// let w: Vec<Vec<f64>> = (0..9).map(|i| (0..5).map(|j| 0.5f64.sqrt().powi(i % 2 + j % 2)).collect()).collect();
+/// let (ku, kv) = ([0., 0., 0., 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1., 1., 1.], [0., 0., 0., 0.5, 0.5, 1., 1., 1.]);
+/// let ball = nurbs_solid(&Frame::WORLD, [2, 2], [&ku, &kv], &net, Some(&w))?;
+/// assert!((ball.volume() - 500.0 / 3.0 * std::f64::consts::PI).abs() < 1e-6 * ball.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn nurbs_solid(
     frame: &Frame,
     degree: [u32; 2],
@@ -320,6 +489,13 @@ pub fn nurbs_solid(
 }
 
 /// The solid with no pieces.
+///
+/// ```
+/// use yack::prelude::*;
+/// let nothing = empty();
+/// assert!(nothing.is_empty() && nothing.volume() == 0.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn empty() -> Solid {
     Solid::empty()
 }
@@ -342,6 +518,15 @@ fn cadrs_only(op: &'static str, run: &dyn Fn() -> Result<Solid>) -> Result<Solid
 /// A negative `height` extrudes to the other side of the profile's plane (along the frame's −z),
 /// the draft still leaning the sides in as they leave that plane: the mirror image of the
 /// positive one in it.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 10 × 10 square up 10, its sides leaning in 5°: a square frustum
+/// let sq = Profile::rectangle([-5.0, -5.0], [5.0, 5.0])?;
+/// let f = extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), false)?;
+/// assert!(f.volume() < 1000.0 && f.volume() > 600.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Angle, both_ways: bool) -> Result<Solid> {
     let op = "extrude_drafted";
     if height < 0.0 {
@@ -356,6 +541,16 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Ang
 
 /// The solid whose sides are straight lines from `bottom_profile` (drawn in `bottom`) to
 /// `top_profile` (drawn in `top`); turning the top frame about the axis twists the rulings.
+///
+/// ```
+/// use yack::prelude::*;
+/// // circles of radius 5 at z = ±5, the top turned a quarter turn: a hyperboloid, 500π/3
+/// let rim = Profile::circle([0.0, 0.0], 5.0)?;
+/// let top = Frame::new([0.0, 0.0, 5.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0])?;
+/// let h = ruled(&Frame::at([0.0, 0.0, -5.0]), &rim, &top, &rim)?;
+/// assert!((h.volume() - 500.0 / 3.0 * std::f64::consts::PI).abs() < 1e-6 * h.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile: &Profile) -> Result<Solid> {
     let op = "ruled";
     cadrs_only(op, &|| engine_cadrs::ruled(op, bottom, bottom_profile, top, top_profile))
@@ -365,6 +560,15 @@ pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile:
 /// `axis_point` along `axis` that starts at the frame's origin, rising `lead` while turning
 /// `angle`; its radius is the origin's distance from the axis. Not [`screw`], which turns a
 /// profile drawn through its axis.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a pipe of radius 1 on a helix of radius 10 rising 5 a turn, three turns: πr²·L
+/// let start = Frame::along([10.0, 0.0, 0.0], [0.0, 20.0 * std::f64::consts::PI, 5.0])?;
+/// let pipe = sweep_helix(&start, &Profile::circle([0.0, 0.0], 1.0)?, [0.0; 3], Dir3::Z, Lead::per_turn(5.0), deg(1080.0))?;
+/// assert!((pipe.volume() - 594.048305033062).abs() < 1e-6 * pipe.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sweep_helix(frame: &Frame, profile: &Profile, axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, lead: Lead, angle: Angle) -> Result<Solid> {
     let op = "sweep_helix";
     let pitch = match &lead.0 {
@@ -379,6 +583,15 @@ pub fn sweep_helix(frame: &Frame, profile: &Profile, axis_point: impl Into<Point
 
 /// [`sweep`], the profile turning `twist` about the path and scaling to `end_scale` times its
 /// size by the path's end, both evenly along it.
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 2 × 2 square run 10 straight on, shrinking to half: a square frustum, 70/3
+/// let sq = Profile::rectangle([-1.0, -1.0], [1.0, 1.0])?;
+/// let f = sweep_scaled(&Frame::WORLD, &sq, &[PathPiece::Line { length: 10.0 }], deg(0.0), 0.5)?;
+/// assert!((f.volume() - 70.0 / 3.0).abs() < 1e-6 * f.volume());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist: Angle, end_scale: f64) -> Result<Solid> {
     let op = "sweep_scaled";
     if end_scale.is_nan() || end_scale <= 0.0 {
@@ -390,6 +603,19 @@ pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist:
 
 /// `profile` (in the frame's xy plane) lofted to the point `apex`, its sides following
 /// `guides` (each from the profile to the apex).
+///
+/// ```
+/// use yack::prelude::*;
+/// // a 2 × 2 square lofted to a point 3 above it along straight guides: a pyramid, 4
+/// let sq = Profile::rectangle([-1.0, -1.0], [1.0, 1.0])?;
+/// let guides = [[1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]]
+///     .map(|[x, y]| Spline3::bezier(&[[x, y, 0.0], [0.0, 0.0, 3.0]]))
+///     .into_iter()
+///     .collect::<yack::Result<Vec<_>>>()?;
+/// let spire = loft_to_point(&Frame::WORLD, &sq, [0.0, 0.0, 3.0], &guides)?;
+/// assert!((spire.volume() - 4.0).abs() < 1e-6);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn loft_to_point(frame: &Frame, profile: &Profile, apex: impl Into<Point3>, guides: &[Spline3]) -> Result<Solid> {
     let op = "loft_to_point";
     let apex = apex.into().to_array();
@@ -400,6 +626,13 @@ impl Spline3 {
     /// The conical helix about the line through `axis_point` along `axis`, its radius going from
     /// `r0` to `r1` as it rises `height`, from the angle `start` (measured from `x`, square to the
     /// axis) over `turns` turns, as one clamped quintic B-spline (a loft guide or a path).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let guide = Spline3::conical_helix([0.0; 3], Dir3::Z, Dir3::X, 10.0, 5.0, 20.0, deg(0.0), 2.0)?;
+    /// assert_eq!(guide.degree(), 5);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn conical_helix(
         axis_point: impl Into<Point3>,

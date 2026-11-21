@@ -47,11 +47,23 @@ pub use yack_base::{Error, ErrorKind, Result, Stage};
 pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3};
 
 /// An angle of `d` degrees.
+///
+/// ```
+/// use yack::prelude::*;
+/// assert!((deg(180.0).radians() - std::f64::consts::PI).abs() < 1e-15);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn deg(d: f64) -> Angle {
     yack_math::deg(d)
 }
 
 /// An angle of `r` radians.
+///
+/// ```
+/// use yack::prelude::*;
+/// assert_eq!(rad(1.5).radians(), 1.5);
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn rad(r: f64) -> Angle {
     yack_math::rad(r)
 }

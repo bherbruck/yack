@@ -122,6 +122,13 @@ fn edge_ref<'a>(s: &Solid, b: &'a Brep, e: engine_ids::Edge) -> Option<EdgeRef<'
 
 impl Solid {
     /// Every face, in a stable order.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.faces().len(), 6);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces(&self) -> Vec<FaceId> {
         if let Some(h) = self.held() {
             let (n, _, _) = crate::engine_cadrs::held_counts(h);
@@ -131,6 +138,13 @@ impl Solid {
     }
 
     /// Every edge (poles aside), in a stable order.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.edges().len(), 12);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edges(&self) -> Vec<EdgeId> {
         if let Some(h) = self.held() {
             let (_, edges, _) = crate::engine_cadrs::held_counts(h);
@@ -142,6 +156,13 @@ impl Solid {
     }
 
     /// Every vertex, in a stable order.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.vertices().len(), 8);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn vertices(&self) -> Vec<VertexId> {
         if let Some(h) = self.held() {
             let (_, _, n) = crate::engine_cadrs::held_counts(h);
@@ -153,6 +174,16 @@ impl Solid {
     /// The face within `tol::PICK` of `p`, nearer than any other by at least `tol::PICK`:
     /// `NotFound` if none, `Ambiguous` if two are equally near (a point on an edge touches both
     /// its faces; yack never chooses).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let top = b.face_at([5.0, 5.0, 10.0])?;
+    /// assert_eq!(b.face(top)?.normal(), Some(Vec3::new(0.0, 0.0, 1.0)));
+    /// // a point on an edge touches two faces: refused, never a guess
+    /// assert_eq!(b.face_at([5.0, 0.0, 10.0]).unwrap_err().kind, ErrorKind::Ambiguous);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn face_at(&self, p: impl Into<Point3>) -> Result<FaceId> {
         let op = "face_at";
         let p = p.into();
@@ -177,6 +208,14 @@ impl Solid {
 
     /// The edge within `tol::PICK` of `p`, nearer than any other by at least `tol::PICK`:
     /// `NotFound` if none, `Ambiguous` if two are equally near (a vertex touches all its edges).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let e = b.edge_at([5.0, 0.0, 10.0])?;
+    /// assert!((b.edge(e)?.length() - 10.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edge_at(&self, p: impl Into<Point3>) -> Result<EdgeId> {
         let op = "edge_at";
         let p = p.into();
@@ -201,6 +240,13 @@ impl Solid {
 
     /// The face within `tol::PICK` of each point, in order; the first point that finds none is
     /// `NotFound`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.faces_at(&[[5.0, 5.0, 10.0], [5.0, 5.0, 0.0]])?.len(), 2);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces_at<P: Into<Point3> + Copy>(&self, pts: &[P]) -> Result<Vec<FaceId>> {
         pts.iter().map(|&p| self.face_at(p)).collect()
     }
@@ -220,6 +266,15 @@ impl Solid {
     }
 
     /// The faces carrying feature name `tag`, given by [`named`](Solid::named).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let tagged = b.named("box");
+    /// assert_eq!(tagged.faces_tagged("box").len(), 6);
+    /// assert!(tagged.faces_tagged("nothing").is_empty());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces_tagged(&self, tag: impl Into<Tag>) -> Vec<FaceId> {
         let tag = tag.into();
         self.named_faces(|n| n.feature == tag.as_str())
@@ -237,6 +292,14 @@ impl Solid {
     }
 
     /// The faces playing `role` in the operation named `tag`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let r = b.fillet(&[b.edge_at([5.0, 0.0, 10.0])?], 2.0)?.named("r");
+    /// assert_eq!(r.faces_by("r", Role::Round(0)).len(), 1);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces_by(&self, tag: impl Into<Tag>, role: Role) -> Vec<FaceId> {
         let tag = tag.into();
         self.named_faces(|n| n.feature == tag.as_str() && engine::role(&n.face).is_some_and(|r| r == role))
@@ -269,6 +332,14 @@ impl Solid {
     }
 
     /// The faces for which `keep` is true.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let up = b.faces_where(|f| matches!(f.kind(), SurfaceKind::Plane { normal } if normal.z > 0.5))?;
+    /// assert_eq!(up, vec![b.face_at([5.0, 5.0, 10.0])?]);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> bool) -> Result<Vec<FaceId>> {
         if let Some(h) = self.held() {
             let mut out = Vec::new();
@@ -285,6 +356,13 @@ impl Solid {
     }
 
     /// The edges (poles aside) for which `keep` is true.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.edges_where(|e| e.convex() == Some(true))?.len(), 12);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edges_where(&self, keep: impl Fn(&EdgeRef) -> bool) -> Result<Vec<EdgeId>> {
         if let Some(h) = self.held() {
             let mut out = Vec::new();
@@ -301,6 +379,14 @@ impl Solid {
     }
 
     /// A view of face `id`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let f = b.face(b.face_at([5.0, 5.0, 10.0])?)?;
+    /// assert!(matches!(f.kind(), SurfaceKind::Plane { .. }) && (f.area() - 100.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn face(&self, id: FaceId) -> Result<FaceRef<'_>> {
         if let Some(h) = self.held() {
             if id.stamp() != self.stamp() {
@@ -316,6 +402,14 @@ impl Solid {
     }
 
     /// A view of edge `id`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let e = b.edge(b.edge_at([5.0, 0.0, 10.0])?)?;
+    /// assert!(matches!(e.kind(), CurveKind::Line { .. }) && e.uses() == 2);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edge(&self, id: EdgeId) -> Result<EdgeRef<'_>> {
         if let Some(h) = self.held() {
             if id.stamp() != self.stamp() {
@@ -336,6 +430,14 @@ impl Solid {
     }
 
     /// A view of vertex `id`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let corner = b.vertices().into_iter().map(|v| b.vertex(v)).collect::<Result<Vec<_>>>()?;
+    /// assert!(corner.iter().any(|v| v.point() == Point3::new(10.0, 10.0, 10.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn vertex(&self, id: VertexId) -> Result<VertexRef> {
         let v = self.sr_vertex("vertex", "id", id)?;
         let b = self.need("vertex")?;
@@ -343,6 +445,13 @@ impl Solid {
     }
 
     /// The edges bounding face `f`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.edges_of(b.face_at([5.0, 5.0, 10.0])?)?.len(), 4);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edges_of(&self, f: FaceId) -> Result<Vec<EdgeId>> {
         let sf = self.sr_face("edges_of", "f", f)?;
         let b = self.need("edges_of")?;
@@ -350,6 +459,13 @@ impl Solid {
     }
 
     /// The faces meeting at edge `e`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert_eq!(b.faces_of(b.edge_at([5.0, 0.0, 10.0])?)?.len(), 2);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn faces_of(&self, e: EdgeId) -> Result<Vec<FaceId>> {
         let se = self.sr_edge("faces_of", "e", e)?;
         let b = self.need("faces_of")?;
@@ -358,6 +474,14 @@ impl Solid {
     }
 
     /// The edges shared by faces `a` and `b`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let (top, front) = (b.face_at([5.0, 5.0, 10.0])?, b.face_at([5.0, 0.0, 5.0])?);
+    /// assert_eq!(b.edges_between(top, front)?, vec![b.edge_at([5.0, 0.0, 10.0])?]);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn edges_between(&self, a: FaceId, b: FaceId) -> Result<Vec<EdgeId>> {
         let fa = self.sr_face("edges_between", "a", a)?;
         let fb = self.sr_face("edges_between", "b", b)?;

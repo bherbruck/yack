@@ -15,6 +15,13 @@ use crate::{Aabb, Dir3, Point2, Point3, Result, Solid, Vec3};
 /// assert_eq!(p.normal(), Dir3::Z);
 /// assert!(Plane::new([0.0; 3], [0.0; 3]).is_err());
 /// ```
+///
+/// ```
+/// use yack::prelude::*;
+/// let p = Plane::new([1.0, 2.0, 3.0], [0.0, 0.0, 1.0])?;
+/// assert_eq!((p.origin(), p.normal()), (Point3::new(1.0, 2.0, 3.0), Dir3::Z));
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plane {
     origin: Point3,
@@ -23,6 +30,14 @@ pub struct Plane {
 
 impl Plane {
     /// The plane through `origin` with normal `normal` (made unit). Refuses a zero normal.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let p = Plane::new([0.0, 0.0, 5.0], [0.0, 0.0, 2.0])?; // the normal made unit
+    /// assert_eq!((p.origin(), p.normal().vec()), (Point3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, 1.0)));
+    /// assert!(Plane::new([0.0; 3], [0.0; 3]).is_err());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn new(origin: impl Into<Point3>, normal: impl Into<Vec3>) -> Result<Plane> {
         let origin = origin.into();
         if !origin.is_finite() {
@@ -32,16 +47,27 @@ impl Plane {
         Ok(Plane { origin, normal })
     }
     /// A point on the plane.
+    ///
+    /// (Its example is on [`Plane`].)
     pub fn origin(&self) -> Point3 {
         self.origin
     }
     /// The unit normal; the plane's front side.
+    ///
+    /// (Its example is on [`Plane`].)
     pub fn normal(&self) -> Dir3 {
         self.normal
     }
 }
 
 /// A half-line: an origin and a unit direction.
+///
+/// ```
+/// use yack::prelude::*;
+/// let r = Ray::new([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])?;
+/// assert_eq!((r.origin(), r.direction()), (Point3::new(1.0, 0.0, 0.0), Dir3::Y));
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
     origin: Point3,
@@ -50,6 +76,13 @@ pub struct Ray {
 
 impl Ray {
     /// The ray from `origin` along `direction` (made unit). Refuses a zero direction.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let r = Ray::new([0.0; 3], [3.0, 0.0, 0.0])?; // the direction made unit
+    /// assert_eq!((r.origin(), r.direction().vec()), (Point3::ORIGIN, Vec3::new(1.0, 0.0, 0.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn new(origin: impl Into<Point3>, direction: impl Into<Vec3>) -> Result<Ray> {
         let origin = origin.into();
         if !origin.is_finite() {
@@ -59,10 +92,14 @@ impl Ray {
         Ok(Ray { origin, direction })
     }
     /// The start point.
+    ///
+    /// (Its example is on [`Ray`].)
     pub fn origin(&self) -> Point3 {
         self.origin
     }
     /// The unit direction.
+    ///
+    /// (Its example is on [`Ray`].)
     pub fn direction(&self) -> Dir3 {
         self.direction
     }
@@ -70,11 +107,19 @@ impl Ray {
 
 /// A feature name, attached to faces with [`Solid::named`] or to profile segments with
 /// [`Pen::label`](crate::Pen::label).
+///
+/// ```
+/// use yack::prelude::*;
+/// assert_eq!(Tag::from("boss").as_str(), "boss");
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tag(String);
 
 impl Tag {
     /// The name.
+    ///
+    /// (Its example is on [`Tag`].)
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -136,6 +181,14 @@ macro_rules! id {
                 self.stamp
             }
             /// The index within its solid.
+            ///
+            /// ```
+            /// use yack::prelude::*;
+            /// let b = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
+            /// let indices: Vec<u32> = b.faces().iter().map(|f| f.index()).collect();
+            /// assert_eq!(indices, (0..6).collect::<Vec<u32>>());
+            /// # Ok::<(), yack::Error>(())
+            /// ```
             pub fn index(self) -> u32 {
                 self.index
             }
@@ -255,6 +308,21 @@ pub enum Role {
 }
 
 /// A read-only view of one face, from [`Solid::face`] or [`Solid::faces_where`].
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+/// let f = b.face(b.face_at([5.0, 5.0, 10.0])?)?.clone();
+/// assert_eq!(f.id(), b.face_at([5.0, 5.0, 10.0])?);
+/// assert!(matches!(f.kind(), SurfaceKind::Plane { .. }) && f.normal() == Some(Vec3::new(0.0, 0.0, 1.0)));
+/// assert!((f.area() - 100.0).abs() < 1e-9 && (f.centroid() - Point3::new(5.0, 5.0, 10.0)).length() < 1e-9);
+/// assert_eq!((f.bbox().min.z, f.bbox().max.z), (10.0, 10.0));
+/// let named = b.named("box");
+/// let g = named.face(named.face_at([5.0, 5.0, 10.0])?)?;
+/// assert_eq!(g.tags(), &[Tag::from("box")]);
+/// assert!(g.roles().iter().all(|(t, _)| t.as_str() == "box") && g.role("other").is_none());
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone)]
 pub struct FaceRef<'a> {
     pub(crate) id: FaceId,
@@ -326,18 +394,26 @@ pub(crate) enum EdgeAt<'a> {
 
 impl FaceRef<'_> {
     /// The face's id.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn id(&self) -> FaceId {
         self.id
     }
     /// The kind of surface.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn kind(&self) -> SurfaceKind {
         self.kind
     }
     /// The outward normal if the face is planar.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn normal(&self) -> Option<Vec3> {
         self.normal
     }
     /// The area (mm²).
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn area(&self) -> f64 {
         *self.area.get_or_init(|| match self.at {
             FaceAt::Springrep(b, f) => yack_springrep::measure::face_area(b, f),
@@ -345,6 +421,8 @@ impl FaceRef<'_> {
         })
     }
     /// The area centroid (it may lie off the face).
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn centroid(&self) -> Point3 {
         *self.centroid.get_or_init(|| match self.at {
             FaceAt::Springrep(b, f) => engine::point(yack_springrep::measure::face_centroid(b, f)),
@@ -353,6 +431,8 @@ impl FaceRef<'_> {
         })
     }
     /// The bounding box.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn bbox(&self) -> Aabb {
         *self.bbox.get_or_init(|| match self.at {
             FaceAt::Springrep(b, f) => {
@@ -367,20 +447,34 @@ impl FaceRef<'_> {
     }
     /// The feature names the face carries ([`Solid::named`]), sorted, without repeats: a face two
     /// operations' faces merged into carries both.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn tags(&self) -> &[Tag] {
         &self.tags
     }
     /// The face's role in each named operation it came from, as `(tag, role)`, sorted.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn roles(&self) -> &[(Tag, Role)] {
         &self.roles
     }
     /// The face's role in the operation named `tag`, if it plays one there.
+    ///
+    /// (Its example is on [`FaceRef`].)
     pub fn role(&self, tag: impl Into<Tag>) -> Option<Role> {
         let tag = tag.into();
         self.roles.iter().find(|(t, _)| *t == tag).map(|(_, r)| r.clone())
     }
     /// The outward unit normal of the face's own surface at the point of it nearest `p` (defined
     /// at creases too, unlike [`Solid::normal_at`]); `None` where the surface is singular.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let top = b.face(b.face_at([5.0, 5.0, 10.0])?)?;
+    /// assert_eq!(top.normal_at([5.0, 5.0, 10.0]), Some(Vec3::new(0.0, 0.0, 1.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> {
         match self.at {
             FaceAt::Springrep(b, f) => api::face_normal_at(b, f, engine::p3(p.into())).map(engine::vec),
@@ -388,6 +482,14 @@ impl FaceRef<'_> {
         }
     }
     /// The nearest point of this face alone to `p` (the rest of the solid ignored).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let top = b.face(b.face_at([5.0, 5.0, 10.0])?)?;
+    /// assert!((top.closest([5.0, 5.0, 20.0])? - Point3::new(5.0, 5.0, 10.0)).length() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn closest(&self, p: impl Into<Point3>) -> Result<Point3> {
         match self.at {
             FaceAt::Springrep(b, f) => {
@@ -398,6 +500,14 @@ impl FaceRef<'_> {
     }
     /// An even `nu` × `nv` grid over the face's surface parameter box, rows along u. The box spans
     /// the face's outline, so on a trimmed face some points lie off the face.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let grid = b.face(b.face_at([5.0, 5.0, 10.0])?)?.sample(3, 3);
+    /// assert!(grid.len() == 3 && grid.iter().all(|row| row.len() == 3 && row.iter().all(|p| p.z == 10.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
         match self.at {
             FaceAt::Springrep(b, f) => api::face_grid(b, f, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect(),
@@ -407,6 +517,18 @@ impl FaceRef<'_> {
 }
 
 /// A read-only view of one edge, from [`Solid::edge`] or [`Solid::edges_where`].
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+/// let e = b.edge(b.edge_at([5.0, 0.0, 10.0])?)?;
+/// assert_eq!(e.id(), b.edge_at([5.0, 0.0, 10.0])?);
+/// assert!(matches!(e.kind(), CurveKind::Line { .. }) && e.convex() == Some(true) && e.uses() == 2);
+/// assert!((e.length() - 10.0).abs() < 1e-9 && e.midpoint() == Point3::new(5.0, 0.0, 10.0));
+/// let [t0, t1] = e.range();
+/// assert!(t0 < t1 && e.ends().iter().all(|p| p.y == 0.0 && p.z == 10.0));
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone)]
 pub struct EdgeRef<'a> {
     pub(crate) id: EdgeId,
@@ -421,37 +543,53 @@ pub struct EdgeRef<'a> {
 
 impl EdgeRef<'_> {
     /// The edge's id.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn id(&self) -> EdgeId {
         self.id
     }
     /// The kind of curve.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn kind(&self) -> CurveKind {
         self.kind
     }
     /// The two end points (equal for a closed edge).
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn ends(&self) -> [Point3; 2] {
         self.ends
     }
     /// Whether the solid is convex (`Some(true)`) or concave (`Some(false)`) across the edge at
     /// its midpoint; `None` where its faces meet tangentially, or more than two faces use it.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn convex(&self) -> Option<bool> {
         self.convex
     }
     /// The length (mm).
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn length(&self) -> f64 {
         self.length
     }
     /// The point halfway along the edge.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn midpoint(&self) -> Point3 {
         self.midpoint
     }
     /// How many face uses the edge has: 2 on a manifold edge, 4 where two pieces touch along it.
     /// A face that runs along both sides of the edge counts twice.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn uses(&self) -> usize {
         self.uses
     }
     /// The edge's curve parameter range `[t0, t1]`, `t0 < t1`, running from `ends()[0]` to
     /// `ends()[1]`.
+    ///
+    /// (Its example is on [`EdgeRef`].)
     pub fn range(&self) -> [f64; 2] {
         match self.at {
             EdgeAt::Springrep(b, e) => {
@@ -463,6 +601,16 @@ impl EdgeRef<'_> {
     }
     /// The point of the edge's curve at parameter `t` (any `t`; within [`range`](EdgeRef::range)
     /// it lies on the edge).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let e = b.edge(b.edge_at([5.0, 0.0, 10.0])?)?;
+    /// let [t0, t1] = e.range();
+    /// let near = |a: Point3, b: Point3| (a - b).length() < 1e-9;
+    /// assert!(near(e.point(t0), e.ends()[0]) && near(e.point(t1), e.ends()[1]));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn point(&self, t: f64) -> Point3 {
         match self.at {
             EdgeAt::Springrep(b, e) => api::edge_point(b, e, t).map_or(self.ends[0], engine::point),
@@ -470,6 +618,15 @@ impl EdgeRef<'_> {
         }
     }
     /// `n` points spaced evenly in the edge's parameter, ends included.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let e = b.edge(b.edge_at([5.0, 0.0, 10.0])?)?;
+    /// let pts = e.points(3);
+    /// assert!(pts.len() == 3 && (pts[1] - e.midpoint()).length() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn points(&self, n: usize) -> Vec<Point3> {
         match self.at {
             EdgeAt::Springrep(b, e) => api::edge_points(b, e, n).into_iter().map(engine::point).collect(),
@@ -479,6 +636,15 @@ impl EdgeRef<'_> {
 }
 
 /// A read-only view of one vertex, from [`Solid::vertex`].
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+/// let v = b.vertex(b.vertices()[0])?;
+/// assert_eq!(v.id(), b.vertices()[0]);
+/// assert!(b.classify(&[v.point()])?[0] == Side::On);
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VertexRef {
     pub(crate) id: VertexId,
@@ -487,16 +653,27 @@ pub struct VertexRef {
 
 impl VertexRef {
     /// The vertex's id.
+    ///
+    /// (Its example is on [`VertexRef`].)
     pub fn id(&self) -> VertexId {
         self.id
     }
     /// Where it is.
+    ///
+    /// (Its example is on [`VertexRef`].)
     pub fn point(&self) -> Point3 {
         self.point
     }
 }
 
 /// How the faces of a solid came from its inputs.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
+/// let _ = b.history().is_empty();
+/// # Ok::<(), yack::Error>(())
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct History {
     _private: (),
@@ -504,6 +681,8 @@ pub struct History {
 
 impl History {
     /// Whether no face has a recorded origin.
+    ///
+    /// (Its example is on [`History`].)
     pub fn is_empty(&self) -> bool {
         true
     }
@@ -557,12 +736,26 @@ pub struct Mesh {
 
 impl Mesh {
     /// The volume the mesh encloses (mm³), assuming it is closed and outward.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!((b.mesh(0.01)?.volume() - 1000.0).abs() < 1e-6);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn volume(&self) -> f64 {
         yack_math::mesh_volume(&self.positions, &self.triangles)
     }
 
     /// Whether every directed triangle edge is matched by exactly one opposite one: the mesh is
     /// closed and consistently oriented.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// assert!(b.mesh(0.01)?.is_watertight());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn is_watertight(&self) -> bool {
         let mut count: std::collections::BTreeMap<(u32, u32), i64> = std::collections::BTreeMap::new();
         for &[a, b, c] in &self.triangles {

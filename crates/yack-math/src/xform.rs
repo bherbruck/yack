@@ -8,14 +8,35 @@ type Rows = [[f64; 4]; 3];
 const IDENTITY: Rows = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
 
 /// A rotation followed by a translation: rows `[R | t]`, `R` a proper rotation.
+///
+/// ```
+/// use yack_math::*;
+/// let m = Rigid::translation([1.0, 0.0, 0.0]);
+/// assert_eq!(m.rows()[0], [1.0, 0.0, 0.0, 1.0]);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rigid(Rows);
 
 /// A rigid map times a uniform scale, mirrors allowed: rows `[c·Q | t]`, `Q` orthogonal, `c > 0`.
+///
+/// ```
+/// use yack_math::*;
+/// let m = Similarity::from_rows([[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 1.0]])?;
+/// assert_eq!(m.rows()[2], [0.0, 0.0, 2.0, 1.0]);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Similarity(Rows);
 
 /// Any invertible affine map: rows `[A | t]`, `det A ≠ 0`.
+///
+/// ```
+/// use yack_math::*;
+/// let m = Affine::from_rows([[1.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?;
+/// assert_eq!(m.rows()[0], [1.0, 1.0, 0.0, 0.0]);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Affine(Rows);
 
@@ -89,6 +110,13 @@ impl Rigid {
     }
 
     /// A pure translation by `v`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let m = Rigid::translation([1.0, 2.0, 3.0]);
+    /// assert_eq!(m.point(Point3::ORIGIN), Point3::new(1.0, 2.0, 3.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn translation(v: impl Into<Vec3>) -> Rigid {
         let v = v.into();
         Rigid([[1.0, 0.0, 0.0, v.x], [0.0, 1.0, 0.0, v.y], [0.0, 0.0, 1.0, v.z]])
@@ -96,6 +124,14 @@ impl Rigid {
 
     /// A rotation by `by` (counter-clockwise looking down `axis`) about the line through
     /// `axis_point` along `axis`. Refuses a zero axis.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// // a quarter turn about z: x goes to y
+    /// let m = Rigid::rotation(Point3::ORIGIN, Dir3::Z, deg(90.0))?;
+    /// assert!((m.point(Point3::new(1.0, 0.0, 0.0)) - Point3::new(0.0, 1.0, 0.0)).length() < 1e-12);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn rotation(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, by: Angle) -> Result<Rigid> {
         let op = "Rigid::rotation";
         let p = axis_point.into();
@@ -128,14 +164,31 @@ impl Rigid {
     }
 
     /// The rows `[R | t]`.
+    ///
+    /// (Its example is on [`Rigid`].)
     pub const fn rows(&self) -> [[f64; 4]; 3] {
         self.0
     }
     /// The image of a point.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let m = Rigid::translation([0.0, 0.0, 5.0]);
+    /// assert_eq!(m.point(Point3::new(1.0, 1.0, 1.0)), Point3::new(1.0, 1.0, 6.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn point(&self, p: Point3) -> Point3 {
         apply_point(&self.0, p)
     }
     /// The image of a vector (rotation only).
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// // a vector turns but does not move
+    /// let m = Rigid::translation([0.0, 0.0, 5.0]);
+    /// assert_eq!(m.vec(Vec3::new(1.0, 0.0, 0.0)), Vec3::new(1.0, 0.0, 0.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn vec(&self, v: Vec3) -> Vec3 {
         apply_vec(&self.0, v)
     }
@@ -146,6 +199,13 @@ impl Similarity {
     pub const IDENTITY: Similarity = Similarity(IDENTITY);
 
     /// The reflection in the plane through `origin` square to `normal`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let m = Similarity::mirror([0.0, 0.0, 1.0], [0.0, 0.0, 1.0])?; // in the plane z = 1
+    /// assert_eq!(m.point(Point3::new(2.0, 3.0, 4.0)), Point3::new(2.0, 3.0, -2.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn mirror(origin: impl Into<Point3>, normal: impl Into<Vec3>) -> Result<Similarity> {
         let n = Dir3::new(normal)?.vec().to_array();
         let o = origin.into().to_array();
@@ -158,6 +218,16 @@ impl Similarity {
     }
 
     /// From rows `[c·Q | t]`: `Q` orthogonal (mirrors allowed), `c > 0`. Refuses anything else.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// // twice the size about the origin
+    /// let m = Similarity::from_rows([[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]])?;
+    /// assert_eq!(m.point(Point3::new(1.0, 1.0, 1.0)), Point3::new(2.0, 2.0, 2.0));
+    /// // a shear is not a similarity
+    /// assert!(Similarity::from_rows([[1.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).is_err());
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn from_rows(m: [[f64; 4]; 3]) -> Result<Similarity> {
         let op = "Similarity::from_rows";
         finite(op, &m)?;
@@ -169,10 +239,19 @@ impl Similarity {
         Ok(Similarity(m))
     }
     /// The rows `[c·Q | t]`.
+    ///
+    /// (Its example is on [`Similarity`].)
     pub const fn rows(&self) -> [[f64; 4]; 3] {
         self.0
     }
     /// The image of a point.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let m = Similarity::from_rows([[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?;
+    /// assert_eq!(m.point(Point3::ORIGIN), Point3::new(5.0, 0.0, 0.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn point(&self, p: Point3) -> Point3 {
         apply_point(&self.0, p)
     }
@@ -189,6 +268,16 @@ impl Affine {
     pub const IDENTITY: Affine = Affine(IDENTITY);
 
     /// From rows `[A | t]`. Refuses a non-finite entry or a singular `A`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// // a shear: invertible, so an affine map
+    /// let m = Affine::from_rows([[1.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?;
+    /// assert_eq!(m.point(Point3::new(0.0, 1.0, 0.0)), Point3::new(1.0, 1.0, 0.0));
+    /// // a flattening one is refused
+    /// assert!(Affine::from_rows([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]).is_err());
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn from_rows(m: [[f64; 4]; 3]) -> Result<Affine> {
         let op = "Affine::from_rows";
         finite(op, &m)?;
@@ -200,10 +289,19 @@ impl Affine {
         Ok(Affine(m))
     }
     /// The rows `[A | t]`.
+    ///
+    /// (Its example is on [`Affine`].)
     pub const fn rows(&self) -> [[f64; 4]; 3] {
         self.0
     }
     /// The image of a point.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let m = Affine::from_rows([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0]])?;
+    /// assert_eq!(m.point(Point3::new(1.0, 1.0, 1.0)), Point3::new(2.0, 1.0, 2.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn point(&self, p: Point3) -> Point3 {
         apply_point(&self.0, p)
     }

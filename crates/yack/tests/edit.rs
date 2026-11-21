@@ -117,8 +117,9 @@ fn swept_sequences_go_leg_by_leg() {
         .swept(&Motion::then(vec![Motion::slide([1.0, 0.0, 0.0]), Motion::slide([1.0, 0.0, 0.0])]))
         .unwrap();
     assert!(two.volume() > one.volume());
-    let e = brick().swept(&Motion::then(vec![Motion::then(vec![])])).unwrap_err();
-    assert_eq!((e.kind, e.op), (ErrorKind::Unsupported, "swept"));
+    // a sequence of sequences is one sequence: an empty one inside leaves the solid as it is
+    let b = brick();
+    assert_eq!(b.swept(&Motion::then(vec![Motion::then(vec![])])).unwrap().digest(), b.digest());
 }
 
 #[test]
@@ -319,4 +320,14 @@ fn a_tool_carried_round_a_loop_is_its_slides_and_turns() {
     ]))
     .unwrap();
     assert!((by_loop.volume() - by_hand.volume()).abs() < 1e-9 * by_hand.volume(), "{} {}", by_loop.volume(), by_hand.volume());
+}
+
+/// A then of thens is one flat sequence: the same solid as the flat then.
+#[test]
+fn a_sequence_of_sequences_is_one_sequence() {
+    let ball = || sphere(&Frame::WORLD, 1.0).unwrap();
+    let flat = Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 0.0]), Motion::slide([0.0, 0.0, 2.0])]);
+    let nested = Motion::then(vec![Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 0.0])]), Motion::slide([0.0, 0.0, 2.0])]);
+    assert_eq!(flat, nested);
+    assert_eq!(ball().swept(&flat).unwrap().digest(), ball().swept(&nested).unwrap().digest());
 }

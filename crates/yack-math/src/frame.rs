@@ -15,6 +15,13 @@ use crate::{Aabb, Dir3, Point3, Rigid, Vec3};
 /// // left-handed: refused
 /// assert!(Frame::new([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]).is_err());
 /// ```
+///
+/// ```
+/// use yack_math::*;
+/// let f = Frame::WORLD;
+/// assert_eq!((f.origin(), f.x(), f.y(), f.z()), (Point3::ORIGIN, Dir3::X, Dir3::Y, Dir3::Z));
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     origin: Point3,
@@ -29,6 +36,15 @@ impl Frame {
 
     /// The frame with the given origin and axes. Refuses a non-finite value, an axis that is not
     /// unit, two axes that are not perpendicular, or `x × y ≠ z`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::new([0.0, 0.0, 5.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0])?;
+    /// assert_eq!(f.point([1.0, 0.0, 0.0]), Point3::new(0.0, 1.0, 5.0));
+    /// // axes must be unit, square and right-handed
+    /// assert!(Frame::new([0.0; 3], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]).is_err());
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn new(
         origin: impl Into<Point3>,
         x: impl Into<Vec3>,
@@ -64,6 +80,13 @@ impl Frame {
     }
 
     /// The world axes moved to `origin`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::at([1.0, 2.0, 3.0]); // the world's axes, moved
+    /// assert_eq!((f.origin(), f.z()), (Point3::new(1.0, 2.0, 3.0), Dir3::Z));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn at(origin: impl Into<Point3>) -> Frame {
         Frame { origin: origin.into(), ..Frame::WORLD }
     }
@@ -96,6 +119,13 @@ impl Frame {
     }
 
     /// This frame turned by `by` about its own z axis (counter-clockwise looking down z).
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::WORLD.turned(deg(90.0)); // its x now along the world's y
+    /// assert!((f.x().vec() - Vec3::new(0.0, 1.0, 0.0)).length() < 1e-12);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn turned(&self, by: crate::Angle) -> Frame {
         let (s, c) = by.radians().sin_cos();
         let (x, y) = (self.x.vec(), self.y.vec());
@@ -105,6 +135,13 @@ impl Frame {
     }
 
     /// This frame carried by the rigid motion `m`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::WORLD.moved(&Rigid::translation([0.0, 0.0, 4.0]));
+    /// assert_eq!(f.origin(), Point3::new(0.0, 0.0, 4.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn moved(&self, m: &Rigid) -> Frame {
         // A rigid map keeps unit, orthogonal, right-handed axes; renormalising only removes
         // rounding, and an axis cannot vanish under a rotation.
@@ -113,24 +150,40 @@ impl Frame {
     }
 
     /// The origin.
+    ///
+    /// (Its example is on [`Frame`].)
     pub const fn origin(&self) -> Point3 {
         self.origin
     }
     /// The x axis.
+    ///
+    /// (Its example is on [`Frame`].)
     pub const fn x(&self) -> Dir3 {
         self.x
     }
     /// The y axis.
+    ///
+    /// (Its example is on [`Frame`].)
     pub const fn y(&self) -> Dir3 {
         self.y
     }
     /// The z axis.
+    ///
+    /// (Its example is on [`Frame`].)
     pub const fn z(&self) -> Dir3 {
         self.z
     }
 
     /// Whether the frame sits on `start` with its z along the straight run from `start` to
     /// `next` (to the model's linear and tangent tolerances); false for a run of no length.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::along([0.0; 3], [1.0, 0.0, 0.0])?;
+    /// assert!(f.starts_run(Point3::ORIGIN, Point3::new(5.0, 0.0, 0.0)));
+    /// assert!(!f.starts_run(Point3::ORIGIN, Point3::new(0.0, 5.0, 0.0)));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn starts_run(&self, start: Point3, next: Point3) -> bool {
         let run = next - start;
         let len = run.length();
@@ -143,12 +196,26 @@ impl Frame {
     }
 
     /// The world point at local coordinates `local`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let f = Frame::at([10.0, 0.0, 0.0]);
+    /// assert_eq!(f.point([1.0, 2.0, 3.0]), Point3::new(11.0, 2.0, 3.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn point(&self, local: [f64; 3]) -> Point3 {
         let [a, b, c] = local;
         self.origin + self.x.vec() * a + self.y.vec() * b + self.z.vec() * c
     }
 
     /// The world box around the local box `[lo, hi]`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let bb = Frame::at([10.0, 0.0, 0.0]).bound([0.0; 3], [1.0, 2.0, 3.0]);
+    /// assert_eq!((bb.min, bb.max), (Point3::new(10.0, 0.0, 0.0), Point3::new(11.0, 2.0, 3.0)));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn bound(&self, lo: [f64; 3], hi: [f64; 3]) -> Aabb {
         let mut b = Aabb::point(self.point(lo));
         for i in 0..8u8 {
@@ -156,6 +223,62 @@ impl Frame {
             b = b.with(self.point([pick(1, lo[0], hi[0]), pick(2, lo[1], hi[1]), pick(4, lo[2], hi[2])]));
         }
         b
+    }
+}
+
+/// One leg of a tool carried along a planar loop: a slide, or a turn by a positive angle about a
+/// line (the arc's clockwise sense carried by the axis's sign).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LoopLeg {
+    /// A straight run.
+    Slide(Vec3),
+    /// A turn about the line through `at` along `axis` by `by` (positive).
+    Turn {
+        /// A point of the axis (the arc's centre).
+        at: Point3,
+        /// The axis: the frame's z for a counter-clockwise arc, its −z for a clockwise one.
+        axis: Vec3,
+        /// The angle turned, positive.
+        by: crate::Angle,
+    },
+}
+
+impl Frame {
+    /// The legs that carry a tool round the loop of `pieces` drawn in this frame's xy plane: a
+    /// slide per line (the end's world point less the start's) and a turn per circular arc.
+    /// `Unsupported` for a conic or spline piece, which no slide or turn traces.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// // a line then a counter-clockwise half circle in the world's xy plane: a slide, then a turn
+    /// let pieces = [
+    ///     planar::Piece::Line { a: Point2::new(0.0, 0.0), b: Point2::new(4.0, 0.0) },
+    ///     planar::Piece::Arc { center: Point2::new(4.0, 1.0), radius: 1.0, start: deg(-90.0), sweep: deg(180.0) },
+    /// ];
+    /// let legs = Frame::WORLD.loop_legs(&pieces)?;
+    /// assert_eq!(legs[0], LoopLeg::Slide(Vec3::new(4.0, 0.0, 0.0)));
+    /// assert!(matches!(legs[1], LoopLeg::Turn { .. }));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn loop_legs(&self, pieces: &[crate::planar::Piece]) -> Result<Vec<LoopLeg>> {
+        use crate::planar::Piece;
+        let at = |p: crate::Point2| self.point([p.x, p.y, 0.0]);
+        pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Line { a, b } => Ok(LoopLeg::Slide(at(*b) - at(*a))),
+                Piece::Arc { center, sweep, .. } => {
+                    let z = self.z.vec();
+                    let (axis, by) = if sweep.radians() < 0.0 { (z * -1.0, crate::rad(-sweep.radians())) } else { (z, *sweep) };
+                    Ok(LoopLeg::Turn { at: at(*center), axis, by })
+                }
+                Piece::Conic { .. } | Piece::Hull(_) => Err(Error::new(
+                    yack_base::ErrorKind::Unsupported,
+                    "Motion::along_loop",
+                    "a conic or spline piece (a tool is carried only along lines and circular arcs)",
+                )),
+            })
+            .collect()
     }
 }
 
@@ -192,48 +315,5 @@ mod tests {
     fn world_is_valid() {
         let w = Frame::WORLD;
         assert_eq!(Frame::new(w.origin(), w.x(), w.y(), w.z()).unwrap(), w);
-    }
-}
-
-/// One leg of a tool carried along a planar loop: a slide, or a turn by a positive angle about a
-/// line (the arc's clockwise sense carried by the axis's sign).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum LoopLeg {
-    /// A straight run.
-    Slide(Vec3),
-    /// A turn about the line through `at` along `axis` by `by` (positive).
-    Turn {
-        /// A point of the axis (the arc's centre).
-        at: Point3,
-        /// The axis: the frame's z for a counter-clockwise arc, its −z for a clockwise one.
-        axis: Vec3,
-        /// The angle turned, positive.
-        by: crate::Angle,
-    },
-}
-
-impl Frame {
-    /// The legs that carry a tool round the loop of `pieces` drawn in this frame's xy plane: a
-    /// slide per line (the end's world point less the start's) and a turn per circular arc.
-    /// `Unsupported` for a conic or spline piece, which no slide or turn traces.
-    pub fn loop_legs(&self, pieces: &[crate::planar::Piece]) -> Result<Vec<LoopLeg>> {
-        use crate::planar::Piece;
-        let at = |p: crate::Point2| self.point([p.x, p.y, 0.0]);
-        pieces
-            .iter()
-            .map(|p| match p {
-                Piece::Line { a, b } => Ok(LoopLeg::Slide(at(*b) - at(*a))),
-                Piece::Arc { center, sweep, .. } => {
-                    let z = self.z.vec();
-                    let (axis, by) = if sweep.radians() < 0.0 { (z * -1.0, crate::rad(-sweep.radians())) } else { (z, *sweep) };
-                    Ok(LoopLeg::Turn { at: at(*center), axis, by })
-                }
-                Piece::Conic { .. } | Piece::Hull(_) => Err(Error::new(
-                    yack_base::ErrorKind::Unsupported,
-                    "Motion::along_loop",
-                    "a conic or spline piece (a tool is carried only along lines and circular arcs)",
-                )),
-            })
-            .collect()
     }
 }

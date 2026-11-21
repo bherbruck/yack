@@ -269,6 +269,7 @@ pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> {
     }
     uncross(b, &edges, &mut samples, &mut mesh.positions);
     drop_unresolved(b, &edges, &mut samples);
+    separate_twins(b, &edges, &mut samples, &mut mesh.positions);
     faces(b, opt, &samples, &mut mesh)?;
     Ok(mesh)
 }
@@ -315,6 +316,28 @@ fn uncross(
                 }
             }
             samples[e] = new;
+        }
+    }
+}
+
+/// Gives each of two or more edges between one pair of vertices that is left a single chord (after
+/// [`drop_unresolved`]) a sample at its middle: their chords would otherwise be one segment that
+/// all their faces use, four triangles on one edge (bench swept/tumbling-torus-full-turn, carried).
+fn separate_twins(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>], positions: &mut Vec<Point3>) {
+    let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (i, &e) in edges.iter().enumerate() {
+        let edge = b.edge(e);
+        if edge.curve.is_some() && samples[i].len() == 2 && edge.start != edge.end {
+            let (a, c) = (edge.start.index(), edge.end.index());
+            by_ends.entry((a.min(c), a.max(c))).or_default().push(i);
+        }
+    }
+    for group in by_ends.values().filter(|g| g.len() > 1) {
+        for &i in group {
+            let Some(curve) = &b.edge(edges[i]).curve else { continue };
+            let t = 0.5 * (samples[i][0].0 + samples[i][1].0);
+            positions.push(curve.eval(t));
+            samples[i].insert(1, (t, (positions.len() - 1) as u32));
         }
     }
 }

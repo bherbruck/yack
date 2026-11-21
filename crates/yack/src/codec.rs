@@ -5,6 +5,14 @@ use crate::{Error, ErrorKind, Result, Solid, firewall};
 
 /// The solid as bytes that [`decode`] reads back exactly; `Unsupported` for a solid held in
 /// cadrs form only (the format carries springrep bodies), never an empty stream in its place.
+///
+/// ```
+/// use yack::prelude::*;
+/// let b = block(&Frame::WORLD, [1.0, 2.0, 3.0])?;
+/// let bytes = yack::codec::encode(&b)?;
+/// assert_eq!(yack::codec::decode(&bytes)?.digest(), b.digest());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn encode(s: &Solid) -> Result<Vec<u8>> {
     Ok(match s.form("codec::encode")? {
         None => yack_springrep::codec::to_bytes(&[]),
@@ -12,6 +20,13 @@ pub fn encode(s: &Solid) -> Result<Vec<u8>> {
     })
 }
 /// The solid encoded in `b`.
+///
+/// ```
+/// use yack::prelude::*;
+/// assert_eq!(yack::codec::decode(b"not a stream").unwrap_err().kind, ErrorKind::Invalid);
+/// assert!(yack::codec::decode(&yack::codec::encode(&empty())?)?.is_empty());
+/// # Ok::<(), yack::Error>(())
+/// ```
 pub fn decode(b: &[u8]) -> Result<Solid> {
     let op = "codec::decode";
     firewall::run(op, || {

@@ -35,6 +35,16 @@ impl Solid {
     }
 
     /// Offsets every face by `distance` (positive grows).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // grown 1 all round: the faces moved out, the edges rounded, the corners balls
+    /// let pi = std::f64::consts::PI;
+    /// let grown = b.offset(1.0)?;
+    /// assert!((grown.volume() - (1600.0 + 30.0 * pi + 4.0 * pi / 3.0)).abs() < 1e-6 * grown.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn offset(&self, distance: f64) -> Result<Solid> {
         let op = "offset";
         if self.is_empty() {
@@ -56,6 +66,14 @@ impl Solid {
         })
     }
     /// Offsets `faces` by `distance` (positive grows), extending their neighbours.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let taller = b.offset_faces(&[b.face_at([5.0, 5.0, 10.0])?], 2.0)?;
+    /// assert!((taller.volume() - 1200.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> {
         let op = "offset_faces";
         let f = self.sr_faces(op, "faces", faces)?;
@@ -77,6 +95,16 @@ impl Solid {
     /// The solid with `face`'s surface replaced by `patch`, its neighbours re-trimmed to it: a
     /// Bézier or B-spline net over its whole domain, or the fill of a closed chain of curves
     /// ([`Patch::Fill`](crate::Patch::Fill)); `Invalid` for a planar fill.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // the top replaced by a flat Bézier patch two higher: the sides run up to it
+    /// let net = vec![vec![[0.0, 0.0, 12.0].into(), [0.0, 10.0, 12.0].into()], vec![[10.0, 0.0, 12.0].into(), [10.0, 10.0, 12.0].into()]];
+    /// let raised = b.replace_face(b.face_at([5.0, 5.0, 10.0])?, &Patch::Bezier { ctrl: net })?;
+    /// assert!((raised.volume() - 1200.0).abs() < 1e-6 * 1200.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn replace_face(&self, face: FaceId, patch: &crate::Patch) -> Result<Solid> {
         let op = "replace_face";
         if face.stamp() != self.stamp() {
@@ -106,6 +134,15 @@ impl Solid {
     }
 
     /// Removes `faces` and heals the gap from the neighbours.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let drilled = b.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0)?)?;
+    /// let filled = drilled.delete_faces(&[drilled.face_at([3.0, 5.0, 5.0])?])?;
+    /// assert!((filled.volume() - 1000.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn delete_faces(&self, faces: &[FaceId]) -> Result<Solid> {
         let op = "delete_faces";
         let f = self.sr_faces(op, "faces", faces)?;
@@ -134,6 +171,14 @@ impl Solid {
         })
     }
     /// Moves `faces` by the rigid motion `by`, extending their neighbours.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let taller = b.move_faces(&[b.face_at([5.0, 5.0, 10.0])?], &Rigid::translation([0.0, 0.0, 2.0]))?;
+    /// assert!((taller.volume() - 1200.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> {
         let op = "move_faces";
         let f = self.sr_faces(op, "faces", faces)?;
@@ -149,6 +194,14 @@ impl Solid {
     /// The sheet `faces` (one connected piece of this solid's boundary) thickened by `thickness`
     /// along its outward normal (negative: inward) into a new solid, the sheet alone. Where two of
     /// the faces part at a crease, `join` closes the gap; the sheet's free rims are swept square.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let plate = b.thicken(&[b.face_at([5.0, 5.0, 10.0])?], 1.0, Join::Round)?;
+    /// assert!((plate.volume() - 100.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> {
         let op = "thicken";
         let f = self.sr_faces(op, "faces", faces)?;
@@ -175,6 +228,15 @@ impl Solid {
         })
     }
     /// Hollows the solid to a wall of `thickness`, removing the `open` faces.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // open at the top, walls 1 thick inward: 1000 − 8·8·9
+    /// let cup = b.shell(&[b.face_at([5.0, 5.0, 10.0])?], 1.0)?;
+    /// assert!((cup.volume() - 424.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell";
         let f = self.sr_faces(op, "open", open)?;
@@ -197,6 +259,15 @@ impl Solid {
     }
     /// Hollows the solid by a wall of `thickness` grown outside it, removing the `open` faces: the
     /// solid's faces become the wall's inside.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // open at the top, walls 1 thick outside the block: 12·12·11 − 1000
+    /// let cup = b.shell_outward(&[b.face_at([5.0, 5.0, 10.0])?], 1.0)?;
+    /// assert!((cup.volume() - 584.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn shell_outward(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_outward";
         let f = self.sr_faces(op, "open", open)?;
@@ -218,6 +289,16 @@ impl Solid {
     /// Hollows the solid to a wall of `thickness`, removing the `open` faces, its walls joined
     /// round where they part (every point within `thickness` of the solid's inside surface is
     /// wall); [`shell`](Solid::shell) joins them sharp.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.shell_rounded(&[b.face_at([5.0, 5.0, 10.0])?], 1.0) {
+    ///     Ok(cup) => assert!(cup.volume() > 0.0 && cup.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_rounded";
         if !(thickness.is_finite() && thickness > 0.0) {
@@ -231,6 +312,16 @@ impl Solid {
     }
     /// As [`shell_outward`](Solid::shell_outward), the outside wall joined round where it parts
     /// (every point within `thickness` of the solid).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.shell_outward_rounded(&[b.face_at([5.0, 5.0, 10.0])?], 1.0) {
+    ///     Ok(cup) => assert!(cup.volume() > 0.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn shell_outward_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_outward_rounded";
         if !(thickness.is_finite() && thickness > 0.0) {
@@ -243,6 +334,16 @@ impl Solid {
         })
     }
     /// Tilts `faces` by `angle` about the neutral plane through `origin` normal to `pull`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // the four sides leaned 5° about the floor's plane, pulled up: a tapered block, valid
+    /// let sides = b.faces_at(&[[0.0, 5.0, 5.0], [10.0, 5.0, 5.0], [5.0, 0.0, 5.0], [5.0, 10.0, 5.0]])?;
+    /// let tapered = b.draft(&sides, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], deg(5.0))?;
+    /// assert!(tapered.check().is_empty() && tapered.volume() != 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn draft(&self, faces: &[FaceId], origin: impl Into<Point3>, pull: impl Into<Vec3>, angle: Angle) -> Result<Solid> {
         let op = "draft";
         let (origin, pull) = (origin.into(), pull.into());
@@ -268,6 +369,15 @@ impl Solid {
     /// planar path (or a ball / a body of revolution about the path's normal for `Fixed`); a `then`
     /// sequence leg by leg; legs `together` as cadrs's rigid motion ([`Solid::is_exact`] false when
     /// faceted); `Toward` is not supported yet.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a ball of radius 1 slid 5: a capsule, π·5 + 4π/3
+    /// let pi = std::f64::consts::PI;
+    /// let capsule = sphere(&Frame::WORLD, 1.0)?.swept(&Motion::slide([5.0, 0.0, 0.0]))?;
+    /// assert!((capsule.volume() - (5.0 * pi + 4.0 * pi / 3.0)).abs() < 1e-6 * capsule.volume());
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn swept(&self, motion: &Motion) -> Result<Solid> {
         let op = "swept";
         if self.is_empty() {
@@ -277,6 +387,14 @@ impl Solid {
     }
 
     /// The image under a similarity (rigid, uniform scale, mirror).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let turned = b.transform(&Similarity::from_rows([[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?)?;
+    /// assert!((turned.volume() - 1000.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn transform(&self, m: &Similarity) -> Result<Solid> {
         let op = "transform";
         if self.is_empty() {
@@ -289,6 +407,14 @@ impl Solid {
     }
 
     /// The image under an invertible affine map (protocol `affine`).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let stretched = b.transform_affine(&Affine::from_rows([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?)?;
+    /// assert!((stretched.volume() - 2000.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn transform_affine(&self, m: &Affine) -> Result<Solid> {
         let op = "transform_affine";
         if self.is_empty() {

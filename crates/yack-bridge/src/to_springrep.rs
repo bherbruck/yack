@@ -406,7 +406,7 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
 /// form holds them correctly. On again only when (1) springrep's mesher samples a Fitted edge
 /// the same way from both its faces, so a carried body meshes closed, and (2) a carried body's
 /// boolean is checked for cost (or bounded) so it cannot run past cadrs's time on the same op.
-const FITTED_RETRY: bool = false;
+const FITTED_RETRY: bool = cfg!(feature = "fitted-retry");
 
 /// [`to_springrep_mapped`] in one way: with springrep's pcurves, or `fitted`, cadrs's own on
 /// spline faces.

@@ -1009,3 +1009,24 @@ fn a_screwed_ball_is_a_pipe_with_ball_ends() {
     let reach = super::helix_reach(2.0, 1.5 / std::f64::consts::TAU, 3.0);
     assert!((reach - 0.75).abs() < 0.01, "{reach}");
 }
+
+#[test]
+fn a_bridged_spline_bar_is_screwed_through_a_rod_with_its_seam_moved_out() {
+    // brep-bench swept/spline-bar-screwed-through-rod, its bar made by springrep and bridged (as
+    // cadrs wrote the bridged body: its section a closed clamped B-spline extruded, its seam
+    // where the section's list starts, near the axis): cadrs's runner 1335.3195911687133.
+    let mut k = DefaultKernel::new();
+    let bar = k.import_step(include_bytes!("yack_glue/spline_bar.step")).unwrap()[0];
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (rod, _) = primitive(&mut k, &world, Prim::Cylinder { radius: 5.0, height: 20.0 }).unwrap();
+    // The bar drawn again: the same solid, its seam far from the screw's axis.
+    let moved = super::reseated_prism(&mut k, bar, [0.0; 3], [0.0, 0.0, 1.0]).unwrap().unwrap();
+    let b = k.get(moved).unwrap();
+    let seam = b.edges.iter().find(|e| matches!(e.curve, crate::native::curve::Curve::Line { .. })).unwrap().point(0.0);
+    assert!(seam.y.abs() > 11.0, "{seam:?}");
+    assert!((k.mass_properties(moved).unwrap().volume - k.mass_properties(bar).unwrap().volume).abs() < 1e-9);
+    let m = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 1440f64.to_radians(), rise_per_turn: 6.0 };
+    let (cut, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - 1335.3195911687133).abs() < 1e-6 * v, "{v}");
+}

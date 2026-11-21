@@ -54,6 +54,15 @@ impl Solid {
     }
 
     /// Rounds each edge with its own radius.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let r = b.fillet_radii(&[(b.edge_at([5.0, 0.0, 10.0])?, 1.0), (b.edge_at([5.0, 10.0, 0.0])?, 2.0)])?;
+    /// let pi = std::f64::consts::PI;
+    /// assert!((r.volume() - (1000.0 - (1.0 - pi / 4.0) * 10.0 * (1.0 + 4.0))).abs() < 1e-6 * 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_radii(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> {
         ladder::springrep_only("fillet_radii", || {
             let feature = engine::feature();
@@ -65,6 +74,17 @@ impl Solid {
 
     /// Rounds `edge` with a radius running from `r_from` at the end nearest `from` to `r_to` at
     /// the other.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // a round growing from 1 to 2 along the top front edge
+    /// match b.fillet_variable(b.edge_at([5.0, 0.0, 10.0])?, [0.0, 0.0, 10.0], 1.0, 2.0) {
+    ///     Ok(r) => assert!(r.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> {
         let from: Point3 = from.into();
         firewall::run("fillet_variable", || {
@@ -81,6 +101,16 @@ impl Solid {
     }
 
     /// A conic blend with `setback` along each face and shape `rho` (0.5 is parabolic).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.fillet_conic(&[b.edge_at([5.0, 0.0, 10.0])?], 2.0, 0.5) {
+    ///     Ok(r) => assert!(r.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> {
         let ix = crate::edit::indices(edges);
         firewall::run("fillet_conic", || {
@@ -98,6 +128,16 @@ impl Solid {
     }
 
     /// A curvature-continuous blend `offset` from the edge, with `center` controlling its depth.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.fillet_g2(&[b.edge_at([5.0, 0.0, 10.0])?], 2.0, 1.0) {
+    ///     Ok(r) => assert!(r.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center: f64) -> Result<Solid> {
         ladder::springrep_only("fillet_g2", || {
             let feature = engine::feature();
@@ -108,6 +148,16 @@ impl Solid {
     }
 
     /// A fillet of `radius` with corner setbacks of `setback` where edges meet.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.fillet_setback(&[b.edge_at([5.0, 0.0, 10.0])?], 1.0, 2.0) {
+    ///     Ok(r) => assert!(r.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
         ladder::springrep_only("fillet_setback", || {
             let feature = engine::feature();
@@ -118,6 +168,16 @@ impl Solid {
     }
 
     /// As [`fillet_setback`](Solid::fillet_setback) with curvature-continuous corner patches.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.fillet_setback_g2(&[b.edge_at([5.0, 0.0, 10.0])?], 1.0, 2.0) {
+    ///     Ok(r) => assert!(r.volume() < 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
         ladder::springrep_only("fillet_setback_g2", || {
             let feature = engine::feature();
@@ -128,6 +188,15 @@ impl Solid {
     }
 
     /// A fillet of `radius` between faces `a` and `b`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // the top and the front, rounded at 2 where they meet: (1 − π/4)·r² of section along 10
+    /// let r = b.fillet_faces(b.face_at([5.0, 5.0, 10.0])?, b.face_at([5.0, 0.0, 5.0])?, 2.0)?;
+    /// assert!((r.volume() - (1000.0 - (1.0 - std::f64::consts::PI / 4.0) * 40.0)).abs() < 1e-6 * 1000.0);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> {
         ladder::springrep_only("fillet_faces", || {
             let feature = engine::feature();
@@ -138,6 +207,18 @@ impl Solid {
     }
 
     /// Replaces `middle` with a round tangent to `side_a` and `side_b`.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// // a wall 2 thick: its top replaced by a half cylinder of radius 1
+    /// let wall = block(&Frame::WORLD, [10.0, 2.0, 10.0])?;
+    /// let (a, top, c) = (wall.face_at([5.0, 0.0, 5.0])?, wall.face_at([5.0, 1.0, 10.0])?, wall.face_at([5.0, 2.0, 5.0])?);
+    /// match wall.full_round(a, top, c) {
+    ///     Ok(r) => assert!((r.volume() - (200.0 - 10.0 * (2.0 - std::f64::consts::PI / 2.0))).abs() < 1e-6 * 200.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn full_round(&self, side_a: FaceId, middle: FaceId, side_b: FaceId) -> Result<Solid> {
         ladder::springrep_only("full_round", || {
             let feature = engine::feature();
@@ -152,6 +233,14 @@ impl Solid {
     /// Bevels `edges` by `distance`: a setback from the edge along each face, measured in the
     /// plane normal to the edge (never a face offset). Each edge brings its whole tangent chain, as
     /// for [`fillet`](Solid::fillet).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let c = b.chamfer(&[b.edge_at([5.0, 0.0, 10.0])?], 1.0)?;
+    /// assert!((c.volume() - 995.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> {
         firewall::run("chamfer", || {
             let feature = engine::feature();
@@ -168,6 +257,15 @@ impl Solid {
 
     /// Bevels `edge` with setback `d1` along `face` (one of the edge's two faces) and `d2` along
     /// the other.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// // 1 along the top, 2 down the front: a triangle of area 1 removed along 10
+    /// let c = b.chamfer_two(b.edge_at([5.0, 0.0, 10.0])?, b.face_at([5.0, 5.0, 10.0])?, 1.0, 2.0)?;
+    /// assert!((c.volume() - 990.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, d1: f64, d2: f64) -> Result<Solid> {
         firewall::run("chamfer_two", || {
             let feature = engine::feature();
@@ -184,6 +282,14 @@ impl Solid {
     }
 
     /// Bevels each edge with its own setback distance.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// let c = b.chamfer_distances(&[(b.edge_at([5.0, 0.0, 10.0])?, 1.0), (b.edge_at([5.0, 10.0, 0.0])?, 2.0)])?;
+    /// assert!((c.volume() - 975.0).abs() < 1e-9);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> {
         ladder::springrep_only("chamfer_distances", || {
             let feature = engine::feature();
@@ -195,6 +301,16 @@ impl Solid {
 
     /// Bevels `edge` with setback `distance` along `face` (one of its two faces), the bevel at
     /// `angle` to that face (cadrs only).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    /// match b.chamfer_angle(b.edge_at([5.0, 0.0, 10.0])?, b.face_at([5.0, 5.0, 10.0])?, 1.0, deg(45.0)) {
+    ///     Ok(c) => assert!((c.volume() - 995.0).abs() < 1e-6 * 1000.0),
+    ///     Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported),
+    /// }
+    /// # Ok::<(), yack::Error>(())
+    /// ```
     pub fn chamfer_angle(&self, edge: EdgeId, face: FaceId, distance: f64, angle: Angle) -> Result<Solid> {
         let op = "chamfer_angle";
         if !(distance.is_finite() && distance > 0.0) {

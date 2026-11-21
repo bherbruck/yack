@@ -54,7 +54,6 @@ pub(super) fn ball_screwed_as_pipe(k: &mut DefaultKernel, body: BodyId, point: [
     let x = radial / radius;
     let along = a.cross(&x) * radius + a.into_inner() * c;
     let t = along.normalize();
-    let u = x.cross(&t).normalize();
     // (A whole circle, as cadrs's runner draws the section: cadrs knows the sweep as a pipe.)
     let plane = crate::Plane::new(centre, x, t);
     let region = crate::Region { outer: crate::Loop { curves: vec![crate::Curve2::Circle { center: nalgebra::Point2::origin(), radius: r, source: Some(0) }] }, holes: vec![], source: Some(0) };
@@ -166,3 +165,87 @@ pub(super) fn from_its_point(k: &mut DefaultKernel, body: BodyId) -> Result<Opti
         }
     }
 }
+
+/// `tool`, where it is a prism (a B-spline section extruded: two flat caps and one side face
+/// closing on itself along one seam) that a turn or a screw about the line through `point` along
+/// `axis` carries, drawn again with its section restarted where its ruling keeps farthest from
+/// that line: the same solid, its seam moved out of the part a cut by the motion trims the tool
+/// to (cadrs's cut by a moving solid gives up where a seam lies where its envelope touches:
+/// spline-bar-screwed-through-rod, its bar made by springrep and bridged, the seam where the
+/// section's list starts, near the axis). `None` for any other body, or where the seam already
+/// lies farthest.
+pub(super) fn reseated_prism(k: &mut DefaultKernel, tool: BodyId, point: [f64; 3], axis: [f64; 3]) -> Result<Option<BodyId>> {
+    use crate::native::curve::Curve;
+    use crate::native::surface::Surface;
+    let b = k.get(tool)?;
+    let (mut planes, mut sides) = (0, Vec::new());
+    for f in &b.faces {
+        match &f.surf {
+            Surface::Plane { .. } => planes += 1,
+            Surface::Extrusion { c: Curve::Nurbs(n), d } => sides.push((n.clone(), *d)),
+            _ => return Ok(None),
+        }
+    }
+    let ([(n, d)], 2) = (sides.as_slice(), planes) else { return Ok(None) };
+    let (n, d) = (n.clone(), *d);
+    let Some(a) = nalgebra::Unit::try_new(v3(axis), 0.0) else { return Ok(None) };
+    let o = p3(point);
+    let across = d.cross(&a);
+    if across.norm() <= crate::native::tol::ANGULAR * d.norm() {
+        return Ok(None);
+    }
+    let across = across.normalize();
+    // How far the ruling through the section's point at t keeps from the axis.
+    let off = |t: f64| (n.point(t) - o).dot(&across).abs();
+    let (t0, t1) = n.range();
+    let steps = 1024;
+    let best = (0..=steps).map(|i| t0 + (t1 - t0) * i as f64 / steps as f64).fold(t0, |m, t| if off(t) > off(m) { t } else { m });
+    if off(best) <= off(t0) * (1.0 + crate::native::tol::REL_POINT) {
+        return Ok(None);
+    }
+    // The section in its plane (square to the rulings, through the old seam's point).
+    let dn = d.normalize();
+    let origin = n.point(t0);
+    let flat = n.cps.iter().all(|h| ((Point3::new(h.x / h.w, h.y / h.w, h.z / h.w) - origin).dot(&dn)).abs() <= crate::native::tol::POINT);
+    // The caps' offsets along the rulings from the section's plane: one at 0, the other the
+    // prism's length (signed).
+    let offs: Vec<f64> = b.faces.iter().filter_map(|f| match &f.surf { Surface::Plane { f: fr } => Some((fr.o - origin).dot(&dn)), _ => None }).collect();
+    let length = match offs.as_slice() {
+        [a, l] | [l, a] if a.abs() <= crate::native::tol::POINT && l.abs() > crate::native::tol::POINT => *l,
+        _ => return Ok(None),
+    };
+    if !flat {
+        return Ok(None);
+    }
+    // The section restarted where its ruling keeps farthest from the axis: a closed clamped
+    // B-spline (as the bridge carries a periodic one) split there and joined the other way
+    // round; drawn in its plane (square to the rulings) and extruded as long as the prism.
+    let closed = n.knots.len() == n.cps.len() + n.degree + 1
+        && n.knots.iter().take(n.degree + 1).all(|&k| k == t0)
+        && n.knots.iter().rev().take(n.degree + 1).all(|&k| k == t1)
+        && (n.point(t0) - n.point(t1)).norm() <= crate::native::tol::POINT;
+    if !closed {
+        return Ok(None);
+    }
+    let Ok(r) = n.restarted(best) else { return Ok(None) };
+    let x = across.cross(&dn).normalize();
+    let normal = dn * length.signum();
+    let y = normal.cross(&x);
+    let poles = r.cps.iter().map(|h| { let q = Point3::new(h.x / h.w, h.y / h.w, h.z / h.w) - origin; nalgebra::Point2::new(q.dot(&x), q.dot(&y)) }).collect();
+    let weights = if r.is_rational() { r.cps.iter().map(|h| h.w).collect() } else { Vec::new() };
+    let section = crate::Curve2::Spline { degree: r.degree, knots: r.knots.clone(), poles, weights, source: Some(0) };
+    let region = crate::Region { outer: crate::Loop { curves: vec![section] }, holes: vec![], source: Some(0) };
+    let was = k.mass_properties(tool)?.volume;
+    let Ok(made) = k.extrude(&crate::Profile::new(crate::Plane::new(origin, x, normal), vec![region]), crate::Extent::Blind(length.abs())).and_then(|m| m.first()) else { return Ok(None) };
+    let (bw, bm) = (k.bounding_box(tool)?, k.bounding_box(made)?);
+    // (Boxes found to a part in a million of their size: a seam vertex can stand a little
+    // inside the extreme the box search finds on the smooth side.)
+    let near = crate::native::tol::REL_POINT * (bw.max - bw.min).norm().max(1.0) * 10.0;
+    let placed = (bw.min - bm.min).norm() <= near && (bw.max - bm.max).norm() <= near;
+    if !placed || (k.mass_properties(made)?.volume - was).abs() > crate::native::tol::REL_POINT * was.abs() {
+        k.release(made);
+        return Ok(None);
+    }
+    Ok(Some(made))
+}
+

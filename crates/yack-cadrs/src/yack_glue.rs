@@ -878,6 +878,12 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
     // would cut by the trimmed tool only as a mesh (a torus or a wheel: it cuts by those
     // exactly whole, by their envelope), the whole tool. Under exact_only a mesh is a refusal
     // at once, so the second try costs nothing.
+    // (A bridged prism's seam moved out of the part the trim keeps: the same tool.)
+    let reseated = match *m {
+        Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } | Move::Climb { point, axis, .. } => reseated_prism(k, tool, point, axis)?,
+        _ => None,
+    };
+    let tool = reseated.unwrap_or(tool);
     let trimmed = match *m {
         Move::Turn { point, axis, .. } | Move::Screw { point, axis, .. } | Move::Climb { point, axis, .. } => {
             near_axis(k, tool, target, point, axis)?
@@ -885,14 +891,19 @@ fn cut_swept_one(k: &mut DefaultKernel, target: BodyId, tool: BodyId, m: &Move) 
         _ => tool,
     };
     let r = cut_by(k, target, trimmed, m);
-    if trimmed == tool {
-        return r;
+    let r = if trimmed == tool {
+        r
+    } else {
+        k.release(trimmed);
+        match r {
+            Err(_) => cut_by(k, target, tool, m),
+            r => r,
+        }
+    };
+    if let Some(t) = reseated {
+        k.release(t);
     }
-    k.release(trimmed);
-    match r {
-        Err(_) => cut_by(k, target, tool, m),
-        r => r,
-    }
+    r
 }
 
 /// `target` less what `used` passes through along `m`, a mesh refused.
@@ -1308,7 +1319,7 @@ fn faces_to_edges(ix: &[u64]) -> Vec<EdgeId> {
 mod held;
 mod redraw;
 pub use held::{Carried, Drawn3, carry_in, carry_out, display, mesh};
-use redraw::{ball_screwed_as_pipe, from_its_point};
+use redraw::{ball_screwed_as_pipe, from_its_point, reseated_prism};
 #[cfg(test)]
 use redraw::helix_reach;
 

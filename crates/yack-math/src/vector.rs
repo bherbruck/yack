@@ -4,6 +4,13 @@ use core::ops::{Add, Mul, Neg, Sub};
 use yack_base::{Error, Result};
 
 /// A point in the plane (mm).
+///
+/// ```
+/// use yack_math::*;
+/// let p = Point2::new(1.0, 2.0);
+/// assert!(p.is_finite() && p.to_array() == [1.0, 2.0]);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point2 {
     /// x coordinate.
@@ -15,6 +22,13 @@ pub struct Point2 {
 /// A point in space (mm).
 ///
 /// `[f64; 3]` converts into it, so every API taking `impl Into<Point3>` accepts `[1.0, 2.0, 3.0]`.
+///
+/// ```
+/// use yack_math::*;
+/// let p = Point3::new(1.0, 2.0, 3.0);
+/// assert!(p.is_finite() && p.to_array() == [1.0, 2.0, 3.0] && p.to_vec() == Vec3::new(1.0, 2.0, 3.0));
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point3 {
     /// x coordinate.
@@ -26,6 +40,13 @@ pub struct Point3 {
 }
 
 /// A displacement in space (mm), of any length.
+///
+/// ```
+/// use yack_math::*;
+/// let v = Vec3::new(1.0, 2.0, 3.0);
+/// assert!(v.is_finite() && v.to_array() == [1.0, 2.0, 3.0] && v - v == Vec3::ZERO);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vec3 {
     /// x component.
@@ -37,23 +58,47 @@ pub struct Vec3 {
 }
 
 /// A unit direction in space. Built only by [`Dir3::new`], which normalises and refuses zero.
+///
+/// ```
+/// use yack_math::*;
+/// let d = Dir3::new([0.0, 0.0, 2.0])?; // made unit
+/// assert_eq!(d.vec(), Vec3::new(0.0, 0.0, 1.0));
+/// # Ok::<(), yack_base::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dir3(Vec3);
 
 impl Point2 {
     /// The point `(x, y)`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let p = Point2::new(3.0, 4.0);
+    /// assert_eq!((p.x, p.y), (3.0, 4.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub const fn new(x: f64, y: f64) -> Point2 {
         Point2 { x, y }
     }
     /// Whether both coordinates are finite.
+    ///
+    /// (Its example is on [`Point2`].)
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }
     /// The distance to `other`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert_eq!(Point2::new(0.0, 0.0).distance(Point2::new(3.0, 4.0)), 5.0);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn distance(self, other: Point2) -> f64 {
         (self.x - other.x).hypot(self.y - other.y)
     }
     /// The coordinates as an array.
+    ///
+    /// (Its example is on [`Point2`].)
     pub const fn to_array(self) -> [f64; 2] {
         [self.x, self.y]
     }
@@ -69,22 +114,41 @@ impl Point3 {
     /// The origin.
     pub const ORIGIN: Point3 = Point3 { x: 0.0, y: 0.0, z: 0.0 };
     /// The point `(x, y, z)`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let p = Point3::new(1.0, 2.0, 3.0);
+    /// assert_eq!(p - Point3::ORIGIN, Vec3::new(1.0, 2.0, 3.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub const fn new(x: f64, y: f64, z: f64) -> Point3 {
         Point3 { x, y, z }
     }
     /// Whether all coordinates are finite.
+    ///
+    /// (Its example is on [`Point3`].)
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
     /// The distance to `other`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert_eq!(Point3::new(1.0, 2.0, 2.0).distance(Point3::ORIGIN), 3.0);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn distance(self, other: Point3) -> f64 {
         (self - other).length()
     }
     /// The displacement from the origin to this point.
+    ///
+    /// (Its example is on [`Point3`].)
     pub const fn to_vec(self) -> Vec3 {
         Vec3 { x: self.x, y: self.y, z: self.z }
     }
     /// The coordinates as an array.
+    ///
+    /// (Its example is on [`Point3`].)
     pub const fn to_array(self) -> [f64; 3] {
         [self.x, self.y, self.z]
     }
@@ -100,18 +164,39 @@ impl Vec3 {
     /// The zero vector.
     pub const ZERO: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
     /// The vector `(x, y, z)`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let v = Vec3::new(1.0, 2.0, 2.0);
+    /// assert_eq!(v * 2.0, Vec3::new(2.0, 4.0, 4.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub const fn new(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3 { x, y, z }
     }
     /// Whether all components are finite.
+    ///
+    /// (Its example is on [`Vec3`].)
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
     /// The dot product.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert_eq!(Vec3::new(1.0, 2.0, 3.0).dot(Vec3::new(4.0, 5.0, 6.0)), 32.0);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn dot(self, o: Vec3) -> f64 {
         self.x * o.x + self.y * o.y + self.z * o.z
     }
     /// The cross product.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert_eq!(Vec3::new(1.0, 0.0, 0.0).cross(Vec3::new(0.0, 1.0, 0.0)), Vec3::new(0.0, 0.0, 1.0));
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn cross(self, o: Vec3) -> Vec3 {
         Vec3 {
             x: self.y * o.z - self.z * o.y,
@@ -120,10 +205,18 @@ impl Vec3 {
         }
     }
     /// The Euclidean length.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert_eq!(Vec3::new(1.0, 2.0, 2.0).length(), 3.0);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
     pub fn length(self) -> f64 {
         self.dot(self).sqrt()
     }
     /// The components as an array.
+    ///
+    /// (Its example is on [`Vec3`].)
     pub const fn to_array(self) -> [f64; 3] {
         [self.x, self.y, self.z]
     }
@@ -173,6 +266,8 @@ impl Dir3 {
         Dir3(v)
     }
     /// The unit vector.
+    ///
+    /// (Its example is on [`Dir3`].)
     pub const fn vec(self) -> Vec3 {
         self.0
     }
