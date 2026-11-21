@@ -1,7 +1,8 @@
 // yack: springrep module src/edit/tweak/tests.rs
 // Adapted from springrep@a03e8a1 src/edit/tweak/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from edit/tweak/tests.rs to tweak/tests.rs (M2.4, T6); paths only.
 use super::*;
+use crate::edit::{draft, offset_faces};
 use crate::{measure, profile::Profile, sweep, topo::FaceName};
 
 fn cube() -> Brep {

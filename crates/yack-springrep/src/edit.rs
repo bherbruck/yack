@@ -25,10 +25,29 @@ use crate::{
 };
 
 mod affine;
-pub(crate) mod tweak;
 
 pub use affine::{Affine, affine};
-pub use tweak::{draft, move_faces, move_faces_by, offset_faces};
+pub use crate::tweak::{move_faces, move_faces_by};
+
+/// `b` with each of `faces` tilted by `angle` about the line where it meets the `neutral` plane, its
+/// outward normal turned towards the plane's normal: positive angles narrow the part along it.
+pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<Brep> {
+    merged(crate::tweak::draft(b, faces, neutral, angle)?)
+}
+
+/// `b` with each face of `by` moved that far along its outward normal, onto its offset surface.
+pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> {
+    merged(crate::tweak::offset_faces(b, by)?)
+}
+
+/// A move's solid, the faces round any that closed on the way merged; if that fails, the error the
+/// direct move gave.
+fn merged(m: crate::tweak::Moved) -> Result<Brep> {
+    match m.merge {
+        None => Ok(m.brep),
+        Some(e) => boolean::unify(&m.brep).map_err(|_| e),
+    }
+}
 
 fn named(segment: Segment, name: &str) -> NamedSegment {
     NamedSegment::new(segment, name)
@@ -61,7 +80,7 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
             .map(|f| (f, if open.contains(&f) { open_by } else { by }))
             .filter(|&(_, d)| d != 0.0)
             .collect();
-        tweak::offset_faces(s, &by)
+        offset_faces(s, &by)
     };
     match wall {
         Wall::Inward => {
@@ -101,7 +120,7 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
         return Err(Error::Unsupported("an inward offset".into()));
     }
     let by: HashMap<FaceId, f64> = s.face_ids().map(|f| (f, distance)).collect();
-    let moved = tweak::offset_faces(s, &by)?;
+    let moved = offset_faces(s, &by)?;
     let edges = convex_edges(&moved)?;
     let mut out = if edges.is_empty() {
         moved
@@ -177,7 +196,7 @@ fn dimple(o: Point3, up: Vec3, r: f64, d: f64, feature: &str) -> Result<Brep> {
 /// it is negative: `s` with them moved, less `s`, or `s` less `s` with them moved in.
 pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
     let by: HashMap<FaceId, f64> = faces.iter().map(|&f| (f, thickness)).collect();
-    let moved = tweak::offset_faces(s, &by)?;
+    let moved = offset_faces(s, &by)?;
     if thickness > 0.0 {
         boolean::difference(&moved, s)
     } else {

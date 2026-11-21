@@ -37,6 +37,7 @@ pub mod step;
 pub mod sweep;
 pub mod tol;
 pub mod topo;
+pub(crate) mod tweak;
 
 pub use error::{Error, Result};
 

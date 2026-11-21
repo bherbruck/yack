@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use crate::{
     check,
     topo::coedge_params,
-    edit::tweak,
+    tweak,
     geom::Surface,
     math::{Aabb, Frame, Point3},
     measure, tol,

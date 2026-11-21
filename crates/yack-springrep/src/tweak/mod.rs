@@ -1,6 +1,6 @@
 // yack: Planar faces of a solid moved onto new planes, its topology kept: every vertex goes where the
 // Adapted from springrep@a03e8a1 src/edit/tweak.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from edit/tweak.rs to tweak/mod.rs (M2.4, T6); paths only.
 //! Planar faces of a solid moved onto new planes, its topology kept: every vertex goes where the
 //! planes of its faces meet and every edge between two planes becomes the line between its new
 //! vertices. Drafts and shells of solids bounded by planes are made this way.
@@ -92,9 +92,29 @@ fn clear_of_contacts<'a>(b: &Brep, faces: impl IntoIterator<Item = &'a FaceId>) 
     unsupported("moving a face up to where the solid touches itself")
 }
 
+/// A move's result: the solid, and where faces closed on the way, the error the direct move gave.
+/// The caller then merges the faces round the closed ones (`boolean::unify`, which this layer may
+/// not call), and reports that error if the merge fails.
+pub(crate) struct Moved {
+    pub brep: Brep,
+    pub merge: Option<Error>,
+}
+
+/// The direct move, or where it fails, the move followed through the faces that close on the way.
+fn followed(direct: Result<Brep>, through: impl FnOnce() -> Result<(Brep, bool)>) -> Result<Moved> {
+    match direct {
+        Ok(brep) => Ok(Moved { brep, merge: None }),
+        Err(e) => match through() {
+            Ok((brep, true)) => Ok(Moved { brep, merge: Some(e) }),
+            Ok((brep, false)) => Ok(Moved { brep, merge: None }),
+            Err(_) => Err(e),
+        },
+    }
+}
+
 /// `b` with each of `faces` tilted by `angle` about the line where it meets the `neutral` plane, its
 /// outward normal turned towards the plane's normal: positive angles narrow the part along it.
-pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<Brep> {
+pub(crate) fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<Moved> {
     let k = neutral.z;
     let mut moved = HashMap::new();
     let mut cones = HashMap::new();
@@ -160,7 +180,7 @@ pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<
         }
         move_faces(b, &surfaces)
     };
-    direct.or_else(|e| through::through(b, &paths).map_err(|_| e))
+    followed(direct, || through::through(b, &paths))
 }
 
 /// [`move_planes`], or [`move_faces`] where a curved face meets the moved planes.
@@ -178,10 +198,10 @@ pub(crate) fn planes_or_faces(b: &Brep, moved: &HashMap<FaceId, Frame>) -> Resul
 }
 
 /// `b` with each face of `by` moved that far along its outward normal, onto its offset surface.
-pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> {
+pub(crate) fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Moved> {
     // Where a face closes on the way, a round offset past its radius or a riser between two faces
     // brought level, the offset is followed there.
-    offset_kept(b, by).or_else(|e| {
+    followed(offset_kept(b, by), || {
         let mut paths: HashMap<FaceId, through::Path> = HashMap::new();
         for (&f, &d) in by {
             let face = b.face(f);
@@ -195,7 +215,7 @@ pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> {
                 }),
             );
         }
-        through::through(b, &paths).map_err(|_| e)
+        through::through(b, &paths)
     })
 }
 

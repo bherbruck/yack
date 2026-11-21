@@ -1,6 +1,6 @@
 // yack: A move of faces followed from where they are to where they go, its topology changing where a
 // Adapted from springrep@a03e8a1 src/edit/tweak/through.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from edit/tweak/through.rs to tweak/through.rs (M2.4, T6); paths only.
 //! A move of faces followed from where they are to where they go, its topology changing where a
 //! face closes on the way: walls drafted until they meet close over the top between them, a step
 //! raised level with the top closes the riser, and a round offset past its radius closes into the
@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use super::{move_faces_pinned, near_uv};
 use crate::{
     Result,
-    boolean::unify,
     geom::{Cone, Surface},
     math::{Frame, Vec2},
     tol,
@@ -52,8 +51,9 @@ pub(crate) fn opening(to: &Cone, s: f64) -> Surface {
 const CLOSED: f64 = 10.0 * tol::LINEAR;
 
 /// `b` with the faces of `paths` moved to the ends of their paths, its topology changed where a
-/// face closes on the way.
-pub(crate) fn through(b: &Brep, paths: &HashMap<FaceId, Path>) -> Result<Brep> {
+/// face closes on the way, and whether one did: the faces round it are then for the caller to merge
+/// (`boolean::unify`, which this layer may not call).
+pub(crate) fn through(b: &Brep, paths: &HashMap<FaceId, Path>) -> Result<(Brep, bool)> {
     let mut cur = b.clone();
     // The face of `b` each face of `cur` comes from.
     let mut from: HashMap<FaceId, FaceId> = b.face_ids().map(|f| (f, f)).collect();
@@ -74,8 +74,7 @@ pub(crate) fn through(b: &Brep, paths: &HashMap<FaceId, Path>) -> Result<Brep> {
             move_faces_pinned(&cur, &moved, &HashMap::new())
         };
         let last = match at(1.0) {
-            Ok(out) if changed => return unify(&out),
-            Ok(out) => return Ok(out),
+            Ok(out) => return Ok((out, changed)),
             Err(e) => e,
         };
         let (mut lo, mut hi) = (s0, 1.0);
