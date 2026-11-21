@@ -14,7 +14,7 @@ the limit is 10. Documented exceptions:
 |---|---|---|
 | boolean/golf-ball | 18 | The 62 icosahedral directions (vertices, edge midpoints, face centres) are plain data built in Rust; no kernel call is composed or missing (accepted by the lead) |
 | swept/spline-bar-screwed-through-rod | 11 | Motion struct literals need typed `Point3`/`Vec3` fields; open API request: `Motion::screw(axis_point, axis, angle, rise)` taking `impl Into` would make it 10 |
-| cnc/flat-end-mill-profile | 31 | data: the cross's rounded-corner toolpath (tangent points and arc centres) computed inline; one `cut_swept` over `Motion::Then` of slides and turns |
+| cnc/flat-end-mill-profile | 13 | data: the cross's 13 corners (listed from the plunge point); `Loop::rounded` and one `Motion::along_loop` per depth in one `cut_swept` |
 | cnc/bull-nose-profile | 24 | data: the flower's lobe/valley centres and arc sweeps computed inline; one `cut_swept` over `Motion::Then` of turns |
 | cnc/pocket-with-an-island | 78 | data: a ~400-move 2.5-axis program (raster intervals, rounded wall path, island circle, bore, pecked holes) for three tools; three `cut_swept` calls |
 | cnc/ball-end-surface-raster | 16 | data: 944 raster points sampled from the surface f(x, y); one `cut_swept` over `Motion::through` them |
