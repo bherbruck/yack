@@ -206,7 +206,7 @@ pub fn ratchet_files(ctx: &Ctx) -> Vec<(&'static str, String)> {
         ("eps.txt", format!("# small float literals without `// tol:` per crate (gate 7; may only fall)\n{}", fmt(source::eps_counts(ctx)))),
         ("filesize.txt", format!("# files over 1500 lines and their allowed length (gate 6; may only fall)\n{}", fmt(files::oversize(ctx)))),
         ("hidden.txt", format!("# hidden-state sites per temporary crate (gate 8; may only fall)\n{}", fmt(source::hidden_counts(ctx)))),
-        ("lints.txt", format!("# denied-lint sites per temporary crate (gate 9; may only fall)\n{}", fmt(lints::lint_counts(ctx)))),
+        ("lints.txt", format!("# denied-lint sites per temporary crate, and contract panics per listed shipping crate (gate 9; may only fall)\n{}", fmt(lints::lint_counts(ctx)))),
         ("cadrs-loc.txt", format!(
             "# yack-cadrs lines of code (gate 12): `{}` (src/native/**) may only fall; `{}` (src/facade/** + yack_glue.rs) is recorded, not ratcheted, until M4\n{}",
             deps::CADRS_NATIVE,

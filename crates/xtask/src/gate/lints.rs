@@ -108,11 +108,16 @@ pub fn lints(ctx: &Ctx, out: &mut Out) {
     }
     let mut banned: Vec<String> = DENIED.iter().map(|l| format!("clippy::{l}")).collect();
     banned.push("unsafe_code".to_string());
+    let rows = ctx.ratchet("lints.txt");
     for (name, spec, srcs) in ctx.crates() {
         if !spec.ships() || spec.is_temporary() {
             continue;
         }
         let mut banned = banned.clone();
+        // A crate with counted contract panics (scores/lints.txt) may mark them at the site.
+        if rows.contains_key(name) {
+            banned.retain(|l| l != "clippy::panic");
+        }
         if name == "yack" {
             banned.extend(["missing_docs".to_string(), "clippy::float_arithmetic".to_string()]);
         }
@@ -129,6 +134,47 @@ pub fn lints(ctx: &Ctx, out: &mut Out) {
         }
     }
     temporary_lints(ctx, out);
+    contract_lints(ctx, out);
+}
+
+/// The explicit contract panics in a shipping crate's non-test code: `panic!` and the
+/// non-debug `assert!`, `assert_eq!` and `assert_ne!` (an index or shape contract that an
+/// nalgebra-shaped API can't return as an error).
+fn contract_sites(srcs: &[Src]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in srcs {
+        for (k, t) in s.toks.iter().enumerate() {
+            let mac = ["panic", "assert", "assert_eq", "assert_ne"].iter().any(|m| t.is_ident(m))
+                && s.toks.get(k + 1).is_some_and(|x| x.is_punct("!"));
+            if s.live(k) && mac {
+                out.push(format!("{}:{}: `{}!`", s.path, t.line, t.ident().unwrap_or_default()));
+            }
+        }
+    }
+    out
+}
+
+/// Gate 9 for a shipping crate with a scores/lints.txt row: its contract panics are counted
+/// debt that may only fall (they go when the crate's callers move onto checked types).
+fn contract_lints(ctx: &Ctx, out: &mut Out) {
+    let rows = ctx.ratchet("lints.txt");
+    for (name, spec, srcs) in ctx.crates() {
+        if !spec.ships() || spec.is_temporary() {
+            continue;
+        }
+        let Some(&max) = rows.get(name) else { continue };
+        let sites = contract_sites(srcs);
+        if sites.len() > max {
+            out.fail(format!("`{name}` has {} contract panics (scores/lints.txt allows {max})", sites.len()));
+            for x in sites.iter().take(10) {
+                out.fail(format!("  {x}"));
+            }
+        } else if sites.len() < max {
+            out.note(format!("`{name}`: {} contract panics, under its ratchet {max}: lower its scores/lints.txt row to {}", sites.len(), sites.len()));
+        } else {
+            out.note(format!("`{name}`: {} contract panics (ratchet {max})", sites.len()));
+        }
+    }
 }
 
 /// Sites in a temporary crate's non-test code that the workspace lints would deny: `.unwrap()`,
@@ -168,14 +214,23 @@ fn temporary_banned() -> Vec<String> {
     b
 }
 
-/// Denied-lint sites per temporary crate (scores/lints.txt).
+/// Denied-lint sites per temporary crate, and contract panics per shipping crate that has a
+/// row already (scores/lints.txt).
 pub fn lint_counts(ctx: &Ctx) -> std::collections::BTreeMap<String, usize> {
     let banned = temporary_banned();
-    ctx.crates()
+    let rows = ctx.ratchet("lints.txt");
+    let mut out: std::collections::BTreeMap<String, usize> = ctx
+        .crates()
         .filter(|(_, s, _)| s.is_temporary())
         .map(|(n, _, srcs)| (n.to_string(), temporary_sites(srcs, &banned).len()))
         .filter(|(_, c)| *c > 0)
-        .collect()
+        .collect();
+    for (n, s, srcs) in ctx.crates() {
+        if s.ships() && !s.is_temporary() && rows.contains_key(n) {
+            out.insert(n.to_string(), contract_sites(srcs).len());
+        }
+    }
+    out
 }
 
 /// Gate 9 for temporary crates: they may lack `[lints] workspace = true` while being untangled,
@@ -194,7 +249,9 @@ fn temporary_lints(ctx: &Ctx, out: &mut Out) {
             for x in sites.iter().take(10) {
                 out.fail(format!("  {x}"));
             }
-        } else if !sites.is_empty() || max > 0 {
+        } else if sites.len() < max {
+            out.note(format!("temporary `{name}`: {} denied-lint sites, under its ratchet {max}: lower its scores/lints.txt row to {}", sites.len(), sites.len()));
+        } else if !sites.is_empty() {
             out.note(format!("temporary `{name}`: {} denied-lint sites (ratchet {max})", sites.len()));
         }
     }
@@ -264,5 +321,25 @@ pub fn facade(ctx: &Ctx, out: &mut Out) {
                 out.fail(format!("{path}: disallowed-methods lacks root clippy.toml's `{m}`"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Ctx, Out};
+    use crate::meta::load_fixture;
+    use std::path::Path;
+
+    /// A shipping crate's contract panics under its row pass, and the gate says to lower the row
+    /// (`debug_assert!` and test code are not counted).
+    #[test]
+    fn contract_panics_under_their_row_suggest_lowering_it() {
+        let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+        let ctx = Ctx::new(load_fixture(&f.join("base"), Some(&f.join("pass_09_contract_under_row"))).unwrap()).unwrap();
+        let mut out = Out::default();
+        super::lints(&ctx, &mut out);
+        assert!(out.fails.is_empty(), "{:?}", out.fails);
+        assert!(out.notes.iter().any(|n| n.contains("`yack-geom`: 2 contract panics") && n.contains("lower its scores/lints.txt row to 2")), "{:?}", out.notes);
+        assert_eq!(super::lint_counts(&ctx).get("yack-geom"), Some(&2));
     }
 }
