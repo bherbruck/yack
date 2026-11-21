@@ -138,7 +138,7 @@ impl Ctx<'_> {
 
 /// A box holding the edge.
 fn piece_box(e: &Piece) -> Bbox {
-    super::boolean::curve_bbox(&e.curve, e.t0, e.t1)
+    super::curve::curve_bbox(&e.curve, e.t0, e.t1)
 }
 
 /// The distance from `p` to an edge.

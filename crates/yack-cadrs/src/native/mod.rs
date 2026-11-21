@@ -1,7 +1,7 @@
 // yack: The native (pure Rust) B-rep kernel: exact curves and surfaces, boundary representation,.
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/mod.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
 // Changes: CADRS_* environment switches fixed at their unset defaults; crate paths cadrs_kernel::
-//   -> yack_cadrs::.
+//   -> yack_cadrs::; M4.0a: module key added, axes removed.
 //! The native (pure Rust) B-rep kernel: exact curves and surfaces, boundary representation,
 //! booleans, features, tessellation and exchange, with no C or C++ dependency.
 //!
@@ -57,11 +57,6 @@ pub mod affine;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod affine;
-#[cfg(feature = "testkit")]
-pub mod axes;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod axes;
 #[cfg(feature = "testkit")]
 pub mod blend;
 #[cfg(not(feature = "testkit"))]
@@ -181,6 +176,11 @@ pub mod fillet_geom;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fillet_geom;
+#[cfg(feature = "testkit")]
+pub mod key;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod key;
 #[cfg(feature = "testkit")]
 pub mod fingerprint;
 #[cfg(not(feature = "testkit"))]

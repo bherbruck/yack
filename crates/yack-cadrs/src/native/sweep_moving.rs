@@ -2857,7 +2857,7 @@ fn assemble(
         let mut hits: Vec<(usize, f64, usize)> = Vec::new();
         for &e in &free {
             let ed = &b.edges[e];
-            let bb = super::boolean::curve_bbox(&ed.curve, ed.t[0], ed.t[1]).grow(near);
+            let bb = super::curve::curve_bbox(&ed.curve, ed.t[0], ed.t[1]).grow(near);
             let mut best: Option<(f64, f64, usize)> = None;
             for &w in &ends {
                 if ed.v.contains(&w) || !bb.contains(&b.verts[w].p) {

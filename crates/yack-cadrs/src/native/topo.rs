@@ -772,7 +772,7 @@ impl Body {
         }
         for e in &self.edges {
             if !e.degenerate {
-                bb.union(&super::boolean::curve_bbox(&e.curve, e.t[0], e.t[1]));
+                bb.union(&super::curve::curve_bbox(&e.curve, e.t[0], e.t[1]));
             }
         }
         for fi in 0..self.faces.len() {
@@ -806,9 +806,9 @@ impl Body {
         for c in f.loops.iter().flatten() {
             let e = &self.edges[c.edge];
             if !e.degenerate {
-                bb.union(&super::boolean::curve_bbox(&e.curve, e.t[0], e.t[1]));
+                bb.union(&super::curve::curve_bbox(&e.curve, e.t[0], e.t[1]));
             }
-            uv.union(&super::boolean::curve_bbox(&c.pc, e.t[0], e.t[1]));
+            uv.union(&super::curve::curve_bbox(&c.pc, e.t[0], e.t[1]));
         }
         if !matches!(f.surf, Surface::Plane { .. }) && !uv.is_empty() {
             bb.union(
@@ -1880,11 +1880,11 @@ pub(super) fn pcurve_gap_kept(
         return pcurve_gap(e, pc, surf);
     }
     let sk = *surface_key.get_or_insert_with(|| {
-        let mut h = super::fingerprint::Key128::new();
+        let mut h = super::key::Key128::new();
         h.surface(surf);
         h.key()
     });
-    let mut h = super::fingerprint::Key128::new();
+    let mut h = super::key::Key128::new();
     h.write_u128(sk);
     h.curve(&e.curve);
     h.f64s(&e.t);
@@ -2118,7 +2118,7 @@ fn flatten_kept(
         flatten(pc, t0, t1, scale, flat, tol, r);
         return;
     }
-    let mut h = super::fingerprint::Key128::new();
+    let mut h = super::key::Key128::new();
     h.curve(pc);
     h.f64s(&[t0, t1, scale.0, scale.1, flat, tol]);
     let key = h.key();

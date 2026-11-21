@@ -27,7 +27,7 @@ fn face_nurbs(b: &Body, f: &super::topo::Face) -> NurbsSurface {
     let mut uv = super::math::Bbox::empty();
     for c in f.loops.iter().flatten() {
         let e = &b.edges[c.edge];
-        uv.union(&super::boolean::curve_bbox(&c.pc, e.t[0], e.t[1]));
+        uv.union(&super::curve::curve_bbox(&c.pc, e.t[0], e.t[1]));
     }
     let ((pu0, pu1), (pv0, pv1)) = f.surf.param_box();
     let (gu, gv) = ((uv.max.x - uv.min.x) * 0.01, (uv.max.y - uv.min.y) * 0.01);

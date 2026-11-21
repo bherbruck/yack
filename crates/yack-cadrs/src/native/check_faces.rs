@@ -307,7 +307,7 @@ fn crossing(
         for c in b.faces[x].loops.iter().flatten() {
             let e = &b.edges[c.edge];
             if e.degenerate
-                || !super::boolean::curve_bbox(&e.curve, e.t[0], e.t[1]).overlaps(&region)
+                || !super::curve::curve_bbox(&e.curve, e.t[0], e.t[1]).overlaps(&region)
             {
                 continue;
             }

@@ -2294,7 +2294,7 @@ fn split_shared_sides(
 /// coedges share an edge: a seam's two sides).
 fn face_mesh_key(body: &Body, f: &Face, es: &[(Vec<f64>, Vec<P3>)], p: &TessParams) -> u128 {
     use std::hash::Hasher;
-    let mut h = super::fingerprint::Key128::new();
+    let mut h = super::key::Key128::new();
     h.f64s(&[p.chord, p.angle, p.max_edge, p.max_aspect]);
     h.surface(&f.surf);
     h.write_u8(f.sense as u8);

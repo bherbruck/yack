@@ -1,6 +1,7 @@
 // yack: Booleans (union, subtract, intersect) of B-rep bodies.
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/boolean.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: span_boxes_of declines a curve with no whole Bézier segment (was an index panic).
+// Changes: span_boxes_of declines a curve with no whole Bézier segment (was an index panic); M4.0a:
+//   curve_bbox moved to curve.rs, VTOL to tol.rs (re-exported).
 //! Booleans (union, subtract, intersect) of B-rep bodies.
 //!
 //! 1. Both bodies go into one pool of vertices and edges (coincident vertices and edges shared).
@@ -31,6 +32,8 @@ use super::surface::Surface;
 use super::tol;
 use super::topo::{Body, Coedge, Edge, Face, Shell, Solid};
 use crate::*;
+use super::curve::curve_bbox;
+pub use super::tol::VTOL;
 
 /// Accumulated time per phase of an operation (CADRS_PROFILE=1 prints it after each one).
 pub(crate) struct Prof {
@@ -95,9 +98,6 @@ fn counts() -> [u64; 6] {
     ]
 }
 
-/// The default distance under which two points of a boolean are one (mm; [`tol::POINT`]; a
-/// run's is [`BoolOptions::tol`]'s).
-pub const VTOL: f64 = super::tol::POINT;
 
 /// How a boolean runs: its tolerances, and which faces on one surface are merged afterwards.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -394,115 +394,9 @@ fn edge_bbox(e: &WEdge, verts: &[P3], tol: f64) -> Bbox {
     bb.grow(tol * 10.0 + e.tol)
 }
 
-/// How many B-spline pieces' boxes a thread keeps ([`curve_bbox`]) before starting over.
-const PIECE_BOXES_KEPT: usize = 1 << 16;
 
-/// A B-spline curve (its address) and a range of it, and the curve itself, weakly: the address
-/// is that curve's for as long as this holds it.
-type PieceBoxes =
-    std::collections::HashMap<(usize, u64, u64), (std::sync::Weak<super::nurbs::NurbsCurve>, Bbox)>;
 
-thread_local! {
-    /// The boxes of B-spline curves' pieces made on this thread ([`curve_bbox`]).
-    static PIECE_BOXES: std::cell::RefCell<PieceBoxes> = std::cell::RefCell::new(PieceBoxes::new());
-}
 
-/// A box that holds the curve between t0 and t1: exact for lines, circles and ellipses (their
-/// extremes in each axis), the poles' box for B-splines (a rational B-spline with positive
-/// weights lies in its poles' convex hull).
-pub fn curve_bbox(c: &Curve, t0: f64, t1: f64) -> Bbox {
-    let (lo, hi) = (t0.min(t1), t0.max(t1));
-    let mut bb = Bbox::empty();
-    bb.add(&c.point(lo));
-    bb.add(&c.point(hi));
-    match c {
-        Curve::Line { .. } => {}
-        Curve::Circle { c: o, x, y, r }
-        | Curve::Ellipse {
-            c: o, x, y, a: r, ..
-        } => {
-            let (rx, ry) = match c {
-                Curve::Ellipse { a, b, .. } => (*a, *b),
-                _ => (*r, *r),
-            };
-            let _ = o;
-            // Coordinate k is o_k + rx·x_k·cos t + ry·y_k·sin t: extreme where tan t = ry·y_k / (rx·x_k).
-            for k in 0..3 {
-                let t = (ry * y[k]).atan2(rx * x[k]);
-                for base in [t, t + std::f64::consts::PI] {
-                    // Every copy of the extreme inside [lo, hi].
-                    let mut tt =
-                        base + ((lo - base) / std::f64::consts::TAU).ceil() * std::f64::consts::TAU;
-                    while tt <= hi {
-                        bb.add(&c.point(tt));
-                        tt += std::f64::consts::TAU;
-                    }
-                }
-            }
-        }
-        Curve::Nurbs(whole) => {
-            // (Over its whole range the curve's own poles, with no piece of it made: a
-            // fitted edge's every box, asked for many times an operation.)
-            let (a0, a1) = whole.range();
-            let all = lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE;
-            // (Over a part of it, the piece's box as this thread made it before of the same
-            // curve and range: a split edge's box is asked for by every boolean after, and
-            // the piece costs a knot inserted at each end.)
-            let key = (
-                std::sync::Arc::as_ptr(whole) as usize,
-                lo.to_bits(),
-                hi.to_bits(),
-            );
-            if !all {
-                let kept = PIECE_BOXES.with(|m| {
-                    m.borrow().get(&key).and_then(|(of, bb)| {
-                        of.upgrade()
-                            .is_some_and(|of| std::sync::Arc::ptr_eq(&of, whole))
-                            .then_some(*bb)
-                    })
-                });
-                if let Some(kept) = kept {
-                    return kept;
-                }
-            }
-            let piece;
-            let n: &super::nurbs::NurbsCurve = if all {
-                whole
-            } else {
-                piece = c.to_nurbs(lo, hi);
-                &piece
-            };
-            if n.cps.iter().all(|h| h.w > 0.0) {
-                for h in &n.cps {
-                    bb.add(&super::nurbs::dehom(h));
-                }
-            } else {
-                for i in 0..=64 {
-                    bb.add(&c.point(lo + (hi - lo) * i as f64 / 64.0));
-                }
-                bb = bb.grow(bb.diagonal() * 0.02);
-            }
-        }
-    }
-    if let Curve::Nurbs(whole) = c {
-        let (a0, a1) = whole.range();
-        if !(lo <= a0 + tol::ROUNDOFF_FINE && hi >= a1 - tol::ROUNDOFF_FINE) {
-            PIECE_BOXES.with(|m| {
-                let mut m = m.borrow_mut();
-                if m.len() >= PIECE_BOXES_KEPT {
-                    m.clear();
-                }
-                let key = (
-                    std::sync::Arc::as_ptr(whole) as usize,
-                    lo.to_bits(),
-                    hi.to_bits(),
-                );
-                m.insert(key, (std::sync::Arc::downgrade(whole), bb));
-            });
-        }
-    }
-    bb
-}
 
 /// Imports a body's vertices, edges and faces into the pool.
 fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge: bool) {

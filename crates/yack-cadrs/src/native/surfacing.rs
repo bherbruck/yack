@@ -1066,7 +1066,7 @@ pub fn sew_faces(mut b: Body, tol: f64) -> Result<Body> {
         'find: for &e in &free {
             let ed = &b.edges[e];
             let (lo, hi) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
-            let mut near = etree.query(&super::boolean::curve_bbox(&ed.curve, lo, hi).grow(tol));
+            let mut near = etree.query(&super::curve::curve_bbox(&ed.curve, lo, hi).grow(tol));
             near.sort_unstable();
             for w in near.into_iter().map(|k| ends[k]) {
                 if ed.v.contains(&w) {

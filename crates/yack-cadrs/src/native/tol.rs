@@ -1,6 +1,7 @@
 // yack: The kernel's tolerance model: the distances under which two things are taken as one,....
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/tol.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
-// Changes: Tolerances::exact_only (yack: refuse instead of meshing).
+// Changes: Tolerances::exact_only (yack: refuse instead of meshing); M4.0a: VTOL moved here from
+//   boolean.rs.
 //! The kernel's tolerance model: the distances under which two things are taken as one, named
 //! once here and carried explicitly (in [`Tolerances`], held by the kernel session) instead of
 //! as literals and globals.
@@ -59,6 +60,10 @@
 pub const CONFUSION: f64 = 1e-7;
 /// The default merge distance of an operation (mm). See the module docs.
 pub const POINT: f64 = 1e-6;
+
+/// The default distance under which two points of a boolean are one (mm; [`POINT`]; a
+/// run's is [`BoolOptions::tol`]'s).
+pub const VTOL: f64 = POINT;
 /// The largest gap between consecutive p-curves of a loop that is still closed (mm).
 pub const LOOP_GAP: f64 = 1e-5;
 /// The size box: coordinates and radii of a model stay within ±`SIZE` (mm, 100 km).
@@ -180,7 +185,7 @@ mod tests {
             (1e-7, 1e-6, [1e-5, 1e-4])
         );
         assert_eq!(super::super::topo::TOL_MIN, CONFUSION);
-        assert_eq!(super::super::boolean::VTOL, POINT);
+        assert_eq!(super::super::tol::VTOL, POINT);
         assert!(t.validate().is_ok());
         // The named round-off margins are the literals they replaced, bit for bit.
         assert_eq!([REL, ANGULAR, ROUNDOFF], [1e-9; 3]);

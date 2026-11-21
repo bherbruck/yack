@@ -355,7 +355,7 @@ fn ax2_of(o: [f64; 3], n: Option<[f64; 3]>, x: Option<[f64; 3]>) -> (P3, V3, V3)
 
 /// OCCT's x direction for a placement with only its main direction (`gp_Ax2(P, V)`).
 pub fn ax2_x(v: &V3) -> V3 {
-    super::axes::ax2_x(v)
+    super::math::ax2_x(v)
 }
 
 /// Checks a measured property against DRAW's `checkprops` rule: within 1% of the expected value

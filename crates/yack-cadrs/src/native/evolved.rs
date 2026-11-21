@@ -104,7 +104,7 @@ impl Spine {
             .max(tol::ROUNDOFF);
         if up.norm() < tol::REL * size * size {
             // An open straight spine: any normal square to it.
-            up = super::axes::ax2_x(&edges[0].dir(0.0));
+            up = super::math::ax2_x(&edges[0].dir(0.0));
         }
         let up = up.normalize();
         if pts
@@ -162,7 +162,7 @@ impl Spine {
     /// The spine as a polygon in its plane (arcs as fine chords), and the map into that plane.
     fn polygon(&self) -> (impl Fn(&P3) -> P2 + use<>, Vec<P2>) {
         const ARC: usize = 64;
-        let (o, u) = (self.edges[0].point(0.0), super::axes::ax2_x(&self.up));
+        let (o, u) = (self.edges[0].point(0.0), super::math::ax2_x(&self.up));
         let v = self.up.cross(&u);
         let to2 = move |p: &P3| P2::new((p - o).dot(&u), (p - o).dot(&v));
         let poly = self

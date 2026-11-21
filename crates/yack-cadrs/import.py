@@ -342,6 +342,8 @@ def write(rel, data):
 
 
 def main():
+    # FROZEN at M4.0a: src/ has been refactored in place since; re-importing would undo it.
+    sys.exit("import.py is frozen since M4.0a (plan/m4-cadrs-map.md): see IMPORT.md")
     srcs = [p for p in ls_tree(f"{KROOT}/src") if p.endswith(".rs")]
     n = 0
     for p in srcs:

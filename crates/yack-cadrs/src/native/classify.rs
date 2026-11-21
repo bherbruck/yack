@@ -250,7 +250,7 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         .loops
         .iter()
         .map(|l| {
-            let mut h = super::fingerprint::Key128::new();
+            let mut h = super::key::Key128::new();
             h.surface(&f.surf);
             h.write_usize(l.len());
             for c in l {
@@ -262,7 +262,7 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         })
         .collect();
     let key = {
-        let mut h = super::fingerprint::Key128::new();
+        let mut h = super::key::Key128::new();
         h.write_usize(loop_keys.len());
         for k in &loop_keys {
             h.write_u128(*k);

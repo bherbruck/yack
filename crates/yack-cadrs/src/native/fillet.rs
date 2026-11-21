@@ -9168,7 +9168,7 @@ fn open_cliffs(
         if c.edge == ef.e
             || x.degenerate
             || is_seam(b, fi, c.edge)
-            || !near.overlaps(&super::boolean::curve_bbox(&x.curve, x.t[0], x.t[1]))
+            || !near.overlaps(&super::curve::curve_bbox(&x.curve, x.t[0], x.t[1]))
         {
             continue;
         }
@@ -12703,7 +12703,7 @@ fn trim(
                 // The rail's box, with room for its fit (the true rail, which the crossings
                 // follow, strays from it by up to the fit's tolerance).
                 let (r0, r1) = (rt[0][k].min(rt[1][k]), rt[0][k].max(rt[1][k]));
-                let near = super::boolean::curve_bbox(&st.rails[k], r0, r1)
+                let near = super::curve::curve_bbox(&st.rails[k], r0, r1)
                     .grow(10.0 * fit_tol + 0.01 * ef.r());
                 *o = open_cliffs(b, ef, k, (t0, t1), [p0, p1], off, &near)?;
             }
@@ -14215,7 +14215,7 @@ fn assemble(
             };
             for e in nf.edges.iter().copied().chain(from) {
                 if let Some(ed) = nb.edges.get(e).filter(|ed| !ed.degenerate) {
-                    bb.union(&super::boolean::curve_bbox(&ed.curve, ed.t[0], ed.t[1]));
+                    bb.union(&super::curve::curve_bbox(&ed.curve, ed.t[0], ed.t[1]));
                 }
             }
             bb.grow(radius + tol::REL_POINT * (1.0 + size))

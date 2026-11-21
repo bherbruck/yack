@@ -857,7 +857,7 @@ impl Surface {
                 return bb;
             }
             Surface::Extrusion { c, d } => {
-                let cb = super::boolean::curve_bbox(c, u.0, u.1);
+                let cb = super::curve::curve_bbox(c, u.0, u.1);
                 for t in [v.0, v.1] {
                     bb.add(&(cb.min + d * t));
                     bb.add(&(cb.max + d * t));
@@ -865,7 +865,7 @@ impl Surface {
                 return bb;
             }
             Surface::Revolution { f, m } => {
-                let mb = super::boolean::curve_bbox(m, v.0, v.1);
+                let mb = super::curve::curve_bbox(m, v.0, v.1);
                 let (mut rho, mut h) = (0.0f64, (f64::MAX, f64::MIN));
                 for i in 0..8 {
                     let c = P3::new(

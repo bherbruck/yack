@@ -1725,7 +1725,7 @@ fn costly(f: &Face) -> bool {
 /// surface, its sense and its boundary (each p-curve and its range).
 fn face_key(body: &Body, f: &Face) -> u128 {
     use std::hash::Hasher;
-    let mut h = super::fingerprint::Key128::new();
+    let mut h = super::key::Key128::new();
     h.surface(&f.surf);
     h.write_u8(f.sense as u8);
     for l in &f.loops {

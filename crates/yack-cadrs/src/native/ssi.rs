@@ -149,7 +149,7 @@ pub fn surface_surface_full(
     ub: ((f64, f64), (f64, f64)),
     bb: &Bbox,
 ) -> Ssi {
-    surface_surface_tol(a, ua, b, ub, bb, super::boolean::VTOL)
+    surface_surface_tol(a, ua, b, ub, bb, super::tol::VTOL)
 }
 
 /// [`surface_surface`] where it has a closed form (coincident surfaces' region, a plane and an
@@ -170,10 +170,10 @@ pub(crate) fn surface_surface_closed(
         || extrusion_along(b, ub, a, ua, bb).is_some()
         || plane_nurbs_extrusion(a, b, ub, bb).is_some()
         || plane_nurbs_extrusion(b, a, ua, bb).is_some()
-        || ball_in_tube(a, b, super::boolean::VTOL).is_some()
-        || ball_in_tube(b, a, super::boolean::VTOL).is_some()
-        || analytic(a, b, bb, super::boolean::VTOL).is_some()
-        || analytic(b, a, bb, super::boolean::VTOL).is_some();
+        || ball_in_tube(a, b, super::tol::VTOL).is_some()
+        || ball_in_tube(b, a, super::tol::VTOL).is_some()
+        || analytic(a, b, bb, super::tol::VTOL).is_some()
+        || analytic(b, a, bb, super::tol::VTOL).is_some();
     closed.then(|| surface_surface(a, ua, b, ub, bb))
 }
 

@@ -1418,7 +1418,7 @@ fn piece_box(p: &Piece) -> Option<Bbox> {
     {
         return None;
     }
-    Some(super::boolean::curve_bbox(&p.c, p.t0, p.t1))
+    Some(super::curve::curve_bbox(&p.c, p.t0, p.t1))
 }
 
 /// Whether `q` lies in the box `b` seen in the profile's plane (x and y).
