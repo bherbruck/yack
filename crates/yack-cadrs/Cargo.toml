@@ -16,6 +16,7 @@ publish = false
 
 [dependencies]
 nalgebra = { path = "../yack-shim", package = "yack-shim" }
+yack-tol = { path = "../yack-tol" }
 
 [features]
 # The test kit (the DRAW harness, the SMLib oracle's body writer; every module public) is on by

@@ -144,7 +144,7 @@ impl NativeKernel {
 
     /// Sets the tolerances the session's operations run with from now on.
     pub fn set_tolerances(&mut self, tol: super::tol::Tolerances) -> Result<()> {
-        tol.validate()?;
+        super::tol::validate(&tol)?;
         self.tol = tol;
         Ok(())
     }

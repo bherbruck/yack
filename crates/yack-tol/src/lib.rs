@@ -4,6 +4,8 @@
 //! Internal crate; `yack::tol` exposes [`LINEAR`] and [`PICK`].
 #![deny(missing_docs)]
 
+pub mod cadrs;
+
 /// Two points closer than this are the same point (mm).
 pub const LINEAR: f64 = 1e-7;
 /// The model size the tolerances are scaled for (mm).

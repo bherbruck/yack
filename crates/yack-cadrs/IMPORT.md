@@ -133,3 +133,10 @@ swarm/done/m4-rehost-plan.md). Their callers, entry points yack never calls, now
 (`Unsupported`, "removed in M4.0b: not reached from yack"): src/native/kernel.rs: face_blend; src/native/kernel.rs: cells; src/native/kernel.rs: fillet_smooth; src/native/heal.rs: HealOp::Tails; src/native/draw.rs: fixshape_tails; src/native/draw.rs: split_by_number; src/native/draw.rs: edgestofaces; src/native/draw.rs: bcadd; src/native/draw.rs: bsplit; src/native/draw.rs: mkvolume.
 Also gone: draw.rs's `sector` (only split_by_number used it), the conformance test
 `fillet_smooth_corner`, and Kernel::cells's runnable doc example (kept as text).
+
+## M4.1a: tolerance values in yack-tol
+
+cadrs's tolerance levels and `Tolerances` now live in `yack_tol::cadrs` (values unchanged), and
+`native/tol.rs` re-exports them by name; `Tolerances::validate` is the free fn
+`native::tol::validate`. `import.py`'s patch of `src/native/tol.rs` (`exact_only`) is obsolete:
+`import.py` is frozen since M4.0a and is not re-run; the field is in `yack_tol::cadrs`.
