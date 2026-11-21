@@ -47,6 +47,12 @@ pub(crate) fn allows(name: &str) -> bool {
     }
 }
 
+/// The ladder rung (engine) that built `s`, for attributing a case to its builder; it may differ
+/// from [`Solid::strategy`], the engine whose form answers `s`'s queries.
+pub fn built_by(s: &Solid) -> &'static str {
+    s.built_by()
+}
+
 /// How `s` survives springrep → cadrs → springrep through the bridge: empty when it comes back
 /// alike, else one line per problem, each starting with a stable cause prefix (`to-cadrs:`,
 /// `back:`, `order:`, `volume:`, `area:`, `face-area:`, `classify:`).

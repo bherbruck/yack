@@ -42,7 +42,7 @@ pub(crate) fn two<'a>(op: &'static str, springrep: &'a dyn Fn() -> Result<Solid>
         return ladder(op, &[s, c]);
     }
     let built = ladder(op, &[c, s])?;
-    if built.strategy() == "cadrs" {
+    if built.built_by() == "cadrs" {
         #[cfg(feature = "bakeoff")]
         if crate::bakeoff::forced() == crate::bakeoff::Engine::Cadrs {
             return Ok(built);
@@ -175,7 +175,7 @@ mod tests {
         let cube = || cube(1.0);
         let none = || Err(Error::new(ErrorKind::Unsupported, "op", "no"));
         let s = ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &cube }]).unwrap();
-        assert!(!s.is_empty() && s.strategy() == "cadrs");
+        assert!(!s.is_empty() && s.built_by() == "cadrs");
         assert!(ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &empty }]).unwrap().is_empty());
         assert!(ladder("op", &[Rung { name: "springrep", run: &empty }, Rung { name: "cadrs", run: &none }]).unwrap().is_empty());
         assert!(two("intersection", &empty, &cube).is_ok_and(|s| !s.is_empty()));
@@ -187,7 +187,7 @@ mod tests {
         let exact = || cube(2.0);
         let s = ladder("op", &[Rung { name: "cadrs", run: &facets }, Rung { name: "springrep", run: &exact }]).unwrap();
         assert!(s.is_exact());
-        assert_eq!(s.strategy(), "springrep");
+        assert_eq!(s.built_by(), "springrep");
     }
 
     #[test]

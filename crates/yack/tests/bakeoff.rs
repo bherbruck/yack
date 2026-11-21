@@ -10,11 +10,11 @@ fn a_forced_engine_holds_through_an_op_that_fans_out() {
     let a = block(&Frame::WORLD, [4.0, 4.0, 4.0]).unwrap();
     let b = sphere(&Frame::at([4.0, 4.0, 4.0]), 2.5).unwrap();
     force(Engine::Cadrs);
-    assert_eq!(a.union(&b).unwrap().strategy(), "cadrs");
-    assert_eq!(a.difference(&b).unwrap().strategy(), "cadrs");
+    assert_eq!(yack::bakeoff::built_by(&a.union(&b).unwrap()), "cadrs");
+    assert_eq!(yack::bakeoff::built_by(&a.difference(&b).unwrap()), "cadrs");
     force(Engine::Springrep);
     assert_eq!(a.swept(&Motion::slide([1.0, 0.0, 0.0])).unwrap_err().kind, ErrorKind::Unsupported);
-    assert_eq!(a.union(&b).unwrap().strategy(), "springrep");
+    assert_eq!(yack::bakeoff::built_by(&a.union(&b).unwrap()), "springrep");
     force(Engine::Both);
 }
 
@@ -32,7 +32,7 @@ fn under_a_forced_engine_every_constructor_builds_on_it_or_refuses() {
         ];
         for m in made {
             match m {
-                Ok(s) => assert_eq!(s.strategy(), name),
+                Ok(s) => assert_eq!(yack::bakeoff::built_by(&s), name),
                 Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
             }
         }
@@ -45,7 +45,9 @@ fn a_block_builds_on_either_forced_engine() {
     for (engine, name) in [(Engine::Cadrs, "cadrs"), (Engine::Springrep, "springrep")] {
         force(engine);
         let b = block(&Frame::at([1.0, 2.0, 3.0]), [2.0, 3.0, 4.0]).unwrap();
-        assert_eq!(b.strategy(), name);
+        assert_eq!(yack::bakeoff::built_by(&b), name);
+        // a cadrs block crosses the bridge: springrep's carried form answers its queries
+        assert_eq!(b.strategy(), "springrep");
         assert!((b.volume() - 24.0).abs() < 1e-9);
     }
     force(Engine::Both);

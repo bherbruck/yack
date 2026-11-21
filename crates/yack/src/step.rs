@@ -42,7 +42,7 @@ pub fn write(s: &Solid) -> Result<String> {
     let springrep = || sr::write_step(b).map_err(|e| engine::error(op, e));
     let cadrs = || engine_cadrs::write_step(op, s);
     let writers: [Writer; 2] =
-        if s.strategy() == "cadrs" { [("cadrs", &cadrs), ("springrep", &springrep)] } else { [("springrep", &springrep), ("cadrs", &cadrs)] };
+        if s.built_by() == "cadrs" { [("cadrs", &cadrs), ("springrep", &springrep)] } else { [("springrep", &springrep), ("cadrs", &cadrs)] };
     firewall::run(op, || written(op, s.volume(), s.area(), &writers))
 }
 

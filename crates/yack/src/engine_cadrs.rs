@@ -170,11 +170,16 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
         lock(session).mass_properties(id).ok()
     };
     let carried = yack_bridge::to_springrep_mapped(&body, &names).map_err(|e| e.to_string()).and_then(|(b, edges)| {
-        let (v, a) = (yack_springrep::measure::volume(&b), yack_springrep::measure::area(&b));
+        // Decided to the agreement alone (an exact volume took 81% of bench ring's 36 s); the area,
+        // exact, only describes a refusal.
         match &mass {
-            Some(m) if yack_math::relative_gap(v, m.volume) > yack_bridge::CADRS_AGREE => {
-                Err(format!("the carried body measures volume {v}, area {a}; cadrs's measures {}, {}", m.volume, m.surface_area))
-            }
+            Some(m) if !yack_springrep::measure::volume_agrees(&b, m.volume, yack_bridge::CADRS_AGREE) => Err(format!(
+                "the carried body's volume is not within {} of cadrs's {} (its area {}; cadrs's {})",
+                yack_bridge::CADRS_AGREE,
+                m.volume,
+                yack_springrep::measure::area(&b),
+                m.surface_area
+            )),
             _ => Ok((b, edges)),
         }
     });

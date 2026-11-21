@@ -18,8 +18,9 @@ mean `loc` of the cases run, or a case's time over 2x its baseline (1.5x warns; 
 in both are not timed against each other). --bless writes the baseline (merged, for a part of the
 suite) instead of failing on what is worse. `loc` is a case program's lines that are neither blank
 nor comments (PLAN §4.4); runner lines per case counts every src/**/*.rs file the same way. A
-case's strategy (`Solid::strategy()`, the ladder rung that made it) comes from one untimed
-`yack-bench --strategy CASE` run per built case after the harness's, and a change of it fails until blessed.
+case's strategy (the engine answering its solid's queries) and built_by (the engine that built it)
+come from one untimed `yack-bench --strategy CASE` run per built case after the harness's; a change
+of either is reported as a note, never a regression.
 
 The harness still keeps its scratch in the clone, all of it git-ignored there: results/meshes/yack/
 and results/mass/yack.json. Nothing else in the clone is written.
@@ -70,8 +71,9 @@ def loc(path):
 
 
 def strategies(k_command, rows, timeout):
-    """Which ladder strategy built each case's solid, for the cases that built one: `yack-bench
-    --strategy CASE`, one process per case (untimed, niced), each given `timeout` seconds."""
+    """Each built case's (strategy, built_by): the engine answering its solid's queries and the one
+    that built it, from `yack-bench --strategy CASE`, one process per case (untimed, niced), each
+    given `timeout` seconds."""
     import subprocess
     out = {}
     for r in rows:
@@ -80,23 +82,24 @@ def strategies(k_command, rows, timeout):
         try:
             p = subprocess.run(["nice", *k_command, "--strategy", r["case"]], capture_output=True, text=True,
                                timeout=timeout)
-            out[r["case"]] = p.stdout.strip() or None
+            words = p.stdout.split()  # `<strategy> <built_by>` (an older runner: the strategy alone)
+            out[r["case"]] = (words[0], words[1] if len(words) > 1 else None) if words else (None, None)
         except subprocess.TimeoutExpired:
-            out[r["case"]] = "timeout"
+            out[r["case"]] = ("timeout", None)
             print(f"strategy: {r['case']} ran past {timeout} s")
     return out
 
 
 def scored(rows, k):
-    """Each case's ratcheted measures: outcome, loc, time (the kernel's own, where it paused) and
-    the strategy that built it."""
+    """Each case's ratcheted measures: outcome, loc and time (the kernel's own, where it paused),
+    and, as information only, its strategy (the engine answering its queries) and built_by."""
     import run  # noqa: E402
     out = {}
     for r in rows:
         secs = r.get("own_seconds") if r.get("own_seconds") is not None else r.get("seconds")
         out[r["case"]] = {"outcome": r["outcome"], "loc": loc(run.source(k, r["case"])),
                           "time_ms": None if secs is None else round(secs * 1000, 1),
-                          "strategy": r.get("strategy")}
+                          "strategy": r.get("strategy"), "built_by": r.get("built_by")}
     return out
 
 
@@ -112,7 +115,7 @@ def ratchet(now, path, bless):
             base = json.load(f).get("cases", {})
     except FileNotFoundError:
         base = {}
-    problems, warnings = [], []
+    problems, warnings, notes = [], [], []
     for cid, n in sorted(now.items()):
         if n["outcome"] == "wrong":
             problems.append(f"{cid}: wrong (never waivable)")
@@ -121,8 +124,10 @@ def ratchet(now, path, bless):
             continue
         if RANK.get(n["outcome"], 99) > RANK.get(b["outcome"], 99):
             problems.append(f"{cid}: {b['outcome']} -> {n['outcome']}")
-        if b.get("strategy") and n.get("strategy") and b["strategy"] != n["strategy"]:
-            problems.append(f"{cid}: strategy {b['strategy']} -> {n['strategy']} (bless it)")
+        # which engine built or answers a case is information, never a regression
+        for key in ("strategy", "built_by"):
+            if b.get(key) and n.get(key) and b[key] != n[key]:
+                notes.append(f"{cid}: {key} {b[key]} -> {n[key]}")
         t0, t1 = b.get("time_ms"), n.get("time_ms")
         if t0 is not None and t1 is not None and max(t0, t1) >= FLOOR_MS:
             if t1 > 2 * t0:
@@ -135,6 +140,8 @@ def ratchet(now, path, bless):
         problems.append(f"mean loc rose: {m0} -> {m1}")
     for w in warnings:
         print(f"warning: {w}")
+    for x in notes:
+        print(f"note: {x}")
     if bless:
         merged = dict(base)
         merged.update(now)
@@ -205,7 +212,7 @@ def main():
                           args.jobs or run.JOBS)
     built = strategies(k["command"], rows, args.timeout)
     for r in rows:
-        r["strategy"] = built.get(r["case"])
+        r["strategy"], r["built_by"] = built.get(r["case"], (None, None))
     result = {"kernel": k["name"], "version": run.version(k), "measured": "exact",
               "run": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": run.host(),
               "startup": start, "binary": size, "cases_run": args.case or "all",

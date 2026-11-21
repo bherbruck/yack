@@ -183,7 +183,7 @@ fn a_torus_tube_across_its_axis_is_invalid() {
     assert_eq!(e.kind, ErrorKind::Invalid);
     assert!(e.detail.contains("spindle_torus"), "{e}");
     match spindle_torus(&Frame::WORLD, 1.0, 2.0) {
-        Ok(s) => assert!(s.volume() > 0.0 && s.strategy() == "cadrs"),
+        Ok(s) => assert!(s.volume() > 0.0),
         Err(e) => assert_eq!(e.kind, ErrorKind::Unsupported, "{e}"),
     }
     assert_eq!(spindle_torus(&Frame::WORLD, 3.0, 1.0).unwrap_err().kind, ErrorKind::Invalid);

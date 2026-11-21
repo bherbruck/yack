@@ -424,14 +424,25 @@ impl Solid {
         self.0.tag.as_ref()
     }
 
-    /// Which ladder rung built this solid (PLAN §3.5): `"springrep"`, `"cadrs"`, or `"empty"`.
-    /// The adapter and the bench runner log it per case.
+    /// The engine whose form of this solid answers its queries (volume, area, mesh, selection,
+    /// STEP's read-back): `"springrep"`, `"cadrs"` (a solid held in cadrs form), or `"empty"`.
+    /// Derived from the body alone, so it never disagrees with what answers.
     pub fn strategy(&self) -> &'static str {
+        match &self.0.body {
+            Body::Empty => "empty",
+            Body::Springrep(_) => "springrep",
+            Body::Cadrs(_) => "cadrs",
+        }
+    }
+
+    /// The ladder rung (engine) that built this solid, which may differ from the engine that
+    /// answers its queries ([`Solid::strategy`]): a cadrs result carried to springrep is answered
+    /// by springrep. For the ladder's own decisions and the bake-off's attribution.
+    pub(crate) fn built_by(&self) -> &'static str {
         match (self.0.strategy, &self.0.body) {
             (_, Body::Empty) => "empty",
             (Some(name), _) => name,
-            (None, Body::Springrep(_)) => "springrep",
-            (None, Body::Cadrs(_)) => "cadrs",
+            (None, _) => self.strategy(),
         }
     }
 }

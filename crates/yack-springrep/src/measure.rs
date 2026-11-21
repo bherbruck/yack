@@ -17,7 +17,7 @@ mod tolerant;
 pub use sample::{
     edge_length, extent, face_extent, face_samples, face_uv_bounds, solid_area, solid_bbox,
 };
-pub use tolerant::volume_to;
+pub use tolerant::{volume_agrees, volume_to};
 
 use std::f64::consts::TAU;
 

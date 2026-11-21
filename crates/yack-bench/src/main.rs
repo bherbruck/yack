@@ -7,7 +7,7 @@
 //! yack-bench CASE OUT.stl [OUT.step]
 //! yack-bench --version
 //! yack-bench --digests [PREFIX]  (each case whose id starts with PREFIX: `<id> <digest hex>` or `<id> refused`)
-//! yack-bench --strategy CASE  (`<Solid::strategy()>` or `refused`)
+//! yack-bench --strategy CASE  (`<strategy> <built_by>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
 //! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only)
 //! ```
@@ -178,6 +178,17 @@ fn meshed(solid: &Solid, volume: f64, area: f64) -> yack::Result<Tris> {
     }
 }
 
+/// The engine that built `solid` (the bake-off's attribution); without `bakeoff`, the engine
+/// answering its queries, which is all a plain build can tell.
+#[cfg(feature = "bakeoff")]
+fn built_by(solid: &Solid) -> &str {
+    yack::bakeoff::built_by(solid)
+}
+#[cfg(not(feature = "bakeoff"))]
+fn built_by(solid: &Solid) -> &str {
+    solid.strategy()
+}
+
 /// The reply for a solid built. With `out_step`, the solid is written there and that is the whole
 /// answer, unless the writer declines (`step_error`), when the runner goes on to measure.
 fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, String> {
@@ -185,7 +196,11 @@ fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, Str
         None => String::new(),
         Some((path, Ok(text))) => {
             std::fs::write(path, text).map_err(|e| format!("{path} not written: {e}"))?;
-            return Ok(format!("{{\"status\":\"ok\",\"strategy\":{}}}", quoted(solid.strategy())));
+            return Ok(format!(
+                "{{\"status\":\"ok\",\"strategy\":{},\"built_by\":{}}}",
+                quoted(solid.strategy()),
+                quoted(built_by(solid))
+            ));
         }
         Some((_, Err(e))) => format!(",\"step_error\":{}", quoted(&e.to_string())),
     };
@@ -205,11 +220,12 @@ fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, Str
     write_stl(out, &mesh).map_err(|e| format!("{out} not written: {e}"))?;
     Ok(format!(
         "{{\"status\":\"ok\",\"volume\":{},\"area\":{}{centroid},\"inertia\":[{}],\"faces\":{{{faces}}},\
-         \"valid\":{valid},\"strategy\":{}{step_error}}}",
+         \"valid\":{valid},\"strategy\":{},\"built_by\":{}{step_error}}}",
         number(volume),
         number(area),
         rows.join(","),
         quoted(solid.strategy()),
+        quoted(built_by(solid)),
     ))
 }
 
@@ -303,7 +319,10 @@ fn main() -> ExitCode {
             eprintln!("no implementation of `{case}`");
             return ExitCode::from(2);
         };
-        println!("{}", build().map_or("refused", |s| s.strategy()));
+        match build() {
+            Ok(s) => println!("{} {}", s.strategy(), built_by(&s)),
+            Err(_) => println!("refused"),
+        }
         return ExitCode::SUCCESS;
     }
     if args.get(1).map(String::as_str) == Some("--digests") {

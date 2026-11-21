@@ -327,39 +327,51 @@ fn has_null_edge(k: &DefaultKernel, body: BodyId) -> Result<bool> {
 /// face inside the solid): faces left back to back inside it. Each face is tried at its
 /// largest triangle's centroid projected onto the face's surface, along the surface's normal there.
 pub fn inner_faces(k: &DefaultKernel, body: BodyId) -> Result<Vec<u64>> {
-    let mesh = k.tessellate(body, crate::Tessellation::default())?;
+    // (A mesh of 0.1 rad a triangle: the default's 2.5° took seconds on a swept B-spline face,
+    // and a coarser one gave the full tumble's fin no test point on it: the three largest
+    // triangles' centroids below.)
+    let mesh = k.tessellate(body, crate::Tessellation { deflection: 0.01, angle: 0.1 })?;
     let bb = k.bounding_box(body)?;
     // A thousandth of the body's smallest extent (a sliver 0.03 thick is stepped across by
     // 3e-5, not through), never under ten times the point tolerance.
     let ext = bb.max - bb.min;
     let step = (1e-3 * ext.x.min(ext.y).min(ext.z)).max(10.0 * crate::native::tol::POINT); // tol: a thousandth of the body
-    let mut best: std::collections::BTreeMap<u64, (f64, Point3<f64>, Vector3<f64>)> = std::collections::BTreeMap::new();
+    // Each face's three largest triangles: (area, centroid, unit normal).
+    let mut best: std::collections::BTreeMap<u64, Vec<(f64, Point3<f64>, Vector3<f64>)>> = std::collections::BTreeMap::new();
     for (t, f) in mesh.indices.iter().zip(&mesh.triangle_faces) {
         let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_else(Point3::origin));
         let n = (b - a).cross(&(c - a));
         let area = n.norm();
-        if area > best.get(&f.0).map_or(0.0, |x| x.0) {
-            best.insert(f.0, (area, Point3::from((a.coords + b.coords + c.coords) / 3.0), n / area));
+        if area <= 0.0 {
+            continue;
         }
+        let kept = best.entry(f.0).or_default();
+        kept.push((area, Point3::from((a.coords + b.coords + c.coords) / 3.0), n / area));
+        kept.sort_by(|x, y| y.0.total_cmp(&x.0));
+        kept.truncate(3);
     }
     let b = k.get(body)?;
+    let side = |q: Point3<f64>| matches!(k.classify(body, q, crate::native::tol::POINT), Ok(crate::PointClass::Inside));
+    let lo = 10.0 * crate::native::tol::POINT;
     let mut out = Vec::new();
-    for (f, (_, c, n)) in best {
-        // From the face's own surface (a triangle's centroid sags inside a curved face by up to
-        // the mesh's deflection, far more than the step): the centroid projected onto it.
+    for (f, points) in best {
         let Some(face) = usize::try_from(f).ok().and_then(|i| b.faces.get(i)) else { continue };
-        let (u, v) = face.surf.project(&c, None);
-        let p = face.surf.eval(u, v);
-        // The surface's own normal there (the triangle's, where it has none: a pole).
-        let sn = face.surf.normal(u, v);
-        let n = if sn.norm() > 0.0 { sn.normalize() } else { n };
-        let side = |q: Point3<f64>| matches!(k.classify(body, q, crate::native::tol::POINT), Ok(crate::PointClass::Inside));
-        // Inside on both sides at the step and at a tenth and a hundredth of it (not under ten
-        // times the point tolerance): a face across a gap narrower than the step from another
-        // part of the solid has the outside a smaller step off it (brep-bench
-        // swept/tumbling-torus-crossed-intersection: a gap of 1.3e-3 against a step of 3.2e-3).
-        let lo = 10.0 * crate::native::tol::POINT;
-        if [step, step * 0.1, step * 0.01].iter().map(|s| s.max(lo)).all(|s| side(p + n * s) && side(p - n * s)) {
+        // A face with the solid on both sides at any of its points.
+        let inner = points.iter().any(|&(_, c, n)| {
+            // From the face's own surface (a triangle's centroid sags inside a curved face by up
+            // to the mesh's deflection, far more than the step): the centroid projected onto it.
+            let (u, v) = face.surf.project(&c, None);
+            let p = face.surf.eval(u, v);
+            // The surface's own normal there (the triangle's, where it has none: a pole).
+            let sn = face.surf.normal(u, v);
+            let n = if sn.norm() > 0.0 { sn.normalize() } else { n };
+            // Inside on both sides at the step and at a tenth and a hundredth of it (not under
+            // ten times the point tolerance): a face across a gap narrower than the step from
+            // another part of the solid has the outside a smaller step off it (brep-bench
+            // swept/tumbling-torus-crossed-intersection: a gap of 1.3e-3 against a step of 3.2e-3).
+            [step, step * 0.1, step * 0.01].iter().map(|s| s.max(lo)).all(|s| side(p + n * s) && side(p - n * s))
+        });
+        if inner {
             out.push(f);
         }
     }
