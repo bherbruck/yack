@@ -6,7 +6,7 @@
 //! reflection or a scale changes a surface's or curve's parameters, the parameter curves on it
 //! change with them.
 
-use super::{Brep, PCurve};
+use super::{Brep, PCurve, pcurve::fitted_mapped};
 use crate::{
     Error, Result,
     geom::{Circle, Cone, Curve, Cylinder, Ellipse, Line, Plane, Sphere, Surface, Torus},
@@ -365,6 +365,10 @@ impl Brep {
                 PCurve::Projected { .. } => PCurve::Projected {
                     seed: at(ends[i], on),
                 },
+                PCurve::Fitted { curve } => match fitted_mapped(curve, |uv| at(uv, on), 1.0) {
+                    Some(curve) => PCurve::Fitted { curve: Box::new(curve) },
+                    None => PCurve::Projected { seed: at(ends[i], on) },
+                },
             };
             c.reversed = !c.reversed;
         }
@@ -405,6 +409,15 @@ impl Brep {
                     dir: by(*dir) / grows[c.edge.index()],
                 },
                 PCurve::Projected { seed } => PCurve::Projected { seed: by(*seed) },
+                PCurve::Fitted { curve } => {
+                    match fitted_mapped(curve, by, grows[c.edge.index()]) {
+                        Some(curve) => PCurve::Fitted { curve: Box::new(curve) },
+                        None => {
+                            let p = curve.eval(curve.domain().0);
+                            PCurve::Projected { seed: by(Vec2::new(p.x, p.y)) }
+                        }
+                    }
+                }
             };
         }
         for t in self.tolerances.vertices.values_mut() {

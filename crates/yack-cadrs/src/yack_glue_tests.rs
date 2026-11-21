@@ -838,3 +838,53 @@ fn held_meshes_close_and_lie_within_their_chord() {
     assert!(faces.iter().all(|(p, n, t)| p.len() == n.len() && !t.is_empty() && n.iter().all(|v| ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-9)));
     assert!(edges.len() >= 2 && edges.iter().all(|e| e.len() >= 2));
 }
+
+#[test]
+fn a_crossed_boolean_of_swept_tori_records_its_gaps_as_tolerances() {
+    // brep-bench swept/tumbling-torus-crossed-intersection: the two sweeps' intersection
+    // p-curves lie up to 8.1e-5 off their edges, within the boolean's 1e-4 merge distance.
+    use crate::facade::motion::{together, Step};
+    use crate::native::topo::CheckLevel;
+    let (l, a, h) = (45f64.to_radians(), 20f64.to_radians(), 0.7071);
+    let q = [0.0, h * l.cos(), h * l.sin()];
+    let u = [a.cos(), a.sin() * l.cos(), a.sin() * l.sin()];
+    let mut k = DefaultKernel::new();
+    let (ring, _) = torus(&mut k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.22).unwrap();
+    let mut sweep = |s: f64| {
+        let steps = [
+            Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -70f64.to_radians(), to: 70f64.to_radians() },
+            Step::Turn { point: q, axis: u, from: (-100.0 * s).to_radians(), to: (100.0 * s).to_radians() },
+        ];
+        together(&mut k, ring, &steps).unwrap().made.0
+    };
+    let (first, second) = (sweep(-1.0), sweep(1.0));
+    let (r, _) = boolean(&mut k, crate::BoolOp::Intersect, first, &[second]).unwrap();
+    let b = k.get(r).unwrap();
+    assert!(b.check_with(CheckLevel::Full).is_empty(), "{:?}", b.check_with(CheckLevel::Full));
+    let most = b.edges.iter().map(|e| e.tol).fold(0.0, f64::max);
+    assert!(most > 6e-5 && most < 1e-4, "{most}");
+    assert!((k.mass_properties(r).unwrap().volume - 4.616577580202968).abs() < 1e-6);
+    // A boolean that passes as it is keeps its tolerances.
+    let at = |o: [f64; 3]| crate::facade::profile::Place { origin: o, x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (x, _) = primitive(&mut k, &at([0.0; 3]), Prim::Block { size: [2.0; 3] }).unwrap();
+    let (y, _) = primitive(&mut k, &at([1.0; 3]), Prim::Block { size: [2.0; 3] }).unwrap();
+    let (z, _) = boolean(&mut k, crate::BoolOp::Union, x, &[y]).unwrap();
+    assert!(k.get(z).unwrap().edges.iter().all(|e| e.tol <= crate::native::tol::POINT));
+    // The rules: a raised tolerance under a tenth of its edge, under half the shortest edge, a
+    // vertex's within the merge distance; each refusal names its rule.
+    let (thin, _) = primitive(&mut k, &at([0.0; 3]), Prim::Block { size: [2.0, 2.0, 0.01] }).unwrap();
+    let was = (**k.get(thin).unwrap()).clone();
+    let long = was.edges.iter().position(|e| super::edge_length(e) > 1.0).unwrap();
+    let short = was.edges.iter().position(|e| super::edge_length(e) < 0.02).unwrap();
+    let raised = |e: usize, tol: f64| { let mut b = was.clone(); b.edges[e].tol = tol; b };
+    assert_eq!(super::blocked(&raised(long, 4e-3), &was, 1e-4), None);
+    let why = super::blocked(&raised(short, 2e-3), &was, 1e-4).unwrap();
+    assert!(why.contains("a tenth of its length"), "{why}");
+    let why = super::blocked(&raised(long, 6e-3), &was, 1e-4).unwrap();
+    assert!(why.contains("half its shortest edge"), "{why}");
+    let mut v = was.clone();
+    v.verts[0].tol = 2e-4;
+    let why = super::blocked(&v, &was, 1e-4).unwrap();
+    assert!(why.contains("beyond the merge distance"), "{why}");
+    assert_eq!(super::blocked(&v, &was, 1e-3), None);
+}

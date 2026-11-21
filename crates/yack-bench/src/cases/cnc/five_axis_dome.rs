@@ -9,7 +9,7 @@ pub fn build() -> Result<Solid> {
         let (l, p) = (lat.to_radians(), lon.to_radians());
         Vec3::new(l.cos() * p.cos(), l.cos() * p.sin(), l.sin())
     };
-    let slide = |v: Vec3, by: f64| Motion::slide(Vec3::new(v.x * by, v.y * by, v.z * by));
+    let slide = |v: Vec3, by: f64| Motion::slide(v * by);
     let about = |axis: Vec3, by: f64| Motion::turn(Point3::ORIGIN, axis, rad(0.0), deg(by));
     let (up, level) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, -1.0, 0.0));
     // 1. roughing: at each level the circles of radius rho + 9 + 12m below 58, largest first
@@ -56,8 +56,8 @@ pub fn build() -> Result<Solid> {
     let bull = revolve(&Frame::at([first, 0.0, 50.0]), &bull, deg(360.0))?;
     let ball = Loop::starting_at([0.0, 0.0]).arc_ccw_to([4.0, 4.0], [0.0, 4.0]).line_to([4.0, 40.0]);
     let ball = Profile::new(ball.line_to([0.0, 40.0]).close()?, vec![])?;
-    let ball = revolve(&Frame::along([90.0 * a.x, 90.0 * a.y, 90.0 * a.z], a)?, &ball, deg(360.0))?;
-    let pose = Frame::along([70.0 * s.x, 70.0 * s.y, 70.0 * s.z], s)?;
+    let ball = revolve(&Frame::along(Point3::ORIGIN + a * 90.0, a)?, &ball, deg(360.0))?;
+    let pose = Frame::along(Point3::ORIGIN + s * 70.0, s)?;
     let drill = Profile::polygon(&[[0.0, 0.0], [2.5, 2.5], [2.5, 40.0], [0.0, 40.0]])?;
     let (face_mill, drill) = (cylinder(&pose, 5.0, 40.0)?, revolve(&pose, &drill, deg(360.0))?);
     let blank = cylinder(&Frame::WORLD, 50.0, 45.0)?;

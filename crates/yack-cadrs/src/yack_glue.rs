@@ -1045,6 +1045,8 @@ pub fn boolean(k: &mut DefaultKernel, how: crate::BoolOp, a: BodyId, tools: &[Bo
         k.set_tolerances(tol)?;
     }
     let r = k.boolean(how, a, tools);
+    let merged = k.tolerances().retries[1];
+    let cap = base.retries[1];
     if scaled {
         k.set_tolerances(base)?;
     }
@@ -1063,7 +1065,75 @@ pub fn boolean(k: &mut DefaultKernel, how: crate::BoolOp, a: BodyId, tools: &[Bo
         }
         r => r,
     };
-    made(r)
+    let (out, history) = made(r)?;
+    Ok((honest_tolerances(k, out, cap, merged)?, history))
+}
+
+/// An edge's length, as the polyline through 17 of its points (never longer than the edge).
+fn edge_length(e: &crate::native::topo::Edge) -> f64 {
+    let at = |i: usize| e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0);
+    (0..16).map(|i| (at(i + 1) - at(i)).norm()).sum()
+}
+
+/// `out` if it passes cadrs's Full check. Otherwise the same body recording the gaps actually
+/// there as its tolerances (each p-curve's largest from its edge, as the check measures it, up
+/// to `cap`, cadrs's own largest merge distance; OCCT's way: an operation that left a gap has
+/// it as a tolerance), `out` released, where that passes the check and every raised tolerance
+/// keeps clear of the body's features: an edge's under a tenth of its own length and under half
+/// the body's shortest edge, a vertex's within `merged`, the distance the operation merged at.
+/// Otherwise (a fit that doesn't pass, or one a rule blocks: [`blocked`] names which) `out` as
+/// it is, for the check or the bridge to judge as before. (brep-bench swept/tumbling-torus-crossed-*: an intersection of two swept B-spline
+/// faces, its p-curves 6e-5 to 8e-5 off two edges 0.29 mm long.)
+fn honest_tolerances(k: &mut DefaultKernel, out: BodyId, cap: f64, merged: f64) -> Result<BodyId> {
+    use crate::native::topo::CheckLevel;
+    let body = k.get(out)?;
+    if body.check_with(CheckLevel::Full).is_empty() {
+        return Ok(out);
+    }
+    let mut fitted = (**body).clone();
+    fitted.fit_tolerances_searched(cap);
+    if !fitted.check_with(CheckLevel::Full).is_empty() {
+        return Ok(out);
+    }
+    if blocked(&fitted, body, merged).is_some() {
+        return Ok(out);
+    }
+    let id = k.insert(fitted);
+    k.release(out);
+    Ok(id)
+}
+
+/// Which of [`honest_tolerances`]'s rules `fitted`'s raised tolerances (against `was`'s) break,
+/// if any.
+fn blocked(fitted: &crate::native::topo::Body, was: &crate::native::topo::Body, merged: f64) -> Option<String> {
+    let shortest = fitted.edges.iter().filter(|e| !e.degenerate).map(edge_length).fold(f64::INFINITY, f64::min);
+    for (i, (e, old)) in fitted.edges.iter().zip(&was.edges).enumerate() {
+        if e.tol <= old.tol {
+            continue;
+        }
+        let len = edge_length(e);
+        if e.tol >= 0.1 * len {
+            return Some(format!(
+                "the result's edge {i} would need tolerance {:.3e}, not under a tenth of its length {len:.3e}",
+                e.tol
+            ));
+        }
+        if e.tol >= 0.5 * shortest {
+            return Some(format!(
+                "the result's edge {i} would need tolerance {:.3e}, not under half its shortest edge {shortest:.3e}",
+                e.tol
+            ));
+        }
+    }
+    for (i, (v, old)) in fitted.verts.iter().zip(&was.verts).enumerate() {
+        if v.tol > old.tol && v.tol > merged {
+            return Some(format!(
+                "the result's vertex {i} would need tolerance {:.3e}, beyond the merge distance {merged:.3e}",
+                v.tol
+            ));
+        }
+    }
+    None
 }
 
 // ---- slabs and transforms ----

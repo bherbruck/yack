@@ -1,8 +1,8 @@
 // yack: springrep module src/topo/pcurve.rs
 // Adapted from springrep@a03e8a1 src/topo/pcurve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: the Fitted pcurve (M1.15: a face's own parameters, for surfaces that fold).
 use crate::{
-    geom::{Curve, Surface},
+    geom::{Curve, NurbsCurve, Surface},
     math::{Point3, Vec2, Vec3},
     tol,
 };
@@ -16,6 +16,58 @@ pub enum PCurve {
     /// the coedge's parameters where it starts, so a seam's two coedges stay apart. Where the edge
     /// meets a pole, `u` is the one its direction there leaves the pole by.
     Projected { seed: Vec2 },
+    /// The face's own parameters as a curve in the edge's parameter, its points `(u, v, 0)`, on the
+    /// coedge's branch of a closed surface: where a surface folds or touches itself near the edge a
+    /// projection can land on the other sheet, and this cannot (M1.15). It lies on the edge's
+    /// curve to the edge's tolerance, which the checker samples.
+    Fitted { curve: Box<NurbsCurve> },
+}
+
+impl PCurve {
+    /// The parameters at `t` of a pcurve that says them itself (affine or fitted); `None` for a
+    /// projected one, whose parameters are found by projecting the edge.
+    pub(crate) fn uv_at(&self, t: f64) -> Option<Vec2> {
+        match self {
+            PCurve::Affine { origin, dir } => Some(*origin + *dir * t),
+            PCurve::Fitted { curve } => {
+                let p = curve.eval(t);
+                Some(Vec2::new(p.x, p.y))
+            }
+            PCurve::Projected { .. } => None,
+        }
+    }
+
+    /// A fitted pcurve's parameters at `t` and how fast they move with `t`; `None` for the others.
+    pub(crate) fn fitted_d1(&self, t: f64) -> Option<(Vec2, Vec2)> {
+        let PCurve::Fitted { curve } = self else { return None };
+        let (p, d, _) = curve.d2(t);
+        Some((Vec2::new(p.x, p.y), Vec2::new(d.x, d.y)))
+    }
+
+    /// A fitted pcurve's parameters at each of `ts`; `None` for the others.
+    pub(crate) fn fitted_uvs(&self, ts: &[f64]) -> Option<Vec<Vec2>> {
+        let PCurve::Fitted { curve } = self else { return None };
+        Some(ts.iter().map(|&t| curve.eval(t)).map(|p| Vec2::new(p.x, p.y)).collect())
+    }
+}
+
+/// A fitted pcurve with each point's parameters moved by `map` and its edge's parameter scaled by
+/// `t_scale` (the edge's own grew by it): `None` where the parts no longer make a curve.
+pub(crate) fn fitted_mapped(
+    curve: &NurbsCurve,
+    map: impl Fn(Vec2) -> Vec2,
+    t_scale: f64,
+) -> Option<NurbsCurve> {
+    let ctrl = curve
+        .control_points()
+        .iter()
+        .map(|p| map(Vec2::new(p.x, p.y)))
+        .map(|w| Point3::new(w.x, w.y, 0.0))
+        .collect();
+    let knots = curve.knots().iter().map(|k| k * t_scale).collect();
+    let weights = curve.weights().map(<[f64]>::to_vec);
+    NurbsCurve::restore(curve.degree(), knots, ctrl, weights, curve.period().map(|p| p * t_scale))
+        .ok()
 }
 
 /// `curve(t)` projected onto `s` near `hint`. At a pole, where every `u` is the same point, `u` is

@@ -6,7 +6,7 @@
 //! ```text
 //! yack-bench CASE OUT.stl [OUT.step]
 //! yack-bench --version
-//! yack-bench --digests      (every case: `<id> <digest hex>` or `<id> refused`)
+//! yack-bench --digests [PREFIX]  (each case whose id starts with PREFIX: `<id> <digest hex>` or `<id> refused`)
 //! yack-bench --strategy CASE  (`<Solid::strategy()>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
 //! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only)
@@ -307,7 +307,9 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args.get(1).map(String::as_str) == Some("--digests") {
-        for (id, build) in cases::CASES {
+        // `--digests PREFIX`: only the cases whose id starts with it
+        let only = args.get(2).map_or("", String::as_str);
+        for (id, build) in cases::CASES.iter().filter(|(id, _)| id.starts_with(only)) {
             match build() {
                 Ok(solid) => println!("{id} {}", solid.digest().iter().map(|b| format!("{b:02x}")).collect::<String>()),
                 Err(_) => println!("{id} refused"),

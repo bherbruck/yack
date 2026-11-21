@@ -66,9 +66,6 @@ impl<T: Copy, C: ColKind> Dynamic<T, C> {
         assert_eq!(data.len(), nrows * ncols, "dynamic matrix: wrong element count");
         Self { nrows, ncols, data, _c: PhantomData }
     }
-    pub(crate) fn recast<C2: ColKind>(self) -> Dynamic<T, C2> {
-        Dynamic { nrows: self.nrows, ncols: self.ncols, data: self.data, _c: PhantomData }
-    }
     /// The number of rows.
     pub fn nrows(&self) -> usize {
         self.nrows
@@ -161,9 +158,7 @@ impl<T: Copy, C: ColKind> Dynamic<T, C> {
     }
     /// Every element `v`.
     pub fn fill(&mut self, v: T) {
-        for e in &mut self.data {
-            *e = v;
-        }
+        self.data.fill(v);
     }
     /// Rows `a` and `b` swapped.
     pub fn swap_rows(&mut self, a: usize, b: usize) {

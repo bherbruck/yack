@@ -260,9 +260,10 @@ pub struct FaceRef<'a> {
     pub(crate) id: FaceId,
     pub(crate) kind: SurfaceKind,
     pub(crate) normal: Option<Vec3>,
-    pub(crate) area: f64,
-    pub(crate) centroid: Point3,
-    pub(crate) bbox: Aabb,
+    /// Measured on first use (exact, as before): a view read only for its kind costs no quadrature.
+    pub(crate) area: std::sync::OnceLock<f64>,
+    pub(crate) centroid: std::sync::OnceLock<Point3>,
+    pub(crate) bbox: std::sync::OnceLock<Aabb>,
     pub(crate) tags: Vec<Tag>,
     pub(crate) roles: Vec<(Tag, Role)>,
     pub(crate) at: FaceAt<'a>,
@@ -274,9 +275,9 @@ impl core::fmt::Debug for FaceRef<'_> {
             .field("id", &self.id)
             .field("kind", &self.kind)
             .field("normal", &self.normal)
-            .field("area", &self.area)
-            .field("centroid", &self.centroid)
-            .field("bbox", &self.bbox)
+            .field("area", &self.area())
+            .field("centroid", &self.centroid())
+            .field("bbox", &self.bbox())
             .field("tags", &self.tags)
             .field("roles", &self.roles)
             .finish_non_exhaustive()
@@ -296,6 +297,13 @@ impl core::fmt::Debug for EdgeRef<'_> {
             .finish_non_exhaustive()
     }
 }
+
+// Views are shared across threads as freely as before the lazy facts (auto traits are API).
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<FaceRef<'static>>();
+    send_sync::<EdgeRef<'static>>();
+};
 
 /// Which engine's face a [`FaceRef`] reads its geometry from.
 #[derive(Clone, Copy)]
@@ -331,15 +339,31 @@ impl FaceRef<'_> {
     }
     /// The area (mm²).
     pub fn area(&self) -> f64 {
-        self.area
+        *self.area.get_or_init(|| match self.at {
+            FaceAt::Springrep(b, f) => yack_springrep::measure::face_area(b, f),
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::area", h, f).map_or(f64::NAN, |x| x.area),
+        })
     }
     /// The area centroid (it may lie off the face).
     pub fn centroid(&self) -> Point3 {
-        self.centroid
+        *self.centroid.get_or_init(|| match self.at {
+            FaceAt::Springrep(b, f) => engine::point(yack_springrep::measure::face_centroid(b, f)),
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::centroid", h, f)
+                .map_or(Point3::new(f64::NAN, f64::NAN, f64::NAN), |x| x.centroid),
+        })
     }
     /// The bounding box.
     pub fn bbox(&self) -> Aabb {
-        self.bbox
+        *self.bbox.get_or_init(|| match self.at {
+            FaceAt::Springrep(b, f) => {
+                let bb = yack_springrep::measure::face_bbox(b, f);
+                Aabb::new(engine::point(bb.min), engine::point(bb.max))
+            }
+            FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::bbox", h, f).map_or(
+                Aabb::new(Point3::new(f64::NAN, f64::NAN, f64::NAN), Point3::new(f64::NAN, f64::NAN, f64::NAN)),
+                |x| x.bbox,
+            ),
+        })
     }
     /// The feature names the face carries ([`Solid::named`]), sorted, without repeats: a face two
     /// operations' faces merged into carries both.

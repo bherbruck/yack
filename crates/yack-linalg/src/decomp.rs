@@ -61,6 +61,8 @@ impl<K: ColKind> Grid for Dynamic<f64, K> {
 }
 
 /// Factors `m` in place; `piv[i]` is the row swapped with row `i` at step `i` (or `i`).
+// (`i` indexes the matrix as well as `piv`: a range is the clearer loop.)
+#[allow(clippy::needless_range_loop)]
 fn lu_factor<G: Grid>(m: &mut G, piv: &mut [usize]) {
     let (nr, nc) = (m.rows(), m.cols());
     for i in 0..nr.min(nc) {

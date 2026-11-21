@@ -216,7 +216,7 @@ struct Uses {
 /// base period: cadrs keeps a loop continuous in uv but may run it a period on (its loops are
 /// chained from wherever the first coedge sits), springrep wants the same continuous loop with its
 /// lowest parameter in `[0, period)`, so that a seam lies at 0 and at one period.
-fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) {
+fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) -> Result<()> {
     for (axis, period) in periods.into_iter().enumerate() {
         let Some(p) = period.filter(|p| *p > 0.0) else { continue };
         let at = |w: Vec2| if axis == 0 { w.x } else { w.y };
@@ -232,12 +232,17 @@ fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) {
         let add = |w: Vec2| Vec2::new(w.x + d.x, w.y + d.y);
         for u in lp.iter_mut() {
             (u.start, u.mid, u.end) = (add(u.start), add(u.mid), add(u.end));
-            u.pc = match u.pc {
-                PCurve::Affine { origin, dir } => PCurve::Affine { origin: add(origin), dir },
-                PCurve::Projected { seed } => PCurve::Projected { seed: add(seed) },
+            u.pc = match &u.pc {
+                PCurve::Affine { origin, dir } => PCurve::Affine { origin: add(*origin), dir: *dir },
+                PCurve::Projected { seed } => PCurve::Projected { seed: add(*seed) },
+                // `pcurve` makes none yet (M1.15's bridge step will).
+                PCurve::Fitted { .. } => {
+                    return Err(Error::Unsupported("a fitted pcurve cannot be moved by a period yet".into()));
+                }
             };
         }
     }
+    Ok(())
 }
 
 /// A cadrs face in a few words: its surface, its range and closed periods, and its loops' uv span.
@@ -528,11 +533,14 @@ fn assemble(
                 let pc = match pcurve(&co.pc, t, co.fwd) {
                     PCurve::Affine { origin, dir } => PCurve::Affine { origin: Vec2::new(origin.x - turn, origin.y), dir },
                     PCurve::Projected { seed } => PCurve::Projected { seed: Vec2::new(seed.x - turn, seed.y) },
+                    PCurve::Fitted { .. } => {
+                        return Err(Error::Unsupported("a fitted pcurve cannot be turned yet".into()));
+                    }
                 };
                 uses.push(Uses { pc, start: at(ts), mid: at(0.5 * (ts + te)), end: at(te) });
                 ids.push((edge, !co.fwd));
             }
-            normalise(&mut uses, periods);
+            normalise(&mut uses, periods)?;
             let specs = ids
                 .into_iter()
                 .zip(uses)

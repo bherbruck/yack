@@ -613,7 +613,9 @@ fn coedge_pcurve(b: &Brep, c: CoedgeId, surf: &CSurface, edge_curve: Option<&CCu
     };
     let first_try = match (&co.pcurve, edge_curve) {
         (PCurve::Affine { .. }, _) | (_, None) => straight(first, last, t0, t1)?,
-        (PCurve::Projected { .. }, Some(curve)) => {
+        // A fitted pcurve is judged, like a projected one, against springrep's own uv (which
+        // evaluate it); carrying its curve straight across comes with M1.15's bridge step.
+        (PCurve::Projected { .. } | PCurve::Fitted { .. }, Some(curve)) => {
             let mid = want.get(SAMPLES / 2).copied().unwrap_or(first);
             pcurve(surf, curve, t0, t1, Some(P2::new(mid.x, mid.y)))
         }

@@ -63,6 +63,10 @@ impl Codec for PCurve {
                 1u8.put(w);
                 seed.put(w);
             }
+            PCurve::Fitted { curve } => {
+                2u8.put(w);
+                (**curve).put(w);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<PCurve> {
@@ -73,6 +77,9 @@ impl Codec for PCurve {
             },
             1 => PCurve::Projected {
                 seed: Codec::get(r)?,
+            },
+            2 => PCurve::Fitted {
+                curve: Box::new(Codec::get(r)?),
             },
             _ => return None,
         })

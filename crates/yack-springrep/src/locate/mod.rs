@@ -58,7 +58,7 @@ pub(crate) fn coedge_trim_with(
             origin: *origin,
             dir: *dir,
         },
-        PCurve::Projected { .. } => UvMap::Projected,
+        PCurve::Projected { .. } | PCurve::Fitted { .. } => UvMap::Projected,
     };
     Trim {
         piece,

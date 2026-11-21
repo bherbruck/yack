@@ -353,6 +353,7 @@ fn coedge_integral<const K: usize>(
     let uv_and_rate = |t: f64| -> (Vec2, Vec2) {
         match &coedge.pcurve {
             PCurve::Affine { origin, dir } => (*origin + *dir * t, *dir),
+            PCurve::Fitted { .. } => coedge.pcurve.fitted_d1(t).unwrap_or_default(),
             PCurve::Projected { .. } => {
                 let curve = edge.curve.as_ref().expect("projected pcurves have curves");
                 let (p, dp) = curve.d1(t);

@@ -2784,16 +2784,16 @@ pub(crate) fn glue(a: &Brep, b: &Brep) -> Option<Brep> {
                                 // Where the coedge starts in the face's parameters, which a
                                 // projected pcurve continues from along the shared edge.
                                 let seed = match &co.pcurve {
-                                    PCurve::Affine { origin, dir } => {
+                                    PCurve::Affine { .. } | PCurve::Fitted { .. } => {
                                         let t = src.edge(co.edge).range;
-                                        *origin + *dir * if co.reversed { t.1 } else { t.0 }
+                                        co.pcurve.uv_at(if co.reversed { t.1 } else { t.0 })
                                     }
-                                    PCurve::Projected { seed } => *seed,
+                                    PCurve::Projected { seed } => Some(*seed),
                                 };
                                 CoedgeSpec {
                                     edge,
                                     reversed: co.reversed != flip,
-                                    pcurve: PCurve::Projected { seed },
+                                    pcurve: PCurve::Projected { seed: seed.unwrap_or_default() },
                                 }
                             } else {
                                 CoedgeSpec {

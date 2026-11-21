@@ -6,7 +6,7 @@ use yack_springrep::{facade::api, geom, measure};
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
 use crate::{
-    Aabb, CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, Role, SurfaceKind, Tag, VertexId, VertexRef,
+    CurveKind, EdgeId, EdgeRef, Error, FaceId, FaceRef, Point3, Result, Solid, Role, SurfaceKind, Tag, VertexId, VertexRef,
 };
 
 /// The tags and roles a face's names give it (internal feature names left out).
@@ -30,9 +30,9 @@ fn held_face_ref<'a>(s: &Solid, h: &'a crate::engine_cadrs::Held, i: u64, op: &'
         id: FaceId::new(s.stamp(), u32::try_from(i).unwrap_or(u32::MAX)),
         kind: f.kind,
         normal: f.normal,
-        area: f.area,
-        centroid: f.centroid,
-        bbox: f.bbox,
+        area: std::sync::OnceLock::from(f.area),
+        centroid: std::sync::OnceLock::from(f.centroid),
+        bbox: std::sync::OnceLock::from(f.bbox),
         tags,
         roles,
         at: crate::values::FaceAt::Cadrs(h, i),
@@ -83,15 +83,14 @@ fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
         geom::Surface::Extrusion(_) | geom::Surface::Revolution(_) | geom::Surface::Ruled(_) => (SurfaceKind::Swept, None),
         geom::Surface::Nurbs(_) => (SurfaceKind::Spline, None),
     };
-    let bb = measure::face_bbox(b, f);
     let (tags, roles) = tags_roles(&face.names);
     FaceRef {
         id: s.face_id(f),
         kind,
         normal,
-        area: measure::face_area(b, f),
-        centroid: engine::point(measure::face_centroid(b, f)),
-        bbox: Aabb::new(engine::point(bb.min), engine::point(bb.max)),
+        area: std::sync::OnceLock::new(),
+        centroid: std::sync::OnceLock::new(),
+        bbox: std::sync::OnceLock::new(),
         tags,
         roles,
         at: crate::values::FaceAt::Springrep(b, f),
