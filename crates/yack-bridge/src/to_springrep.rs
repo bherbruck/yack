@@ -194,7 +194,9 @@ const MEASURE_AGREES: f64 = 1e-5; // tol: two engines' quadratures of one body (
 /// were sound), while a lost face or a lost region always shows in the volume.
 fn same_measure(body: &Body, back: &Brep) -> Result<()> {
     let cv = yack_cadrs::native::mass::body_volume(body);
-    let sv = yack_springrep::measure::volume(back);
+    // To a thousandth of the agreement asked, not to the last digits (a swept spline body's exact
+    // volume took most of a minute: bench swept/ring-carried-along-a-spline).
+    let sv = yack_springrep::measure::volume_to(back, MEASURE_AGREES * 1e-3); // tol: a thousandth of the guard
     if (sv - cv).abs() / cv.abs().max(1.0) <= MEASURE_AGREES {
         Ok(())
     } else {

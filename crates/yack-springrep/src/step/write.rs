@@ -82,6 +82,13 @@ pub(super) struct Writer {
     /// Each face's surface, written before any of its edges so their pcurves can name it.
     surfaces: HashMap<FaceId, usize>,
     context_2d: Option<usize>,
+    /// Each coedge's pcurve as [`pcurve`] finds it (or `None`), worked out once.
+    found: HashMap<CoedgeId, Option<Curve2>>,
+    /// The faces on a closed surface that get no pcurves: some coedge of theirs has none, and a
+    /// reader that takes the pcurves given and projects the rest itself places them each in a
+    /// period of its own choosing, so their loops need not join up (bench swept/ring-pushed-in-
+    /// past-its-fold read a torus face as its other region). All of a face's pcurves, or none.
+    bare: HashMap<FaceId, bool>,
     /// The faces in the order their `ADVANCED_FACE`s were written.
     faces: Vec<FaceId>,
 }
@@ -102,6 +109,8 @@ impl Writer {
             fans: HashMap::new(),
             surfaces: HashMap::new(),
             context_2d: None,
+            found: HashMap::new(),
+            bare: HashMap::new(),
             faces: Vec::new(),
         }
     }
@@ -371,16 +380,45 @@ impl Writer {
         }
     }
 
+    /// Coedge `c`'s pcurve, once: [`pcurve`]'s, less a line that goes nowhere.
+    fn found_pcurve(&mut self, b: &Brep, c: CoedgeId) -> Option<Curve2> {
+        self.found
+            .entry(c)
+            .or_insert_with(|| {
+                pcurve(b, c).filter(|c2| {
+                    !matches!(c2, Curve2::Line { dir, .. } if dir.norm() == 0.0 || dir.norm().is_nan())
+                })
+            })
+            .clone()
+    }
+
+    /// Whether face `f` is written without pcurves (see [`Writer::bare`]).
+    fn is_bare(&mut self, b: &Brep, f: FaceId) -> bool {
+        if let Some(&bare) = self.bare.get(&f) {
+            return bare;
+        }
+        let s = &b.face(f).surface;
+        let closed = s.u_period().is_some() || s.v_period().is_some();
+        let coedges: Vec<CoedgeId> =
+            b.face(f).loops.iter().flat_map(|&lp| b.lp(lp).coedges.clone()).collect();
+        let bare = closed
+            && coedges
+                .into_iter()
+                .filter(|&c| b.edge(b.coedge(c).edge).curve.is_some())
+                .any(|c| self.found_pcurve(b, c).is_none());
+        self.bare.insert(f, bare);
+        bare
+    }
+
     /// Coedge `c`'s pcurve on its face's surface, when [`pcurve`] finds one.
     fn pcurve(&mut self, b: &Brep, c: CoedgeId) -> Result<Option<usize>> {
-        let Some(c2) = pcurve(b, c) else {
-            return Ok(None);
-        };
-        if let Curve2::Line { dir, .. } = &c2
-            && (dir.norm() == 0.0 || dir.norm().is_nan())
-        {
+        let f = b.coedge_face(c);
+        if self.is_bare(b, f) {
             return Ok(None);
         }
+        let Some(c2) = self.found_pcurve(b, c) else {
+            return Ok(None);
+        };
         let surface = self.face_surface(b, b.coedge_face(c))?;
         let curve = self.curve_2d(&c2)?;
         let ctx = match self.context_2d {

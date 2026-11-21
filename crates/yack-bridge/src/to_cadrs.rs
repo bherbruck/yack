@@ -531,59 +531,6 @@ fn canonical(s: CSurface) -> (CSurface, bool, f64) {
     (s, flipped, du)
 }
 
-/// How near, relative, a cone face's v span must end to the apex for the face to be drawn from it.
-const AT_APEX: f64 = 1e-6; // tol: a face's uv span against the apex's parameter
-
-/// A cone face that reaches its apex, drawn from the apex as cadrs draws its own pointed cones
-/// (radius 0 at v = 0, v growing away from it): cadrs sweeps a pointed cone exactly only in that
-/// form (bench swept/cone-spun-about-a-line-through-it). Takes the canonical surface and the
-/// face's canonical v span; gives the new surface and the uv map `(u, v) → (s·u + cu, s·v + cv)`.
-/// With sin a > 0 the apex is at v = −r/sin a below the face: the frame slides there (s = +1).
-/// With sin a < 0 it is above: the axis turns over and both parameters run back from the apex
-/// (s = −1), a map of determinant +1, so the natural normal, and the face's sense, stay.
-fn from_apex(s: &CSurface, v_span: (f64, f64)) -> Option<(CSurface, f64, f64, f64)> {
-    let CSurface::Cone { f, r, a } = s else { return None };
-    let (sin, cos) = a.sin_cos();
-    // A cone already drawn from its apex (r = 0, opening along +v) needs nothing; springrep's
-    // pointed cone is r = 0 too but runs v ≤ 0 with sin a < 0, the second case below.
-    if sin == 0.0 || (*r == 0.0 && sin > 0.0) {
-        return None;
-    }
-    let va = -r / sin;
-    let near = |v: f64| (v - va).abs() <= AT_APEX * va.abs().max(1.0);
-    let o = f.o + f.z * (va * cos);
-    if sin > 0.0 && near(v_span.0) {
-        let f2 = CFrame { o, x: f.x, y: f.y, z: f.z };
-        Some((CSurface::Cone { f: f2, r: 0.0, a: *a }, 1.0, 0.0, -va))
-    } else if sin < 0.0 && near(v_span.1) {
-        let z = -f.z;
-        let native = CFrame::from_z(o, z);
-        let phi = native.x.dot(&f.y).atan2(native.x.dot(&f.x));
-        let f2 = CFrame { o, x: native.x, y: z.cross(&native.x), z };
-        Some((CSurface::Cone { f: f2, r: 0.0, a: -a }, -1.0, phi, va))
-    } else {
-        None
-    }
-}
-
-/// The pcurve under the uv map `(u, v) → (s·u + cu, s·v + cv)`, `s` ±1 (see [`from_apex`]).
-fn mapped_uv(pc: CCurve, s: f64, cu: f64, cv: f64) -> CCurve {
-    let pt = |p: P3| P3::new(s * p.x + cu, s * p.y + cv, p.z);
-    let dir = |v: V3| V3::new(s * v.x, s * v.y, v.z);
-    match pc {
-        CCurve::Line { o, d } => CCurve::Line { o: pt(o), d: dir(d) },
-        CCurve::Circle { c, x, y, r } => CCurve::Circle { c: pt(c), x: dir(x), y: dir(y), r },
-        CCurve::Ellipse { c, x, y, a, b } => CCurve::Ellipse { c: pt(c), x: dir(x), y: dir(y), a, b },
-        CCurve::Nurbs(n) => {
-            let mut n = (*n).clone();
-            for h in &mut n.cps {
-                (h.x, h.y) = (s * h.x + cu * h.w, s * h.y + cv * h.w);
-            }
-            CCurve::Nurbs(std::sync::Arc::new(n))
-        }
-    }
-}
-
 /// The pcurve with its v negated (for a surface [`canonical`] flipped).
 fn flip_v(pc: CCurve) -> CCurve {
     let neg = |p: P3| P3::new(p.x, -p.y, p.z);
@@ -858,11 +805,6 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
         let surf = surface(&face.surface, uv)?;
         let fresh_face = reparametrised(&face.surface);
         let (canon, flipped, turned_u) = canonical(surf.clone());
-        // A cone face reaching its apex is drawn from it (its canonical v span is springrep's,
-        // negated where canonical flipped it).
-        let v_span = if flipped { (-uv.1.1, -uv.1.0) } else { uv.1 };
-        let apex = from_apex(&canon, v_span);
-        let canon = apex.as_ref().map_or(canon, |a| a.0.clone());
         // Periods cadrs may not see for itself. A whole swept ellipse re-parametrised onto
         // s ∈ [0, 1] closes with period 1 there; springrep knows when its spline surface closes (to
         // its tolerance).
@@ -912,10 +854,6 @@ pub fn to_cadrs(b: &Brep) -> Result<(Body, Vec<BTreeSet<FaceName>>)> {
                 }
                 let pc = if flipped { flip_v(pc) } else { pc };
                 let pc = if turned_u != 0.0 { pc.transformed(&Affine::translation(V3::new(turned_u, 0.0, 0.0))) } else { pc };
-                let pc = match &apex {
-                    Some((_, s, cu, cv)) => mapped_uv(pc, *s, *cu, *cv),
-                    None => pc,
-                };
                 coedges.push(Coedge { edge: co.edge.index(), fwd: !co.reversed, pc });
             }
             chain(&canon, &body.edges, &mut coedges, extra_periods);

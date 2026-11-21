@@ -22,6 +22,8 @@ pub(crate) fn bad(what: impl Into<String>) -> Error {
 /// One edge as a bound uses it: its curve run from `t0` to `t1` (either way round).
 #[derive(Clone, Debug)]
 pub(crate) struct Use {
+    /// The edge's instance number (a seam's two uses in one loop share it).
+    pub(crate) edge: u64,
     pub(crate) curve: Curve,
     pub(crate) t0: f64,
     pub(crate) t1: f64,
@@ -245,7 +247,7 @@ impl Reader<'_> {
                 let sense = bool_at(p, 4, id)?;
                 let (ta, tb) = range(&curve, pa, pb, a == b, sense).map_err(|e| bad(format!("#{id}: {e}")))?;
                 let (t0, t1) = if forward { (ta, tb) } else { (tb, ta) };
-                Ok(Use { curve, t0, t1, pcurves })
+                Ok(Use { edge: id, curve, t0, t1, pcurves })
             }
             other => Err(bad(format!("#{id}: {other} is not an edge"))),
         }

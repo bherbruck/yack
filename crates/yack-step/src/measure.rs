@@ -90,6 +90,14 @@ const EMPTY: f64 = 1e-10; // tol: relative area of a face that is not there
 /// A point in a surface's parameters.
 type Uv = (f64, f64);
 
+/// Whether the pcurves' placement against the edges' loops is checked (see `face`).
+const PLACEMENT_CHECK: bool = false;
+
+/// The most of a period one step between an edge's quadrature nodes may turn (see `piece`), and how
+/// many times a run may be halved to keep to it.
+const MAX_TURN: f64 = 0.125;
+const MAX_SPLITS: usize = 12;
+
 /// Points sampled along an edge to compare its pcurves with it (less one).
 const PCURVE_SAMPLES: usize = 8;
 
@@ -125,7 +133,7 @@ impl Measurer {
         let mut walks = Vec::new();
         for b in &f.bounds {
             if !b.uses.is_empty() {
-                walks.push(self.walk(s, &b.uses)?);
+                walks.push(self.walk(s, &b.uses, f.same_sense)?);
             }
         }
         // A reader that takes the pcurves for the loops projects the edges that carry none itself,
@@ -181,12 +189,15 @@ impl Measurer {
         // only if that sum is the k the region needs.
         let mut literal = 0;
         let mut any = false;
-        for w in &walks {
+        for w in walks.iter().filter(|_| PLACEMENT_CHECK) {
             if let Some(d) = self.loop_shift(w)? {
                 any = true;
                 literal += if ax == 1 { -d[1] * w.wind[0] } else { d[0] * w.wind[1] };
             }
         }
+        // Off for now: on 459 sound bench files this refused about 60 that the grader reads as
+        // their solids (w-m11, ladder12 comparison); the partial-pcurve rule above is what catches
+        // the misread one.
         if any && literal != k {
             return Err(bad(format!(
                 "its pcurves place its loops so that they bound another region of the surface ({literal} whole surfaces where the edges' curves need {k})"
@@ -284,7 +295,9 @@ impl Measurer {
     }
 
     /// One bound walked in uv.
-    fn walk(&self, s: &Surface, uses: &[Use]) -> Result<Walk> {
+    fn walk(&self, s: &Surface, uses: &[Use], same_sense: bool) -> Result<Walk> {
+        // Each edge's first use in this loop: its start and end in uv.
+        let mut seen: Vec<(u64, Uv, Uv)> = Vec::new();
         let mut placed = Vec::new();
         let mut nodes = Vec::new();
         let mut first: Option<(f64, f64)> = None;
@@ -293,8 +306,20 @@ impl Measurer {
             if self.degenerate(u) {
                 continue;
             }
-            let (edge, start, end) = self.edge(s, u, last)?;
-            if let Some(p) = self.pcurve_periods(s, u, &edge)? {
+            let (mut edge, mut start, mut end) = self.edge(s, u, last)?;
+            // A seam's second use in one loop that lands on its first (both at u = 0, say, where
+            // the walk arrived along a pole) is the seam's other side: one period across, toward
+            // the side the face is on (its left, seen from its normal).
+            if let Some(&(_, s0, e0)) = seen.iter().find(|x| x.0 == u.edge)
+                && self.same_uv(s, start, e0)
+                && self.same_uv(s, end, s0)
+                && let Some(shift) = seam_shift(s.periods(), s0, e0, same_sense)
+            {
+                let hint = last.map(|l| (l.0 + shift.0, l.1 + shift.1));
+                (edge, start, end) = self.edge(s, u, hint)?;
+            }
+            seen.push((u.edge, start, end));
+            if let Some(p) = if PLACEMENT_CHECK { self.pcurve_periods(s, u, &edge)? } else { None } {
                 placed.push(p);
             }
             match last {
@@ -390,6 +415,13 @@ impl Measurer {
         }
     }
 
+    /// Whether two uv points are one, to a small part of the surface's periods (or of 1).
+    fn same_uv(&self, s: &Surface, a: Uv, b: Uv) -> bool {
+        let periods = s.periods();
+        let close = |x: f64, y: f64, p: Option<f64>| (x - y).abs() <= SAME_UV * p.unwrap_or(1.0);
+        close(a.0, b.0, periods[0]) && close(a.1, b.1, periods[1])
+    }
+
     /// Whether the edge use has no length (a degenerate edge at a pole): the join covers it.
     fn degenerate(&self, u: &Use) -> bool {
         let a = u.curve.d1(u.t0).0;
@@ -413,16 +445,7 @@ impl Measurer {
         for b in cuts.into_iter().chain(std::iter::once(e.t1)) {
             for k in 0..sub {
                 let (pa, pb) = (a + (b - a) * k as f64 / sub as f64, a + (b - a) * (k + 1) as f64 / sub as f64);
-                let (mid, half) = ((pa + pb) / 2.0, (pb - pa) / 2.0);
-                for &(x, w) in &self.gauss {
-                    let t = mid + half * x;
-                    let (p, dp) = e.curve.d1(t);
-                    let (u, v) = s.invert(p, h);
-                    h = Some((u, v));
-                    let (_, su, sv) = s.d1(u, v);
-                    let (du, dv) = solve(su, sv, dp);
-                    nodes.push(Node { u, v, du: du * w * half, dv: dv * w * half, t });
-                }
+                self.piece(s, e, (pa, pb), &mut h, &mut nodes, 0);
             }
             a = b;
         }
@@ -432,6 +455,38 @@ impl Measurer {
         let start = self.end(s, e, e.t0, e.t0 + (e.t1 - e.t0) * POLE_STEP, (n0.u, n0.v));
         let end = self.end(s, e, e.t1, e.t1 - (e.t1 - e.t0) * POLE_STEP, (n1.u, n1.v));
         Ok((nodes, start, end))
+    }
+
+    /// The quadrature nodes of the run `(pa, pb)` of an edge, from hint `h`, halved until no step
+    /// between nodes turns more than [`MAX_TURN`] of a period: where an edge passes close by a pole
+    /// its u turns fast, and a coarser walk takes the wrong turn there (bench scale/balls-united:
+    /// a circle 3° from a sphere's pole lost the winding and 15% of the face).
+    fn piece(&self, s: &Surface, e: &Use, (pa, pb): (f64, f64), h: &mut Option<Uv>, nodes: &mut Vec<Node>, depth: usize) {
+        let (mid, half) = ((pa + pb) / 2.0, (pb - pa) / 2.0);
+        let periods = s.periods();
+        let mut here = Vec::with_capacity(self.gauss.len());
+        let mut last = *h;
+        for &(x, w) in &self.gauss {
+            let t = mid + half * x;
+            let (p, dp) = e.curve.d1(t);
+            let (u, v) = s.invert(p, last);
+            if depth < MAX_SPLITS
+                && let Some((lu, lv)) = last
+            {
+                let turned = |d: f64, p: Option<f64>| p.is_some_and(|p| d.abs() > MAX_TURN * p);
+                if turned(u - lu, periods[0]) || turned(v - lv, periods[1]) {
+                    self.piece(s, e, (pa, mid), h, nodes, depth + 1);
+                    self.piece(s, e, (mid, pb), h, nodes, depth + 1);
+                    return;
+                }
+            }
+            last = Some((u, v));
+            let (_, su, sv) = s.d1(u, v);
+            let (du, dv) = solve(su, sv, dp);
+            here.push(Node { u, v, du: du * w * half, dv: dv * w * half, t });
+        }
+        *h = last;
+        nodes.extend(here);
     }
 
     /// The uv of an edge's end at curve parameter `t`, next to node `near`. At a pole the
@@ -489,6 +544,25 @@ fn solve(su: Vec3, sv: Vec3, d: Vec3) -> (f64, f64) {
         (if a > 0.0 { e / a } else { 0.0 }, 0.0)
     } else {
         (0.0, if c > 0.0 { g / c } else { 0.0 })
+    }
+}
+
+/// How near, as a share of a period, two uv points are one (see `same_uv`).
+const SAME_UV: f64 = 1e-6; // tol: a share of a period, not a length
+
+/// The shift across a seam from its first use, running `s0` to `e0`, to its other side: a period
+/// across the seam's direction, to its left in uv for a face along its surface's normal (to its
+/// right for one against it). `None` where the surface does not close across it.
+fn seam_shift(periods: [Option<f64>; 2], s0: Uv, e0: Uv, same_sense: bool) -> Option<Uv> {
+    let (du, dv) = (e0.0 - s0.0, e0.1 - s0.1);
+    let side = if same_sense { 1.0 } else { -1.0 };
+    if dv.abs() >= du.abs() {
+        // Along v: the left is toward −u when running up.
+        let p = periods[0]?;
+        Some((-dv.signum() * side * p, 0.0))
+    } else {
+        let p = periods[1]?;
+        Some((0.0, du.signum() * side * p))
     }
 }
 

@@ -109,16 +109,6 @@ where
         assert!(s.len() >= R * C, "from_row_slice: slice too short");
         Self::from_fn(|r, c| s[r * C + c])
     }
-    /// The first `R × C` items of `it`, column by column (panics if it has fewer).
-    pub fn from_iterator(it: impl IntoIterator<Item = T>) -> Self {
-        let mut it = it.into_iter();
-        Self {
-            data: <Sh as Shape<T, R, C>>::S::from_lin(|_| match it.next() {
-                Some(v) => v,
-                None => panic!("from_iterator: iterator too short"),
-            }),
-        }
-    }
     /// `R`.
     pub fn nrows(&self) -> usize {
         R

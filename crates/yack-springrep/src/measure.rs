@@ -11,10 +11,13 @@
 //! the boundary integral is adaptive.
 
 mod sample;
+mod tables;
+mod tolerant;
 
 pub use sample::{
     edge_length, extent, face_extent, face_samples, face_uv_bounds, solid_area, solid_bbox,
 };
+pub use tolerant::volume_to;
 
 use std::f64::consts::TAU;
 
@@ -27,6 +30,7 @@ use crate::{
         coedge_params,
     },
 };
+use tables::{pcurve_table, pcurve_tables};
 
 /// Whether a face's inner integral runs along v, and the lowest value its loops reach along that
 /// parameter, where every inner integral starts; `None` for a face without loops.
@@ -305,37 +309,6 @@ fn face_moments_anew(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 11] {
     face_sum(b, f, inner_v, &inner, tol, rel)
 }
 
-/// How many even steps along a coedge its table of parameters takes.
-const TABLE: usize = 64;
-
-/// Each projected coedge's surface parameters at [`TABLE`] + 1 even steps along its edge in its
-/// own direction, loop by loop; empty for a straight pcurve. They seed every projection the face's
-/// integrals make, and its memo keeps them for each later integral.
-fn pcurve_tables(b: &Brep, f: FaceId) -> &[Vec<Vec<Vec2>>] {
-    b.memo(f).pcurves.get_or_init(|| {
-        b.face(f)
-            .loops
-            .iter()
-            .map(|&lp| {
-                b.lp(lp)
-                    .coedges
-                    .iter()
-                    .map(|&co| pcurve_table(b, co))
-                    .collect()
-            })
-            .collect()
-    })
-}
-
-/// One coedge's entry of [`pcurve_tables`].
-fn pcurve_table(b: &Brep, co: CoedgeId) -> Vec<Vec2> {
-    let coedge = b.coedge(co);
-    if !matches!(coedge.pcurve, PCurve::Projected { .. }) || b.edge(coedge.edge).curve.is_none() {
-        return Vec::new();
-    }
-    b.coedge_uvs(co, &coedge_params(b, co, TABLE))
-}
-
 /// How fast the parameters move along a curve with derivative `dp` on a surface with partial
 /// derivatives `su` and `sv`.
 fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
@@ -371,8 +344,9 @@ fn coedge_integral<const K: usize>(
     // A straight blend stays between them, so a periodic parameter keeps their period; a cubic
     // through their rates can overshoot by one beside a pole.
     let hint = |t: f64| -> Vec2 {
-        let x = ((t - a) / (z - a) * TABLE as f64).clamp(0.0, TABLE as f64);
-        let k = (x.floor() as usize).min(TABLE - 1);
+        let n = table.len().saturating_sub(1).max(1);
+        let x = ((t - a) / (z - a) * n as f64).clamp(0.0, n as f64);
+        let k = (x.floor() as usize).min(n - 1);
         let s = x - k as f64;
         table[k] * (1.0 - s) + table[k + 1] * s
     };
@@ -772,12 +746,6 @@ pub fn volume(b: &Brep) -> f64 {
         .flat_map(|s| b.solid_faces(s))
         .map(|f| face_exact(b, f, c, scale).1)
         .sum()
-}
-
-/// [`volume`] to `rel` of the model's size cubed rather than to the last digits: each face's
-/// integral stops refining once two levels agree that well.
-pub fn volume_to(b: &Brep, rel: f64) -> f64 {
-    b.solid_ids().map(|s| solid_volume_to(b, s, rel)).sum()
 }
 
 /// [`area`] and [`volume`] together, integrating each face once.

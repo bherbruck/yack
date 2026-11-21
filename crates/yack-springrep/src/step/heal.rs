@@ -224,6 +224,8 @@ fn solve_vertex(p0: Point3, on: &[On], reach: Option<f64>) -> Option<Point3> {
 /// The most points a refit puts through an edge before it gives up on the faces meeting along one
 /// curve: halving further only finds the same band where they touch.
 const MAX_REFIT_POINTS: usize = 4096;
+/// The share of its gap two rounds earlier a refit's gap must at least come down to.
+const STALL_GAIN: f64 = 0.5;
 
 /// The point on both surfaces nearest `p`: by their tangent planes where they cross, by
 /// alternating projection where they touch, or onto the one surface of a seam. Where neither
@@ -348,6 +350,10 @@ fn refit(
                 .ok_or_else(|| format!("its {kinds} faces do not meet near it"))?;
         }
     }
+    // The worst gap of each round's interpolant: a refit whose gap two doublings have not at
+    // least halved has stalled (faces that touch rather than cross, bench swept/ring-carried-
+    // along-a-spline doubled to 4229 points for minutes), and ends with the refusal it reaches.
+    let mut worst_by_round: Vec<f64> = Vec::new();
     for _ in 0..16 {
         let approx = if closed {
             BSpline::interpolate_periodic(&pts).ok()
@@ -423,7 +429,11 @@ fn refit(
             next.push(pts[pts.len() - 1]);
         }
         pts = next;
-        if pts.len() > MAX_REFIT_POINTS {
+        let worst = err.iter().copied().fold(0.0, f64::max);
+        let stalled = worst_by_round.len() >= 2
+            && worst_by_round.get(worst_by_round.len() - 2).is_some_and(|&w| worst > STALL_GAIN * w);
+        worst_by_round.push(worst);
+        if pts.len() > MAX_REFIT_POINTS || stalled {
             break;
         }
     }

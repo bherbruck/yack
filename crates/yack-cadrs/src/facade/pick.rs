@@ -25,15 +25,42 @@ pub enum Picked {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FaceKind {
     /// A plane, its outward normal.
-    Plane { normal: [f64; 3] },
+    Plane {
+        /// The outward unit normal.
+        normal: [f64; 3],
+    },
     /// A cylinder: its axis (a point on it, its direction) and radius.
-    Cylinder { axis: ([f64; 3], [f64; 3]), radius: f64 },
+    Cylinder {
+        /// A point on the axis and its unit direction.
+        axis: ([f64; 3], [f64; 3]),
+        /// The radius.
+        radius: f64,
+    },
     /// A cone: its apex, axis direction and half-angle (radians).
-    Cone { apex: [f64; 3], axis: [f64; 3], half_angle: f64 },
+    Cone {
+        /// The apex.
+        apex: [f64; 3],
+        /// The axis's unit direction.
+        axis: [f64; 3],
+        /// The half-angle (radians).
+        half_angle: f64,
+    },
     /// A sphere: its centre and radius.
-    Sphere { center: [f64; 3], radius: f64 },
+    Sphere {
+        /// The centre.
+        center: [f64; 3],
+        /// The radius.
+        radius: f64,
+    },
     /// A torus: its axis (centre, direction) and radii.
-    Torus { axis: ([f64; 3], [f64; 3]), major: f64, minor: f64 },
+    Torus {
+        /// The centre and the axis's unit direction.
+        axis: ([f64; 3], [f64; 3]),
+        /// The radius of the tube's centre circle.
+        major: f64,
+        /// The tube's radius.
+        minor: f64,
+    },
     /// An extrusion or a revolution of a curve.
     Swept,
     /// A B-spline surface, or anything else.
@@ -57,9 +84,17 @@ pub struct FaceFacts {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EdgeKind {
     /// A line, its unit direction from start to end.
-    Line { direction: [f64; 3] },
+    Line {
+        /// The unit direction from start to end.
+        direction: [f64; 3],
+    },
     /// A circle or an arc of one: its radius and axis (centre, unit normal).
-    Circle { radius: f64, axis: ([f64; 3], [f64; 3]) },
+    Circle {
+        /// The radius.
+        radius: f64,
+        /// The centre and the unit normal of the circle's plane.
+        axis: ([f64; 3], [f64; 3]),
+    },
     /// An ellipse or an arc of one.
     Ellipse,
     /// A B-spline curve.

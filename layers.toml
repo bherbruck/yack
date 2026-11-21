@@ -27,6 +27,13 @@ owner = "lead"
 deps = []
 license = "MIT OR Apache-2.0"
 
+[crate.yack-linalg]
+layer = 1
+kind = "kernel"
+owner = "w-m17-cadrs"
+deps = ["yack-base"]
+license = "MIT OR Apache-2.0"
+
 [crate.yack-tol]
 layer = 0
 kind = "kernel"
@@ -218,7 +225,7 @@ license = "MIT OR Apache-2.0"
 layer = 8
 kind = "temporary"
 owner = "lead"
-deps = ["yack-base"]
+deps = ["yack-base", "yack-linalg"]
 delete_by = "M4"
 license = "MIT OR Apache-2.0"
 

@@ -1,4 +1,6 @@
 # denied-lint sites per temporary crate (gate 9; may only fall)
 yack-cadrs 137
-yack-shim 3
+yack-shim 2
 yack-springrep 125
+# yack-linalg: contract panics (nalgebra-shaped index/shape checks); gone when M5 converges cadrs onto yack-math's checked types
+yack-linalg 24
