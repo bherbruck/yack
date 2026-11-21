@@ -7,7 +7,6 @@
 mod facts;
 pub(crate) mod domain;
 mod memo;
-mod names;
 mod parts;
 pub(crate) mod pcurve;
 pub(crate) mod radial;
@@ -21,7 +20,7 @@ use std::sync::Arc;
 
 pub use facts::{Facts, OnFace};
 pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey, MemoSlot};
-pub use names::{EdgeName, FaceName};
+pub use crate::names::{EdgeName, FaceName};
 pub(crate) use parts::{Entities, Parts};
 pub use pcurve::PCurve;
 pub(crate) use trims::{coedge_trim_with, coedge_uv_at, face_domain};

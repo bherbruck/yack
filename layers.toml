@@ -298,6 +298,7 @@ license = "MIT OR Apache-2.0"
 [modules.yack-springrep]
 error = []
 tol = []
+names = []
 numeric = ["error", "tol"]
 math = ["error", "tol", "numeric"]
 geom = ["error", "tol", "numeric", "math"]

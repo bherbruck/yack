@@ -26,6 +26,7 @@ pub mod loft;
 pub mod math;
 pub mod measure;
 pub mod mesh;
+pub mod names;
 mod numeric;
 pub mod overlap;
 pub mod primitive;

@@ -1,6 +1,7 @@
-// yack: springrep module src/topo/names.rs
+// yack: the names features give faces, and the face-name pairs that pick edges: plain data.
 // Adapted from springrep@a03e8a1 src/topo/names.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: EdgeName moved here from blend.rs (M2.5, T8), so pick's dissolving leaves no loop.
+// Changes: moved from topo/names.rs to names.rs (M2), being plain data topo and profile both use;
+// EdgeName joined it from blend.rs (M2.5, T8).
 use std::fmt;
 
 /// The name a feature gave a face: `feature.face`. A face can

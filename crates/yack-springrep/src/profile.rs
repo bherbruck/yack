@@ -538,7 +538,7 @@ impl Profile {
 
     /// A circle; its one edge is `side`.
     pub fn circle(center: Vec2, diameter: f64) -> Profile {
-        Profile::named_circle(center, diameter, crate::topo::FaceName::SIDE)
+        Profile::named_circle(center, diameter, crate::names::FaceName::SIDE)
     }
 
     /// A circle whose one edge is `name`.
