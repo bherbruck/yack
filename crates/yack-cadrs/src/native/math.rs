@@ -16,8 +16,6 @@ pub type V2 = Vector2<f64>;
 /// The linear modelling tolerance (mm): points closer than this are the same point
 /// (OCCT's `Precision::Confusion`).
 pub const TOL: f64 = 1e-7;
-/// Angular tolerance (radians) for parallel and coincident directions.
-pub const ANG_TOL: f64 = 1e-10;
 
 pub const PI: f64 = std::f64::consts::PI;
 pub const TAU: f64 = std::f64::consts::TAU;

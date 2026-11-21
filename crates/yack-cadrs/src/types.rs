@@ -1166,19 +1166,6 @@ pub struct Aabb {
 }
 
 impl Aabb {
-    /// The largest value of `(p - origin)·dir` over the box's corners.
-    pub fn max_along(&self, origin: Point3<f64>, dir: &Vector3<f64>) -> f64 {
-        let mut best = f64::NEG_INFINITY;
-        for i in 0..8 {
-            let p = Point3::new(
-                if i & 1 == 0 { self.min.x } else { self.max.x },
-                if i & 2 == 0 { self.min.y } else { self.max.y },
-                if i & 4 == 0 { self.min.z } else { self.max.z },
-            );
-            best = best.max((p - origin).dot(dir));
-        }
-        best
-    }
 
     /// The length of its diagonal.
     pub fn diagonal(&self) -> f64 {
@@ -1301,9 +1288,6 @@ pub struct FilletSpec {
     pub propagate: bool,
 }
 
-fn yes() -> bool {
-    true
-}
 
 impl FilletSpec {
     /// A circular fillet of radius `r`, overflow allowed, tangent edges propagated.

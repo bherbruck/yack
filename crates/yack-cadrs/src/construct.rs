@@ -592,15 +592,6 @@ impl ExtrudeSpec {
         }
     }
 
-    /// A solid extrude along `direction` up to `end`, the bodies of `scene` the ones Up to next
-    /// and Through all consider.
-    pub fn up_to(direction: Unit<V3>, end: ExtrudeEnd, scene: &[BodyId]) -> Self {
-        ExtrudeSpec {
-            end,
-            scene: scene.to_vec(),
-            ..ExtrudeSpec::blind(direction, 0.0)
-        }
-    }
 
     /// Its depth split evenly either side of the sketch plane.
     pub fn both_ways(mut self) -> Self {
@@ -624,15 +615,6 @@ impl RevolveSpec {
         }
     }
 
-    /// A solid revolve about `axis` up to `end`, the bodies of `scene` the ones Up to next
-    /// considers.
-    pub fn up_to(axis: Axis, end: RevolveEnd, scene: &[BodyId]) -> Self {
-        RevolveSpec {
-            end,
-            scene: scene.to_vec(),
-            ..RevolveSpec::solid(axis, Some(0.0))
-        }
-    }
 
     /// With planar faces revolved along with the profile's regions.
     pub fn with_faces(mut self, faces: Vec<FaceInput>) -> Self {
@@ -654,11 +636,6 @@ impl SweepSpec {
         }
     }
 
-    /// Round the path's sharp corners: the profile turned about each.
-    pub fn round_corners(mut self) -> Self {
-        self.corners = SweepCorners::Round;
-        self
-    }
 }
 
 impl LoftSpec {
@@ -767,38 +744,8 @@ impl ShellSpec {
 }
 
 impl ThickenSpec {
-    /// The sheets `bodies` thickened `along` their faces' normals and `against` them, their
-    /// bends rounded.
-    pub fn of_bodies(bodies: Vec<BodyId>, along: f64, against: f64) -> Self {
-        ThickenSpec {
-            bodies,
-            faces: Vec::new(),
-            profiles: Vec::new(),
-            along,
-            against,
-            sharp: false,
-            source: 0,
-        }
-    }
 
-    /// The faces `faces` of the part `body` thickened.
-    pub fn of_faces(body: BodyId, faces: &[FaceId], along: f64, against: f64) -> Self {
-        ThickenSpec {
-            faces: faces
-                .iter()
-                .map(|&face| FaceInput::new(body, face))
-                .collect(),
-            ..ThickenSpec::of_bodies(Vec::new(), along, against)
-        }
-    }
 
-    /// The regions of the sketches `profiles` thickened (their normals along their planes').
-    pub fn of_profiles(profiles: Vec<Profile>, along: f64, against: f64) -> Self {
-        ThickenSpec {
-            profiles,
-            ..ThickenSpec::of_bodies(Vec::new(), along, against)
-        }
-    }
 
     /// Its bends mitred: the moved faces extended until they meet.
     pub fn mitred(mut self) -> Self {
@@ -818,15 +765,6 @@ impl OffsetSpec {
         }
     }
 
-    /// Only these faces moved, each its own distance along its outward normal, the others kept
-    /// and trimmed to meet them (Move face, Offset).
-    pub fn of_faces(faces: &[(FaceId, f64)]) -> Self {
-        OffsetSpec {
-            distance: 0.0,
-            faces: faces.to_vec(),
-            sharp: true,
-        }
-    }
 
     /// Its edges kept sharp: the moved faces extended until they meet.
     pub fn mitred(mut self) -> Self {
@@ -912,14 +850,6 @@ impl Primitive {
         Primitive::ball_with(center, radius, V3::z(), V3::x())
     }
 
-    /// The ball with its poles along `dir` from its centre, its seam where [`Plane::through_axis`]
-    /// puts that axis's sketch x.
-    pub fn ball_about(center: P3, dir: V3, radius: f64) -> Self {
-        let seam = Plane::through_axis(&Axis::new(center, dir))
-            .x_dir
-            .into_inner();
-        Primitive::ball_with(center, radius, dir, seam)
-    }
 
     /// The ball with its poles along `axis` from its centre and its seam toward `seam` from
     /// that axis.

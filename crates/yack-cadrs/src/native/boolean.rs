@@ -5838,21 +5838,6 @@ pub fn boolean_with(
     boolean_opts(k, op, target, tools, opts)
 }
 
-/// [`boolean`] with one run only ([`BoolOptions::retry`] off): for a question about the result
-/// (whether it is one solid, has volume), not a result to keep.
-pub fn boolean_once(
-    k: &mut NativeKernel,
-    op: BoolOp,
-    target: BodyId,
-    tools: &[BodyId],
-) -> Result<OpResult> {
-    let opts = BoolOptions {
-        tol: k.tolerances(),
-        retry: false,
-        ..BoolOptions::default()
-    };
-    boolean_opts(k, op, target, tools, opts)
-}
 
 /// `tools` subtracted from `target` where they lie within it ([`BoolOptions::within`]).
 pub(crate) fn subtract_within(

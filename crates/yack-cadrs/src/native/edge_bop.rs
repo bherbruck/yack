@@ -548,18 +548,6 @@ pub fn edge_boolean(
     })
 }
 
-/// The number of distinct vertices of a set of edges (their ends, merged within `tol`).
-pub fn vertex_count(edges: &[(P3, P3)], tol: f64) -> usize {
-    let mut pts: Vec<P3> = Vec::new();
-    for (a, b) in edges {
-        for p in [a, b] {
-            if !pts.iter().any(|q| (q - p).norm() <= tol) {
-                pts.push(*p);
-            }
-        }
-    }
-    pts.len()
-}
 
 #[cfg(test)]
 mod tests {

@@ -2164,13 +2164,6 @@ const PLANE_UNKEPT: usize = 16;
 /// Whether face meshes are kept to be used again ([`keep_meshes`]).
 static KEEP_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// Whether the tessellator keeps the faces' meshes, to give them again when the same face is
-/// meshed again with the same controls (on by default: a model rebuilt after an edit meshes
-/// most of its faces again unchanged). A program that meshes each body once, a batch converter
-/// or a benchmark's runner, turns it off and saves the keys and the copies.
-pub fn keep_meshes(on: bool) {
-    KEEP_MESHES.store(on, std::sync::atomic::Ordering::Relaxed);
-}
 
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);

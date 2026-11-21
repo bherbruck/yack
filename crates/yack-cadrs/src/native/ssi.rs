@@ -1998,44 +1998,6 @@ pub fn sdist_gradient(s: &Surface, p: &P3, hint: &mut Option<(f64, f64)>) -> Opt
     }
 }
 
-pub fn refine_point_uv(a: &Surface, b: &Surface, uv: P2) -> (P3, P2) {
-    let (mut u, mut v) = (uv.x, uv.y);
-    let e = 1e-7;
-    let mut hint: Option<(f64, f64)> = if b.signed_distance(&P3::origin()).is_some() {
-        None
-    } else {
-        Some(b.project(&a.eval(u, v), None))
-    };
-    for _ in 0..30 {
-        let p = a.eval(u, v);
-        let g0 = sdist_hint(b, &p, &mut hint);
-        if g0.abs() < 1e-13 {
-            break;
-        }
-        let (_, su, sv) = a.d1(u, v);
-        // ∇g = n_b·(Su, Sv) with n_b the distance's gradient (differenced only where it has
-        // none to write down).
-        let (gu, gv) = match sdist_gradient(b, &p, &mut hint) {
-            Some(n) => (n.dot(&su), n.dot(&sv)),
-            None => {
-                let (mut h1, mut h2, mut h3, mut h4) = (hint, hint, hint, hint);
-                (
-                    (sdist_hint(b, &(p + su * e), &mut h1) - sdist_hint(b, &(p - su * e), &mut h2))
-                        / (2.0 * e),
-                    (sdist_hint(b, &(p + sv * e), &mut h3) - sdist_hint(b, &(p - sv * e), &mut h4))
-                        / (2.0 * e),
-                )
-            }
-        };
-        let l = gu * gu + gv * gv;
-        if l < tol::TINY {
-            break;
-        }
-        u -= g0 * gu / l;
-        v -= g0 * gv / l;
-    }
-    (a.eval(u, v), P2::new(u, v))
-}
 
 /// Distance from p to the segment ab.
 fn seg_dist3(p: &P3, a: &P3, b: &P3) -> f64 {

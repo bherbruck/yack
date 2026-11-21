@@ -1329,20 +1329,7 @@ fn split_at_knots(pc: &Curve, ts: &[f64], ku: &[f64], kv: &[f64]) -> Vec<f64> {
 #[cfg(feature = "gpu")]
 const GPU_MIN_JOBS: usize = 512;
 
-/// Whether mass properties may use the GPU: off unless `CADRS_GPU=1` (or [`set_gpu`]). On
-/// pi7zoll-gehäuse's B-spline faces its dispatches (a millisecond each, one queue for all the
-/// rebuild's threads) lost to the CPU's cores: 7.7 s against 6.5 s for its Part Studio.
-static GPU_ON: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
-    std::sync::LazyLock::new(|| {
-        let on = crate::native::switch("CADRS_GPU").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("on"));
-        std::sync::atomic::AtomicBool::new(on)
-    });
 
-/// Turns the GPU path on or off (for comparisons; off unless `CADRS_GPU=1`, and only there
-/// when the kernel is built with the `gpu` feature and a GPU is there).
-pub fn set_gpu(on: bool) {
-    GPU_ON.store(on, std::sync::atomic::Ordering::Relaxed);
-}
 
 /// Whether mass properties may use the GPU now.
 pub fn gpu_active() -> bool {

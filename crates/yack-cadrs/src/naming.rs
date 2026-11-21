@@ -224,15 +224,6 @@ pub fn canonical_edge(aliases: &[(FaceName, FaceName)], name: &EdgeName) -> Edge
     )
 }
 
-/// A vertex name with each of its faces by the name it is known by now ([`canonical_face`]).
-pub fn canonical_vertex(aliases: &[(FaceName, FaceName)], name: &VertexName) -> VertexName {
-    let mut faces = name.faces.map(|f| canonical_face(aliases, &f));
-    faces.sort();
-    VertexName {
-        faces,
-        index: name.index,
-    }
-}
 
 impl BodyNames {
     /// The name `name` is known by now on this body ([`canonical_face`]).
@@ -287,19 +278,6 @@ impl BodyNames {
         }
     }
 
-    /// The vertex with this name (its faces may be named by merged-away names).
-    pub fn vertex_named(&self, name: &VertexName) -> Option<VertexId> {
-        let find = |name: &VertexName| {
-            (0..self.vertices.len())
-                .find(|&i| self.vertices[i] == Some(*name))
-                .map(|i| VertexId(i as u64))
-        };
-        find(name).or_else(|| {
-            (!self.aliases.is_empty())
-                .then(|| find(&canonical_vertex(&self.aliases, name)))
-                .flatten()
-        })
-    }
 }
 
 /// FNV-1a over bytes: a hash that never changes between Rust or cadrs versions, for names that
@@ -333,12 +311,6 @@ fn face_bytes(f: &FaceName, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.split.to_le_bytes());
 }
 
-/// [`stable_hash`] of a face name.
-pub fn face_hash(f: &FaceName) -> u64 {
-    let mut bytes = Vec::with_capacity(64);
-    face_bytes(f, &mut bytes);
-    stable_hash(&bytes)
-}
 
 /// [`stable_hash`] of an edge name.
 pub fn edge_hash(e: &EdgeName) -> u64 {

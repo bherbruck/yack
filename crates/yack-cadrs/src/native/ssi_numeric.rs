@@ -1466,10 +1466,6 @@ fn chain_touches(pts: Vec<Pt>, link: f64, merge: f64) -> (Vec<Traced>, Vec<Pt>) 
     (curves, points)
 }
 
-/// The intersection of `a` over `ua` and `b` over `ub` inside `region`.
-pub fn intersect(a: &Surface, ua: UvBox, b: &Surface, ub: UvBox, region: &Bbox) -> Intersection {
-    intersect_stats(a, ua, b, ub, region).0
-}
 
 /// [`intersect`] with the search's counters.
 pub fn intersect_stats(

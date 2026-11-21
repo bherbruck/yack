@@ -161,20 +161,11 @@ fn quarter_turns(b: &mut Body, s1: f64) {
     lap("each on its own part");
 }
 
-/// How long (seconds) a sweep by faces may split and unite before it gives up.
-const EFFORT_SECONDS: f64 = 4.0;
 
 /// yack: the rounds a sweep by faces may split, or unite pieces, before it gives up
 /// (in place of [`EFFORT_SECONDS`] of wall clock: results never depend on timing).
 const SWEEP_CHECKS: usize = 4096;
 
-/// [`EFFORT_SECONDS`], or `CADRS_SWEEP_EFFORT` seconds (for debugging).
-fn effort() -> f64 {
-    crate::native::switch("CADRS_SWEEP_EFFORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(EFFORT_SECONDS)
-}
 
 /// A screw's turn (radians, above 0).
 fn mv_angle(mv: &Move) -> f64 {

@@ -249,21 +249,6 @@ impl KernelError {
         }
     }
 
-    /// Whether the algorithm gave up on this input ([`KernelError::OperationFailed`] or one of
-    /// the typed failures, `BooleanFailed`, `BlendFailed`, `BudgetExhausted`, `TooLarge`,
-    /// `InvalidGeometry`, `InvalidResult`), as opposed to refusing its arguments or finding nothing to make.
-    pub fn is_failure(&self) -> bool {
-        matches!(
-            self,
-            Self::OperationFailed(_)
-                | Self::BooleanFailed { .. }
-                | Self::BlendFailed { .. }
-                | Self::BudgetExhausted { .. }
-                | Self::TooLarge { .. }
-                | Self::InvalidGeometry { .. }
-                | Self::InvalidResult { .. }
-        )
-    }
 }
 
 impl fmt::Display for KernelError {

@@ -1487,28 +1487,6 @@ impl NurbsCurve {
         }
     }
 
-    /// Degree elevation by repeated knot refinement is not needed yet; this raises the degree of
-    /// a Bézier segment-wise curve by converting each span (only used for loft compatibility).
-    pub fn elevate_bezier(&self) -> Self {
-        // Valid for single-span (Bézier) curves only.
-        let p = self.degree;
-        let q = &self.cps;
-        let mut out = Vec::with_capacity(p + 2);
-        out.push(q[0]);
-        for i in 1..=p {
-            let a = i as f64 / (p + 1) as f64;
-            out.push(q[i - 1] * a + q[i] * (1.0 - a));
-        }
-        out.push(q[p]);
-        let (a, b) = self.range();
-        let mut knots = vec![a; p + 2];
-        knots.extend(vec![b; p + 2]);
-        Self {
-            degree: p + 1,
-            knots,
-            cps: out,
-        }
-    }
 }
 
 /// A rational B-spline surface. Build one from outside data with the checked
@@ -1895,27 +1873,6 @@ impl NurbsSurface {
         }
     }
 
-    /// The curve of the surface at one v, along u ([`Self::iso_u_curve`] the other way).
-    pub fn iso_v_curve(&self, v: f64) -> NurbsCurve {
-        let m = self.cps[0].len() - 1;
-        let v = v.clamp(self.kv[self.dv], self.kv[m + 1]);
-        let span = find_span(m, self.dv, v, &self.kv);
-        let basis = basis_ders(span, v, self.dv, 0, &self.kv);
-        let cps = self
-            .cps
-            .iter()
-            .map(|row| {
-                (0..=self.dv).fold(H::zeros(), |acc, k| {
-                    acc + row[span - self.dv + k] * basis[0][k]
-                })
-            })
-            .collect();
-        NurbsCurve {
-            degree: self.du,
-            knots: self.ku.clone(),
-            cps,
-        }
-    }
 
     /// The iso-curve at `v` for evaluating many points along u in [u0, u1] (mass properties'
     /// inner integrals): the control points of S(·, v) and ∂S/∂v(·, v), contracted along v once.
@@ -2008,26 +1965,6 @@ impl NurbsSurface {
     }
 }
 
-/// Solves a banded system A·X = B (|i − j| ≤ `bw` outside the band is zero) by Gaussian
-/// elimination with partial pivoting inside the band: O(n·bw²) instead of O(n³). B-spline
-/// collocation matrices are banded (and totally positive).
-pub fn banded_solve(a: &DMatrix<f64>, b: &DMatrix<f64>, bw: usize) -> Option<DMatrix<f64>> {
-    let n = a.nrows();
-    let mut band = Band::new(n, bw);
-    for i in 0..n {
-        for j in i.saturating_sub(bw)..(i + 2 * bw + 1).min(n) {
-            band.set(i, j, a[(i, j)]);
-        }
-        // Entries just outside the stored band must be zero (B-spline collocation rows are
-        // local; checking every entry would make the solve O(n²)).
-        for j in [i.wrapping_sub(bw + 1), i + 2 * bw + 1] {
-            if j < n && a[(i, j)] != 0.0 {
-                return a.clone().lu().solve(b);
-            }
-        }
-    }
-    band.solve(b.clone())
-}
 
 /// A square matrix in band storage: row i keeps columns [i − bw, i + 2bw] (room for the
 /// fill-in of partial pivoting).
@@ -2141,10 +2078,6 @@ impl Band {
     }
 }
 
-/// Solves a dense square system (used by fits).
-pub fn solve(a: DMatrix<f64>, b: DVector<f64>) -> Option<DVector<f64>> {
-    a.lu().solve(&b)
-}
 
 /// The poles (first and last) of a B-spline of `n` poles and degree `p` on `knots` that the part
 /// over `range` hangs on, and those of a span more each way where there are more: the curve

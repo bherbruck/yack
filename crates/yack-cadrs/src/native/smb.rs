@@ -1176,11 +1176,6 @@ pub fn read(bytes: &[u8]) -> R<(Body, Vec<String>)> {
     read_brep(bytes).map(|b| (b.body, b.warnings))
 }
 
-/// [`read`], with the middle point of each of the file's edges (in the file's order, which
-/// SMLib's tests index).
-pub fn read_with_edges(bytes: &[u8]) -> R<(Body, Vec<P3>, Vec<String>)> {
-    read_brep(bytes).map(|b| (b.body, b.edge_mids, b.warnings))
-}
 
 /// [`read`], with the area centroid of the body face each of the file's faces became (in the
 /// file's order, which SMLib's tests index; None for a face the builder dropped).

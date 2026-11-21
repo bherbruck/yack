@@ -124,12 +124,7 @@ pub struct NativeKernel {
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
 const JOINED_KEPT: usize = 4;
 
-/// How many body ids each [`NativeKernel::fork`] of a session has to itself.
-const FORK_IDS: u64 = 1 << 32;
 
-/// The next range of body ids a fork takes: every fork its own, a fork of a fork too (a fork's
-/// range past its parent's lane would be another fork's), and past every id handed out before.
-static FORK_RANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl NativeKernel {
     /// An empty session at the default tolerances.
@@ -232,91 +227,9 @@ impl NativeKernel {
         Ok(outside(ea, eb) && outside(eb, ea))
     }
 
-    /// [`Kernel::joins`] from one boolean run (no retries when it leaves the union broken, and
-    /// the union not kept for an Add): a question only, as a New's dialog asks it.
-    pub fn joins_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
-        if self.surely_apart(a, b)? || super::boolean::union_falls_apart(self.get(a)?, self.get(b)?)
-        {
-            return Ok(false);
-        }
-        let r = super::boolean::boolean_once(self, BoolOp::Union, a, &[b])?;
-        let joined = self.solid_count(r.bodies[0]).unwrap_or(2) == 1;
-        for x in r.bodies {
-            self.release(x);
-        }
-        Ok(joined)
-    }
 
-    /// [`Kernel::overlaps`] from one boolean run, like [`Self::joins_once`].
-    pub fn overlaps_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
-        if self.surely_apart(a, b)? {
-            return Ok(false);
-        }
-        let r = super::boolean::boolean_once(self, BoolOp::Intersect, a, &[b])?;
-        let v = self
-            .get(r.bodies[0])
-            .map(|x| super::mass::body_volume(x))
-            .unwrap_or(0.0);
-        for x in r.bodies {
-            self.release(x);
-        }
-        Ok(v > tol::ROUNDOFF)
-    }
 
-    /// A session to run an operation in on another thread, its bodies, colours and
-    /// tolerances this one's; [`Self::absorb`] takes back what it made. Its new bodies are
-    /// numbered from a range of ids of its own ([`FORK_RANGES`]).
-    pub fn fork(&self) -> NativeKernel {
-        let first = FORK_RANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) * FORK_IDS;
-        NativeKernel {
-            bodies: self.bodies.clone(),
-            next: first,
-            first,
-            tol: self.tol,
-            colors: self.colors.clone(),
-            draw_history: None,
-            // (Not the unions kept for a union to come: a boolean takes its result out of them,
-            // and two sessions mustn't hand out the same body.)
-            joined: Vec::new(),
-            swept_tori: self.swept_tori.clone(),
-            pipes: self.pipes.clone(),
-            placed: self.placed.clone(),
-            swept: self.swept.clone(),
-            united: self.united.clone(),
-        }
-    }
 
-    /// Takes the bodies (and their colours) a [`Self::fork`] of this session made, and the
-    /// unions it kept for [`Kernel::joins`] (after this session's, as though made here in turn:
-    /// the oldest past [`JOINED_KEPT`] released).
-    pub fn absorb(&mut self, fork: NativeKernel) {
-        for (id, e) in fork.bodies {
-            // (Not those it had from here: one released here since stays released.)
-            if id < fork.first || self.bodies.contains_key(&id) {
-                continue;
-            }
-            if let Some(c) = fork.colors.get(&id) {
-                self.colors.insert(id, c.clone());
-            }
-            if let Some(t) = fork.swept_tori.get(&id) {
-                self.swept_tori.insert(id, t.clone());
-            }
-            if let Some(t) = fork.pipes.get(&id) {
-                self.pipes.insert(id, t.clone());
-            }
-            self.bodies.insert(id, e);
-            self.next = self.next.max(id + 1);
-        }
-        for j in fork.joined {
-            self.joined.push(j);
-            if self.joined.len() > JOINED_KEPT {
-                let (_, _, old) = self.joined.remove(0);
-                for x in old.bodies {
-                    self.release(x);
-                }
-            }
-        }
-    }
 
     /// Adds a built body with its faces' origins as the history of a new result.
     pub(crate) fn insert_result(&mut self, b: Built) -> OpResult {

@@ -10703,21 +10703,6 @@ pub fn chamfer_offsets_along(b: &Body, e: usize, d: [f64; 2]) -> Option<[f64; 2]
     ball_offsets_within(q, n, tol::REL * (1.0 + p.coords.abs().max()))
 }
 
-/// The offsets from edge e's two faces (as [`chamfer_offsets`]) of the ball whose contacts are
-/// the ends of a distance-and-angle chamfer: `distance` along face `first` (0 or 1 of
-/// [`super::blend::edge_sides`]) from the edge, and where the straight line from there, at
-/// `angle` to that face, meets the other face's own surface (on a ball or a cone that is not
-/// where it would meet the face's tangent plane at the edge). `None` unless the section is
-/// the same all along the edge (a rim of a turned solid, a straight edge of faces along it).
-pub fn chamfer_offsets_angled(
-    b: &Body,
-    e: usize,
-    first: usize,
-    distance: f64,
-    angle: f64,
-) -> Option<[f64; 2]> {
-    chamfer_offsets_angled_at(b, e, first, distance, angle, false).map(|k| k[0].1)
-}
 
 /// [`chamfer_offsets_angled`] where the section changes along the edge too: the offsets at
 /// stations along it, (fraction of the edge, offsets), for [`chamfer_edges_offsets_along`].
@@ -10867,23 +10852,6 @@ fn ball_offsets_within(q: [P3; 2], n: [V3; 2], within: f64) -> Option<[f64; 2]> 
     (x.x * x.y > 0.0 && miss < within).then(|| [x.x.abs(), x.y.abs()])
 }
 
-/// [`chamfer_edges`] with each edge's ball given by its offsets from its two faces (in
-/// [`super::blend::edge_sides`] order), not by its contacts' distances.
-pub fn chamfer_edges_offsets(
-    b: &Body,
-    input: BodyId,
-    edges: &[(usize, [f64; 2])],
-) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
-    let mut laws = Vec::new();
-    let mut ratios = Vec::new();
-    for &(e, k) in edges {
-        let [(_, c1), _] = sides(b, e)?;
-        let k = if c1 { k } else { [k[1], k[0]] };
-        laws.push((e, vec![(0.0, k[0]), (1.0, k[0])]));
-        ratios.push((k[1] / k[0], None));
-    }
-    local_blend(b, input, &laws, &ratios, true)
-}
 
 /// The point `dist` along face f from `p` in the plane square to `t`, starting along `w`: on a
 /// plane `dist` along `w`; on a cylinder whose axis runs along `t`, `p` turned dist/R about the
