@@ -741,7 +741,7 @@ pub trait Kernel {
     /// ```
     fn boolean(&mut self, op: BoolOp, target: BodyId, tools: &[BodyId]) -> Result<OpResult>;
 
-    /// The cells of an arrangement of solids (OCCT's `BOPAlgo_CellsBuilder`): the connected
+    /// (yack M4.0b: refuses, Unsupported.) The cells of an arrangement of solids (OCCT's `BOPAlgo_CellsBuilder`): the connected
     /// solids `bodies` split one another into, each inside some of the bodies and outside the
     /// rest, as one body each. `select` keeps the cells inside the bodies it marks `true` and
     /// outside those it marks `false` (by index into `bodies`; the others either way); with an
@@ -752,7 +752,7 @@ pub trait Kernel {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```text
     /// # use yack_cadrs::{DefaultKernel, Extent, Kernel};
     /// # use yack_cadrs::{Curve2, Loop, Plane, Profile, Region};
     /// # fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Profile {

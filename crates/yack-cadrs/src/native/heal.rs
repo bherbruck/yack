@@ -122,11 +122,8 @@ impl Healing {
                     .map(|s| s.into_iter().map(|(_, f)| f).collect())
                     .collect();
             }
-            HealOp::Tails {
-                max_angle,
-                max_width,
-            } => {
-                super::tails::fix_tails(b, max_angle, max_width)?;
+            HealOp::Tails { .. } => {
+                return Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"));
             }
         }
         if self.from.len() != self.body.faces.len() {

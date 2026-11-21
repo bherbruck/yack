@@ -1036,8 +1036,9 @@ impl Kernel for NativeKernel {
         super::curve_split::project_curve(self, spec)
     }
 
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     fn face_blend(&mut self, spec: &FaceBlendSpec) -> Result<OpResult> {
-        super::face_blend::face_blend(self, spec)
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     fn sweep_curves(&mut self, spec: &CurveSweepSpec) -> Result<OpResult> {
@@ -1338,17 +1339,9 @@ impl Kernel for NativeKernel {
         super::sweep::chain::sweep_chain(self, pieces)
     }
 
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     fn cells(&mut self, bodies: &[BodyId], select: &[(usize, bool)]) -> Result<Vec<BodyId>> {
-        for &b in bodies {
-            self.get(b)?;
-        }
-        if let Some((i, _)) = select.iter().find(|(i, _)| *i >= bodies.len()) {
-            return Err(KernelError::InvalidParameter(format!(
-                "The cell selection names body {i} of {}",
-                bodies.len()
-            )));
-        }
-        super::cells::select_cells(self, bodies, select)
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     fn boolean(&mut self, op: BoolOp, target: BodyId, tools: &[BodyId]) -> Result<OpResult> {
@@ -1447,6 +1440,7 @@ impl Kernel for NativeKernel {
         })
     }
 
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     fn fillet_smooth(
         &mut self,
         body: BodyId,
@@ -1454,17 +1448,7 @@ impl Kernel for NativeKernel {
         spec: &FilletSpec,
         setback: f64,
     ) -> Result<OpResult> {
-        dump(
-            "fillet",
-            self.get(body)?,
-            &format!("edges {edges:?} {spec:?} smooth {setback}"),
-        );
-        self.at_working_size(body, |k, body, by| {
-            let spec = fillet_scaled(spec, by);
-            let r = super::blend_corner::fillet_smooth(k, body, edges, &spec, setback * by);
-            let r = k.dumped(&r);
-            k.colored(r)
-        })
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult> {

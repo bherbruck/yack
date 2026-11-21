@@ -14,6 +14,7 @@
 )]
 
 use std::f64::consts::{PI, TAU};
+use crate::KernelError;
 
 use super::curve::Curve;
 use super::kernel::NativeKernel;
@@ -5716,175 +5717,29 @@ impl NativeKernel {
 
     /// `fixshape result shape -maxtaila degrees -maxtailw width` (ShapeFix with its wire-tail
     /// fix, `native::tails`): the faces' tails removed. A lone face stays a face (no shell).
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn fixshape_tails(&mut self, s: &Shape, max_angle: f64, max_width: f64) -> Result<Shape> {
-        let (mut body, lone) = match s {
-            Shape::Face { .. } => {
-                let b = self.sheet_of_face(s)?;
-                ((**self.get(b)?).clone(), true)
-            }
-            Shape::BodyFace(b, f) => (
-                super::kernel::subset(self.get(*b)?, &[f.0 as usize], false),
-                true,
-            ),
-            Shape::Body(b) => {
-                let body = (**self.get(*b)?).clone();
-                let lone = body.faces.len() == 1 && body.solids.is_empty();
-                (body, lone)
-            }
-            _ => return Err(KernelError::Unsupported("fixshape of this kind of shape")),
-        };
-        super::tails::fix_tails(&mut body, max_angle.to_radians(), max_width)?;
-        if lone {
-            body.shells.clear();
-        }
-        Ok(Shape::Body(self.insert(body)))
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     /// `DT_SplitByNumber result face parts` and `DT_SplitByNumber result face nu nv`
     /// (`native::split_area`): the face divided into patches.
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn split_by_number(
         &mut self,
         f: &Shape,
         parts: usize,
         fixed: Option<(usize, usize)>,
     ) -> Result<Shape> {
-        let (b, fi) = match f {
-            Shape::BodyFace(b, id) => (*b, id.0 as usize),
-            Shape::Body(b) if self.get(*b)?.faces.len() == 1 => (*b, 0),
-            Shape::Face { .. } => (self.sheet_of_face(f)?, 0),
-            _ => {
-                return Err(KernelError::Unsupported(
-                    "DT_SplitByNumber of this kind of shape",
-                ));
-            }
-        };
-        if let Some(out) = super::split_area::split_face(self.get(b)?, fi, parts, fixed)? {
-            return Ok(Shape::Body(self.insert(out)));
-        }
-        // A trimmed face: each cell's region in space (a plane's rectangle, or a sector and a
-        // slab of a sphere's or a cylinder's) cut out of it.
-        let (cells, _) = super::split_area::cells(self.get(b)?, fi, parts, fixed)?;
-        let face = super::kernel::subset(self.get(b)?, &[fi], false);
-        let surf = face.faces[0].surf.clone();
-        let sheet = Shape::Body(self.insert(face));
-        let big = crate::Kernel::bounding_box(self, self.body_of(&sheet)?)
-            .map(|bb| (bb.max - bb.min).norm())
-            .unwrap_or(1.0)
-            .max(1.0)
-            * 4.0;
-        let mut pieces: Vec<Shape> = Vec::new();
-        for ((u0, u1), (v0, v1)) in cells {
-            let region = match &surf {
-                Surface::Plane { f } => {
-                    let z = f.x.cross(&f.y);
-                    let ax = Ax3 {
-                        origin: f.o + f.x * u0 + f.y * v0 - z * big,
-                        z,
-                        x: f.x,
-                    };
-                    self.box_on(&ax, u1 - u0, v1 - v0, 2.0 * big)?
-                }
-                Surface::Sphere { f, r } => {
-                    self.sector(f, u0, u1, r * v0.sin(), r * v1.sin(), big)?
-                }
-                Surface::Cylinder { f, .. } => self.sector(f, u0, u1, v0, v1, big)?,
-                _ => {
-                    return Err(KernelError::Unsupported(
-                        "dividing trimmed faces of this surface",
-                    ));
-                }
-            };
-            match self.bcommon(&sheet, &region)? {
-                Shape::Empty => {}
-                p => pieces.push(p),
-            }
-        }
-        let mut body = super::topo::Body::default();
-        for p in &pieces {
-            let pb = self.body_of(p)?;
-            let _ = body.append(self.get(pb)?);
-        }
-        Ok(Shape::Body(self.insert(body)))
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
-    /// The solid between the half planes at angles `a0` and `a1` about a frame's z axis (less
-    /// than a half turn apart) and the heights `z0` and `z1` along it, `big` across.
-    fn sector(&mut self, f: &Frame, a0: f64, a1: f64, z0: f64, z1: f64, big: f64) -> Result<Shape> {
-        let at = |a: f64, r: f64, z: f64| f.o + (f.x * a.cos() + f.y * a.sin()) * r + f.z * z;
-        let am = 0.5 * (a0 + a1);
-        let rm = big / ((a1 - a0) / 4.0).cos();
-        let ring = |z: f64| {
-            [
-                at(0.0, 0.0, z),
-                at(a0, big, z),
-                at(am, rm, z),
-                at(a1, big, z),
-            ]
-        };
-        let (lo, hi) = (ring(z0.min(z1)), ring(z0.max(z1)));
-        let mut tris: Vec<[P3; 3]> = vec![
-            [lo[0], lo[2], lo[1]],
-            [lo[0], lo[3], lo[2]],
-            [hi[0], hi[1], hi[2]],
-            [hi[0], hi[2], hi[3]],
-        ];
-        for k in 0..4 {
-            let j = (k + 1) % 4;
-            tris.push([lo[k], lo[j], hi[j]]);
-            tris.push([lo[k], hi[j], hi[k]]);
-        }
-        let b = crate::Kernel::mesh_solid(self, &tris, 1e-9 * big)?;
-        Ok(Shape::Body(b))
-    }
 
     /// `edgestofaces result edges` (`native::edges_faces`): the planar faces the edges
     /// enclose, as a compound.
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn edgestofaces(&self, s: &Shape) -> Result<Shape> {
-        fn gather(k: &NativeKernel, s: &Shape, out: &mut Vec<(Curve, f64, f64)>) -> Result<()> {
-            match s {
-                Shape::Edge(e) => out.push((e.curve.clone(), e.t0, e.t1)),
-                Shape::Wire(w) => out.extend(w.iter().map(|e| (e.curve.clone(), e.t0, e.t1))),
-                Shape::BodyEdge(b, id) => {
-                    let e = k
-                        .get(*b)?
-                        .edges
-                        .get(id.0 as usize)
-                        .ok_or_else(|| err("an unknown edge"))?;
-                    out.push((e.curve.clone(), e.t[0], e.t[1]));
-                }
-                Shape::Compound(v) => {
-                    for x in v {
-                        gather(k, x, out)?;
-                    }
-                }
-                Shape::Empty => {}
-                _ => {
-                    return Err(KernelError::Unsupported(
-                        "edgestofaces of shapes other than edges",
-                    ));
-                }
-            }
-            Ok(())
-        }
-        let mut edges = Vec::new();
-        gather(self, s, &mut edges)?;
-        let faces = super::edges_faces::edges_to_faces(&edges)?;
-        Ok(Shape::Compound(
-            faces
-                .into_iter()
-                .map(|(plane, loops)| Shape::Face {
-                    plane,
-                    loops: loops
-                        .into_iter()
-                        .map(|l| {
-                            l.into_iter()
-                                .map(|(curve, t0, t1)| DEdge { curve, t0, t1 })
-                                .collect()
-                        })
-                        .collect(),
-                })
-                .collect(),
-        ))
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     /// `halfspace name face x y z` (BRepPrimAPI_MakeHalfSpace): the side of a planar face's
@@ -5934,6 +5789,7 @@ impl NativeKernel {
     /// marked 0 (the others either way), added to `prev` (the result so far) as solids side by
     /// side, each once; tagged with `material` when not 0, and with `update` the cells of each
     /// material fused (their shared boundaries gone). An empty `spec` adds every cell.
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn bcadd(
         &mut self,
         args: &[&Shape],
@@ -5942,59 +5798,7 @@ impl NativeKernel {
         material: i64,
         update: bool,
     ) -> Result<Shape> {
-        let ids = args
-            .iter()
-            .map(|a| self.solid_of(a))
-            .collect::<Result<Vec<_>>>()?;
-        let cells = super::cells::select_cells(self, &ids, spec)?;
-        let mut out: Vec<Shape> = match prev {
-            Some(Shape::Compound(v)) => v.clone(),
-            Some(Shape::Empty) | None => Vec::new(),
-            Some(s) => vec![s.clone()],
-        };
-        // A cell already in the result (the same volume, area and box) isn't added again.
-        let sig = |k: &Self, b: BodyId| -> Result<[f64; 8]> {
-            let m = crate::Kernel::mass_properties(k, b)?;
-            let bb = crate::Kernel::bounding_box(k, b)?;
-            Ok([
-                m.volume,
-                m.surface_area,
-                bb.min.x,
-                bb.min.y,
-                bb.min.z,
-                bb.max.x,
-                bb.max.y,
-                bb.max.z,
-            ])
-        };
-        let mut have: Vec<[f64; 8]> = Vec::new();
-        for p in &out {
-            if let Shape::Body(b) = p {
-                have.push(sig(self, *b)?);
-            }
-        }
-        for c in cells {
-            let sc = sig(self, c)?;
-            let scale = sc.iter().fold(1.0f64, |a, x| a.max(x.abs()));
-            if have.iter().any(|h| {
-                h.iter()
-                    .zip(&sc)
-                    .all(|(x, y)| (x - y).abs() <= 1e-6 * scale)
-            }) {
-                continue;
-            }
-            have.push(sc);
-            if material != 0 {
-                MATERIALS.with(|m| m.borrow_mut().insert(c, material));
-            }
-            out.push(Shape::Body(c));
-        }
-        let r = if out.is_empty() {
-            Shape::Empty
-        } else {
-            Shape::Compound(out)
-        };
-        if update { self.bcremoveint(&r) } else { Ok(r) }
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     /// `bcremoveint result`: the result's cells of each material fused (their shared
@@ -6033,19 +5837,9 @@ impl NativeKernel {
 
     /// `bsplit result` and `bapisplit result` (BOPAlgo_Splitter, `native::cells::split_by`):
     /// the objects split by the tools, the pieces side by side.
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn bsplit(&mut self, objects: &[&Shape], tools: &[&Shape]) -> Result<Shape> {
-        let o = objects
-            .iter()
-            .map(|a| self.solid_of(a))
-            .collect::<Result<Vec<_>>>()?;
-        let t = tools
-            .iter()
-            .map(|a| self.solid_of(a))
-            .collect::<Result<Vec<_>>>()?;
-        let parts = super::cells::split_by(self, &o, &t)?;
-        Ok(Shape::Compound(
-            parts.into_iter().map(Shape::Body).collect(),
-        ))
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     /// `removefeatures result shape f1 f2 …` (BRepAlgoAPI_Defeaturing): the faces removed and
@@ -6095,105 +5889,9 @@ impl NativeKernel {
     /// `mkvolume result f1 f2 …` (BOPAlgo_MakerVolume) for faces covering whole surfaces
     /// (planes, cylinders, a cone's nappe from its apex, spheres): the bounded cells the
     /// surfaces divide space into, as solids side by side.
+    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     pub fn mkvolume(&mut self, surfs: &[&DSurface]) -> Result<Shape> {
-        // How far the bounded cells can reach: about the surfaces' placements.
-        let mut pts: Vec<P3> = Vec::new();
-        let mut rmax: f64 = 0.0;
-        for s in surfs {
-            match &s.s {
-                Surface::Plane { f } => pts.push(f.o),
-                Surface::Cylinder { f, r }
-                | Surface::Sphere { f, r }
-                | Surface::Cone { f, r, .. } => {
-                    pts.push(f.o);
-                    rmax = rmax.max(r.abs());
-                }
-                _ => {
-                    return Err(KernelError::Unsupported(
-                        "mkvolume of faces of this kind of surface",
-                    ));
-                }
-            }
-        }
-        let c =
-            P3::from(pts.iter().fold(V3::zeros(), |a, p| a + p.coords) / pts.len().max(1) as f64);
-        let spread = pts.iter().map(|p| (p - c).norm()).fold(0.0, f64::max) + rmax;
-        let l0 = 4.0 * spread.max(1e-3);
-        let outer = Ax3 {
-            origin: c - V3::new(l0, l0, l0),
-            z: V3::z(),
-            x: V3::x(),
-        };
-        let outer = self.box_on(&outer, 2.0 * l0, 2.0 * l0, 2.0 * l0)?;
-        let big = 4.0 * l0;
-        let mut regions = Vec::new();
-        for s in surfs {
-            let region = match &s.s {
-                Surface::Plane { f } => {
-                    let n = f.x.cross(&f.y).normalize();
-                    let o = c - n * (c - f.o).dot(&n);
-                    let x = f.x.normalize();
-                    self.box_on(
-                        &Ax3 {
-                            origin: o - x * big - n.cross(&x) * big,
-                            z: n,
-                            x,
-                        },
-                        2.0 * big,
-                        2.0 * big,
-                        big,
-                    )?
-                }
-                Surface::Cylinder { f, r } => {
-                    let z = f.z.normalize();
-                    let o = f.o + z * ((c - f.o).dot(&z) - big);
-                    self.pcylinder_on(
-                        &Ax3 {
-                            origin: o,
-                            z,
-                            x: f.x.normalize(),
-                        },
-                        *r,
-                        2.0 * big,
-                    )?
-                }
-                Surface::Sphere { f, r } => self.psphere_on(
-                    &Ax3 {
-                        origin: f.o,
-                        z: f.z.normalize(),
-                        x: f.x.normalize(),
-                    },
-                    *r,
-                )?,
-                Surface::Cone { f, r, a } => {
-                    if r.abs() > 1e-9 {
-                        return Err(KernelError::Unsupported("mkvolume of truncated cones"));
-                    }
-                    let z = f.z.normalize() * a.cos().signum();
-                    let h = big * 4.0;
-                    self.pcone_on(
-                        &Ax3 {
-                            origin: f.o,
-                            z,
-                            x: f.x.normalize(),
-                        },
-                        0.0,
-                        h * a.tan().abs(),
-                        h,
-                    )?
-                }
-                _ => unreachable!(),
-            };
-            regions.push(self.body_of(&region)?);
-        }
-        let ob = self.body_of(&outer)?;
-        let cells = super::cells::split_cells(self, ob, &regions)?;
-        let bb = crate::Kernel::bounding_box(self, ob)?;
-        let kept = super::cells::bounded(self, &cells, &bb, 1e-6 * l0)?;
-        Ok(match kept.len() {
-            0 => Shape::Empty,
-            _ => Shape::Compound(kept.into_iter().map(Shape::Body).collect()),
-        })
+        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
     }
 
     /// `checkprops shape -s empty` (and -v, -l): nothing there.

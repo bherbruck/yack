@@ -125,3 +125,11 @@ Source: cadrs `crates/cadrs_kernel` at `eb5899efab2081c76e82f2401e1462d476189493
 | `CADRS_UNION_IN_TURN` | native/boolean.rs:5634 | many-body unions by halves (not one at a time) |
 | `CADRS_USD_BREP` | native/smb.rs:1540 | test only: the usd-brep checkout test returns early |
 | `CADRS_VERTEX_DEBUG` | native/boolean.rs:341 | debug/trace/profile output off |
+
+## M4.0b: what yack can't reach, dropped
+
+Deleted `native/{edges_faces,face_blend,blend_corner,tails,split_area,cells}.rs` (each at least 90 % unreachable from yack's glue,
+swarm/done/m4-rehost-plan.md). Their callers, entry points yack never calls, now refuse
+(`Unsupported`, "removed in M4.0b: not reached from yack"): src/native/kernel.rs: face_blend; src/native/kernel.rs: cells; src/native/kernel.rs: fillet_smooth; src/native/heal.rs: HealOp::Tails; src/native/draw.rs: fixshape_tails; src/native/draw.rs: split_by_number; src/native/draw.rs: edgestofaces; src/native/draw.rs: bcadd; src/native/draw.rs: bsplit; src/native/draw.rs: mkvolume.
+Also gone: draw.rs's `sector` (only split_by_number used it), the conformance test
+`fillet_smooth_corner`, and Kernel::cells's runnable doc example (kept as text).

@@ -73,11 +73,6 @@ pub mod blend_chain;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod blend_chain;
 #[cfg(feature = "testkit")]
-pub mod blend_corner;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod blend_corner;
-#[cfg(feature = "testkit")]
 pub mod boolean;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -107,11 +102,6 @@ pub mod bvh;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod bvh;
-#[cfg(feature = "testkit")]
-pub mod cells;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod cells;
 #[cfg(feature = "testkit")]
 pub mod check_faces;
 #[cfg(not(feature = "testkit"))]
@@ -162,11 +152,6 @@ pub mod edge_bop;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod edge_bop;
 #[cfg(feature = "testkit")]
-pub mod edges_faces;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod edges_faces;
-#[cfg(feature = "testkit")]
 pub mod evolved;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -176,11 +161,6 @@ pub mod exchange;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod exchange;
-#[cfg(feature = "testkit")]
-pub mod face_blend;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod face_blend;
 #[cfg(feature = "testkit")]
 pub mod face_build;
 #[cfg(not(feature = "testkit"))]
@@ -314,11 +294,6 @@ pub mod split;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod split;
 #[cfg(feature = "testkit")]
-pub mod split_area;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod split_area;
-#[cfg(feature = "testkit")]
 pub mod ssi;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -387,11 +362,6 @@ pub(crate) mod sweep_solid;
 pub mod sweep_tube;
 #[cfg(not(feature = "testkit"))]
 pub(crate) mod sweep_tube;
-#[cfg(feature = "testkit")]
-pub mod tails;
-#[cfg(not(feature = "testkit"))]
-#[allow(dead_code, reason = "items only the test kit uses")]
-pub(crate) mod tails;
 #[cfg(feature = "testkit")]
 pub mod tess;
 #[cfg(not(feature = "testkit"))]
