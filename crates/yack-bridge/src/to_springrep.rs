@@ -50,7 +50,7 @@ fn gaps(body: &Body) -> (Vec<f64>, Vec<f64>) {
             // edge onto the surface and keeps nothing of cadrs's curve but a seed, so what counts is
             // how far the edge itself lies from the surface (bench swept/ball-screwed-round-a-tight-
             // helix: one cadrs pcurve 4.8e-4 off, its edge within 4.5e-7).
-            let carried = matches!(pcurve(&co.pc, e.t, co.fwd), PCurve::Affine { .. });
+            let carried = matches!(pcurve(&co.pc, e.t, co.fwd, false), PCurve::Affine { .. });
             let worst = (0..GAP_SAMPLES)
                 .map(|i| {
                     let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / (GAP_SAMPLES - 1) as f64;
@@ -163,7 +163,7 @@ fn surface(s: &CSurface) -> Result<SSurface> {
 
 /// The pcurve in springrep's form: `Affine` where cadrs's is straight in the edge's t, else
 /// `Projected` from where the coedge starts.
-fn pcurve(pc: &CCurve, t: [f64; 2], fwd: bool) -> PCurve {
+fn pcurve(pc: &CCurve, t: [f64; 2], fwd: bool, fitted: bool) -> PCurve {
     let straight = match pc {
         CCurve::Line { o, d } => Some((Vec2::new(o.x, o.y), Vec2::new(d.x, d.y))),
         CCurve::Nurbs(n) if n.degree == 1 && n.cps.len() == 2 && n.cps.iter().all(|h| h.w == 1.0) => {
@@ -180,10 +180,30 @@ fn pcurve(pc: &CCurve, t: [f64; 2], fwd: bool) -> PCurve {
     match straight {
         Some((origin, dir)) => PCurve::Affine { origin, dir },
         None => {
+            if let Some(curve) = fitted.then(|| fitted_of(pc)).flatten() {
+                return PCurve::Fitted { curve: Box::new(curve) };
+            }
             let p = pc.point(if fwd { t[0] } else { t[1] });
             PCurve::Projected { seed: Vec2::new(p.x, p.y) }
         }
     }
+}
+
+/// cadrs's pcurve `pc` as springrep's fitted one, its points `(u, v, 0)` by the edge's t: a
+/// spline's homogeneous points `[w·u, w·v, 0, w]` divided out. `None` for any other curve.
+fn fitted_of(pc: &CCurve) -> Option<SNurbsCurve> {
+    let CCurve::Nurbs(n) = pc else { return None };
+    let ctrl = n.cps.iter().map(|h| Vec3::new(h.x / h.w, h.y / h.w, 0.0)).collect();
+    let weights = n.cps.iter().map(|h| h.w).collect();
+    SNurbsCurve::new(n.degree, n.knots.clone(), ctrl, Some(weights)).ok()
+}
+
+/// A fitted pcurve moved by `d` in the parameter plane.
+fn shifted(curve: &SNurbsCurve, d: Vec2) -> Result<PCurve> {
+    let ctrl = curve.control_points().iter().map(|p| Vec3::new(p.x + d.x, p.y + d.y, 0.0)).collect();
+    SNurbsCurve::new(curve.degree(), curve.knots().to_vec(), ctrl, curve.weights().map(<[f64]>::to_vec))
+        .map(|c| PCurve::Fitted { curve: Box::new(c) })
+        .map_err(|e| Error::Unsupported(format!("a fitted pcurve would not move: {e}")))
 }
 
 /// How far, relative, the springrep form's volume may be from cadrs's.
@@ -236,9 +256,7 @@ fn normalise(lp: &mut [Uses], periods: [Option<f64>; 2]) -> Result<()> {
                 PCurve::Affine { origin, dir } => PCurve::Affine { origin: add(*origin), dir: *dir },
                 PCurve::Projected { seed } => PCurve::Projected { seed: add(*seed) },
                 // `pcurve` makes none yet (M1.15's bridge step will).
-                PCurve::Fitted { .. } => {
-                    return Err(Error::Unsupported("a fitted pcurve cannot be moved by a period yet".into()));
-                }
+                PCurve::Fitted { curve } => shifted(curve, d)?,
             };
         }
     }
@@ -370,13 +388,36 @@ pub fn to_springrep(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<Brep> {
 /// [`to_springrep`], with where each cadrs edge went: `map[i]` is cadrs edge `i`'s springrep
 /// edge index, `None` for an edge no face used (dropped). The identity when none was dropped.
 pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<(Brep, Vec<Option<usize>>)> {
+    // As it is first; only a body that will not cross so, and has spline faces, is crossed again
+    // with cadrs's own pcurves on them (M1.15): where a spline face folds near an edge, springrep's
+    // projected pcurve can land on the other sheet, and a fitted one cannot.
+    match carried(body, names, false) {
+        Ok(out) => Ok(out),
+        Err(first) if FITTED_RETRY && body.faces().iter().any(|f| matches!(f.surf, CSurface::Nurbs(_))) => {
+            carried(body, names, true).map_err(|_| first)
+        }
+        Err(first) => Err(first),
+    }
+}
+
+/// Whether a body that will not cross as it is is crossed again with fitted pcurves. Off: on
+/// ladder25 the bodies it carried meshed open (swept/tumbling-torus-full-turn, a wrong answer) and
+/// ran springrep's booleans past the time limit (the crossed tumbling-torus cases), where cadrs's
+/// form holds them correctly. On again only when (1) springrep's mesher samples a Fitted edge
+/// the same way from both its faces, so a carried body meshes closed, and (2) a carried body's
+/// boolean is checked for cost (or bounded) so it cannot run past cadrs's time on the same op.
+const FITTED_RETRY: bool = false;
+
+/// [`to_springrep_mapped`] in one way: with springrep's pcurves, or `fitted`, cadrs's own on
+/// spline faces.
+fn carried(body: &Body, names: &[BTreeSet<FaceName>], fitted: bool) -> Result<(Brep, Vec<Option<usize>>)> {
     if !body.wires().is_empty() || !body.points().is_empty() {
         return Err(Error::Unsupported("a body with wires or acorn points".into()));
     }
     if body.shells().iter().any(|s| !s.closed) {
         return Err(Error::Unsupported("a body with an open shell (a sheet)".into()));
     }
-    let (bb, edges, loops) = assemble(body, names, &BTreeMap::new())?;
+    let (bb, edges, loops) = assemble(body, names, &BTreeMap::new(), fitted)?;
     // A degenerate (pole) coedge runs from where the coedge before it leaves the pole to where the
     // one after it arrives; springrep works out those coedges' u at the pole its own way, so the
     // pole's pcurve is set from what springrep made of them, and the body built again.
@@ -384,7 +425,7 @@ pub fn to_springrep_mapped(body: &Body, names: &[BTreeSet<FaceName>]) -> Result<
     let (bb, edges) = if poles.is_empty() {
         (bb, edges)
     } else {
-        let (bb, edges, _) = assemble(body, names, &poles)?;
+        let (bb, edges, _) = assemble(body, names, &poles, fitted)?;
         (bb, edges)
     };
     let map = edges.iter().map(|e| e.map(EdgeId::index)).collect();
@@ -463,6 +504,7 @@ fn assemble(
     body: &Body,
     names: &[BTreeSet<FaceName>],
     poles: &BTreeMap<(usize, usize, usize), PCurve>,
+    fitted: bool,
 ) -> Result<(Builder, Vec<Option<EdgeId>>, Loops)> {
     let mut bb = Builder::new();
     let (edge_gap, vert_gap) = gaps(body);
@@ -530,12 +572,10 @@ fn assemble(
                     let w = uv(x);
                     Vec2::new(w.x - turn, w.y)
                 };
-                let pc = match pcurve(&co.pc, t, co.fwd) {
+                let pc = match pcurve(&co.pc, t, co.fwd, fitted && matches!(f.surf, CSurface::Nurbs(_))) {
                     PCurve::Affine { origin, dir } => PCurve::Affine { origin: Vec2::new(origin.x - turn, origin.y), dir },
                     PCurve::Projected { seed } => PCurve::Projected { seed: Vec2::new(seed.x - turn, seed.y) },
-                    PCurve::Fitted { .. } => {
-                        return Err(Error::Unsupported("a fitted pcurve cannot be turned yet".into()));
-                    }
+                    PCurve::Fitted { curve } => shifted(&curve, Vec2::new(-turn, 0.0))?,
                 };
                 uses.push(Uses { pc, start: at(ts), mid: at(0.5 * (ts + te)), end: at(te) });
                 ids.push((edge, !co.fwd));

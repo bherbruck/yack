@@ -1,7 +1,7 @@
 // yack: Sweeps of solids made once for every place of one tool: a cutter is one body moved ri....
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/sweep_cache.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
 // Changes: a fixed-size vector's as_slice() read as to_array().as_slice() (lines 63, 184, 185, 214,
-//   215).
+//   215); an identity move kept bit for bit (no -0.0 turned +0.0).
 //! Sweeps of solids made once for every place of one tool: a cutter is one body moved rigidly
 //! to each pass of its program, and what it sweeps there, by a motion that sits the same way
 //! to it, is what it swept before, moved the same way. A session keeps each body it made by
@@ -309,7 +309,7 @@ pub(crate) fn sweep_solid(
         let bodies: Vec<BodyId> = hit
             .bodies
             .iter()
-            .map(|b| k.insert(b.transformed(&place)))
+            .map(|b| k.insert(if place == Affine::identity() { b.clone() } else { b.transformed(&place) }))
             .collect();
         for (&made, &first) in bodies.iter().zip(&hit.first) {
             k.place(made, first, &on);
@@ -326,7 +326,7 @@ pub(crate) fn sweep_solid(
     if aside == (k.swept_tori.len(), k.pipes.len()) {
         let mut bodies = Vec::with_capacity(r.bodies.len());
         for &id in &r.bodies {
-            bodies.push(k.get(id)?.transformed(&inv));
+            bodies.push(if inv == Affine::identity() { (**k.get(id)?).clone() } else { k.get(id)?.transformed(&inv) });
         }
         if k.swept.len() >= KEPT.1 && !k.swept.contains_key(&root) {
             k.swept.clear();

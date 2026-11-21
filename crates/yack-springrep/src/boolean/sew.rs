@@ -628,6 +628,9 @@ fn build(
                                 dir: *dir,
                             },
                             UvMap::Projected => PCurve::Projected { seed: t.uv0 },
+                            UvMap::Fitted(fit) => PCurve::Fitted {
+                                curve: Box::new((**fit).clone()),
+                            },
                         };
                         specs.push(CoedgeSpec {
                             edge: e,

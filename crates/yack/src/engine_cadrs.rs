@@ -77,8 +77,10 @@ fn into_session(op: &'static str, a: &CadrsRef, b: &CadrsRef) -> Result<BodyId> 
     if Arc::ptr_eq(&a.session, &b.session) {
         return Ok(b.id);
     }
-    let body = (**lock(&b.session).get(b.id).map_err(|e| error(op, e))?).clone();
-    Ok(lock(&a.session).insert(body))
+    // the body and its session records (swept tori, pipes) carried over; one session locked at a
+    // time, so two ops copying between the same two sessions both ways never wait on each other
+    let carried = yack_glue::carry_out(&lock(&b.session), b.id).map_err(|e| error(op, e))?;
+    yack_glue::carry_in(&mut lock(&a.session), carried).map_err(|e| error(op, e))
 }
 
 /// How to name a cadrs result's faces from its history: the inputs (cadrs body, springrep form)

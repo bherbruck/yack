@@ -9,7 +9,7 @@ use std::f64::consts::TAU;
 use std::rc::Rc;
 
 use crate::{
-    geom::{Curve, Surface},
+    geom::{Curve, NurbsCurve, Surface},
     math::{Aabb, Point3, Vec2, Vec3},
     numeric::solve2,
     tol,
@@ -23,6 +23,8 @@ pub(crate) enum UvMap {
     Affine { origin: Vec2, dir: Vec2 },
     /// The curve point projected onto the surface, periodic parameters continued from a hint.
     Projected,
+    /// The face's own parameters along the trim (a fitted pcurve, its points `(u, v, 0)`).
+    Fitted(Rc<NurbsCurve>),
 }
 
 /// One directed piece of a face's boundary or of a cut across it.
@@ -60,6 +62,10 @@ impl Trim {
     pub(crate) fn uv(&self, s: &Surface, t: f64, hint: Vec2) -> Vec2 {
         match &self.map {
             UvMap::Affine { origin, dir } => *origin + *dir * t,
+            UvMap::Fitted(fit) => {
+                let p = fit.eval(t);
+                Vec2::new(p.x, p.y)
+            }
             UvMap::Projected => match &self.curve {
                 Some(c) => {
                     // Towards the trim's inside, the side its points near a pole come from.
@@ -95,7 +101,8 @@ impl Trim {
                 }
             }
             let arrived = (hint - self.uv1).norm() <= 1e-6 * (1.0 + self.uv1.norm());
-            if arrived || !periodic || matches!(self.map, UvMap::Affine { .. }) || sub >= 256 {
+            let exact = matches!(self.map, UvMap::Affine { .. } | UvMap::Fitted(_));
+            if arrived || !periodic || exact || sub >= 256 {
                 out.push(self.uv1);
                 return out;
             }
@@ -108,12 +115,10 @@ impl Trim {
     /// cycloid, lobe after lobe) can sit near the curve at its middle while the lobes either side
     /// swing past a point, and the winding about the point read from the chord is then wrong.
     pub(crate) fn steps(&self) -> usize {
+        let (lo, hi) = (self.t0.min(self.t1), self.t0.max(self.t1));
         let pieces = match (&self.map, &self.curve) {
-            (UvMap::Projected, Some(c)) => {
-                c.breakpoints(self.t0.min(self.t1), self.t0.max(self.t1))
-                    .len()
-                    + 1
-            }
+            (UvMap::Projected, Some(c)) => c.breakpoints(lo, hi).len() + 1,
+            (UvMap::Fitted(fit), _) => fit.breakpoints(lo, hi).len() + 1,
             _ => 1,
         };
         (2 * pieces).max(SAMPLES)
@@ -141,15 +146,21 @@ impl Trim {
     /// The parameter-plane direction it leaves its start in.
     pub(crate) fn start_tangent(&self, s: &Surface) -> Vec2 {
         let sign = if self.t1 >= self.t0 { 1.0 } else { -1.0 };
+        self.rate(s, self.uv0, self.t0) * sign
+    }
+
+    /// How fast its parameter-plane point moves with its curve parameter at `t`, where it is `uv`.
+    pub(crate) fn rate(&self, s: &Surface, uv: Vec2, t: f64) -> Vec2 {
         match &self.map {
-            UvMap::Affine { dir, .. } => *dir * sign,
-            UvMap::Projected => {
-                let Some(c) = &self.curve else {
-                    return Vec2::ZERO;
-                };
-                let (_, dp) = c.d1(self.t0);
-                uv_rate(s, self.uv0, dp * sign)
+            UvMap::Affine { dir, .. } => *dir,
+            UvMap::Fitted(fit) => {
+                let (_, d, _) = fit.d2(t);
+                Vec2::new(d.x, d.y)
             }
+            UvMap::Projected => match &self.curve {
+                Some(c) => uv_rate(s, uv, c.d1(t).1),
+                None => Vec2::ZERO,
+            },
         }
     }
 
@@ -293,7 +304,7 @@ fn angle(a: Vec2, b: Vec2) -> f64 {
 fn chords(tr: &Trim, samples: &[Vec2]) -> Vec<Vec2> {
     match tr.map {
         UvMap::Affine { .. } => vec![tr.uv0, tr.uv1],
-        UvMap::Projected => samples.to_vec(),
+        UvMap::Projected | UvMap::Fitted(_) => samples.to_vec(),
     }
 }
 
@@ -710,7 +721,7 @@ impl Domain {
                 for tr in l {
                     let n = match tr.map {
                         UvMap::Affine { .. } => 1,
-                        UvMap::Projected => per_trim,
+                        UvMap::Projected | UvMap::Fitted(_) => per_trim,
                     };
                     let pl = tr.polyline(&self.surface, n);
                     pts.extend_from_slice(&pl[..pl.len() - 1]);

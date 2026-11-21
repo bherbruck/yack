@@ -694,6 +694,15 @@ pub(super) fn pcurve(b: &Brep, c: CoedgeId) -> Option<Curve2> {
             dir: scaled(*dir),
         });
     }
+    // A fitted pcurve is the face's own parameters along the edge: written as it is.
+    if let PCurve::Fitted { curve: fit } = &co.pcurve {
+        return Some(Curve2::Spline {
+            degree: fit.degree(),
+            knots: fit.knots().to_vec(),
+            ctrl: fit.control_points().iter().map(|p| scaled(Vec2::new(p.x, p.y))).collect(),
+            weights: fit.weights().map(<[f64]>::to_vec),
+        });
+    }
     if let Surface::Plane(pl) = s {
         let local = |p: Point3| {
             let d = p - pl.frame.origin;

@@ -917,4 +917,95 @@ fn a_full_tumble_is_swept_as_two_halves_united() {
     assert!((v - 23.6738854823).abs() < 1e-6, "{v}");
 }
 
+#[test]
+fn a_chain_of_sweeps_is_the_same_twice_and_names_its_input() {
+    // yack held.rs the_same_sweep_twice_is_the_same_solid: the history once named the legs'
+    // passing bodies by their session ids, so a second sweep in one session named its faces
+    // otherwise.
+    use crate::facade::motion::swept_then;
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let mut k = DefaultKernel::new();
+    let (ball, _) = primitive(&mut k, &world, Prim::Sphere { radius: 1.0 }).unwrap();
+    let m = [Move::Slide { by: [5.0, 0.0, 0.0] }, Move::Slide { by: [0.0, 3.0, 1.0] }];
+    let (a, ha) = swept_then(&mut k, ball, &m).unwrap();
+    let (b, hb) = swept_then(&mut k, ball, &m).unwrap();
+    assert_eq!(ha, hb);
+    assert!(ha.modified.iter().chain(&ha.deleted.iter().map(|d| (crate::FaceId(0), *d)).collect::<Vec<_>>()).all(|(_, i)| i.body == ball), "{ha:?}");
+    // (cadrs reports no history for a moved solid's sweep, so none is left to name its faces:
+    // the queued "cadrs solid sweeps carry no history" gives them names.)
+    let data = |b: BodyId| { let t = k.export_step(&[b]).unwrap(); let i = t.windows(5).position(|w| w == b"DATA;").unwrap(); t[i..].to_vec() };
+    assert_eq!(data(a), data(b));
+    // Bit for bit, past what STEP shows (a -0.0 the second sweep once turned +0.0).
+    assert_eq!(format!("{:?}", **k.get(a).unwrap()), format!("{:?}", **k.get(b).unwrap()));
+}
 
+#[test]
+fn two_fresh_swept_tori_combine_as_one_torus_swept_twice() {
+    // brep-bench swept/tumbling-torus-crossed-*: each sweep in its own session, one carried into
+    // the other's, combine as the two sweeps of one session do.
+    use crate::facade::motion::{together, Step};
+    let (l, a, h) = (45f64.to_radians(), 20f64.to_radians(), 0.7071);
+    let q = [0.0, h * l.cos(), h * l.sin()];
+    let u = [a.cos(), a.sin() * l.cos(), a.sin() * l.sin()];
+    let sweep = |k: &mut DefaultKernel, s: f64| {
+        let (ring, _) = torus(k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.22).unwrap();
+        let steps = [
+            Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -70f64.to_radians(), to: 70f64.to_radians() },
+            Step::Turn { point: q, axis: u, from: (-100.0 * s).to_radians(), to: (100.0 * s).to_radians() },
+        ];
+        together(k, ring, &steps).unwrap().made.0
+    };
+    let data = |k: &DefaultKernel, b: BodyId| { let t = k.export_step(&[b]).unwrap(); let i = t.windows(5).position(|w| w == b"DATA;").unwrap(); t[i..].to_vec() };
+    let mut shared = DefaultKernel::new();
+    let (x, y) = (sweep(&mut shared, -1.0), sweep(&mut shared, 1.0));
+    let (want, _) = boolean(&mut shared, crate::BoolOp::Intersect, x, &[y]).unwrap();
+    let (mut ka, mut kb) = (DefaultKernel::new(), DefaultKernel::new());
+    let (xa, yb) = (sweep(&mut ka, -1.0), sweep(&mut kb, 1.0));
+    let yb = carry_in(&mut ka, carry_out(&kb, yb).unwrap()).unwrap();
+    let (got, _) = boolean(&mut ka, crate::BoolOp::Intersect, xa, &[yb]).unwrap();
+    assert_eq!(data(&ka, got), data(&shared, want));
+}
+
+#[test]
+fn a_cone_drawn_from_its_base_is_spun_as_one_drawn_from_its_point() {
+    // brep-bench swept/cone-spun-about-a-line-through-it, its cone made by springrep and bridged
+    // (drawn from its base): cadrs's runner 288.495056512097.
+    let mut k = DefaultKernel::new();
+    let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
+    let r = 7.0 * 25f64.to_radians().tan();
+    let spike = k
+        .primitive(&Primitive::Cone { base: Point3::new(5.0 * c, 0.0, 5.0 * s), axis: nalgebra::Unit::new_normalize(Vector3::new(-c, 0.0, -s)), base_radius: r, top_radius: 0.0, height: 7.0 })
+        .and_then(|r| r.first())
+        .unwrap();
+    let m = Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 150f64.to_radians() };
+    let (out, _) = swept(&mut k, spike, &m).unwrap();
+    let v = k.mass_properties(out).unwrap().volume;
+    assert!((v - 288.495056512097).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_screwed_ball_is_a_pipe_with_ball_ends() {
+    // brep-bench swept/coil-spring-pushed-aslant-through-plate: cadrs's runner 3541.93793634313,
+    // its spring a circle swept along the helix with a ball at each end.
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let at = |o: [f64; 3]| crate::facade::profile::Place { origin: o, ..world };
+    let mut k = DefaultKernel::new();
+    let (ball, _) = primitive(&mut k, &at([2.0, 0.0, -12.0]), Prim::Sphere { radius: 0.4 }).unwrap();
+    let coil = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 1080f64.to_radians(), rise_per_turn: 1.5 };
+    let t = std::time::Instant::now();
+    let (spring, _) = swept(&mut k, ball, &coil).unwrap();
+    assert!(k.pipes.contains_key(&spring.0), "the spring is a pipe");
+    let (plate, _) = primitive(&mut k, &at([-15.0, -15.0, 0.0]), Prim::Block { size: [30.0, 30.0, 4.0] }).unwrap();
+    let (cut, _) = cut_swept(&mut k, plate, spring, &[Move::Slide { by: [3.0, 1.0, 18.0] }]).unwrap();
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - 3541.93793634313).abs() < 1e-6 * v, "{v}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(30), "{:?}", t.elapsed());
+    // A helix too tight for the ball (its turns 0.5 apart, the ball 0.4 round): not a pipe.
+    let (fat, _) = primitive(&mut k, &at([2.0, 0.0, 0.0]), Prim::Sphere { radius: 0.4 }).unwrap();
+    let tight = Move::Screw { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 720f64.to_radians(), rise_per_turn: 0.5 };
+    assert!(super::ball_screwed_as_pipe(&mut k, fat, [0.0; 3], [0.0, 0.0, 1.0], 720f64.to_radians(), 0.5).unwrap().is_none());
+    let _ = tight;
+    // Reach: a helix of radius 2 rising 1.5 a turn keeps 0.75 clear (half a pitch), its curvature 2.03.
+    let reach = super::helix_reach(2.0, 1.5 / std::f64::consts::TAU, 3.0);
+    assert!((reach - 0.75).abs() < 0.01, "{reach}");
+}

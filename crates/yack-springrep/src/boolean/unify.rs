@@ -119,11 +119,8 @@ fn trim(b: &Brep, c: CoedgeId, curves: &[Option<Rc<crate::geom::Curve>>], pool: 
             origin: uvs[0],
             dir: Vec2::ZERO,
         },
-        (PCurve::Projected { .. } | PCurve::Fitted { .. }, Some(_)) => UvMap::Projected,
-        (PCurve::Fitted { .. }, None) => UvMap::Affine {
-            origin: uvs[0],
-            dir: Vec2::ZERO,
-        },
+        (PCurve::Projected { .. }, Some(_)) => UvMap::Projected,
+        (PCurve::Fitted { curve }, _) => UvMap::Fitted(std::rc::Rc::new((**curve).clone())),
     };
     Trim {
         piece: co.edge.index(),

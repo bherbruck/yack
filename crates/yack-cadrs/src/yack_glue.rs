@@ -176,8 +176,30 @@ fn swept_exactly(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> 
     {
         return made(Ok(r));
     }
-    made(k.sweep_solid(body, &solid_motion(m)))
+    // A ball screwed: the pipe of its radius along its centre's helix with a ball at each end,
+    // the same solid, which cadrs knows as a pipe (cut by a slide, it is swept as one:
+    // coil-spring-pushed-aslant-through-plate, as cadrs's runner builds its spring).
+    if let &Move::Screw { point, axis, angle, rise_per_turn } = m
+        && let Some(made) = ball_screwed_as_pipe(k, body, point, axis, angle, rise_per_turn)?
+    {
+        return Ok(made);
+    }
+    // A pointed cone drawn from its base (a bridged one): drawn again from its point, the same
+    // solid, which cadrs sweeps exactly where from its base it only meshes it
+    // (cone-spun-about-a-line-through-it).
+    let Some(redrawn) = from_its_point(k, body)? else { return made(k.sweep_solid(body, &solid_motion(m))) };
+    let r = k.sweep_solid(redrawn.0, &solid_motion(m));
+    k.release(redrawn.0);
+    let (out, history) = made(r)?;
+    let back = |i: crate::InputFace| if i.body == redrawn.0 { redrawn.1.get(i.face.0 as usize).map_or(i, |&f| crate::InputFace { body, face: f }) } else { i };
+    let history = History {
+        generated: history.generated,
+        modified: history.modified.into_iter().map(|(f, i)| (f, back(i))).collect(),
+        deleted: history.deleted.into_iter().map(back).collect(),
+    };
+    Ok((out, history))
 }
+
 
 /// The unit normal of the plane holding every control point, or `None` when they are collinear
 /// or not coplanar (within `tol` relative to their spread). The plane is the farthest point's
@@ -1282,80 +1304,13 @@ fn faces_to_edges(ix: &[u64]) -> Vec<EdgeId> {
     ix.iter().map(|&e| EdgeId(e)).collect()
 }
 
-/// The turn per triangle a held body's mesh allows (radians): springrep's `MeshOptions::ANGULAR`.
-const MESH_TURN: f64 = 0.5;
 
-fn meshed(k: &DefaultKernel, body: BodyId, chord: f64) -> Result<crate::TriMesh> {
-    if !(chord.is_finite() && chord > 0.0) {
-        return Err(KernelError::InvalidParameter(format!("a mesh's chord must be finite and above zero, not {chord}")));
-    }
-    k.tessellate(body, crate::Tessellation { deflection: chord, angle: MESH_TURN })
-}
-
-/// `body`'s surface as one closed, outward, welded mesh (springrep's `Solid::mesh`): every point
-/// within `chord` (mm) of the exact surface, at most [`MESH_TURN`] between neighbouring normals,
-/// faces sharing their boundary points (the mesher's are bit for bit the same), triangles
-/// counter-clockwise seen from outside. A mesh that does not close refuses.
-pub fn mesh(k: &DefaultKernel, body: BodyId, chord: f64) -> Result<(Vec<[f64; 3]>, Vec<[u32; 3]>)> {
-    let m = meshed(k, body, chord)?;
-    let check = crate::native::tess::check_tri_mesh(&m);
-    if !check.is_watertight() {
-        return Err(KernelError::OperationFailed(format!(
-            "the mesh does not close ({} open and {} bad sides of {})",
-            check.open, check.bad, check.edges
-        )));
-    }
-    let mut at: std::collections::BTreeMap<[u64; 3], u32> = std::collections::BTreeMap::new();
-    let mut points: Vec<[f64; 3]> = Vec::new();
-    let mut index = |i: u32| -> Result<u32> {
-        let p = m.positions.get(i as usize).ok_or_else(|| KernelError::OperationFailed("a triangle past the mesh's points".into()))?;
-        let key = [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
-        Ok(*at.entry(key).or_insert_with(|| {
-            points.push([p.x, p.y, p.z]);
-            (points.len() - 1) as u32
-        }))
-    };
-    let mut tris = Vec::with_capacity(m.indices.len());
-    for t in &m.indices {
-        let [a, b, c] = [index(t[0])?, index(t[1])?, index(t[2])?];
-        if a != b && b != c && c != a {
-            tris.push([a, b, c]);
-        }
-    }
-    Ok((points, tris))
-}
-
-/// A held body drawn: per face in face order its points, the exact surface's outward unit normal
-/// at each and its triangles (not welded across faces); then the edges' polylines.
-pub type Drawn3 = (Vec<(Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[u32; 3]>)>, Vec<Vec<[f64; 3]>>);
-
-/// `body` drawn as springrep's `display_within(b, chord, edge_chord)`: its faces within `chord`
-/// (mm) of the exact surface and its edges' polylines within `edge_chord` of their curves.
-pub fn display(k: &DefaultKernel, body: BodyId, chord: f64, edge_chord: f64) -> Result<Drawn3> {
-    let m = meshed(k, body, chord)?;
-    let n = k.get(body)?.faces.len();
-    let mut faces: Vec<(Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[u32; 3]>)> = vec![(Vec::new(), Vec::new(), Vec::new()); n];
-    let mut local: Vec<std::collections::BTreeMap<u32, u32>> = vec![std::collections::BTreeMap::new(); n];
-    for (t, f) in m.indices.iter().zip(&m.triangle_faces) {
-        let fi = usize::try_from(f.0).ok().filter(|&i| i < n).ok_or_else(|| KernelError::OperationFailed("a triangle of no face".into()))?;
-        let (Some(out), Some(map)) = (faces.get_mut(fi), local.get_mut(fi)) else { continue };
-        let mut tri = [0u32; 3];
-        for (slot, &i) in tri.iter_mut().zip(t) {
-            let (Some(p), Some(nm)) = (m.positions.get(i as usize), m.normals.get(i as usize)) else {
-                return Err(KernelError::OperationFailed("a triangle past the mesh's points".into()));
-            };
-            *slot = *map.entry(i).or_insert_with(|| {
-                out.0.push([p.x, p.y, p.z]);
-                out.1.push([nm.x, nm.y, nm.z]);
-                (out.0.len() - 1) as u32
-            });
-        }
-        out.2.push(tri);
-    }
-    let edges_from = if edge_chord == chord { m } else { meshed(k, body, edge_chord)? };
-    let edges = edges_from.edges.iter().map(|(_, pts)| pts.iter().map(|p| [p.x, p.y, p.z]).collect()).collect();
-    Ok((faces, edges))
-}
+mod held;
+mod redraw;
+pub use held::{Carried, Drawn3, carry_in, carry_out, display, mesh};
+use redraw::{ball_screwed_as_pipe, from_its_point};
+#[cfg(test)]
+use redraw::helix_reach;
 
 #[cfg(test)]
 #[path = "yack_glue_tests.rs"]

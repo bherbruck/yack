@@ -131,7 +131,6 @@ fn a_held_solid_meshes_and_displays_through_cadrs() {
 /// two different solids. A cadrs result depends on the session state its lineage carries, and the
 /// first sweep changes it. Same input, same output must hold; ignored until the session is fixed.
 #[test]
-#[ignore = "API gap: a cadrs sweep depends on its lineage's session state (w-m17 costing a fix)"]
 fn the_same_sweep_twice_is_the_same_solid() {
     let ball = sphere(&Frame::WORLD, 1.0).unwrap();
     let m = Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 1.0])]);

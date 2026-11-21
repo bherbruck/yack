@@ -103,19 +103,32 @@ fn swept_then_exactly(k: &mut DefaultKernel, body: BodyId, moves: &[Move]) -> Re
     }
     let mut made: Vec<BodyId> = Vec::new();
     let r = (|| {
-        let mut pieces = Vec::new();
-        let mut at = body;
+        // Each leg's sweep, its history read back to `body` (through the moved copies it
+        // started from): the result's history names `body`'s faces, never a step's.
+        let mut pieces: Vec<(BodyId, crate::History)> = Vec::new();
+        let (mut at, mut at_history) = (body, None::<crate::History>);
         for (i, m) in moves.iter().enumerate() {
-            let (piece, _) = swept(k, at, m)?;
+            let (piece, h) = swept(k, at, m)?;
             made.push(piece);
-            pieces.push(piece);
+            let h = match &at_history {
+                Some(a) => through(&h, &[(at, a.clone())]),
+                None => h,
+            };
+            pieces.push((piece, h));
             if i + 1 < moves.len() {
-                at = k.transform_motion(at, &end_motion(m)?)?.first()?;
-                made.push(at);
+                let moved = k.transform_motion(at, &end_motion(m)?)?;
+                let next = moved.first()?;
+                made.push(next);
+                let t = match &at_history {
+                    Some(a) => through(&moved.history, &[(at, a.clone())]),
+                    None => moved.history,
+                };
+                (at, at_history) = (next, Some(t));
             }
         }
-        let r = k.boolean(BoolOp::Union, pieces[0], &pieces[1..])?;
-        Ok((r.first()?, r.history))
+        let ids: Vec<BodyId> = pieces.iter().map(|(p, _)| *p).collect();
+        let r = k.boolean(BoolOp::Union, ids[0], &ids[1..])?;
+        Ok((r.first()?, through(&r.history, &pieces)))
     })();
     // The legs and the moved copies were only steps on the way.
     for id in made {
