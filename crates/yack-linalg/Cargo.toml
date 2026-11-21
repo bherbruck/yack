@@ -1,0 +1,15 @@
+# yack: nalgebra-shaped linear algebra (f64), moved out of yack-shim (M4.1c) so kernel code can reach it.
+[package]
+name = "yack-linalg"
+description = "yack internal crate (not published; use the `yack` crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

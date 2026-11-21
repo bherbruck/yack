@@ -17,7 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod fx;
-pub mod linalg;
+pub use yack_linalg as linalg;
 pub mod par;
 pub mod spade;
 pub mod time;

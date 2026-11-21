@@ -172,6 +172,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-linalg"
+version = "0.0.0"
+
+[[package]]
 name = "yack-math"
 version = "0.0.0"
 dependencies = [
@@ -189,6 +193,9 @@ dependencies = [
 [[package]]
 name = "yack-shim"
 version = "0.0.0"
+dependencies = [
+ "yack-linalg",
+]
 
 [[package]]
 name = "yack-springrep"

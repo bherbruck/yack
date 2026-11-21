@@ -45,6 +45,7 @@ pub struct XYZW<T> {
     pub w: T,
 }
 
+#[expect(clippy::panic, reason = "an index contract, as nalgebra's: counted in scores/lints.txt until M5")]
 fn out_of_bounds(i: usize, n: usize) -> ! {
     panic!("matrix index {i} out of bounds (length {n})")
 }

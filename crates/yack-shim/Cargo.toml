@@ -11,6 +11,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+yack-linalg = { path = "../yack-linalg" }
 
 [lints.rust]
 unsafe_code = "forbid"
