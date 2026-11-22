@@ -40,6 +40,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet(&self, edges: &[EdgeId], radius: f64) -> Result<Solid> {
+        // api.md:659
+        if !(radius.is_finite() && radius > 0.0) {
+            return Err(crate::Error::invalid("fillet", "radius", format!("radius {radius} mm is not positive")));
+        }
         if edges.is_empty() {
             return Err(crate::Error::invalid("fillet", "edges", "no edges to round"));
         }
@@ -67,6 +71,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_radii(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> {
+        // api.md:702-703: each radius as fillet requires
+        if !edges.iter().all(|&(_, r)| r.is_finite() && r > 0.0) {
+            return Err(crate::Error::invalid("fillet_radii", "edges", "every radius must be positive"));
+        }
         ladder::springrep_only("fillet_radii", || {
             let feature = engine::feature();
             let op = "fillet_radii";
@@ -89,6 +97,13 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_variable(&self, edge: EdgeId, from: impl Into<Point3>, r_from: f64, r_to: f64) -> Result<Solid> {
+        // api.md:722-723
+        if !(r_from.is_finite() && r_from > 0.0) {
+            return Err(crate::Error::invalid("fillet_variable", "r_from", format!("r_from {r_from} mm is not positive")));
+        }
+        if !(r_to.is_finite() && r_to > 0.0) {
+            return Err(crate::Error::invalid("fillet_variable", "r_to", format!("r_to {r_to} mm is not positive")));
+        }
         let from: Point3 = from.into();
         firewall::run("fillet_variable", || {
             let feature = engine::feature();
@@ -153,6 +168,13 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_g2(&self, edges: &[EdgeId], offset: f64, center_radius: f64) -> Result<Solid> {
+        // api.md:773
+        if !(offset.is_finite() && offset > 0.0) {
+            return Err(crate::Error::invalid("fillet_g2", "offset", format!("offset {offset} mm is not positive")));
+        }
+        if !(center_radius.is_finite() && center_radius > 0.0) {
+            return Err(crate::Error::invalid("fillet_g2", "center_radius", format!("center_radius {center_radius} mm is not positive")));
+        }
         ladder::springrep_only("fillet_g2", || {
             let feature = engine::feature();
             let op = "fillet_g2";
@@ -216,6 +238,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> {
+        // api.md:841: two different faces
+        if a == b {
+            return Err(crate::Error::invalid("fillet_faces", "b", "the two faces must be different"));
+        }
         // api.md:840
         if !(radius.is_finite() && radius > 0.0) {
             return Err(crate::Error::invalid("fillet_faces", "radius", format!("radius {radius} mm is not positive")));
@@ -275,6 +301,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> {
+        // api.md:876
+        if !(distance.is_finite() && distance > 0.0) {
+            return Err(crate::Error::invalid("chamfer", "distance", format!("distance {distance} mm is not positive")));
+        }
         if edges.is_empty() {
             return Err(crate::Error::invalid("chamfer", "edges", "no edges to bevel"));
         }
@@ -304,6 +334,13 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, along_face: f64, along_other: f64) -> Result<Solid> {
+        // api.md:897
+        if !(along_face.is_finite() && along_face > 0.0) {
+            return Err(crate::Error::invalid("chamfer_two", "along_face", format!("along_face {along_face} mm is not positive")));
+        }
+        if !(along_other.is_finite() && along_other > 0.0) {
+            return Err(crate::Error::invalid("chamfer_two", "along_other", format!("along_other {along_other} mm is not positive")));
+        }
         if !self.faces_of(edge)?.contains(&face) {
             return Err(crate::Error::invalid("chamfer_two", "face", "the face is not one of the edge's two faces"));
         }
@@ -331,6 +368,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn chamfer_distances(&self, edges: &[(EdgeId, f64)]) -> Result<Solid> {
+        // api.md:912-913: each distance as chamfer requires
+        if !edges.iter().all(|&(_, d)| d.is_finite() && d > 0.0) {
+            return Err(crate::Error::invalid("chamfer_distances", "edges", "every distance must be positive"));
+        }
         ladder::springrep_only("chamfer_distances", || {
             let feature = engine::feature();
             let op = "chamfer_distances";

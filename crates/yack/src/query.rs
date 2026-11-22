@@ -396,6 +396,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn mesh(&self, tolerance: f64) -> Result<Mesh> {
+        // api.md:1577
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(crate::Error::invalid("mesh", "tolerance", format!("tolerance {tolerance} mm is not positive")));
+        }
         if let Some(h) = self.held() {
             let (positions, triangles) = engine_cadrs::held_mesh("mesh", h, tolerance)?;
             return Ok(Mesh { positions, triangles });
@@ -417,6 +421,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn display(&self, tolerance: f64) -> Result<Display> {
+        // api.md:1577 (as mesh)
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(crate::Error::invalid("display", "tolerance", format!("tolerance {tolerance} mm is not positive")));
+        }
         let b = match self.body() {
             Body::Empty => return Ok(Display::default()),
             Body::Cadrs(h) => {

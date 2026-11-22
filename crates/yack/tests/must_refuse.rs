@@ -133,3 +133,34 @@ fn landing_two_requirements_are_invalid_with_their_arg() {
     invalid_arg("shell_outward of no thickness (api.md:1051)", b.shell_outward(&[top], -1.0), "thickness");
     // a curved face is drafted on purpose (yack extends api.md:1068, as springrep's tests do)
 }
+
+/// Rule 7, landing 3: refusals the engine already made as Invalid, now naming their arg.
+#[test]
+fn landing_three_requirements_name_their_arg() {
+    let b = cube();
+    let e = b.edge_at([4.0, 2.5, 6.0]).unwrap();
+    let e2 = b.edge_at([2.0, 0.0, 6.0]).unwrap();
+    let top = b.face_at([2.0, 2.5, 6.0]).unwrap();
+    let f = &Frame::WORLD;
+    let sq = Profile::rectangle([2.0, 0.0], [3.0, 1.0]).unwrap();
+    invalid_arg("cylinder of no height (api.md:263)", cylinder(f, 1.0, 0.0), "height");
+    invalid_arg("sphere of negative radius (api.md:280)", sphere(f, -1.0), "radius");
+    invalid_arg("torus with no tube (api.md:297)", torus(f, 5.0, 0.0), "minor");
+    invalid_arg("cone of no height (api.md:315)", cone(f, 1.0, 0.5, 0.0), "height");
+    invalid_arg("cone of negative bottom (api.md:315)", cone(f, -1.0, 0.5, 2.0), "bottom");
+    invalid_arg("cone with no radius (api.md:315)", cone(f, 0.0, 0.0, 2.0), "bottom");
+    invalid_arg("extrude of NaN height (api.md:334)", extrude(f, &sq, f64::NAN), "height");
+    invalid_arg("slab with a negative height (api.md:520)", slab(f, [4.0, 4.0], &[0.0, 0.0, 1.0, 1.0], &[0.0, 0.0, 1.0, 1.0], &[vec![1.0, 1.0], vec![1.0, -1.0]]), "heights");
+    invalid_arg("fillet of negative radius (api.md:659)", b.fillet(&[e], -1.0), "radius");
+    invalid_arg("fillet_radii with one negative (api.md:703)", b.fillet_radii(&[(e, 1.0), (e2, -1.0)]), "edges");
+    invalid_arg("fillet_variable ending at zero (api.md:723)", b.fillet_variable(e, [4.0, 0.0, 6.0], 1.0, 0.0), "r_to");
+    invalid_arg("fillet_g2 of negative offset (api.md:773)", b.fillet_g2(&[e], -1.0, 1.4), "offset");
+    invalid_arg("fillet_faces naming one face twice (api.md:841)", b.fillet_faces(top, top, 1.0), "b");
+    invalid_arg("chamfer of NaN (api.md:876)", b.chamfer(&[e], f64::NAN), "distance");
+    invalid_arg("chamfer_two of no setback (api.md:897)", b.chamfer_two(e, top, 1.0, 0.0), "along_other");
+    invalid_arg("chamfer_distances with one negative (api.md:913)", b.chamfer_distances(&[(e, 1.0), (e2, -1.0)]), "edges");
+    invalid_arg("mesh at tolerance zero (api.md:1577)", b.mesh(0.0), "tolerance");
+    invalid_arg("display at NaN tolerance (api.md:1577)", b.display(f64::NAN), "tolerance");
+    // yack's own extensions stay accepted: a negative extrude height
+    assert!(extrude(f, &sq, -1.0).is_ok());
+}

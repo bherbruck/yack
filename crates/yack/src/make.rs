@@ -45,6 +45,13 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
+    // api.md:263
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err(Error::invalid("cylinder", "radius", format!("radius {radius} mm is not positive")));
+    }
+    if !(height.is_finite() && height > 0.0) {
+        return Err(Error::invalid("cylinder", "height", format!("height {height} mm is not positive")));
+    }
     firewall::run("cylinder", || {
         ladder::two("cylinder", &|| {
         let feature = engine::feature();
@@ -62,6 +69,10 @@ pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
+    // api.md:280
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err(Error::invalid("sphere", "radius", format!("radius {radius} mm is not positive")));
+    }
     firewall::run("sphere", || {
         ladder::two("sphere", &|| {
         let feature = engine::feature();
@@ -82,6 +93,13 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
+    // api.md:297: major > minor > 0
+    if !(minor.is_finite() && minor > 0.0) {
+        return Err(Error::invalid("torus", "minor", format!("minor {minor} mm is not positive")));
+    }
+    if !(major.is_finite() && major > 0.0) {
+        return Err(Error::invalid("torus", "major", format!("major {major} mm is not positive")));
+    }
     if major > 0.0 && minor >= major {
         return Err(Error::invalid(
             "torus",
@@ -135,6 +153,19 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> {
+    // api.md:315: a positive height; each end's radius at least zero, not both zero
+    if !(height.is_finite() && height > 0.0) {
+        return Err(Error::invalid("cone", "height", format!("height {height} mm is not positive")));
+    }
+    if !(bottom.is_finite() && bottom >= 0.0) {
+        return Err(Error::invalid("cone", "bottom", format!("bottom radius {bottom} mm is negative")));
+    }
+    if !(top.is_finite() && top >= 0.0) {
+        return Err(Error::invalid("cone", "top", format!("top radius {top} mm is negative")));
+    }
+    if bottom <= 0.0 && top <= 0.0 {
+        return Err(Error::invalid("cone", "bottom", "the cone has no radius at either end"));
+    }
     firewall::run("cone", || {
         ladder::two("cone", &|| {
         let feature = engine::feature();
@@ -160,6 +191,10 @@ pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> 
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
+    // api.md:334 (a negative height is yack's: the other side of the plane)
+    if !(height.is_finite() && height != 0.0) {
+        return Err(Error::invalid("extrude", "height", format!("height {height} mm is not a nonzero length")));
+    }
     if height < 0.0 {
         return reversed("extrude", frame, extrude(frame, profile, height.abs()));
     }
@@ -481,6 +516,10 @@ pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], heights: &[Vec<f64>]) -> Result<Solid> {
+    // api.md:520: every height positive
+    if !heights.iter().flatten().all(|h| h.is_finite() && *h > 0.0) {
+        return Err(Error::invalid("slab", "heights", "every height must be positive"));
+    }
     firewall::run("slab", || {
         ladder::two("slab", &|| {
         let feature = engine::feature();
