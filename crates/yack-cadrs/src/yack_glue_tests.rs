@@ -908,10 +908,12 @@ fn a_full_tumble_is_swept_as_two_halves_united() {
     ];
     let (s, history) = together(&mut k, ring, &steps).unwrap().made;
     assert!(inner_faces(&k, s).unwrap().is_empty());
-    // Its history as one sweep's (cadrs's sweep of a solid reports none), no released half
-    // named in it.
-    assert!(history.modified.iter().all(|(_, i)| i.body == ring), "{history:?}");
-    assert_eq!(history, crate::History::default());
+    // Its history as one sweep's: every face from the torus's one face, no released half named.
+    assert!(
+        history.modified.iter().all(|(_, i)| i.body == ring && i.face == FaceId(0)),
+        "{history:?}"
+    );
+    assert_eq!(history.modified.len(), k.get(s).unwrap().faces.len());
     assert!(k.get(s).unwrap().check_with(CheckLevel::Full).is_empty());
     let v = k.mass_properties(s).unwrap().volume;
     assert!((v - 23.6738854823).abs() < 1e-6, "{v}");
@@ -1029,4 +1031,112 @@ fn a_bridged_spline_bar_is_screwed_through_a_rod_with_its_seam_moved_out() {
     let (cut, _) = cut_swept(&mut k, rod, bar, &[m]).unwrap();
     let v = k.mass_properties(cut).unwrap().volume;
     assert!((v - 1335.3195911687133).abs() < 1e-6 * v, "{v}");
+}
+
+#[test]
+fn a_swept_solid_names_each_face_from_the_input_face_or_edge_that_made_it() {
+    use crate::facade::motion::{together, Step};
+    use crate::native::surface::Surface;
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let mut k = DefaultKernel::new();
+    // A torus tumbled: every face from its one face.
+    let (ring, _) = torus(&mut k, [3.0, 0.0, 2.0], [0.0, 0.0, 1.0], 1.0, 0.22).unwrap();
+    let (l, a, hh) = (45f64.to_radians(), 20f64.to_radians(), 0.7071);
+    let q = [0.0, hh * l.cos(), hh * l.sin()];
+    let u = [a.cos(), a.sin() * l.cos(), a.sin() * l.sin()];
+    let steps = [
+        Step::Turn { point: [2.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], from: -0.3, to: 0.3 },
+        Step::Turn { point: q, axis: u, from: -0.4, to: 0.4 },
+    ];
+    let (out, h) = together(&mut k, ring, &steps).unwrap().made;
+    let n = k.get(out).unwrap().faces.len();
+    assert_eq!(h.modified.len(), n);
+    assert!(h.modified.iter().all(|(_, i)| i.body == ring && i.face == FaceId(0)));
+    // A block slid aslant: its six faces' copies keep their faces; the sides its upright edges
+    // sweep, those edges.
+    let (b, _) = primitive(&mut k, &world, Prim::Block { size: [1.0, 1.0, 1.0] }).unwrap();
+    let t = std::time::Instant::now();
+    let (out, h) = swept(&mut k, b, &Move::Slide { by: [3.0, 2.0, 0.0] }).unwrap();
+    let took = t.elapsed();
+    let normal = |k: &DefaultKernel, body: BodyId, f: FaceId| -> [f64; 3] {
+        let bb = k.get(body).unwrap();
+        let face = &bb.faces[f.0 as usize];
+        let Surface::Plane { f: fr } = &face.surf else { panic!("not a plane") };
+        let n = fr.x.cross(&fr.y) * if face.sense { 1.0 } else { -1.0 };
+        [n.x.round(), n.y.round(), n.z.round()]
+    };
+    for (f, i) in &h.modified {
+        assert_eq!(i.body, b);
+        assert_eq!(normal(&k, out, *f), normal(&k, b, i.face), "face {f:?} from {i:?}");
+    }
+    let edges: Vec<_> =
+        h.generated.iter().filter(|(_, o)| matches!(o, Origin::FromEdge { .. })).collect();
+    let faces = k.get(out).unwrap().faces.len();
+    assert_eq!(h.modified.len() + edges.len(), faces, "{h:?}");
+    // Two upright edges sweep the two slanted sides.
+    assert_eq!(edges.len(), 2, "{h:?}");
+    for (f, o) in &edges {
+        let Origin::FromEdge { edge, .. } = o else { unreachable!() };
+        let e = &k.get(b).unwrap().edges[edge.0 as usize];
+        let d = e.point(e.t[1]) - e.point(e.t[0]);
+        assert!(d.x.abs() < 1e-12 && d.y.abs() < 1e-12, "{f:?}: edge {edge:?} isn't upright");
+    }
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+#[test]
+fn a_history_point_lies_inside_its_own_face() {
+    use crate::native::classify::{InFace, face_polygons, in_face, periodic_candidates};
+    use crate::native::surface::Surface;
+    use history::{NEAR, domain_points};
+    // A cylinder cut by a plane at 45°: its side's rim is an ellipse, and a point taken near the
+    // rim's low point without the trim (a mesh triangle's centroid projected onto the cylinder)
+    // can lie past the rim, on the cylinder the cut took away; there it would lie on the cut
+    // face's moving copy, not its own.
+    let mut k = DefaultKernel::new();
+    let world = crate::facade::profile::Place { origin: [0.0; 3], x: [1.0, 0.0, 0.0], y: [0.0, 1.0, 0.0], z: [0.0, 0.0, 1.0] };
+    let (cy, _) = primitive(&mut k, &world, Prim::Cylinder { radius: 1.0, height: 3.0 }).unwrap();
+    let slab = k
+        .primitive(&Primitive::Box { min: Point3::new(-5.0, -5.0, 1.5), max: Point3::new(5.0, 5.0, 10.0) })
+        .and_then(|r| r.first())
+        .unwrap();
+    let tilt = Motion::rotation(&Axis::new(Point3::new(0.0, 0.0, 1.5), Vector3::x()), 45f64.to_radians());
+    let slab = k.transform_motion(slab, &tilt).and_then(|r| r.first()).unwrap();
+    let (cut, _) = boolean(&mut k, crate::BoolOp::Subtract, cy, &[slab]).unwrap();
+    let body = k.get(cut).unwrap().clone();
+    let side = body.faces.iter().position(|f| matches!(f.surf, Surface::Cylinder { .. })).unwrap();
+    let face = &body.faces[side];
+    let polys = face_polygons(&body, face);
+    let inside = |p: &Point3<f64>| {
+        let (u, v) = face.surf.project(p, None);
+        periodic_candidates(&face.surf, u, v, &polys).into_iter().any(|uv| in_face(&polys, &face.surf, uv, NEAR) == InFace::Inside)
+    };
+    // The hazard is real: three points of the rim about its lowest point (where the rim bends
+    // up) have a centroid that projects above the rim, onto the cylinder the cut took away.
+    // (The rim: the side's edge that isn't its seam and rises and falls; the base circle stays
+    // at z = 0.)
+    let rises = |e: &crate::native::topo::Edge| {
+        let z: Vec<f64> = (0..=64).map(|i| e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 64.0).z).collect();
+        z.iter().copied().fold(f64::MIN, f64::max) - z.iter().copied().fold(f64::MAX, f64::min) > 0.5
+    };
+    let rim = face
+        .loops
+        .iter()
+        .flatten()
+        .map(|c| &body.edges[c.edge])
+        .find(|e| !matches!(e.curve, crate::native::curve::Curve::Line { .. }) && rises(e))
+        .expect("the cut's rim");
+    let [t0, t1] = rim.t;
+    let at = |i: usize| t0 + (t1 - t0) * i as f64 / 64.0;
+    let low = (0..=64).min_by(|&i, &j| rim.point(at(i)).z.total_cmp(&rim.point(at(j)).z)).unwrap();
+    let dt = (t1 - t0) / 16.0;
+    let t = at(low).clamp(t0 + dt, t1 - dt);
+    let [a, b, c] = [t - dt, t, t + dt].map(|s| rim.point(s));
+    assert!(!inside(&Point3::from((a.coords + b.coords + c.coords) / 3.0)), "the rim's chord centroid is inside");
+    // And every point the history takes lies inside its own face.
+    // (The side is periodic: its points must lie in its trim, not anywhere round the turn.)
+    let points = domain_points(&body);
+    let (_, mine) = points.iter().find(|(f, _)| *f == side as u64).unwrap();
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    assert!(mine.iter().all(|(p, _)| inside(p)), "{mine:?}");
 }

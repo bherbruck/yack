@@ -124,6 +124,17 @@ fn solid_motion(m: &Move) -> SolidMotion {
 
 /// Everything `body` passes through as it moves by `m` (cadrs's sweep of a solid).
 pub fn swept(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
+    let (out, history) = swept_shape(k, body, m)?;
+    // (cadrs reports no history for a moving solid's sweep: each face from the input face or
+    // edge whose moving copy made it.)
+    if history == History::default() {
+        return Ok((out, history::swept_history(k, body, out, &|s| history::move_pose(m, s))?));
+    }
+    Ok((out, history))
+}
+
+/// [`swept`] without its history: for a sweep that is only a step on the way (a cut by it).
+fn swept_shape(k: &mut DefaultKernel, body: BodyId, m: &Move) -> Result<Made> {
     exact(k, |k| swept_exactly(k, body, m))
 }
 
@@ -931,7 +942,7 @@ fn cut_by(k: &mut DefaultKernel, target: BodyId, used: BodyId, m: &Move) -> Resu
     };
     let r = match *m {
         _ if screwing => k.cut_swept(target, used, &solid_motion(m)),
-        _ => swept(k, used, m).and_then(|(sw, _)| {
+        _ => swept_shape(k, used, m).and_then(|(sw, _)| {
             let r = k.boolean(crate::BoolOp::Subtract, target, &[sw]);
             k.release(sw);
             r
@@ -1044,7 +1055,7 @@ fn slides_cut(k: &mut DefaultKernel, target: BodyId, tool: BodyId, slides: &[Mov
     let r = (|| {
         for v in &by {
             let placed = k.transform_motion(tool, &crate::Motion { linear: nalgebra::Matrix3::identity(), translation: offset })?.first()?;
-            let sw = swept(k, placed, &Move::Slide { by: [v.x, v.y, v.z] });
+            let sw = swept_shape(k, placed, &Move::Slide { by: [v.x, v.y, v.z] });
             k.release(placed);
             tools.push(sw?.0);
             offset += v;
@@ -1329,7 +1340,17 @@ fn faces_to_edges(ix: &[u64]) -> Vec<EdgeId> {
 
 
 mod held;
+mod history;
 mod redraw;
+/// The history of `out`, `body` swept by `steps` all at once (see [`history`]).
+pub(crate) fn swept_history_of(
+    k: &DefaultKernel,
+    body: BodyId,
+    out: BodyId,
+    steps: &[crate::facade::motion::Step],
+) -> Result<History> {
+    history::swept_history(k, body, out, &|s| history::steps_pose(steps, s))
+}
 pub use held::{Carried, Drawn3, carry_in, carry_out, display, mesh};
 use redraw::{ball_screwed_as_pipe, from_its_point, reseated_prism};
 #[cfg(test)]

@@ -138,3 +138,23 @@ fn the_same_sweep_twice_is_the_same_solid() {
     let second = ball.swept(&m).unwrap();
     assert_eq!(first.digest(), second.digest(), "the second sweep of one solid differs from the first");
 }
+
+#[test]
+fn a_slid_box_keeps_its_face_names_and_its_edges_sweep_new_sides() {
+    // a 4 mm box slid by (3, 2, 0): a hexagonal prism. Every face of it that one of the box's
+    // faces swept keeps that face's name; the two upright sides its edges swept are new.
+    let b = block(&Frame::WORLD, [4.0, 4.0, 4.0]).unwrap().named("box");
+    let s = b.swept(&Motion::slide([3.0, 2.0, 0.0])).unwrap();
+    let side = |n: &str| s.faces_by("box", Role::Side(n.into()));
+    // the far x_max is the x_max face's last position
+    assert!(side("x_max").contains(&s.face_at([7.0, 4.0, 2.0]).unwrap()));
+    assert!(side("y_max").contains(&s.face_at([5.0, 6.0, 2.0]).unwrap()));
+    assert!(side("x_min").contains(&s.face_at([0.0, 2.0, 2.0]).unwrap()));
+    assert!(!s.faces_by("box", Role::Start).is_empty() && !s.faces_by("box", Role::End).is_empty());
+    // the side the edge (4, 0) swept, from (4, 0) to (7, 2): no role of the box's
+    let swept_side = s.face(s.face_at([5.5, 1.0, 2.0]).unwrap()).unwrap();
+    assert!(swept_side.role("box").is_none(), "{:?}", swept_side.roles());
+    // a `then` of two slides names from the box itself: the far x = 7 wall is still its x_max
+    let l = b.swept(&Motion::then(vec![Motion::slide([3.0, 0.0, 0.0]), Motion::slide([0.0, 2.0, 0.0])])).unwrap();
+    assert!(l.faces_by("box", Role::Side("x_max".into())).contains(&l.face_at([7.0, 3.0, 2.0]).unwrap()));
+}

@@ -213,7 +213,15 @@ pub struct Together {
 /// instant (cadrs's `SolidMotion::Rigid`, or its planar motion where the steps lie in one plane;
 /// the body drawn where it is at every step's start). Exact or refused (exact_only).
 pub fn together(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<Together> {
-    crate::yack_glue::exact(k, |k| together_exactly(k, body, steps))
+    let t = crate::yack_glue::exact(k, |k| together_exactly(k, body, steps))?;
+    // (cadrs reports no history for a moving solid's sweep: each face from the input face or
+    // edge whose moving copy made it.)
+    if t.made.1 == crate::History::default() {
+        let out = t.made.0;
+        let history = crate::yack_glue::swept_history_of(k, body, out, steps)?;
+        return Ok(Together { made: (out, history) });
+    }
+    Ok(t)
 }
 
 fn together_exactly(k: &mut DefaultKernel, body: BodyId, steps: &[Step]) -> Result<Together> {
