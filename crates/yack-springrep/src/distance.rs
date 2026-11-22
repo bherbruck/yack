@@ -24,9 +24,9 @@ use crate::{
     error::Result,
     geom::{Curve, Surface},
     math::{Aabb, Point3, Vec3},
+    math::bvh::{Bvh, on_segment, on_triangle, segment_triangle, segments},
     mesh::{
         self, MeshOptions,
-        bvh::{Bvh, on_segment, on_triangle, segment_triangle, segments},
     },
     tol,
     topo::{Brep, EdgeId, FaceId, SolidId, VertexId},

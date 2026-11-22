@@ -11,9 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     math::{Aabb, Point3},
+    math::bvh::{Bvh, segment_triangle, segments},
     mesh::{
         self, MeshOptions,
-        bvh::{Bvh, segment_triangle, segments},
     },
     topo::{Brep, CoedgeSpec, EdgeId, FaceId, VertexId},
 };

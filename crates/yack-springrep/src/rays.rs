@@ -23,9 +23,9 @@ use crate::{
     error::{Error, Result},
     geom::{Curve, Line},
     math::{Aabb, Point3, Vec3},
+    math::bvh::{Bvh, segment_triangle},
     mesh::{
         self, MeshOptions,
-        bvh::{Bvh, segment_triangle},
     },
     tol,
     topo::{Brep, FaceId},
@@ -100,7 +100,7 @@ impl<'a> Rays<'a> {
         let Some((m, opt)) = found else {
             return Err(err.expect("a mesh was tried"));
         };
-        let tree = Bvh::new(&m);
+        let tree = Bvh::new(&m.positions, &m.triangles);
         let mut face_of = vec![None; m.triangles.len()];
         for (f, range) in &m.faces {
             for k in range.clone() {

@@ -6,7 +6,6 @@
 //! of those points in its parameter plane, refined until every triangle is within the deflection
 //! limits of the surface (`face`).
 
-pub(crate) mod bvh;
 mod cdt;
 pub mod display;
 mod face;

@@ -4,6 +4,8 @@
 //! Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 //! name at each use says which it is.
 
+pub(crate) mod bvh;
+
 use std::ops::{Add, AddAssign, Div, Index, Mul, Neg, Sub, SubAssign};
 
 use crate::{Result, error::invalid, tol};

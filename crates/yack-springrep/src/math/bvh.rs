@@ -1,12 +1,12 @@
 // yack: A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 // Adapted from springrep@a03e8a1 src/mesh/bvh.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from mesh/bvh.rs to math/bvh.rs (M2); `Bvh::new` takes the triangles' positions and
+// indices rather than a mesh.
 //! A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 //! segments and triangles: the search structures the thin-place probe, distances and rays share.
 
 use crate::math::{Aabb, Point3, Transform, Vec3};
 
-use super::Mesh;
 
 /// A bounding volume hierarchy over boxes: a mesh's triangles, or any primitives' boxes.
 pub(crate) struct Bvh {
@@ -22,14 +22,13 @@ enum Node {
 }
 
 impl Bvh {
-    pub(crate) fn new(mesh: &Mesh) -> Bvh {
-        let boxes: Vec<Aabb> = mesh
-            .triangles
+    pub(crate) fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Bvh {
+        let boxes: Vec<Aabb> = triangles
             .iter()
             .map(|t| {
                 let mut b = Aabb::EMPTY;
                 for &i in t {
-                    b.add(mesh.positions[i as usize]);
+                    b.add(positions[i as usize]);
                 }
                 b
             })

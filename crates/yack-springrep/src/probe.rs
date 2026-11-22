@@ -16,9 +16,9 @@ use crate::{
     Result,
     math::{Aabb, Point3, Vec3},
     measure,
+    math::bvh::{Bvh, ray_triangle},
     mesh::{
         MeshOptions,
-        bvh::{Bvh, ray_triangle},
         tessellate,
     },
     numeric,
@@ -159,7 +159,7 @@ pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
     for (f, r) in &mesh.faces {
         face_of.resize(r.end.max(face_of.len()), *f);
     }
-    let bvh = Bvh::new(&mesh);
+    let bvh = Bvh::new(&mesh.positions, &mesh.triangles);
     let reach = below + 2.0 * chord;
     let mut found: BTreeMap<(FaceId, FaceId, bool), Thin> = BTreeMap::new();
     let mut near = Vec::new();

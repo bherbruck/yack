@@ -16,9 +16,9 @@ use crate::{
     distance::{self, Selection},
     math::{Aabb, Point3, Transform, Vec3},
     measure,
+    math::bvh::{Bvh, moved_box, on_triangle, ray_triangle, triangles},
     mesh::{
         Mesh, MeshOptions,
-        bvh::{Bvh, moved_box, on_triangle, ray_triangle, triangles},
         tessellate,
     },
     tol,
@@ -79,7 +79,7 @@ impl Body {
         for opt in MESHES {
             match tessellate(&brep, &opt) {
                 Ok(mesh) => {
-                    let bvh = Bvh::new(&mesh);
+                    let bvh = Bvh::new(&mesh.positions, &mesh.triangles);
                     let mut bbox = Aabb::EMPTY;
                     for p in &mesh.positions {
                         bbox.add(*p);
@@ -126,7 +126,7 @@ impl Body {
             deflection = deflection.max(b.deflection);
         }
         Body {
-            bvh: Bvh::new(&mesh),
+            bvh: Bvh::new(&mesh.positions, &mesh.triangles),
             brep,
             mesh,
             part,
@@ -155,7 +155,7 @@ impl Body {
             let _ = volume.set(v);
         }
         Body {
-            bvh: Bvh::new(&mesh),
+            bvh: Bvh::new(&mesh.positions, &mesh.triangles),
             brep,
             mesh,
             part: self.part.clone(),
@@ -243,7 +243,7 @@ pub fn overlap(a: &Body, b: &Body, rel: &Transform) -> Result<Overlap> {
     // Twice both deflections: where the exact surfaces meet, their meshes lie within both.
     let margin = 2.0 * (a.deflection + b.deflection);
     let moved = moved_box(&b.bbox, rel);
-    let boxes_meet = crate::mesh::bvh::box_gap(&a.bbox, &moved) <= margin;
+    let boxes_meet = crate::math::bvh::box_gap(&a.bbox, &moved) <= margin;
     let near = boxes_meet
         && a.bvh.any_within(&b.bvh, rel, margin, |i, j| {
             let tb = b.triangle(j).map(|p| rel.point(p));
@@ -271,7 +271,7 @@ pub fn overlap(a: &Body, b: &Body, rel: &Transform) -> Result<Overlap> {
     let back = rel.inverse();
     let reach = moved_box(&a.bbox, &back);
     for f in b.brep.face_ids() {
-        if crate::mesh::bvh::box_gap(&measure::face_bbox(&b.brep, f), &reach) <= margin {
+        if crate::math::bvh::box_gap(&measure::face_bbox(&b.brep, f), &reach) <= margin {
             measure::prime_face_volume(&b.brep, f);
         }
     }

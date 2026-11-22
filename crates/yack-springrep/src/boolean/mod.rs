@@ -53,7 +53,7 @@ use crate::{
     geom::{Curve, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
     measure,
-    mesh::bvh::Bvh,
+    math::bvh::Bvh,
     tol,
     topo::{
         Brep, CoedgeId, CoedgeSpec, EdgeId, FaceId, FaceName, Facts, OnFace, SolidId,
