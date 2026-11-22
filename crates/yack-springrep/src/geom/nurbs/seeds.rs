@@ -95,13 +95,22 @@ impl super::NurbsSurface {
     pub fn project(&self, p: Point3) -> Vec2 {
         let near = self.seed_grid().nearest::<4>(p);
         let mut best = (f64::INFINITY, Vec2::ZERO);
+        self.search_from(p, &near, &[], &mut best);
+        best.1
+    }
+
+    /// [`NurbsSurface::project`] for a point that should lie on the surface. Four seeds settle a
+    /// point of a surface whose far parts keep a seed spacing away. A squashed or sheared one can
+    /// bring a far part nearer than all four, and every search from them stops short of the point
+    /// (conformance stretches-369ef83ce9d5f331, a sheared cone's narrow end beside its wide rim):
+    /// the next nearest seeds are searched too. A point truly off the surface (a rolling ball's
+    /// centre) pays that on every call, so only a caller expecting the surface asks for it.
+    pub fn project_onto(&self, p: Point3) -> Vec2 {
+        let near = self.seed_grid().nearest::<4>(p);
+        let mut best = (f64::INFINITY, Vec2::ZERO);
         if self.search_from(p, &near, &[], &mut best) {
             return best.1;
         }
-        // Four seeds settle a point of a surface whose far parts keep a seed spacing away. A
-        // squashed or sheared one can bring a far part nearer than all four, and every search from
-        // them stops short of the point (conformance stretches-369ef83ce9d5f331, a sheared cone's
-        // narrow end beside its wide rim): the next nearest seeds are searched too.
         let more = self.seed_grid().nearest::<SEARCHED>(p);
         self.search_from(p, &more, &near, &mut best);
         best.1

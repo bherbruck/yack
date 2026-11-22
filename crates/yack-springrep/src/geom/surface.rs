@@ -404,6 +404,15 @@ impl Surface {
         }
     }
 
+    /// [`Surface::project`] for a point that should lie on the surface: a spline searches from
+    /// more seeds where the nearest few settle off it ([`NurbsSurface::project_onto`]).
+    pub fn project_onto(&self, p: Point3) -> Vec2 {
+        match self {
+            Surface::Nurbs(s) => s.project_onto(p),
+            _ => self.project(p),
+        }
+    }
+
     /// As [`Surface::project`], with each periodic parameter moved by whole periods to lie
     /// nearest `hint`. At a pole, where every `u` is the same point, `u` stays at the hint's, so a
     /// curve through the pole keeps the `u` it arrived with.

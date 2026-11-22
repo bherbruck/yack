@@ -532,7 +532,7 @@ impl Domain {
     /// Whether `p` lies in the face: off its surface or outside its loops, on a boundary curve
     /// (within the linear tolerance), or inside at parameters `uv`.
     pub(crate) fn locate(&self, p: Point3) -> Where {
-        let uv = self.surface.project(p);
+        let uv = self.surface.project_onto(p);
         let off = self.surface.eval(uv.x, uv.y).dist(p);
         if off > self.widest() {
             return Where::Outside;
@@ -624,7 +624,7 @@ impl Domain {
     /// exact winding number, and at which parameters. Only a piece that was cut along the boundary
     /// may rely on this: it tells which side of the curve the point is on, however close.
     pub(crate) fn exact_side(&self, p: Point3) -> Option<Vec2> {
-        self.inside_image(self.surface.project(p))
+        self.inside_image(self.surface.project_onto(p))
     }
 
     /// Whether the points all lie within the tolerance of one trim: a piece of curve through them
