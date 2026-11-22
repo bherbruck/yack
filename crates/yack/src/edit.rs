@@ -47,6 +47,9 @@ impl Solid {
     /// ```
     pub fn offset(&self, distance: f64) -> Result<Solid> {
         let op = "offset";
+        if !(distance.is_finite() && distance != 0.0) {
+            return Err(Error::invalid(op, "distance", format!("distance {distance} mm is not a nonzero length")));
+        }
         if self.is_empty() {
             return Ok(Solid::empty());
         }
@@ -78,6 +81,9 @@ impl Solid {
         let op = "offset_faces";
         if faces.is_empty() {
             return Err(Error::invalid(op, "faces", "no faces to offset"));
+        }
+        if !(distance.is_finite() && distance != 0.0) {
+            return Err(Error::invalid(op, "distance", format!("distance {distance} mm is not a nonzero length")));
         }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
@@ -212,6 +218,9 @@ impl Solid {
         let op = "thicken";
         if faces.is_empty() {
             return Err(Error::invalid(op, "faces", "no faces to thicken"));
+        }
+        if !(thickness.is_finite() && thickness != 0.0) {
+            return Err(Error::invalid(op, "thickness", format!("thickness {thickness} mm is not a nonzero length")));
         }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
@@ -363,6 +372,9 @@ impl Solid {
         if faces.is_empty() {
             return Err(Error::invalid(op, "faces", "no faces to draft"));
         }
+        if !(angle.radians() > 0.0 && angle.radians() < core::f64::consts::FRAC_PI_2) {
+            return Err(Error::invalid(op, "angle", format!("{}° is not between 0° and 90°", angle.degrees())));
+        }
         let (origin, pull) = (origin.into(), pull.into());
         if !origin.is_finite() {
             return Err(Error::invalid(op, "origin", "not finite"));
@@ -386,6 +398,12 @@ impl Solid {
     /// planar path (or a ball / a body of revolution about the path's normal for `Fixed`); a `then`
     /// sequence leg by leg; legs `together` as cadrs's rigid motion ([`Solid::is_exact`] false when
     /// faceted); `Toward` is not supported yet.
+    ///
+    /// Faces swept by one of the solid's faces (its first and last positions, and the surface it
+    /// sweeps) keep that face's names; sides swept by its edges are new faces of this operation,
+    /// with no role. A face made from pieces of several input faces keeps the lowest-numbered
+    /// one's names. Where cadrs does not follow the motion's faces (a curved path, or a sweep too
+    /// costly to trace), every face carries only this operation's name.
     ///
     /// ```
     /// use yack::prelude::*;

@@ -183,6 +183,9 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> {
+    if !(angle.radians() > 0.0 && angle.radians() <= core::f64::consts::TAU) {
+        return Err(Error::invalid("revolve", "angle", format!("{}° is not above 0° and at most a full turn", angle.degrees())));
+    }
     firewall::run("revolve", || {
         ladder::two(
             "revolve",
@@ -405,6 +408,15 @@ pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<
 pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid> {
     if path.is_empty() {
         return Err(Error::invalid("sweep", "path", "no path pieces to sweep along"));
+    }
+    for (i, p) in path.iter().enumerate() {
+        let bad = match *p {
+            PathPiece::Line { length } => !(length.is_finite() && length > 0.0),
+            PathPiece::Arc { radius, angle } => !(radius.is_finite() && radius > 0.0 && angle.is_finite() && angle.radians() != 0.0),
+        };
+        if bad {
+            return Err(Error::invalid("sweep", "path", format!("path piece {i} needs a positive length or radius and a nonzero angle")));
+        }
     }
     firewall::run("sweep", || {
         ladder::two("sweep", &|| {

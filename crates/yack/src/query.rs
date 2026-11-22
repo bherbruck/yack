@@ -201,7 +201,7 @@ impl Solid {
         Ok(sr_points(points).map(|p| outlines.curvature(p)).collect())
     }
 
-    /// The least distance between the two solids: zero if they touch or overlap, infinite if
+    /// The least distance between the two solids: zero if they touch or overlap. `Invalid` if
     /// either is empty.
     ///
     /// ```
@@ -213,7 +213,9 @@ impl Solid {
     /// ```
     pub fn distance(&self, other: &Solid) -> Result<f64> {
         let op = "distance";
-        let (Some(a), Some(b)) = (self.form(op)?, other.form(op)?) else { return Ok(f64::INFINITY) };
+        // api.md:1428: both must be non-empty
+        let a = self.form(op)?.ok_or_else(|| crate::Error::invalid(op, "self", "the solid is empty"))?;
+        let b = other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?;
         firewall::run(op, || {
             distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| c.distance)
@@ -314,6 +316,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn section(&self, plane: &Plane, tolerance: f64) -> Result<Vec<Vec<Point3>>> {
+        // api.md:1498
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(crate::Error::invalid("section", "tolerance", format!("tolerance {tolerance} mm is not positive")));
+        }
         let Some(b) = self.form("section")? else { return Ok(Vec::new()) };
         let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), tolerance)
             .map_err(|e| engine::error("section", e))?;
@@ -334,6 +340,10 @@ impl Solid {
     /// ```
     pub fn project(&self, direction: impl Into<Vec3>, tolerance: f64) -> Result<Drawing> {
         let op = "project";
+        // api.md:1524
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(crate::Error::invalid(op, "tolerance", format!("tolerance {tolerance} mm is not positive")));
+        }
         let d = direction.into();
         let (u, v) = yack_math::view_axes(d)?;
         if self.is_empty() {

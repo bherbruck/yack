@@ -71,3 +71,36 @@ fn empty_lists_and_a_foreign_face_are_invalid() {
     // a boolean's empty cases are identities, not refusals: no tools leaves the solid
     assert!((b.difference_all(&[]).unwrap().volume() - 120.0).abs() < 1e-9);
 }
+
+fn invalid_arg<T>(what: &str, r: Result<T>, arg: &str) {
+    match r {
+        Err(e) => assert!(e.kind == ErrorKind::Invalid && e.arg == Some(arg), "{what}: {e:?}"),
+        Ok(_) => panic!("{what}: accepted"),
+    }
+}
+
+/// Rule 7, landing 1: inputs api.md refuses that yack built, or spun on, before the facade checked.
+#[test]
+fn landing_one_requirements_are_invalid_with_their_arg() {
+    let b = cube();
+    let (top, side) = (b.face_at([2.0, 2.5, 6.0]).unwrap(), b.face_at([4.0, 2.5, 3.0]).unwrap());
+    let sq = Profile::rectangle([2.0, 0.0], [3.0, 1.0]).unwrap();
+    let f = &Frame::WORLD;
+    invalid_arg("project at a negative tolerance (api.md:1524)", b.project([0.0, 0.0, 1.0], -0.1), "tolerance");
+    invalid_arg("section at tolerance zero (api.md:1498)", b.section(&Plane::new([0.0, 0.0, 3.0], [0.0, 0.0, 1.0]).unwrap(), 0.0), "tolerance");
+    invalid_arg("distance to an empty solid (api.md:1428)", b.distance(&empty()), "other");
+    invalid_arg("offset of zero (api.md:949)", b.offset(0.0), "distance");
+    invalid_arg("offset_faces of zero (api.md:971)", b.offset_faces(&[top], 0.0), "distance");
+    invalid_arg("thicken of zero (api.md:1028)", b.thicken(&[top], 0.0, Join::Round), "thickness");
+    invalid_arg("draft of 0° (api.md:1069)", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(0.0)), "angle");
+    invalid_arg("draft of −5° (api.md:1069)", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(-5.0)), "angle");
+    invalid_arg("draft of 90° (api.md:1069)", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(90.0)), "angle");
+    invalid_arg("revolve past a turn (api.md:356)", revolve(f, &sq, deg(400.0)), "angle");
+    invalid_arg("revolve by 0° (api.md:356)", revolve(f, &sq, deg(0.0)), "angle");
+    invalid_arg("sweep along a negative line (api.md:466)", sweep(f, &sq, &[PathPiece::Line { length: -2.0 }]), "path");
+    invalid_arg("sweep round a negative radius (api.md:466)", sweep(f, &sq, &[PathPiece::Arc { radius: -10.0, angle: deg(90.0) }]), "path");
+    invalid_arg("sweep round no angle (api.md:466)", sweep(f, &sq, &[PathPiece::Arc { radius: 10.0, angle: deg(0.0) }]), "path");
+    // the edges of each range are accepted: a full turn, a negative offset (yack's offset is signed)
+    assert!(revolve(f, &sq, deg(360.0)).is_ok());
+    assert!(b.offset(-0.5).is_ok());
+}
