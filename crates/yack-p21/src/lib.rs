@@ -1,7 +1,7 @@
 // yack: ISO 10303-21 (STEP Part 21) exchange files read into a neutral entity graph; no geometry.
 //! The clear-text encoding of an exchange structure (ISO 10303-21), read into entity instances.
 //!
-//! [`parse`] reads the DATA sections: each instance `#n = NAME(params);` (simple) or
+//! [`parse`] reads the HEADER section's records and the DATA sections: each instance `#n = NAME(params);` (simple) or
 //! `#n = (A(params) B(params) ...);` (complex) becomes an [`Entity`]. Parameters keep their kind:
 //! integer, real, string, enumeration, entity reference, list, typed (`NAME(param)`), unset (`$`)
 //! and derived (`*`). Nothing is interpreted: that is the schema's business, not the encoding's.
@@ -139,8 +139,12 @@ impl Entity {
 /// An exchange structure's instances, by number.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct File {
+    /// The HEADER section's records (`FILE_DESCRIPTION`, `FILE_NAME`, `FILE_SCHEMA`, ...), in order.
+    pub header: Vec<Record>,
     /// Every instance of the DATA sections.
     pub entities: BTreeMap<u64, Entity>,
+    /// The instance numbers in the order the file gives them, which need not be ascending.
+    pub order: Vec<u64>,
 }
 
 impl File {
@@ -194,7 +198,10 @@ pub fn parse_within(text: &str, limits: Limits) -> Result<File> {
         if p.done() {
             break;
         }
-        if p.keyword("DATA") {
+        if p.keyword("HEADER") {
+            p.expect(b';')?;
+            p.header(&mut file)?;
+        } else if p.keyword("DATA") {
             p.skip();
             // `DATA;` or `DATA(name, schemas);`
             if p.peek() == Some(b'(') {
@@ -275,6 +282,33 @@ impl Parser<'_> {
     }
 
     /// Instances up to `ENDSEC;`.
+    fn header(&mut self, file: &mut File) -> Result<()> {
+        loop {
+            self.skip();
+            if self.keyword("ENDSEC") {
+                self.expect(b';')?;
+                return Ok(());
+            }
+            if self.done() {
+                return Err(bad(self.i, "the HEADER section has no ENDSEC"));
+            }
+            // A record `NAME(params);`; a bare word before ';' is no record and is passed over.
+            let name = self.name()?;
+            self.skip();
+            if self.peek() == Some(b';') {
+                self.i += 1;
+                continue;
+            }
+            self.expect(b'(')?;
+            let record = Record { name, params: self.params(1)? };
+            self.expect(b';')?;
+            if file.header.len() >= self.limits.entities {
+                return Err(bad(self.i, format!("over {} header records", self.limits.entities)));
+            }
+            file.header.push(record);
+        }
+    }
+
     fn data(&mut self, file: &mut File) -> Result<()> {
         loop {
             self.skip();
@@ -311,6 +345,7 @@ impl Parser<'_> {
             if file.entities.insert(id, entity).is_some() {
                 return Err(bad(self.i, format!("#{id} is defined twice")));
             }
+            file.order.push(id);
         }
     }
 
@@ -395,6 +430,9 @@ impl Parser<'_> {
                 let s = self.i;
                 while self.peek().is_some_and(|c| c != b'"') {
                     self.i += 1;
+                }
+                if self.done() {
+                    return Err(bad(start, "a binary without its closing '\"'"));
                 }
                 let hex = String::from_utf8_lossy(self.s.get(s..self.i).unwrap_or_default()).into_owned();
                 self.i += 1;
@@ -511,6 +549,28 @@ mod tests {
         let f = parse(text).unwrap();
         assert_eq!(f.entities.len(), 1);
         assert_eq!(f.part(7, "A").unwrap()[0], Param::Int(1));
+    }
+
+    #[test]
+    fn keeps_the_header_records_and_the_order_the_file_gives_its_instances() {
+        let text = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('d'),'2;1');\n\
+                    FILE_NAME('a.stp','t',('x'),(''),'p','sys','');\nENDSEC;\nDATA;\n\
+                    #9=A(1);\n#2=B(#9);\n#5=C();\nENDSEC;\nEND-ISO-10303-21;\n";
+        let f = parse(text).unwrap();
+        let names: Vec<&str> = f.header.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["FILE_DESCRIPTION", "FILE_NAME"]);
+        assert_eq!(f.header[1].params[5], Param::Str("sys".into()));
+        assert_eq!(f.order, [9, 2, 5]);
+        assert_eq!(f.entities.keys().copied().collect::<Vec<_>>(), [2, 5, 9]);
+        // A header without its ENDSEC is no file.
+        assert!(parse("ISO-10303-21;\nHEADER;\nFILE_NAME('a');\n").is_err());
+    }
+
+    #[test]
+    fn a_binary_without_its_closing_quote_is_refused() {
+        assert!(parse("DATA;\n#1=A(\"0F);\nENDSEC;").is_err());
+        assert!(parse("DATA;\n#1=A(\"0F").is_err());
+        assert!(parse("DATA;\n#1=A(\"0F\");\nENDSEC;").is_ok());
     }
 
     #[test]
