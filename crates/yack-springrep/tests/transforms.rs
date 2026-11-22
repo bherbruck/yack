@@ -13,7 +13,7 @@ use yack_springrep::{
     boolean::{difference, intersection, union},
     check,
     math::{Frame, Transform, Vec2, Vec3},
-    measure, mesh, primitive,
+    build, measure, primitive,
     profile::{NamedSegment, PointsInterp, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
     topo::Brep,
@@ -37,7 +37,7 @@ fn twisted_prism(n: u32, r: f64, h: f64) -> Brep {
         let (a, b, c, d) = (2 * k, 2 * j, 2 * j + 1, 2 * k + 1);
         triangles.extend([[a, b, d], [b, c, d], [low, b, a], [high, d, c]]);
     }
-    mesh::solid(&points, &triangles).unwrap()
+    build::solid_from_mesh(&points, &triangles).unwrap()
 }
 
 /// A turn about z then a quarter turn about x, as another program writes it: to nine digits,

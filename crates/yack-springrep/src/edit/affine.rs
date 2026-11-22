@@ -11,7 +11,7 @@ use crate::{
     Error, Result,
     geom::{BSpline, Curve, Ellipse, Line, NurbsCurve, NurbsSurface, Plane, Surface},
     math::{Frame, Point3, Vec3},
-    step,
+    build,
     topo::{Brep, FaceId},
 };
 
@@ -58,7 +58,7 @@ pub fn affine(b: &Brep, a: &Affine) -> Result<Brep> {
         .filter(|&f| b.face(f).shell.is_some())
         .map(|f| surface(b, f, a))
         .collect::<Result<_>>()?;
-    step::rebuilt(b, points, curves, surfaces, det < 0.0)
+    build::rebuilt(b, points, curves, surfaces, det < 0.0)
 }
 
 fn curve(c: &Curve, a: &Affine) -> Result<Curve> {

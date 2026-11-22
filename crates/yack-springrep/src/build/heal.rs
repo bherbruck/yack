@@ -1,6 +1,6 @@
 // yack: Making a file's geometry agree with itself within the kernel tolerance.
 // Adapted from springrep@a03e8a1 src/step/heal.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from step/heal.rs to build/heal.rs (M2 T5); paths and visibility only.
 //! Making a file's geometry agree with itself within the kernel tolerance.
 //!
 //! Exporters write each vertex, edge curve and surface separately, and many hold them together
@@ -17,7 +17,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::adjust::{Target, adjust};
-use super::topology::{Raw, edge_range, param_of};
+use super::raw::{Raw, edge_range, param_of};
 use crate::{
     Error, Result,
     geom::{BSpline, Curve, IntersectionCurve, Surface, refine_onto_both},
@@ -474,7 +474,7 @@ pub struct Healed {
 }
 
 /// Each edge's parameter range, and how far healing moved the solid's geometry.
-pub(super) type Ranges = (Vec<(f64, f64)>, Option<Healed>);
+pub(crate) type Ranges = (Vec<(f64, f64)>, Option<Healed>);
 
 /// The most healing may move any of a solid's geometry, in mm.
 pub const MAX_HEAL: f64 = 0.05;
@@ -783,7 +783,7 @@ fn movement(file: &Raw, healed: &Raw, faces: &BTreeSet<usize>) -> Option<Healed>
 /// geometry would move more than [`MAX_HEAL`] is an error naming the distance.
 /// Whether every edge of `raw` ends at its vertices and lies on its faces to [`tol::LINEAR`] as
 /// the file has it: then [`heal`] keeps the file as it is, at once.
-pub(super) fn fits_as_written(raw: &Raw) -> bool {
+pub(crate) fn fits_as_written(raw: &Raw) -> bool {
     (0..raw.edges.len()).all(|e| edge_fits(raw, e, range_of(raw, e)))
 }
 
@@ -794,7 +794,7 @@ pub(super) fn fits_as_written(raw: &Raw) -> bool {
 /// which on a fine thread's 546 spline edges took 80 s, for a shape no different within the
 /// file's own uncertainty. `None` where the file fits to the kernel's tolerance (it reads exactly,
 /// as before), states no uncertainty, or misses by more.
-pub(super) fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tolerated) -> Option<B>) -> Option<B> {
+pub(crate) fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tolerated) -> Option<B>) -> Option<B> {
     let w = within?;
     if fits_as_written(file) {
         return None;
@@ -805,7 +805,7 @@ pub(super) fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw
     if t.edges.iter().chain(&t.vertices).all(|&x| x <= bound) { build(&kept, &t) } else { None }
 }
 
-pub(super) fn heal(raw: &mut Raw) -> Result<Ranges> {
+pub(crate) fn heal(raw: &mut Raw) -> Result<Ranges> {
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
     if (0..raw.edges.len()).all(|e| edge_fits(raw, e, ranges[e])) {
         let ranges = ranges
@@ -905,7 +905,7 @@ pub(super) fn heal(raw: &mut Raw) -> Result<Ranges> {
 /// hold what is left: where faces meet nowhere exactly, as four faces at a corner can miss each
 /// other by far less than the file's uncertainty, healing fails, but an edge elsewhere may still
 /// be further off than the file promises until it is refitted. Returns how far it moved.
-pub(super) fn heal_loosely(raw: &mut Raw) -> Option<Healed> {
+pub(crate) fn heal_loosely(raw: &mut Raw) -> Option<Healed> {
     let file = raw.clone();
     let _ = attempt(raw, &HashMap::new(), &HashMap::new(), true);
     movement(&file, raw, &BTreeSet::new())
@@ -913,7 +913,7 @@ pub(super) fn heal_loosely(raw: &mut Raw) -> Option<Healed> {
 
 /// What [`tolerate`] gives a solid it keeps as the file has it: each edge's range, and each
 /// vertex's and edge's tolerance (at least [`tol::LINEAR`]).
-pub(super) struct Tolerated {
+pub(crate) struct Tolerated {
     pub ranges: Vec<(f64, f64)>,
     pub vertices: Vec<f64>,
     pub edges: Vec<f64>,
@@ -1046,7 +1046,7 @@ fn edge_length(c: &Curve, r: (f64, f64)) -> f64 {
 /// uncertainty does not bound that: exporters write gaps wider than they state. An edge that
 /// misses by more than `stated` takes a curve [`midway`] between its faces where that one misses
 /// by less. A tolerance past [`MAX_SHARE`] of an edge it holds is an error.
-pub(super) fn tolerate(
+pub(crate) fn tolerate(
     raw: &mut Raw,
     stated: Option<f64>,
 ) -> std::result::Result<Tolerated, String> {

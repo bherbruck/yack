@@ -3,7 +3,7 @@
 //! check it.
 
 use super::heal;
-use super::topology::{Raw, build};
+use super::raw::{Raw, build};
 use crate::{
     Error, Result, check,
     topo::{Brep, ShellId, SolidId},
@@ -11,7 +11,7 @@ use crate::{
 
 /// The checked arena of a solid read as `raw`, its edges over `ranges`, and its vertices and edges
 /// given the local tolerances of `tolerated` where it is given.
-pub(super) fn assemble(
+pub(crate) fn assemble(
     raw: &Raw,
     ranges: &[(f64, f64)],
     tolerated: Option<&heal::Tolerated>,

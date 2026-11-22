@@ -25,7 +25,7 @@ use crate::{
     math::{Frame, Point3, Vec2, Vec3},
     measure,
     profile::Profile,
-    step::{PartFace, Parts, parts_of, solid_of},
+    build::{PartFace, Parts, parts_of, solid_of},
     sweep::extrude,
     tol,
     topo::{Brep, EdgeId, FaceName, VertexId},

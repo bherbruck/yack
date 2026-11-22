@@ -11,14 +11,11 @@ pub mod display;
 mod face;
 mod predicates;
 mod query;
-mod solid;
 #[cfg(test)]
 mod tests;
 
 pub use crate::geom::{MeshOptions, edge_params};
-pub(crate) use solid::from_indexed;
 pub use query::{closest, nearest_boundary, nearest_of, nearest_solid, rays};
-pub use solid::solid;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;

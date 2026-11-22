@@ -11,12 +11,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::{
     WRITER,
     geometry::{Geometry, Placing},
-    heal::Healed,
     part21::{self, File, Param},
     topology,
 };
 use crate::{
-    Error, Result, check,
+    Error, Result,
+    build::Healed,
+    check,
     math::Point3,
     topo::{Brep, FaceId, FaceName, SolidId},
 };

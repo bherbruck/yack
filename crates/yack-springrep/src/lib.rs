@@ -11,6 +11,7 @@
 
 pub mod blend;
 pub mod boolean;
+pub mod build;
 pub mod check;
 pub mod codec;
 pub mod distance;

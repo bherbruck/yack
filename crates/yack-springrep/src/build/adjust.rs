@@ -1,6 +1,6 @@
 // yack: Moving an imported solid's surfaces, as little as possible, where its faces miss each other.
 // Adapted from springrep@a03e8a1 src/step/adjust.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from step/adjust.rs to build/adjust.rs (M2 T5); paths and visibility only.
 //! Moving an imported solid's surfaces, as little as possible, where its faces miss each other.
 //!
 //! Where two faces touch rather than cross, or a B-spline face stops short of its corner, no
@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use super::topology::Raw;
+use super::raw::Raw;
 use crate::{
     geom::{NurbsSurface, Surface},
     math::{Point3, Transform, Vec2, Vec3},
@@ -45,7 +45,7 @@ const CG_STALL: usize = 25;
 const MIN_SPANS: usize = 16;
 
 /// A point the step moves, and the faces it must lie on.
-pub(super) struct Target {
+pub(crate) struct Target {
     pub at: Point3,
     pub faces: Vec<usize>,
     /// The vertex it is, if it is one rather than a sample of an edge.
@@ -64,7 +64,7 @@ impl Target {
     /// A vertex. Where all its faces touch (a corner of rounds that blend into each other), only
     /// how far along their common normal it lies is fixed to first order; sliding across that
     /// normal costs as much as moving a surface.
-    pub(super) fn vertex(raw: &Raw, at: Point3, faces: Vec<usize>, vertex: usize) -> Target {
+    pub(crate) fn vertex(raw: &Raw, at: Point3, faces: Vec<usize>, vertex: usize) -> Target {
         let normals = normals_at(raw, &faces, at);
         let n = common_normal(&normals);
         let touching = normals
@@ -90,7 +90,7 @@ impl Target {
     /// A point of edge `edge`, which runs along `along` there. Where along its edge a sample lies
     /// is arbitrary, so moving it that way costs as much as moving a surface: free, the step's
     /// linear model slides it far along an edge between faces that touch.
-    pub(super) fn sample(
+    pub(crate) fn sample(
         raw: &Raw,
         at: Point3,
         faces: Vec<usize>,
@@ -526,7 +526,7 @@ impl System {
 /// Moves the surfaces of `faces` and every target until each target lies on each of its faces,
 /// or until the rounds run out. Returns where each target vertex went, and whether the targets
 /// all lie on their faces within a small part of the tolerance.
-pub(super) fn adjust(
+pub(crate) fn adjust(
     raw: &mut Raw,
     faces: &[usize],
     targets: &mut [Target],

@@ -52,6 +52,7 @@ build || { echo "$TAG post build failed"; restore; exit 1; }
 QFP=$(fp)  # after the post build: the name records the tree that was built
 cargo test -p yack-springrep --no-run || { echo "$TAG springrep tests do not compile"; restore; exit 1; }
 for f in "${EXT[@]}"; do
+  case $f in crates/*) ;; *) continue;; esac  # a workspace file such as layers.toml: the gate checks it
   pkg=$(echo $f | sed 's|crates/\([^/]*\)/.*|\1|')
   cargo test -p $pkg --no-run || { echo "$TAG $pkg does not compile"; restore; exit 1; }
 done

@@ -1,6 +1,6 @@
 // yack: A solid from a closed triangle mesh: each triangle a plane face, so the kernel's booleans,
 // Adapted from springrep@a03e8a1 src/mesh/solid.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from mesh/solid.rs to build/mesh_solid.rs (M2 T5; mesh no longer calls the checker); paths and visibility only.
 //! A solid from a closed triangle mesh: each triangle a plane face, so the kernel's booleans,
 //! distances and measures take a mesh another tool wrote as they take any solid.
 

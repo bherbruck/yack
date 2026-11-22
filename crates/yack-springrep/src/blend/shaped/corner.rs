@@ -39,7 +39,7 @@ use crate::{
     loft::rail::basis,
     math::Point3,
     numeric::solve_dense,
-    step::{PartFace, Parts, parts_of, solid_of},
+    build::{PartFace, Parts, parts_of, solid_of},
     tol,
     topo::{Brep, EdgeId, FaceName},
 };
