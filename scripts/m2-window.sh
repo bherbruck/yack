@@ -18,6 +18,10 @@ snap() { mkdir -p $R/$1 && cp bin/release/yack-conformance bin/release/yack-benc
 
 dirty=$(git status --short -- crates/yack-springrep "${EXT[@]}")
 if [ -n "$dirty" ]; then echo "$TAG ABORT: files the move touches have uncommitted changes:"; echo "$dirty"; exit 1; fi
+# yack-springrep's own files outside the move: hashed at the start, and again at the end over every file
+# the apply did not touch, so another worker's save into the crate mid-window is caught too
+srhash() { ( cd $SR && find src tests -type f | sort | while read -r f; do case " $SKIP " in *" $f "*) ;; *) md5sum "$f";; esac; done ) | md5sum | cut -c1-8; }
+SKIP=""; S1_ALL=$( (cd $SR && find src tests -type f | sort | xargs md5sum) )
 O1=$(others); PFP=$(fp)
 # springrep is a temporary crate under a lints ratchet: the warning count may not rise
 lints() { cargo clippy -p yack-springrep --all-targets 2>&1 | grep -c '^warning: ' ; }
@@ -44,8 +48,8 @@ restore() {
 }
 python3 $APPLY $SR "${APPLY_ARGS[@]}"; ARC=$?; TOUCHED=$(touched); echo "$TAG touched:" $TOUCHED "${EXT[@]}"
 [ $ARC -eq 0 ] || { restore; exit 1; }
-QFP=$(fp)
 build || { echo "$TAG post build failed"; restore; exit 1; }
+QFP=$(fp)  # after the post build: the name records the tree that was built
 cargo test -p yack-springrep --no-run || { echo "$TAG springrep tests do not compile"; restore; exit 1; }
 for f in "${EXT[@]}"; do
   pkg=$(echo $f | sed 's|crates/\([^/]*\)/.*|\1|')
@@ -57,5 +61,9 @@ cargo xtask gate; G2=$?; echo "$TAG gate after: rc=$G2"
 [ $G1 -ne 0 ] || [ $G2 -eq 0 ] || { echo "$TAG gate was green and the move makes it fail"; restore; exit 1; }
 cargo test -p yack-springrep --lib $FILTER || { echo "$TAG tests fail"; restore; exit 1; }
 snap $tag-post-$QFP; O2=$(others)
-echo "$TAG POST=$QFP others=$O2"
-if [ "$O1" = "$O2" ]; then echo "$TAG others unchanged"; else echo "$TAG OTHERS CHANGED during window ($O1 -> $O2): pair contaminated"; exit 3; fi
+# untouched springrep files: compare their start hashes with now
+SKIP=" $(echo $TOUCHED | sed "s#/\./#/#g") "; S1=$(echo "$S1_ALL" | while read -r h f; do case "$SKIP" in *" $f "*) ;; *) echo "$h  $f";; esac; done | md5sum | cut -c1-8); S2=$(srhash)
+echo "$TAG POST=$QFP others=$O2 springrep-untouched=$S1->$S2"
+if [ "$O1" != "$O2" ]; then echo "$TAG OTHERS CHANGED during window ($O1 -> $O2): pair contaminated"; exit 3; fi
+if [ "$S1" != "$S2" ]; then echo "$TAG yack-springrep files outside the move CHANGED during window: pair contaminated"; exit 3; fi
+echo "$TAG others unchanged"
