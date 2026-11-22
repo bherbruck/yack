@@ -115,6 +115,13 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_conic(&self, edges: &[EdgeId], setback: f64, rho: f64) -> Result<Solid> {
+        // api.md:748-749
+        if !(setback.is_finite() && setback > 0.0) {
+            return Err(crate::Error::invalid("fillet_conic", "setback", format!("setback {setback} mm is not positive")));
+        }
+        if !(rho > 0.0 && rho < 1.0) {
+            return Err(crate::Error::invalid("fillet_conic", "rho", format!("rho {rho} is not between 0 and 1")));
+        }
         let ix = crate::edit::indices(edges);
         firewall::run("fillet_conic", || {
             ladder::two(
@@ -166,6 +173,8 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
+        // api.md:786-789
+        setback_ok("fillet_setback", radius, setback)?;
         ladder::springrep_only("fillet_setback", || {
             let feature = engine::feature();
             let op = "fillet_setback";
@@ -186,6 +195,8 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
+        // api.md:813: as fillet_setback requires
+        setback_ok("fillet_setback_g2", radius, setback)?;
         ladder::springrep_only("fillet_setback_g2", || {
             let feature = engine::feature();
             let op = "fillet_setback_g2";
@@ -205,6 +216,10 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet_faces(&self, a: FaceId, b: FaceId, radius: f64) -> Result<Solid> {
+        // api.md:840
+        if !(radius.is_finite() && radius > 0.0) {
+            return Err(crate::Error::invalid("fillet_faces", "radius", format!("radius {radius} mm is not positive")));
+        }
         ladder::springrep_only("fillet_faces", || {
             let feature = engine::feature();
             let op = "fillet_faces";
@@ -227,6 +242,17 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn full_round(&self, side_a: FaceId, middle: FaceId, side_b: FaceId) -> Result<Solid> {
+        // api.md:859-860
+        let op = "full_round";
+        if side_a == middle || side_b == middle || side_a == side_b {
+            return Err(crate::Error::invalid(op, "middle", "the three faces must be different"));
+        }
+        if self.edges_between(side_a, middle)?.is_empty() {
+            return Err(crate::Error::invalid(op, "side_a", "the side shares no edge with the middle face"));
+        }
+        if self.edges_between(side_b, middle)?.is_empty() {
+            return Err(crate::Error::invalid(op, "side_b", "the side shares no edge with the middle face"));
+        }
         ladder::springrep_only("full_round", || {
             let feature = engine::feature();
             let op = "full_round";
@@ -343,4 +369,15 @@ impl Solid {
             )
         })
     }
+}
+
+/// api.md:786-789: a fillet's radius must be positive, and its `setback` greater than it.
+fn setback_ok(op: &'static str, radius: f64, setback: f64) -> Result<()> {
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err(crate::Error::invalid(op, "radius", format!("radius {radius} mm is not positive")));
+    }
+    if !(setback.is_finite() && setback > radius) {
+        return Err(crate::Error::invalid(op, "setback", format!("setback {setback} mm is not greater than the radius {radius} mm")));
+    }
+    Ok(())
 }

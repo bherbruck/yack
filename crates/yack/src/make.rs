@@ -24,6 +24,10 @@ use crate::{Angle, Error, Frame, Lead, PathPiece, Patch, Point3, Profile, Result
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
+    // api.md:246
+    if !size.iter().all(|s| s.is_finite() && *s > 0.0) {
+        return Err(Error::invalid("block", "size", format!("size {size:?} mm is not positive on every side")));
+    }
     firewall::run("block", || {
         ladder::two("block", &|| {
         let feature = engine::feature();
@@ -215,6 +219,10 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Result<Solid> {
+    // api.md:378
+    if !(angle.is_finite() && angle.radians() > 0.0) {
+        return Err(Error::invalid("screw", "angle", format!("{}° is not positive", angle.degrees())));
+    }
     let rise = match &lead.0 {
         LeadKind::PerRadian(c) => *c,
         LeadKind::PerTurn(p) => yack_math::per_radian_of(*p),
@@ -318,6 +326,10 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64) -> Result<Solid> {
+    // api.md:403
+    if !(height.is_finite() && height > 0.0) {
+        return Err(Error::invalid("loft", "height", format!("height {height} mm is not positive")));
+    }
     if !(scale.is_finite() && scale > 0.0) {
         return Err(Error::invalid("loft", "scale", format!("scale {scale} is not positive")));
     }

@@ -87,7 +87,8 @@ fn probe_core_blends_and_edits() {
     report(1051, "shell thickness zero", b.shell(&[top], 0.0));
     report(1051, "shell thickness negative", b.shell(&[top], -1.0));
     report(1051, "shell_outward thickness zero", b.shell_outward(&[top], 0.0));
-    report(1068, "draft a curved face", cylinder(f, 2.0, 4.0).unwrap().draft(&[cylinder(f, 2.0, 4.0).unwrap().face_at([2.0, 0.0, 2.0]).unwrap()], [0.0; 3], [0.0, 0.0, 1.0], deg(5.0)));
+    let can = cylinder(f, 2.0, 4.0).unwrap();
+    report(1068, "draft a curved face", can.draft(&[can.face_at([2.0, 0.0, 2.0]).unwrap()], [0.0; 3], [0.0, 0.0, 1.0], deg(5.0)));
     report(1069, "draft angle zero", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(0.0)));
     report(1069, "draft angle right", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(90.0)));
     report(1069, "draft angle negative", b.draft(&[side], [0.0; 3], [0.0, 0.0, 1.0], deg(-5.0)));

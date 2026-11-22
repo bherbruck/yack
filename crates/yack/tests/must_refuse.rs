@@ -104,3 +104,32 @@ fn landing_one_requirements_are_invalid_with_their_arg() {
     assert!(revolve(f, &sq, deg(360.0)).is_ok());
     assert!(b.offset(-0.5).is_ok());
 }
+
+/// Rule 7, landing 2: refusals that came back Failed or Unsupported, now Invalid with their arg.
+#[test]
+fn landing_two_requirements_are_invalid_with_their_arg() {
+    let b = cube();
+    let e = b.edge_at([4.0, 2.5, 6.0]).unwrap();
+    let (top, side, bottom, front) = (
+        b.face_at([2.0, 2.5, 6.0]).unwrap(),
+        b.face_at([4.0, 2.5, 3.0]).unwrap(),
+        b.face_at([2.0, 2.5, 0.0]).unwrap(),
+        b.face_at([2.0, 0.0, 3.0]).unwrap(),
+    );
+    // the top and the bottom share no edge
+    let sq = Profile::rectangle([2.0, 0.0], [3.0, 1.0]).unwrap();
+    let f = &Frame::WORLD;
+    invalid_arg("block with a NaN side (api.md:246)", block(f, [1.0, f64::NAN, 1.0]), "size");
+    invalid_arg("screw by 0° (api.md:378)", screw(f, &sq, Lead::per_turn(3.0), deg(0.0)), "angle");
+    invalid_arg("loft of no height (api.md:403)", loft(f, &sq, 0.5, 0.0), "height");
+    invalid_arg("fillet_conic with no setback (api.md:748)", b.fillet_conic(&[e], 0.0, 0.5), "setback");
+    invalid_arg("fillet_conic with rho 1 (api.md:749)", b.fillet_conic(&[e], 1.0, 1.0), "rho");
+    invalid_arg("fillet_setback inside its radius (api.md:789)", b.fillet_setback(&[e], 1.0, 0.5), "setback");
+    invalid_arg("fillet_setback_g2 inside its radius (api.md:813)", b.fillet_setback_g2(&[e], 1.0, 0.5), "setback");
+    invalid_arg("fillet_faces of no radius (api.md:840)", b.fillet_faces(top, side, 0.0), "radius");
+    invalid_arg("full_round naming a face twice (api.md:859)", b.full_round(side, top, side), "middle");
+    invalid_arg("full_round whose middle misses a side (api.md:860)", b.full_round(front, top, bottom), "side_b");
+    invalid_arg("shell of no thickness (api.md:1051)", b.shell(&[top], 0.0), "thickness");
+    invalid_arg("shell_outward of no thickness (api.md:1051)", b.shell_outward(&[top], -1.0), "thickness");
+    // a curved face is drafted on purpose (yack extends api.md:1068, as springrep's tests do)
+}

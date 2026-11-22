@@ -257,6 +257,10 @@ impl Solid {
     /// ```
     pub fn shell(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell";
+        // api.md:1051
+        if !(thickness.is_finite() && thickness > 0.0) {
+            return Err(Error::invalid(op, "thickness", format!("thickness {thickness} mm is not positive")));
+        }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
         firewall::run(op, || {
@@ -293,6 +297,10 @@ impl Solid {
     /// ```
     pub fn shell_outward(&self, open: &[FaceId], thickness: f64) -> Result<Solid> {
         let op = "shell_outward";
+        // api.md:1051
+        if !(thickness.is_finite() && thickness > 0.0) {
+            return Err(Error::invalid(op, "thickness", format!("thickness {thickness} mm is not positive")));
+        }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
         firewall::run(op, || {
@@ -382,6 +390,7 @@ impl Solid {
         if !pull.is_finite() {
             return Err(Error::invalid(op, "pull", "not finite"));
         }
+
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
         let (o, p, a) = (origin.to_array(), pull.to_array(), angle.radians());
