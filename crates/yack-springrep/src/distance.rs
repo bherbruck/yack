@@ -263,7 +263,7 @@ impl Side<'_> {
             .solid_faces
             .iter()
             .map(|&f| {
-                let bb = crate::measure::face_box(self.b, f);
+                let bb = crate::topo::bbox::face_box(self.b, f);
                 let padded = Aabb {
                     min: bb.min - pad,
                     max: bb.max + pad,

@@ -4,6 +4,7 @@
 //! The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 //! edge by one face. Every entity lives in one [`Brep`] and is referred to by a typed id.
 
+pub(crate) mod bbox;
 mod facts;
 pub(crate) mod domain;
 mod memo;

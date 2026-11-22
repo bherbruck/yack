@@ -66,7 +66,7 @@ pub struct Mesh {
 /// that seeds exact searches over `b` (rays, distances), whose triangles must stand near the faces
 /// however small the part, and need not be finer than the search's own margin however large.
 pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
-    let size = crate::measure::loose_bbox(b).diagonal();
+    let size = crate::topo::bbox::loose_bbox(b).diagonal();
     MeshOptions {
         linear: if size > 0.0 {
             opt.linear.clamp(1e-4 * size, 1e-3 * size)
