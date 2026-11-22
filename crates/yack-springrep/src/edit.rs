@@ -125,11 +125,8 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
         }
         Wall::Outward => {
             let mut outer = moved(thickness, 0.0)?;
-            // The open faces stay where they were and keep their names, by name rather than by id
-            // (the move numbers its faces afresh): the rim round each opening is that face's.
-            let kept: Vec<_> = open.iter().map(|&f| s.face(f).names.clone()).filter(|n| !n.is_empty()).collect();
             for f in outer.face_ids().collect::<Vec<_>>() {
-                if !kept.contains(&outer.face(f).names) {
+                if !open.contains(&f) {
                     outer.set_face_names(f, Default::default());
                 }
             }
