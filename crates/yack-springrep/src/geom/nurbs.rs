@@ -21,6 +21,9 @@ use crate::{
 pub(super) const MAX_DEGREE: usize = 15;
 /// How near the surface, as a share of the seed spacing, a local projection is taken as nearest.
 const NEAR_SHARE: f64 = 0.05;
+/// How short a stalled Newton step, and how small the distance gradient along the surface, a
+/// search that stops there counts as settled at.
+const STALLED: f64 = 1e-3 * tol::LINEAR; // tol: rounding of a foot, a thousandth of the tolerance
 const M: usize = MAX_DEGREE + 1;
 /// The highest degree the span polynomials evaluate (see [`NurbsSurface::by_polys`]).
 const MAX_POLY_DEGREE: usize = 6;
@@ -1815,14 +1818,24 @@ impl NurbsSurface {
                     break None;
                 }
             };
+            // No fraction of a step this short gets nearer by more than the rounding of measuring
+            // it: the foot is here, as near as a step that short (bench swept/ring-carried-along-
+            // a-spline: one in sixteen local searches stopped at the foot unsettled, and each one
+            // then searched the whole surface again).
             let Some((next, there)) = next else {
-                break;
+                // Only at a stationary point: the distance's gradient along the surface at
+                // rounding, not a stall short of the foot.
+                let along = g0.abs() / su.norm().max(f64::MIN_POSITIVE) + g1.abs() / sv.norm().max(f64::MIN_POSITIVE);
+                let settled = (su * du + sv * dv).norm() <= STALLED && along <= STALLED;
+                return (self.wrapped(uv), r.norm(), settled);
             };
             let moved = (next.x - uv.x).abs() + (next.y - uv.y).abs();
             uv = next;
             at = there;
             if moved <= 1e-15 * (1.0 + uv.x.abs() + uv.y.abs()) {
-                break;
+                // Parameters that move by rounding alone: settled where the gradient is rounding too.
+                let along = g0.abs() / su.norm().max(f64::MIN_POSITIVE) + g1.abs() / sv.norm().max(f64::MIN_POSITIVE);
+                return (self.wrapped(uv), at[0].dist(p), along <= STALLED);
             }
         }
         (self.wrapped(uv), at[0].dist(p), false)
