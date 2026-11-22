@@ -6,7 +6,7 @@ yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
 yack: pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3}
 yack: pub use solid::Solid
-yack: pub use values::{CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh, Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
+yack: pub use values::{Closest, CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, Interference, Issue, Mesh, NearestFace, Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
 yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Similarity, Vec3}
 yack::bakeoff: enum Engine variant Both
@@ -51,7 +51,7 @@ yack::edit: impl Solid { pub fn shell_outward_rounded(&self, open: &[FaceId], th
 yack::edit: impl Solid { pub fn shell_rounded(&self, open: &[FaceId], thickness: f64) -> Result<Solid> }
 yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> }
-yack::edit: impl Solid { pub fn transform(&self, m: &Similarity) -> Result<Solid> }
+yack::edit: impl Solid { pub fn transform(&self, m: impl Into<Similarity>) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
 yack::input: impl Lead { pub fn per_radian(mm: f64) -> Lead }
 yack::input: impl Lead { pub fn per_turn(mm: f64) -> Lead }
@@ -100,7 +100,7 @@ yack::make: pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<S
 yack::make: pub fn empty() -> Solid
 yack::make: pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid>
 yack::make: pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Angle, both_ways: bool) -> Result<Solid>
-yack::make: pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid>
+yack::make: pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64) -> Result<Solid>
 yack::make: pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<Solid>
 yack::make: pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
 yack::make: pub fn loft_to_point(frame: &Frame, profile: &Profile, apex: impl Into<Point3>, guides: &[Spline3]) -> Result<Solid>
@@ -122,20 +122,20 @@ yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus, extrude_drafted, ruled, sweep_helix, sweep_scaled, loft_to_point,}
 yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
+yack::query: impl Solid { pub fn bbox(&self) -> Option<Aabb> }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }
-yack::query: impl Solid { pub fn bounding_box(&self) -> Option<Aabb> }
 yack::query: impl Solid { pub fn centroid(&self) -> Option<Point3> }
 yack::query: impl Solid { pub fn check(&self) -> Vec<Issue> }
 yack::query: impl Solid { pub fn classify<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Side>> }
 yack::query: impl Solid { pub fn closest<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Point3>> }
-yack::query: impl Solid { pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> }
+yack::query: impl Solid { pub fn closest_pair(&self, other: &Solid) -> Result<Closest> }
 yack::query: impl Solid { pub fn curvature_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<[f64; 2]>>> }
 yack::query: impl Solid { pub fn display(&self, tolerance: f64) -> Result<Display> }
 yack::query: impl Solid { pub fn distance(&self, other: &Solid) -> Result<f64> }
 yack::query: impl Solid { pub fn inertia(&self) -> [[f64; 3]; 3] }
 yack::query: impl Solid { pub fn interference(&self, other: &Solid) -> Result<Interference> }
 yack::query: impl Solid { pub fn mesh(&self, tolerance: f64) -> Result<Mesh> }
-yack::query: impl Solid { pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> }
+yack::query: impl Solid { pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<NearestFace> }
 yack::query: impl Solid { pub fn normal_at<P: Into<Point3> + Copy>(&self, points: &[P]) -> Result<Vec<Option<Vec3>>> }
 yack::query: impl Solid { pub fn project(&self, direction: impl Into<Vec3>, tolerance: f64) -> Result<Drawing> }
 yack::query: impl Solid { pub fn raycast(&self, rays: &[Ray]) -> Result<Vec<Vec<f64>>> }
@@ -161,7 +161,6 @@ yack::select: impl Solid { pub fn faces_where(&self, keep: impl Fn(&FaceRef) -> 
 yack::select: impl Solid { pub fn vertex(&self, id: VertexId) -> Result<VertexRef> }
 yack::select: impl Solid { pub fn vertices(&self) -> Vec<VertexId> }
 yack::solid: impl Solid { pub fn digest(&self) -> [u8; 32] }
-yack::solid: impl Solid { pub fn history(&self) -> &History }
 yack::solid: impl Solid { pub fn is_empty(&self) -> bool }
 yack::solid: impl Solid { pub fn is_exact(&self) -> bool }
 yack::solid: impl Solid { pub fn named(&self, tag: impl Into<Tag>) -> Solid }
@@ -197,7 +196,6 @@ yack::values: impl FaceRef<'_> { pub fn sample(&self, nu: usize, nv: usize) -> V
 yack::values: impl FaceRef<'_> { pub fn tags(&self) -> &[Tag] }
 yack::values: impl From<&str> for Tag
 yack::values: impl From<String> for Tag
-yack::values: impl History { pub fn is_empty(&self) -> bool }
 yack::values: impl Mesh { pub fn is_watertight(&self) -> bool }
 yack::values: impl Mesh { pub fn volume(&self) -> f64 }
 yack::values: impl Plane { pub fn new(origin: impl Into<Point3>, normal: impl Into<Vec3>) -> Result<Plane> }

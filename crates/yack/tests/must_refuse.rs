@@ -49,3 +49,25 @@ fn blends_and_edits() {
     refused("shell as thick as the part", c.shell(&[top], 3.0));
     refused("face pushed through the part", c.offset_faces(&[top], -7.0));
 }
+
+/// An empty edge or face list for a blend or face edit, or a face the edge does not border, is
+/// `Invalid` before any engine runs (a springrep refusal that is not `Invalid` would otherwise fall through to cadrs, which
+/// built from such input).
+#[test]
+fn empty_lists_and_a_foreign_face_are_invalid() {
+    let b = cube();
+    let invalid = |what: &str, r: Result<Solid>| {
+        assert!(matches!(&r, Err(e) if e.kind == ErrorKind::Invalid), "{what}: {:?}", r.map(|s| s.volume()));
+    };
+    invalid("fillet of no edges", b.fillet(&[], 1.0));
+    invalid("chamfer of no edges", b.chamfer(&[], 1.0));
+    let edge = b.edge_at([4.0, 2.5, 6.0]).unwrap();
+    invalid("chamfer_two on a face the edge does not border", b.chamfer_two(edge, b.face_at([2.0, 2.5, 0.0]).unwrap(), 1.0, 0.5));
+    invalid("offset_faces of no faces", b.offset_faces(&[], 1.0));
+    invalid("move_faces of no faces", b.move_faces(&[], &Rigid::translation([0.0, 0.0, 1.0])));
+    invalid("thicken of no faces", b.thicken(&[], 1.0, Join::Round));
+    invalid("draft of no faces", b.draft(&[], [0.0; 3], [0.0, 0.0, 1.0], deg(5.0)));
+    invalid("sweep along no path", sweep(&Frame::WORLD, &Profile::rectangle([0.0, 0.0], [1.0, 1.0]).unwrap(), &[]));
+    // a boolean's empty cases are identities, not refusals: no tools leaves the solid
+    assert!((b.difference_all(&[]).unwrap().volume() - 120.0).abs() < 1e-9);
+}

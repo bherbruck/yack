@@ -57,9 +57,13 @@ fn det(m: &Rows) -> f64 {
     column(m, 0).cross(column(m, 1)).dot(column(m, 2))
 }
 
-/// Checks that the linear part's columns are mutually orthogonal and all of length `scale`.
-fn orthogonal(op: &'static str, m: &Rows, scale: f64) -> Result<()> {
-    let tol = yack_tol::ANGULAR;
+/// How far a rigid motion's linear part may be from orthonormal (in its columns' dot products)
+/// and still be taken as the rotation nearest it: rows written to six digits or more.
+const NEAR_ROTATION: f64 = 1e-6; // tol: a rotation written to six or more significant digits
+
+/// Checks that the linear part's columns are mutually orthogonal and all of length `scale`, each
+/// dot product within `tol` (relative to `scale²`).
+fn orthogonal(op: &'static str, m: &Rows, scale: f64, tol: f64) -> Result<()> {
     let c = [column(m, 0), column(m, 1), column(m, 2)];
     let s2 = scale * scale;
     for (i, a) in c.iter().enumerate() {
@@ -67,15 +71,29 @@ fn orthogonal(op: &'static str, m: &Rows, scale: f64) -> Result<()> {
             let want = if i == j { s2 } else { 0.0 };
             let got = a.dot(*b);
             if (got - want).abs() > tol * s2 {
-                return Err(Error::invalid(
-                    op,
-                    "rows",
-                    format!("columns {i} and {j} of the linear part have dot {got}, not {want}"),
-                ));
+                let what = if i == j {
+                    format!("column {i} of the linear part has squared length {got}, not {want}")
+                } else {
+                    format!("columns {i} and {j} of the linear part have dot {got}, not {want}")
+                };
+                return Err(Error::invalid(op, "rows", what));
             }
         }
     }
     Ok(())
+}
+
+/// `m` with its near-orthonormal linear part replaced by the rotation nearest it (the polar
+/// factor, by Newton–Schulz steps `R ← R·(3I − RᵀR)/2`, each squaring the error), shift kept.
+fn nearest_rotation(m: &Rows) -> Rows {
+    let mut c = [column(m, 0), column(m, 1), column(m, 2)];
+    for _ in 0..4 {
+        let [a, b, d] = c;
+        let step = |cj: Vec3| (cj * 3.0 - (a * a.dot(cj) + b * b.dot(cj) + d * d.dot(cj))) * 0.5;
+        c = [step(a), step(b), step(d)];
+    }
+    let [a, b, d] = c;
+    [[a.x, b.x, d.x, m[0][3]], [a.y, b.y, d.y, m[1][3]], [a.z, b.z, d.z, m[2][3]]]
 }
 
 fn apply_point(m: &Rows, p: Point3) -> Point3 {
@@ -92,21 +110,32 @@ impl Rigid {
     /// The identity.
     pub const IDENTITY: Rigid = Rigid(IDENTITY);
 
-    /// From rows `[R | t]`. Refuses a non-finite entry, a non-orthonormal `R`, or a mirror.
+    /// From rows `[R | t]`. An `R` orthonormal to within 1e-6 (in its columns' dot products, as
+    /// rows written to six digits or more are) is taken as the rotation nearest it; one farther
+    /// off, a non-finite entry, or a mirror is refused.
     ///
     /// ```
     /// use yack_math::Rigid;
     /// assert!(Rigid::from_rows([[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).is_ok());
+    /// // a quarter turn written to nine digits is that turn
+    /// let r = Rigid::from_rows([[0.963144594, 0.268984183, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.268984183, -0.963144594, 0.0, 0.0]])?;
+    /// let c = r.rows();
+    /// assert!((c[0][0] * c[0][0] + c[1][0] * c[1][0] + c[2][0] * c[2][0] - 1.0).abs() < 1e-15);
     /// assert!(Rigid::from_rows([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).is_err());
+    /// # Ok::<(), yack_base::Error>(())
     /// ```
     pub fn from_rows(m: [[f64; 4]; 3]) -> Result<Rigid> {
         let op = "Rigid::from_rows";
         finite(op, &m)?;
-        orthogonal(op, &m, 1.0)?;
+        orthogonal(op, &m, 1.0, NEAR_ROTATION)?;
         if det(&m) <= 0.0 {
             return Err(Error::invalid(op, "rows", "the linear part is a mirror, not a rotation"));
         }
-        Ok(Rigid(m))
+        // rows orthonormal as given are kept bit for bit; only near ones are rounded to a rotation
+        if orthogonal(op, &m, 1.0, yack_tol::ANGULAR).is_ok() {
+            return Ok(Rigid(m));
+        }
+        Ok(Rigid(nearest_rotation(&m)))
     }
 
     /// A pure translation by `v`.
@@ -235,7 +264,7 @@ impl Similarity {
         if scale <= yack_tol::ANGULAR {
             return Err(Error::invalid(op, "rows", "the scale is zero"));
         }
-        orthogonal(op, &m, scale)?;
+        orthogonal(op, &m, scale, yack_tol::ANGULAR)?;
         Ok(Similarity(m))
     }
     /// The rows `[c·Q | t]`.
@@ -260,6 +289,18 @@ impl Similarity {
 impl From<Rigid> for Similarity {
     fn from(r: Rigid) -> Similarity {
         Similarity(r.0)
+    }
+}
+
+impl From<&Rigid> for Similarity {
+    fn from(r: &Rigid) -> Similarity {
+        Similarity(r.0)
+    }
+}
+
+impl From<&Similarity> for Similarity {
+    fn from(m: &Similarity) -> Similarity {
+        *m
     }
 }
 

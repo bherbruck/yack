@@ -24,7 +24,7 @@ fn assert_solid(b: &Solid, volume: f64, area: f64, lo: [f64; 3], hi: [f64; 3], r
     let a = b.area();
     assert!((v - volume).abs() <= rel * volume, "volume {v} vs {volume}");
     assert!((a - area).abs() <= rel * area, "area {a} vs {area}");
-    let bb = b.bounding_box().unwrap();
+    let bb = b.bbox().unwrap();
     let d = [
         bb.min.x - lo[0],
         bb.min.y - lo[1],
@@ -121,7 +121,7 @@ fn periodic_spline_disc_matches_its_ellipse() {
     let v = b.volume();
     assert!((v / (PI * 6000.0) - 1.0).abs() < 2e-5, "{v}");
     assert_eq!(b.faces().len(), 3);
-    let bb = b.bounding_box().unwrap();
+    let bb = b.bbox().unwrap();
     assert!((bb.max.x - 30.0).abs() < 1e-3 && (bb.min.y + 20.0).abs() < 1e-3);
 }
 

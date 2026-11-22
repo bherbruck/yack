@@ -33,7 +33,7 @@ fn assert_near(got: f64, want: f64, what: &str) {
 
 /// The boundary of `b` nearest `p`: `(distance, point)`.
 fn boundary(b: &Solid, p: Point3) -> (f64, Point3) {
-    let (face, distance) = b.nearest_face(p).unwrap();
+    let yack::NearestFace { face, distance } = b.nearest_face(p).unwrap();
     (distance, b.face(face).unwrap().closest(p).unwrap())
 }
 

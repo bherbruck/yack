@@ -117,6 +117,18 @@ fn in_place(out: &Body, f: usize, input: Option<&Body>, from: &InputFace) -> boo
     }
 }
 
+/// The input face whose very surface result face `f` lies on, for a face generated from an
+/// input body's edge or vertex (`origin` names the body).
+fn on_input_face(out: &Body, f: usize, input: Option<&Body>, origin: &Origin) -> Option<InputFace> {
+    let body = match origin {
+        Origin::FromEdge { body, .. } | Origin::FromVertex { body, .. } => *body,
+        _ => return None,
+    };
+    let face = &out.faces.get(f)?.surf;
+    let j = input?.faces.iter().position(|g| &g.surf == face)?;
+    Some(InputFace { body, face: crate::FaceId(j as u64) })
+}
+
 /// What each face of `result` (by index) is called, from `history` and `how`. `input` is the
 /// operation's input body, needed to tell a shell's walls apart.
 pub fn face_roles(
@@ -157,6 +169,14 @@ pub fn roles(out: &Body, input: Option<&Body>, history: &History, how: &Naming) 
     for (f, o) in &history.generated {
         let Some(i) = usize::try_from(f.0).ok().filter(|&i| i < n) else { continue };
         has_history[i] = true;
+        // A shell's rim (the wall's end where an open face was, made from that face's edges)
+        // lies on the open face's own surface: it keeps that face's names.
+        if how.shell.is_some()
+            && let Some(rim) = on_input_face(out, i, input, o)
+        {
+            push(&mut roles[i], FaceRole::Keep(rim));
+            continue;
+        }
         match how.shell {
             // A round in a shell's cavity is part of the cavity.
             Some(Wall::Inward) => push(&mut roles[i], FaceRole::Part("inner".into())),

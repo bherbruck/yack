@@ -14,8 +14,7 @@ pub fn build() -> Result<Solid> {
     let (inner, outer, phi) = (ae - 12.0, ae + 2.0, (24.0 / (75.0 - 5.0 * s5)).asin());
     let turned = Rigid::rotation([0.0; 3], [0.0, 0.0, 1.0], rad(phi))?;
     let foot = Frame::new(g.map(|c| c * inner), d, [0.0, -1.0, 0.0], g)?.moved(&turned);
-    let (low, high) = (Profile::polygon(&trap(inner / ae))?, Profile::polygon(&trap(outer / ae))?);
-    let tooth = loft(&foot, &low, outer / inner, outer - inner, &high)?;
+    let tooth = loft(&foot, &Profile::polygon(&trap(inner / ae))?, outer / inner, outer - inner)?;
     // seen from the blank: turned by t about the pinion's axis (through (0, 12, 0) along x), then by 7t/15 about z,
     // t from −70° to 70°
     let (p, x, z): (Point3, Vec3, Vec3) = ([0.0, 12.0, 0.0].into(), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));

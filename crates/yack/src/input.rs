@@ -73,6 +73,30 @@ pub enum Segment {
     },
 }
 
+impl Segment {
+    /// This segment scaled by `s` about the plane's origin: its points and lengths (angles,
+    /// weights and knots kept), multiplied as the protocol's client scales a loft's top.
+    fn scaled(&self, s: f64) -> Segment {
+        let pt = |p: &Point2| yack_math::scale2(*p, s);
+        match self {
+            Segment::Line { a, b } => Segment::Line { a: pt(a), b: pt(b) },
+            Segment::Arc { center, radius, start, sweep } => {
+                Segment::Arc { center: pt(center), radius: yack_math::scale_length(*radius, s), start: *start, sweep: *sweep }
+            }
+            Segment::Conic { a, apex, b, weight } => Segment::Conic { a: pt(a), apex: pt(apex), b: pt(b), weight: *weight },
+            Segment::Blend { a, apex, b, order, weight } => {
+                Segment::Blend { a: pt(a), apex: pt(apex), b: pt(b), order: *order, weight: *weight }
+            }
+            Segment::Nurbs { degree, knots, ctrl, weights } => {
+                Segment::Nurbs { degree: *degree, knots: knots.clone(), ctrl: ctrl.iter().map(pt).collect(), weights: weights.clone() }
+            }
+            Segment::PeriodicSpline { degree, knots, ctrl } => {
+                Segment::PeriodicSpline { degree: *degree, knots: knots.clone(), ctrl: ctrl.iter().map(pt).collect() }
+            }
+        }
+    }
+}
+
 /// A closed planar loop of [`Segment`]s, each starting where the previous one ends.
 ///
 /// ```
@@ -279,6 +303,11 @@ impl Loop {
     pub fn new(segments: Vec<Segment>) -> Result<Loop> {
         let labels = vec![None; segments.len()];
         Loop::labelled("Loop::new", segments, labels)
+    }
+
+    /// This loop scaled by `s` about the plane's origin, labels kept.
+    pub(crate) fn scaled(&self, op: &'static str, s: f64) -> Result<Loop> {
+        Loop::labelled(op, self.segments.iter().map(|g| g.scaled(s)).collect(), self.labels.clone())
     }
 
     fn labelled(op: &'static str, segments: Vec<Segment>, labels: Vec<Option<Tag>>) -> Result<Loop> {
@@ -510,6 +539,13 @@ impl Profile {
         let shapes: Vec<LoopShape> = holes.iter().map(|h| h.shape.clone()).collect();
         planar::check_profile("Profile::new", &outer.shape, &shapes)?;
         Ok(Profile { outer, holes })
+    }
+
+    /// This profile scaled by `s > 0` about the plane's origin (a scaled copy of a valid profile
+    /// is valid, so the profile check is not run again).
+    pub(crate) fn scaled(&self, op: &'static str, s: f64) -> Result<Profile> {
+        let holes = self.holes.iter().map(|h| h.scaled(op, s)).collect::<Result<Vec<_>>>()?;
+        Ok(Profile { outer: self.outer.scaled(op, s)?, holes })
     }
 
     /// The rectangle with corners `min` and `max` (`min < max` on both axes).

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::engine::{self, Brep};
 use crate::engine_cadrs::{CadrsRef, Held};
-use crate::{EdgeId, Error, ErrorKind, FaceId, History, Result, Tag, VertexId};
+use crate::{EdgeId, Error, ErrorKind, FaceId, Result, Tag, VertexId};
 use yack_springrep::topo::FaceName;
 
 /// A solid: an immutable, checked B-rep value, cheap to clone and share between threads.
@@ -45,7 +45,6 @@ pub(crate) fn fresh_stamp() -> u64 {
 struct Inner {
     stamp: u64,
     body: Body,
-    history: History,
     tag: Option<Tag>,
     /// The engine feature name on the faces the operation that made this solid created.
     feature: Option<String>,
@@ -81,7 +80,6 @@ impl Solid {
         Solid(Arc::new(Inner {
             stamp: fresh_stamp(),
             body,
-            history: History::default(),
             tag: None,
             feature: None,
             strategy: None,
@@ -203,18 +201,6 @@ impl Solid {
         ids.iter().map(|&e| self.sr_edge(op, arg, e)).collect()
     }
 
-    /// How this solid's faces came from its inputs.
-    ///
-    /// ```
-    /// use yack::prelude::*;
-    /// let b = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
-    /// let _ = b.history(); // how this solid's faces came from its inputs
-    /// # Ok::<(), yack::Error>(())
-    /// ```
-    pub fn history(&self) -> &History {
-        &self.0.history
-    }
-
     /// A content digest of topology, geometry and face names: equal solids, bit for bit, have equal
     /// digests, and running the same program again gives the same digest. The empty solid's is all zeros.
     ///
@@ -290,7 +276,6 @@ impl Solid {
         Solid(Arc::new(Inner {
             stamp: i.stamp,
             body: i.body.clone(),
-            history: i.history.clone(),
             tag: i.tag.clone(),
             feature: i.feature.clone(),
             strategy: i.strategy,
@@ -409,7 +394,6 @@ impl Solid {
         Solid(Arc::new(Inner {
             stamp: fresh_stamp(),
             body,
-            history: self.0.history.clone(),
             tag: Some(tag),
             feature: Some(name),
             strategy: self.0.strategy,

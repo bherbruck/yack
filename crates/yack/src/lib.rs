@@ -40,7 +40,7 @@ mod values;
 pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3};
 pub use solid::Solid;
 pub use values::{
-    CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, History, Interference, Issue, Mesh,
+    Closest, CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, Interference, Issue, Mesh, NearestFace,
     Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,
 };
 pub use yack_base::{Error, ErrorKind, Result, Stage};

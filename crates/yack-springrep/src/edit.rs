@@ -125,8 +125,11 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
         }
         Wall::Outward => {
             let mut outer = moved(thickness, 0.0)?;
+            // The open faces stay where they were and keep their names, by name rather than by id
+            // (the move numbers its faces afresh): the rim round each opening is that face's.
+            let kept: Vec<_> = open.iter().map(|&f| s.face(f).names.clone()).filter(|n| !n.is_empty()).collect();
             for f in outer.face_ids().collect::<Vec<_>>() {
-                if !open.contains(&f) {
+                if !kept.contains(&outer.face(f).names) {
                     outer.set_face_names(f, Default::default());
                 }
             }
@@ -341,6 +344,24 @@ fn edge_bounds(s: &Brep, e: EdgeId, axes: &Frame, b: &mut Aabb) {
 mod tests {
     use super::*;
     use crate::topo::FaceName;
+
+    #[test]
+    fn a_shells_rim_keeps_the_open_faces_name_both_ways() {
+        // A 20 × 20 × 10 block open at the top, 2 thick, in and out: the ring of wall top round
+        // the opening is what is left of the open face, and carries its names.
+        let block = crate::primitive::block(&Frame::WORLD, Vec3::new(20.0, 20.0, 10.0), "block").unwrap();
+        let top = block
+            .face_ids()
+            .find(|&f| crate::measure::face_bbox(&block, f).min.z > 9.9)
+            .unwrap();
+        let names = block.face(top).names.clone();
+        for wall in [Wall::Inward, Wall::Outward] {
+            let b = shell(&block, &[top], 2.0, wall, "skin").unwrap();
+            let all: Vec<_> = b.face_ids().map(|f| b.face(f).names.clone()).collect();
+            let rims = all.iter().filter(|n| n.is_superset(&names)).count();
+            assert_eq!(rims, 1, "{wall:?}: {all:?}");
+        }
+    }
 
     #[test]
     fn an_arcs_reach_along_an_axis_is_its_own_extreme_not_its_nearest_sample() {

@@ -149,8 +149,10 @@ pub fn face_closest(b: &Brep, f: FaceId, p: Point3) -> Result<Point3> {
     Ok(Nearest::of(b, &Selection::face(f))?.to(p)?.on_b)
 }
 
-/// The face nearest `p` and its distance; ties (a point nearest a shared edge) go to the face
-/// whose own surface passes nearer `p`.
+/// The face nearest `p` and its distance; ties (a point nearest a shared edge) go to the face whose
+/// own region holds the foot of `p` on its surface, as near as it does: the one whose nearest point
+/// is least farther than its surface's. Just inside a hole's rim, in the plane of the top, that is
+/// the hole's wall, not the top whose surface runs through the point where the top is not.
 pub fn nearest_face(b: &Brep, p: Point3) -> Result<Option<(FaceId, f64)>> {
     let mut best: Option<(f64, f64, FaceId)> = None;
     for f in b.face_ids() {
@@ -160,7 +162,7 @@ pub fn nearest_face(b: &Brep, p: Point3) -> Result<Option<(FaceId, f64)>> {
         let off = s.eval(uv.x, uv.y).dist(p);
         let better = match best {
             None => true,
-            Some((bd, boff, _)) => d < bd - crate::tol::LINEAR || (d <= bd + crate::tol::LINEAR && off < boff),
+            Some((bd, boff, _)) => d < bd - crate::tol::LINEAR || (d <= bd + crate::tol::LINEAR && d - off < bd - boff),
         };
         if better {
             best = Some((d, off, f));
@@ -205,9 +207,9 @@ pub fn radius_collapses(b: &Brep, only: Option<&[FaceId]>, by: f64, into: bool) 
     })
 }
 
-/// Whether an inward shell of `thickness` makes two flat walls cross: two planar faces (not
-/// `open`) facing each other across material, nearer than twice the thickness, whose boxes
-/// overlap across the gap.
+/// Whether an inward shell of `thickness` makes two flat walls meet or cross: two planar faces (not
+/// `open`) facing each other across material, no farther apart than twice the thickness, whose
+/// boxes overlap across the gap.
 pub fn walls_cross(b: &Brep, open: &[FaceId], thickness: f64) -> bool {
     use crate::geom::Surface;
     let planes: Vec<(FaceId, Point3, Vec3)> = b
@@ -227,7 +229,8 @@ pub fn walls_cross(b: &Brep, open: &[FaceId], thickness: f64) -> bool {
                 return false;
             }
             let d = -(q - o).dot(n);
-            if d <= 0.0 || d >= gap {
+            // Walls that only meet leave no cavity between them either: as bad as crossing.
+            if d <= 0.0 || d > gap + crate::tol::LINEAR {
                 return false;
             }
             let (bf, bg) = (measure::face_bbox(b, f), measure::face_bbox(b, g));
@@ -356,12 +359,20 @@ pub fn breaks_requirement(op: &str, detail: &str) -> bool {
     let is = |ops: &[&str]| ops.contains(&op);
     // sizes, radii, heights and blend sizes must be positive (block, cylinder, sphere, cone, every blend)
     detail.contains("must be positive")
+        // every number given must be finite (every op; not a computed spline's knots)
+        || detail.ends_with("must be finite")
+        // a slab's heights must all lie above its floor
+        || (op == "slab" && detail.contains("above its floor"))
+        // a sweep's path needs a leg
+        || (op == "sweep" && detail.contains("needs a leg"))
         // a radius or distance must fit the faces it lies on (every fillet and chamfer)
         || (is(BLENDS)
             && (detail.contains("takes a whole face")
                 || detail.contains("runs past the end of an edge")
                 || detail.contains("does not fit on its faces")
-                || detail.contains("the faces are parallel")))
+                || detail.contains("the faces are parallel")
+                // a blend needs an edge to work on
+                || detail.contains("no edges to")))
         // a cone needs a positive height and a radius at one end at least
         || (op == "cone" && detail.contains("needs a positive height"))
         // an extrusion's height must be positive
@@ -376,4 +387,55 @@ pub fn breaks_requirement(op: &str, detail: &str) -> bool {
         || (op == "torus" && detail.contains("clear of its axis"))
         // a shell's walls must not meet; a moved face may not pass the face it meets
         || (is(&["shell", "offset_faces", "move_faces"]) && detail.contains("turns inside out"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Point3, Vec3, breaks_requirement};
+
+    #[test]
+    fn the_face_nearest_a_point_just_inside_a_holes_rim_is_the_holes_wall() {
+        use crate::{boolean, geom::Surface, math::Frame, primitive};
+        let plate = primitive::block(&Frame::WORLD, Vec3::new(30.0, 30.0, 2.0), "p").unwrap();
+        let drill = primitive::cylinder(&Frame::from_axis(Vec3::new(15.0, 15.0, -1.0), Vec3::Z).unwrap(), 10.0, 4.0, "d").unwrap();
+        let b = boolean::difference(&plate, &drill).unwrap();
+        for turn in [0.1f64, 1.3, 2.9, 4.4] {
+            for (r, wall) in [(10.0 - 0.005, true), (10.0 + 0.005, false)] {
+                let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
+                let (f, d) = super::nearest_face(&b, p).unwrap().unwrap();
+                let is_wall = matches!(b.face(f).surface, Surface::Cylinder(_));
+                assert_eq!(is_wall, wall, "at {turn}, radius {r}");
+                assert!((d - if wall { 0.005 } else { 0.0 }).abs() < 1e-9, "at {turn}, radius {r}: {d}"); // tol: the rim's own
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "probe: yack-acceptance springrep_one_call:124, a shell whose walls meet (w-m11)"]
+    fn shell_whose_walls_meet_probe() {
+        use crate::{math::Frame, primitive};
+        let blk = primitive::block(&Frame::WORLD, Vec3::new(10.0, 8.0, 6.0), "b").unwrap();
+        let top = blk.face_ids().find(|&f| {
+            let s = &blk.face(f).surface;
+            let uv = s.project(Point3::new(5.0, 4.0, 6.0));
+            s.eval(uv.x, uv.y).dist(Point3::new(5.0, 4.0, 6.0)) < 1e-9 && crate::measure::face_bbox(&blk, f).min.z > 5.9
+        }).unwrap();
+        for t in [3.9, 3.999, 4.0, 4.001, 4.5] {
+            match crate::facade::edit::shell(&blk, &[top], t) {
+                Ok(b) => eprintln!("t {t}: Ok, {} faces, volume {}, walls_cross {}", b.face_ids().count(), crate::measure::volume(&b), super::walls_cross(&blk, &[top], t)),
+                Err(e) => eprintln!("t {t}: Err {e:?} breaks_requirement {} walls_cross {}", super::breaks_requirement("shell", &e.to_string()), super::walls_cross(&blk, &[top], t)),
+            }
+        }
+    }
+
+    #[test]
+    fn a_blend_with_no_edges_breaks_a_requirement() {
+        assert!(breaks_requirement("fillet", "no edges to round"));
+        assert!(breaks_requirement("chamfer", "no edges to chamfer"));
+        assert!(!breaks_requirement("shell", "no edges to round"));
+        assert!(breaks_requirement("extrude", "extrusion distance must be finite"));
+        assert!(breaks_requirement("slab", "a slab's heights must all lie above its floor"));
+        assert!(breaks_requirement("sweep", "a sweep's path needs a leg"));
+        assert!(!breaks_requirement("loft", "B-spline knots must be finite and not decrease"));
+    }
 }

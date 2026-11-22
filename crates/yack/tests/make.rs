@@ -112,8 +112,7 @@ fn a_revolved_rectangle_is_a_tube() {
 #[test]
 fn a_loft_between_a_square_and_its_half() {
     let sq = Profile::rectangle([-2.0, -2.0], [2.0, 2.0]).unwrap();
-    let half = Profile::rectangle([-1.0, -1.0], [1.0, 1.0]).unwrap();
-    let s = loft(&Frame::WORLD, &sq, 0.5, 3.0, &half).unwrap();
+    let s = loft(&Frame::WORLD, &sq, 0.5, 3.0).unwrap();
     assert!(s.check().is_empty());
     // a frustum of a square pyramid: h/3 (A1 + A2 + sqrt(A1 A2))
     close(s.volume(), 3.0 / 3.0 * (16.0 + 4.0 + 8.0));
@@ -225,7 +224,7 @@ fn a_drafted_extrude_one_and_both_ways() {
     assert!(down.check().is_empty(), "{:?}", down.check());
     assert_eq!(down.classify(&[[0.0, 0.0, -5.0]]).unwrap(), vec![Side::In]);
     assert!((down.volume() - want).abs() < 1e-6 * want, "{} vs {want}", down.volume());
-    let (a, b) = (one.bounding_box().unwrap(), down.bounding_box().unwrap());
+    let (a, b) = (one.bbox().unwrap(), down.bbox().unwrap());
     assert!((a.min.z - 0.0).abs() < 1e-9 && (b.max.z - 0.0).abs() < 1e-9 && (b.min.z + 10.0).abs() < 1e-9, "{a:?} {b:?}");
 }
 
@@ -241,7 +240,7 @@ fn a_negative_height_extrudes_the_other_way() {
     // a mirror flips handedness: the reversed solid must still be valid with outward faces
     assert!(down.check().is_empty(), "{:?}", down.check());
     assert_eq!(down.betti(), [1, 0, 0]);
-    let (a, b) = (up.bounding_box().unwrap(), down.bounding_box().unwrap());
+    let (a, b) = (up.bbox().unwrap(), down.bbox().unwrap());
     // the frame's z is −y: +h runs to y = −3, −h to y = +3; x and z (the outline) alike
     assert!((a.min.y + 3.0).abs() < 1e-9 && (b.max.y - 3.0).abs() < 1e-9, "{a:?} {b:?}");
     assert!((a.min.x - b.min.x).abs() < 1e-9 && (a.max.x - b.max.x).abs() < 1e-9 && (a.max.z - b.max.z).abs() < 1e-9);

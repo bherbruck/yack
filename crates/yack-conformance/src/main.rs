@@ -116,8 +116,8 @@ impl Kernel for Yack {
                 Primitive::Slab { size, knots_u, knots_v, heights, .. } => {
                     make::slab(f, *size, knots_u, knots_v, heights)
                 }
-                Primitive::Loft { profile, scale, height, top, .. } => {
-                    make::loft(f, &sketch(profile)?, *scale, *height, &sketch(top)?)
+                Primitive::Loft { profile, scale, height, .. } => {
+                    make::loft(f, &sketch(profile)?, *scale, *height)
                 }
             }
             .map_err(r)
@@ -265,7 +265,7 @@ impl Kernel for Yack {
     }
     fn transform(&self, s: &Solid, m: [[f64; 4]; 3]) -> Res<Solid> {
         rec((|| -> Res<Solid> {
-            s.transform(&Similarity::from_rows(m).map_err(r)?).map_err(r)
+            s.transform(Similarity::from_rows(m).map_err(r)?).map_err(r)
         })())
     }
     fn affine(&self, s: &Solid, m: [[f64; 4]; 3]) -> Res<Solid> {
@@ -323,7 +323,7 @@ impl Kernel for Yack {
         Ok(s.inertia())
     }
     fn bounding_box(&self, s: &Solid) -> Res<[V; 2]> {
-        let b = s.bounding_box().ok_or_else(|| Refusal::invalid("the empty solid has no box"))?;
+        let b = s.bbox().ok_or_else(|| Refusal::invalid("the empty solid has no box"))?;
         Ok([b.min.to_array(), b.max.to_array()])
     }
     fn betti(&self, s: &Solid) -> Res<[u64; 3]> {

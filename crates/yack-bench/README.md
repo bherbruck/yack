@@ -22,8 +22,8 @@ the limit is 10. Documented exceptions:
 | swept/tumbling-torus-crossed-union | 12 | two sweeps of one torus (A and B), then the boolean |
 | swept/tumbling-torus-crossed-difference | 12 | two sweeps of one torus (A and B), then the boolean |
 | swept/tumbling-torus-crossed-intersection | 12 | two sweeps of one torus (A and B), then the boolean |
-| swept/straight-bevel-gear-cut-by-its-pinion | 18 | data: the pinion tooth's trapezoid scaled to the inner and outer cone planes |
-| swept/hypoid-gear-cut-by-its-pinion | 20 | data: the offset pinion tooth's trapezoid and frame angle |
+| swept/straight-bevel-gear-cut-by-its-pinion | 17 | data: the pinion tooth's trapezoid at the inner cone plane, lofted to the outer one by its scale |
+| swept/hypoid-gear-cut-by-its-pinion | 19 | data: the offset pinion tooth's trapezoid and frame angle |
 | swept/worm-wheel-hobbed-by-its-worm | 14 | data: the worm thread's trapezoidal section |
 | swept/helicon-face-gear-hobbed-by-its-worm | 15 | data: the worm thread's trapezoidal section |
 | swept/spiroid-face-gear-hobbed-by-its-worm | 17 | data: the tapered thread's section on its pitch cone |

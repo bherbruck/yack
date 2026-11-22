@@ -61,7 +61,7 @@ fn a_split_cube() {
 #[test]
 fn queries_on_a_block() {
     let a = cube([1.0, 2.0, 3.0]);
-    let bb = a.bounding_box().unwrap();
+    let bb = a.bbox().unwrap();
     assert!((bb.min.x - 1.0).abs() < 1e-9 && (bb.max.z - 5.0).abs() < 1e-9);
     assert_eq!(a.classify(&[[2.0, 3.0, 4.0], [9.0, 9.0, 9.0], [1.0, 3.0, 4.0]]).unwrap(), vec![Side::In, Side::Out, Side::On]);
     let hits = a.raycast(&[Ray::new([0.0, 3.0, 4.0], [1.0, 0.0, 0.0]).unwrap()]).unwrap();
@@ -75,7 +75,7 @@ fn queries_on_a_block() {
 #[test]
 fn closest_pairs_meshes_and_vertices() {
     let (a, b) = (cube([0.0; 3]), cube([5.0, 0.0, 0.0]));
-    let (d, pa, pb) = a.closest_pair(&b).unwrap();
+    let yack::Closest { distance: d, on_self: pa, on_other: pb } = a.closest_pair(&b).unwrap();
     close(d, 3.0);
     close(pa.x, 2.0);
     close(pb.x, 5.0);
@@ -100,7 +100,7 @@ fn a_spline_loop_through_points_extrudes() {
 #[test]
 fn nearest_faces_edge_parameters_and_closest_with_insides() {
     let a = cube([0.0; 3]);
-    let (f, d) = a.nearest_face([1.0, 1.0, 5.0]).unwrap();
+    let yack::NearestFace { face: f, distance: d } = a.nearest_face([1.0, 1.0, 5.0]).unwrap();
     close(d, 3.0);
     assert!(a.face(f).unwrap().normal().unwrap().z > 0.99);
     // inside counts: a held point is its own nearest point

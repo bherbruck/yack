@@ -9,6 +9,7 @@
 // `Profile::rect` is written as `Profile::rectangle(min, max)`; the offset's names are an API gap
 // (`offset` makes faces `named` cannot reach).
 //! Chamfers and fillets of edges picked by id: the result's faces keep the names they had.
+#![allow(clippy::unwrap_used)] // helper fns outside #[test] unwrap test geometry
 
 use std::collections::BTreeMap;
 use std::f64::consts::PI;

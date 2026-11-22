@@ -40,6 +40,9 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn fillet(&self, edges: &[EdgeId], radius: f64) -> Result<Solid> {
+        if edges.is_empty() {
+            return Err(crate::Error::invalid("fillet", "edges", "no edges to round"));
+        }
         firewall::run("fillet", || {
             let feature = engine::feature();
             let op = "fillet";
@@ -246,6 +249,9 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> {
+        if edges.is_empty() {
+            return Err(crate::Error::invalid("chamfer", "edges", "no edges to bevel"));
+        }
         firewall::run("chamfer", || {
             let feature = engine::feature();
             let op = "chamfer";
@@ -272,6 +278,9 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn chamfer_two(&self, edge: EdgeId, face: FaceId, along_face: f64, along_other: f64) -> Result<Solid> {
+        if !self.faces_of(edge)?.contains(&face) {
+            return Err(crate::Error::invalid("chamfer_two", "face", "the face is not one of the edge's two faces"));
+        }
         firewall::run("chamfer_two", || {
             let feature = engine::feature();
             let op = "chamfer_two";

@@ -156,7 +156,7 @@ fn write_stl(path: &str, mesh: &Tris) -> std::io::Result<()> {
 /// twentieth of its thickness, volume over area, where less), that bounds its exact volume to
 /// 1/100 (the harness asks 1/50).
 fn meshed(solid: &Solid, volume: f64, area: f64) -> yack::Result<Tris> {
-    let size = solid.bounding_box().map_or(1.0, |b| {
+    let size = solid.bbox().map_or(1.0, |b| {
         let (lo, hi) = (b.min, b.max);
         ((hi.x - lo.x).powi(2) + (hi.y - lo.y).powi(2) + (hi.z - lo.z).powi(2)).sqrt()
     });

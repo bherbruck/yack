@@ -18,7 +18,7 @@ fn valid(b: &Solid) {
 }
 
 fn face_through(b: &Solid, p: [f64; 3]) -> FaceId {
-    let (f, d) = b.nearest_face(p).unwrap();
+    let yack::NearestFace { face: f, distance: d } = b.nearest_face(p).unwrap();
     assert!(d < 1e-9, "no face through {p:?}: {d}");
     f
 }
@@ -46,7 +46,7 @@ fn a_bend_turns_about_the_axis_it_is_given() {
     valid(&b);
     let want = 4.0 * (5.0 + 4.0 * FRAC_PI_2);
     assert!((b.volume() - want).abs() < 1e-9 * want);
-    let bb = b.bounding_box().unwrap();
+    let bb = b.bbox().unwrap();
     assert!((bb.min.y + 4.0).abs() < 1e-9 && (bb.max.y - 1.0).abs() < 1e-9);
     assert!((bb.max.z - 10.0).abs() < 1e-9 && (bb.max.x - 1.0).abs() < 1e-9);
     // API GAP: springrep refuses an arc about the path's own direction (axis z); a §4.3 PathPiece
@@ -73,7 +73,7 @@ fn a_sweep_along_lines_and_an_arc_has_its_profile_s_area_times_the_path() {
     let v = b.volume();
     assert!((v - 2.0 * length).abs() < 1e-9, "{v}");
     // The bend ends 4 out and 4 up from its start, the profile 1 to either side; 3 more along x.
-    let hi = b.bounding_box().unwrap().max;
+    let hi = b.bbox().unwrap().max;
     assert!((hi.x - 7.0).abs() < 1e-9 && (hi.z - 10.0).abs() < 1e-9, "{hi:?}");
 }
 
@@ -106,7 +106,7 @@ fn a_path_sweep_along_a_straight_path_is_a_prism_or_a_twisted_one() {
         assert!((v - 12.0).abs() < 1e-7, "{v}");
         // Its top is the rectangle turned: 1 wide along x and 2 along y.
         let top = face_through(&twisted, [0.0, 0.9, 6.0]);
-        assert!(twisted.nearest_face([0.9, 0.0, 6.0]).map_or(true, |(f, d)| f != top || d > 1e-6));
+        assert!(twisted.nearest_face([0.9, 0.0, 6.0]).map_or(true, |n| n.face != top || n.distance > 1e-6));
     }
 }
 

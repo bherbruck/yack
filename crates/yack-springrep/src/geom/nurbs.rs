@@ -7,6 +7,9 @@
 
 use std::{cell::RefCell, sync::OnceLock};
 
+mod seeds;
+use seeds::Seeds;
+
 use crate::{
     Result,
     error::invalid,
@@ -844,7 +847,7 @@ pub struct NurbsSurface {
     u_period: Option<f64>,
     v_period: Option<f64>,
     /// Sample points of the surface that seed global projection, built on first use.
-    seeds: OnceLock<(Vec<(Vec2, Point3)>, f64)>,
+    seeds: OnceLock<Seeds>,
     /// Small patches whose boxes together hold the surface, built on first use.
     patches: OnceLock<Vec<Patch>>,
     /// Each patch as a Bézier patch, built on first use.
@@ -1189,9 +1192,9 @@ impl NurbsSurface {
         // surface, and each span polynomial's homogeneous coefficients map as the control points
         // do, `(R·c + t·w, w)`.
         let seeds = OnceLock::new();
-        if let Some((pts, h)) = self.seeds.get() {
-            let moved = pts.iter().map(|&(uv, p)| (uv, t.point(p))).collect();
-            let _ = seeds.set((moved, *h));
+        if let Some(old) = self.seeds.get() {
+            let moved = old.pts.iter().map(|&(uv, p)| (uv, t.point(p))).collect();
+            let _ = seeds.set(Seeds::new(moved, old.spacing));
         }
         let polys = OnceLock::new();
         if let Some(sp) = self.polys.get() {
@@ -1468,12 +1471,8 @@ impl NurbsSurface {
         })
     }
 
-    fn seeds(&self) -> &[(Vec2, Point3)] {
-        &self.seed_grid().0
-    }
-
     /// The seeds, and the spacing they were laid out at along the surface.
-    fn seed_grid(&self) -> &(Vec<(Vec2, Point3)>, f64) {
+    fn seed_grid(&self) -> &Seeds {
         self.seeds.get_or_init(|| {
             let samples = |b: &Basis, total: usize| -> Vec<f64> {
                 let spans = b.spans();
@@ -1521,7 +1520,7 @@ impl NurbsSurface {
                     out.push((Vec2::new(u, v), self.eval(u, v)));
                 }
             }
-            (out, h)
+            Seeds::new(out, h)
         })
     }
 
@@ -1938,51 +1937,11 @@ impl NurbsSurface {
         )
     }
 
-    /// The parameters of the surface point nearest `p`, periodic parameters in the knot domain.
-    pub fn project(&self, p: Point3) -> Vec2 {
-        // The four nearest seeds at distinct points, nearest first: a pole's row of seeds is one
-        // point, and four of them would be one search. A mapped surface's pole row agrees only to
-        // rounding, so one point is any within a millionth of the seeds' spacing.
-        let same = (1e-6 * self.seed_grid().1).powi(2);
-        let mut near = [(f64::INFINITY, Vec2::ZERO); 4];
-        let mut at = [Point3::ZERO; 4];
-        for &(uv, q) in self.seeds() {
-            let d2 = (q - p).norm2();
-            let taken = |i: usize| near[i].0.is_finite() && (at[i] - q).norm2() <= same;
-            if d2 < near[3].0 && !(0..4).any(taken) {
-                let mut i = 3;
-                while i > 0 && near[i - 1].0 > d2 {
-                    near[i] = near[i - 1];
-                    at[i] = at[i - 1];
-                    i -= 1;
-                }
-                near[i] = (d2, uv);
-                at[i] = q;
-            }
-        }
-        let mut best = (f64::INFINITY, Vec2::ZERO);
-        for &(d2, seed) in &near {
-            if d2.is_infinite() {
-                break;
-            }
-            let (uv, d, settled) = self.search(p, seed, None);
-            if d < best.0 {
-                best = (d, uv);
-            }
-            // A foot this near the surface is the nearest, as `project_near` takes it: the seed
-            // grid resolves the surface, so no other sheet comes that near it. A search that
-            // stopped short of a foot says nothing of the kind.
-            if settled && best.0 <= self.near_radius() {
-                break;
-            }
-        }
-        best.1
-    }
 
     /// How near the surface a point must lie for [`NurbsSurface::project_near`] to take the point
     /// Newton finds from its hint as the nearest.
     pub fn near_radius(&self) -> f64 {
-        tol::LINEAR.max(NEAR_SHARE * self.seed_grid().1)
+        tol::LINEAR.max(NEAR_SHARE * self.seed_grid().spacing)
     }
 
     /// The parameters of the surface point nearest `p`, found from `hint` when the surface passes

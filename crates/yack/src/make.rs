@@ -303,23 +303,24 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
     firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sewn(op, patches) }]))
 }
 
-/// A ruled loft from `profile` at z = 0 to `top` at z = `height`. As in the protocol, `top` is
-/// `profile` scaled by `scale` about the frame's z axis, sent ready-made; yack lofts to `top` as
-/// given and does not scale it again.
+/// A tapered post: `profile` at z = 0 joined by straight lines to its copy scaled by `scale`
+/// about the frame's z axis at z = `height` (a scale of 1 is an extrusion; below 1 it narrows
+/// upward). `scale` and `height` must be positive.
 ///
 /// ```
 /// use yack::prelude::*;
-/// // a 6 × 6 square up 6 to the same square at half the size (sent ready-made): a frustum,
-/// // h/3·(A₁ + A₂ + √(A₁A₂)) = 2·(36 + 9 + 18)
-/// let (bottom, top) = (Profile::rectangle([-3.0, -3.0], [3.0, 3.0])?, Profile::rectangle([-1.5, -1.5], [1.5, 1.5])?);
-/// let f = loft(&Frame::WORLD, &bottom, 0.5, 6.0, &top)?;
+/// // a 6 × 6 square up 6 to half its size: a frustum, h/3·(A₁ + A₂ + √(A₁A₂)) = 2·(36 + 9 + 18)
+/// let f = loft(&Frame::WORLD, &Profile::rectangle([-3.0, -3.0], [3.0, 3.0])?, 0.5, 6.0)?;
 /// assert!((f.volume() - 126.0).abs() < 1e-6 * 126.0);
 /// # Ok::<(), yack::Error>(())
 /// ```
-pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64, top: &Profile) -> Result<Solid> {
+pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64) -> Result<Solid> {
+    if !(scale.is_finite() && scale > 0.0) {
+        return Err(Error::invalid("loft", "scale", format!("scale {scale} is not positive")));
+    }
+    let top = &profile.scaled("loft", scale)?;
     firewall::run("loft", || {
         ladder::two("loft", &|| {
-        let _ = scale; // recorded by the protocol; `top` is already the scaled copy
         let feature = engine::feature();
         let op = "loft";
         let up = Frame::new(frame.point([0.0, 0.0, height]), frame.x(), frame.y(), frame.z()).map_err(|e| e.in_op(op))?;
@@ -402,6 +403,9 @@ pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Solid> {
+    if path.is_empty() {
+        return Err(Error::invalid("sweep", "path", "no path pieces to sweep along"));
+    }
     firewall::run("sweep", || {
         ladder::two("sweep", &|| {
         let feature = engine::feature();
@@ -503,7 +507,7 @@ pub fn empty() -> Solid {
 /// An extrusion to the other side of the frame's plane: `positive`'s mirror image in that plane.
 fn reversed(op: &'static str, frame: &Frame, positive: Result<Solid>) -> Result<Solid> {
     let m = crate::Similarity::mirror(frame.origin(), frame.z()).map_err(|e| Error { op, ..e })?;
-    positive?.transform(&m)
+    positive?.transform(m)
 }
 
 /// One cadrs rung behind the firewall: the constructors only cadrs builds.

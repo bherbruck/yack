@@ -50,7 +50,7 @@ fn shell_outward_grows_a_wall_outside() {
     let s = brick();
     let h = s.shell_outward(&[top(&s)], 1.0).unwrap();
     assert!(h.check().is_empty());
-    let bb = h.bounding_box().unwrap();
+    let bb = h.bbox().unwrap();
     close(bb.min.x, -1.0);
     close(bb.max.x, 11.0);
     close(bb.min.z, -1.0);
@@ -95,12 +95,12 @@ fn draft_tilts_the_sides() {
 fn maps_scale_volume_by_their_determinant() {
     let s = brick();
     let twice = Similarity::from_rows([[2.0, 0.0, 0.0, 1.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]]).unwrap();
-    close(s.transform(&twice).unwrap().volume(), 8.0 * 6000.0);
+    close(s.transform(twice).unwrap().volume(), 8.0 * 6000.0);
     let stretch = Affine::from_rows([[3.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
     let a = s.transform_affine(&stretch).unwrap();
     assert!(a.check().is_empty());
     close(a.volume(), 3.0 * 6000.0);
-    assert!(empty().transform(&twice).unwrap().is_empty());
+    assert!(empty().transform(twice).unwrap().is_empty());
 }
 
 #[test]
@@ -330,4 +330,21 @@ fn a_sequence_of_sequences_is_one_sequence() {
     let nested = Motion::then(vec![Motion::then(vec![Motion::slide([5.0, 0.0, 0.0]), Motion::slide([0.0, 3.0, 0.0])]), Motion::slide([0.0, 0.0, 2.0])]);
     assert_eq!(flat, nested);
     assert_eq!(ball().swept(&flat).unwrap().digest(), ball().swept(&nested).unwrap().digest());
+}
+
+#[test]
+fn an_outward_shell_keeps_the_blocks_face_names_on_the_inside() {
+    let b = block(&Frame::at([-10.0, -10.0, 0.0]), [20.0, 20.0, 10.0]).unwrap().named("block");
+    let s = b.shell_outward(&[b.face_by("block", Role::End).unwrap()], 2.0).unwrap();
+    let roles: Vec<String> = s.faces().iter().map(|&f| format!("{:?}", s.face(f).unwrap().roles())).collect();
+    // which rung built it (strategy() names the engine that answers, which a carried cadrs result
+    // shares with springrep's own)
+    #[cfg(feature = "bakeoff")]
+    let by = yack::bakeoff::built_by(&s);
+    #[cfg(not(feature = "bakeoff"))]
+    let by = "(build with --features bakeoff)";
+    assert_eq!(s.faces_by("block", Role::Side("x_min".into())).len(), 1, "built by {by}, faces {roles:?}");
+    assert_eq!(s.faces_by("block", Role::Start).len(), 1, "built by {by}, faces {roles:?}");
+    // the rim, where the open top was, keeps the top's name
+    assert_eq!(s.faces_by("block", Role::End).len(), 1, "built by {by}, faces {roles:?}");
 }

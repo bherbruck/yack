@@ -15,8 +15,7 @@ pub fn build() -> Result<Solid> {
     let trap = |k: f64| [[2.5, -w(2.5)], [2.5, w(2.5)], [-2.5, w(-2.5)], [-2.5, -w(-2.5)]].map(|[u, v]| [u * k, v * k]);
     let (inner, outer) = (ae - 12.0, ae + 2.0);
     let foot = Frame::new(g.map(|c| c * inner), d, [0.0, -1.0, 0.0], g)?;
-    let (low, high) = (Profile::polygon(&trap(inner / ae))?, Profile::polygon(&trap(outer / ae))?);
-    let tooth = loft(&foot, &low, outer / inner, outer - inner, &high)?;
+    let tooth = loft(&foot, &Profile::polygon(&trap(inner / ae))?, outer / inner, outer - inner)?;
     // seen from the blank: turned by t about the x axis, then by t/2 about the z axis, t from −60° to 60°
     let pinion = Motion::turn(Point3::ORIGIN, Dir3::X, deg(-60.0), deg(60.0));
     let gear = Motion::turn(Point3::ORIGIN, Dir3::Z, deg(-30.0), deg(30.0));

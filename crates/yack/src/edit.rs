@@ -76,6 +76,9 @@ impl Solid {
     /// ```
     pub fn offset_faces(&self, faces: &[FaceId], distance: f64) -> Result<Solid> {
         let op = "offset_faces";
+        if faces.is_empty() {
+            return Err(Error::invalid(op, "faces", "no faces to offset"));
+        }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
         firewall::run(op, || {
@@ -181,6 +184,9 @@ impl Solid {
     /// ```
     pub fn move_faces(&self, faces: &[FaceId], by: &Rigid) -> Result<Solid> {
         let op = "move_faces";
+        if faces.is_empty() {
+            return Err(Error::invalid(op, "faces", "no faces to move"));
+        }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
         firewall::run(op, || {
@@ -204,6 +210,9 @@ impl Solid {
     /// ```
     pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> {
         let op = "thicken";
+        if faces.is_empty() {
+            return Err(Error::invalid(op, "faces", "no faces to thicken"));
+        }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
         let sharp = join == Join::Sharp;
@@ -246,10 +255,15 @@ impl Solid {
                 op,
                 &|| {
                     let b = self.need(op)?;
+                    // the stated requirement (a shell's walls must not meet), checked before springrep
+                    // tries to build: Invalid, so it vetoes a cadrs build too; the two checks after
+                    // the build are springrep's limits, a decline
+                    if api::walls_cross(b, &f, thickness) {
+                        return Err(Error::invalid(op, "thickness", "the walls would meet: thicker than half the part"));
+                    }
                     let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
-                    if api::radius_collapses(b, None, thickness, true) || api::walls_cross(b, &f, thickness) || api::open_at_concave_edge(b, &f) {
-                        return refuse(out, op, "the moved walls would cross (a wall thinner than twice the thickness, or a round face of radius under it)",
-                        );
+                    if api::radius_collapses(b, None, thickness, true) || api::open_at_concave_edge(b, &f) {
+                        return refuse(out, op, "a round face of radius under the thickness would close, or an open face meets a concave edge");
                     }
                     Ok(out)
                 },
@@ -346,6 +360,9 @@ impl Solid {
     /// ```
     pub fn draft(&self, faces: &[FaceId], origin: impl Into<Point3>, pull: impl Into<Vec3>, angle: Angle) -> Result<Solid> {
         let op = "draft";
+        if faces.is_empty() {
+            return Err(Error::invalid(op, "faces", "no faces to draft"));
+        }
         let (origin, pull) = (origin.into(), pull.into());
         if !origin.is_finite() {
             return Err(Error::invalid(op, "origin", "not finite"));
@@ -386,20 +403,24 @@ impl Solid {
         firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }]))
     }
 
-    /// The image under a similarity (rigid, uniform scale, mirror).
+    /// The image under a similarity (rigid, uniform scale, mirror): a [`Similarity`], or a
+    /// [`Rigid`](crate::Rigid) motion as it is.
     ///
     /// ```
     /// use yack::prelude::*;
     /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
-    /// let turned = b.transform(&Similarity::from_rows([[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])?)?;
+    /// let turned = b.transform(Rigid::rotation([0.0; 3], [0.0, 0.0, 1.0], deg(90.0))?)?;
     /// assert!((turned.volume() - 1000.0).abs() < 1e-9);
+    /// let mirrored = b.transform(&Similarity::mirror([0.0; 3], [1.0, 0.0, 0.0])?)?;
+    /// assert!((mirrored.volume() - 1000.0).abs() < 1e-9);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn transform(&self, m: &Similarity) -> Result<Solid> {
+    pub fn transform(&self, m: impl Into<Similarity>) -> Result<Solid> {
         let op = "transform";
         if self.is_empty() {
             return Ok(Solid::empty());
         }
+        let m: Similarity = m.into();
         let rows = m.rows();
         firewall::run(op, || {
             ladder::two(op, &|| engine::solid(op, sr::transform(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))

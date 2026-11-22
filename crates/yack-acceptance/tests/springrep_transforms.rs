@@ -72,7 +72,7 @@ fn moved(m: [[f64; 3]; 3], t: [f64; 3], p: Point3) -> Point3 {
 /// `b` moved by the similarity `m`, `t`, of uniform scale `s`, checked against its own measures
 /// moved by hand.
 fn assert_moved(b: &Solid, m: [[f64; 3]; 3], t: [f64; 3], s: f64) -> Solid {
-    let out = b.transform(&Similarity::from_rows(rows(m, t)).unwrap()).unwrap();
+    let out = b.transform(Similarity::from_rows(rows(m, t)).unwrap()).unwrap();
     let issues = out.check();
     assert!(issues.is_empty(), "{issues:?}");
     let rel = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want.abs().max(1.0);
@@ -137,7 +137,7 @@ fn a_part_scaled_turned_and_mirrored_at_once() {
 fn a_part_mirrored_and_joined_to_itself() {
     // The part across x = 2 overlaps it over x 1..3: the union and intersection add up to both.
     let a = part();
-    let b = a.transform(&Similarity::from_rows(rows(MIRROR_X, [4.0, 0.0, 0.0])).unwrap()).unwrap();
+    let b = a.transform(Similarity::from_rows(rows(MIRROR_X, [4.0, 0.0, 0.0])).unwrap()).unwrap();
     let (u, i) = (a.union(&b).unwrap(), a.intersection(&b).unwrap());
     for x in [&u, &i] {
         assert!(x.check().is_empty());

@@ -671,26 +671,24 @@ impl VertexRef {
     }
 }
 
-/// How the faces of a solid came from its inputs.
-///
-/// ```
-/// use yack::prelude::*;
-/// let b = block(&Frame::WORLD, [1.0, 1.0, 1.0])?;
-/// let _ = b.history().is_empty();
-/// # Ok::<(), yack::Error>(())
-/// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct History {
-    _private: (),
+/// Where two solids come nearest, from [`Solid::closest_pair`] (its example is there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Closest {
+    /// The least distance between them (mm); zero where they touch or overlap.
+    pub distance: f64,
+    /// The point of the solid asked that is nearest the other.
+    pub on_self: Point3,
+    /// The point of the other solid that is nearest it.
+    pub on_other: Point3,
 }
 
-impl History {
-    /// Whether no face has a recorded origin.
-    ///
-    /// (Its example is on [`History`].)
-    pub fn is_empty(&self) -> bool {
-        true
-    }
+/// The face of a solid nearest a point, from [`Solid::nearest_face`] (its example is there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NearestFace {
+    /// The face.
+    pub face: FaceId,
+    /// Its distance from the point (mm).
+    pub distance: f64,
 }
 
 /// One validity problem found by [`Solid::check`].
@@ -752,8 +750,9 @@ impl Mesh {
         yack_math::mesh_volume(&self.positions, &self.triangles)
     }
 
-    /// Whether every directed triangle edge is matched by exactly one opposite one: the mesh is
-    /// closed and consistently oriented.
+    /// Whether every directed triangle edge is matched by as many opposite ones (counting each
+    /// use): the mesh is closed and consistently oriented. An edge where a solid touches itself,
+    /// used by four triangles in two opposite pairs, is closed.
     ///
     /// ```
     /// use yack::prelude::*;
@@ -768,7 +767,7 @@ impl Mesh {
                 *count.entry((p, q)).or_default() += 1;
             }
         }
-        count.iter().all(|(&(p, q), &n)| n == 1 && count.get(&(q, p)) == Some(&1))
+        count.iter().all(|(&(p, q), &n)| count.get(&(q, p)) == Some(&n))
     }
 }
 

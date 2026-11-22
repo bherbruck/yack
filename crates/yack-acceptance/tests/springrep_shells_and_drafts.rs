@@ -10,6 +10,7 @@
 // origin 0 and pull +z; the trailing unify is dropped (yack results are already merged); springrep
 // circles take a diameter, yack's a radius; edit::shell(.., Wall::Outward) is Solid::shell_outward;
 // face_count is faces().len().
+#![allow(clippy::unwrap_used)] // helper fns outside #[test] unwrap test geometry
 
 use std::f64::consts::{PI, TAU};
 

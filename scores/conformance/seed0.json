@@ -3373,7 +3373,7 @@
   "stretches-26c9f818c4d83a0c": {"outcome": "pass", "tier": "1e-7", "time_ms": 84.0},
   "stretches-2c57b1c2d84f59d2": {"outcome": "pass", "tier": "1e-7", "time_ms": 80.2},
   "stretches-367282b78a936fb5": {"outcome": "pass", "tier": "1e-7", "time_ms": 83.4},
-  "stretches-369ef83ce9d5f331": {"outcome": "fail", "tier": "fail", "time_ms": 117.8},
+  "stretches-369ef83ce9d5f331": {"outcome": "pass", "tier": "1e-7", "time_ms": 68.7},
   "stretches-3a2aa9d285d06aa8": {"outcome": "pass", "tier": "1e-7", "time_ms": 46.3},
   "stretches-3b1b6efa55a29035": {"outcome": "pass", "tier": "1e-7", "time_ms": 47.8},
   "stretches-3bff243490886af2": {"outcome": "pass", "tier": "1e-7", "time_ms": 63.4},

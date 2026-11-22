@@ -549,7 +549,7 @@ fn a_chamfer_of_two_distances_sets_the_first_back_on_the_face_named() {
         assert!((cut.volume() - volume).abs() < 1e-9);
         // Where each face now ends: a point just inside the kept part is on it, one just past
         // the chamfer's edge is not.
-        let on = |p: [f64; 3]| cut.nearest_face(p).is_ok_and(|(_, d)| d < 1e-9);
+        let on = |p: [f64; 3]| cut.nearest_face(p).is_ok_and(|n| n.distance < 1e-9);
         assert!(on([10.0 - on_top - 0.01, 4.0, 6.0]));
         assert!(!on([10.0 - on_top + 0.01, 4.0, 6.0]));
         assert!(on([10.0, 4.0, 6.0 - on_side - 0.01]));

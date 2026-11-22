@@ -244,6 +244,10 @@ fn apart_names(body: &Brep, edges: &[EdgeId]) -> Result<(Brep, Vec<(String, Stri
             .map(|c| body.coedge_face(c))
             .collect();
         let [f, g] = faces[..] else {
+            // Where the solid touches itself a blend would cut into the other side: not built yet.
+            if faces.len() > 2 {
+                return Err(Error::Unsupported("a blend along an edge where the solid touches itself".into()));
+            }
             return invalid("a filleted edge must lie between two faces");
         };
         names.push((name(f), name(g)));

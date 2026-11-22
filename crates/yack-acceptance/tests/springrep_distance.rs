@@ -23,7 +23,8 @@ fn cuboid(lo: [f64; 3], hi: [f64; 3]) -> Solid {
 
 /// `(distance, on a, on b)`.
 fn bodies(a: &Solid, b: &Solid) -> (f64, Point3, Point3) {
-    a.closest_pair(b).unwrap()
+    let c = a.closest_pair(b).unwrap();
+    (c.distance, c.on_self, c.on_other)
 }
 
 /// The distance, to rounding, and that both points lie that far apart.
@@ -187,7 +188,7 @@ fn a_point_just_inside_a_holes_rim_is_as_far_as_the_rim_not_on_the_face() {
         for turn in [0.1f64, 1.3, 2.9, 4.4] {
             let r = 10.0 + off;
             let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
-            let got = plate.nearest_face(p).unwrap().1;
+            let got = plate.nearest_face(p).unwrap().distance;
             assert!((got - want).abs() < 1e-7, "{off} at {turn}: {got} against {want}");
         }
     }
@@ -214,13 +215,13 @@ fn the_face_at_a_point_just_inside_a_holes_rim_is_the_holes_wall() {
     for turn in [0.1f64, 1.3, 2.9, 4.4] {
         let r = 10.0 - 0.005;
         let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
-        let (face, d) = plate.nearest_face(p).unwrap();
+        let yack::NearestFace { face, distance: d } = plate.nearest_face(p).unwrap();
         assert!(matches!(plate.face(face).unwrap().kind(), SurfaceKind::Cylinder { .. }), "at {turn}");
         assert!((d - 0.005).abs() < 1e-9, "at {turn}: {d}");
         // And 5 µm outside it, on the plate: the top, at no distance.
         let r = 10.0 + 0.005;
         let p = Point3::new(15.0 + r * turn.cos(), 15.0 + r * turn.sin(), 2.0);
-        let (face, d) = plate.nearest_face(p).unwrap();
+        let yack::NearestFace { face, distance: d } = plate.nearest_face(p).unwrap();
         assert!(matches!(plate.face(face).unwrap().kind(), SurfaceKind::Plane { .. }), "at {turn}");
         assert!(d < 1e-9, "at {turn}: {d}");
     }

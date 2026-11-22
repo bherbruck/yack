@@ -5,7 +5,7 @@ use yack_springrep::{check, distance, draw, measure, mesh, overlap, rays};
 use crate::{engine, engine_cadrs, firewall, ladder};
 use crate::solid::Body;
 use crate::{
-    Aabb, Display, DisplayFace, Drawing, Interference, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
+    Aabb, Display, DisplayFace, Drawing, Closest, Interference, NearestFace, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
 };
 
 fn sr_points<P: Into<Point3> + Copy>(points: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
@@ -80,11 +80,11 @@ impl Solid {
     /// ```
     /// use yack::prelude::*;
     /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
-    /// let bb = b.bounding_box().unwrap();
+    /// let bb = b.bbox().unwrap();
     /// assert_eq!((bb.min, bb.max), (Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 10.0, 10.0)));
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn bounding_box(&self) -> Option<Aabb> {
+    pub fn bbox(&self) -> Option<Aabb> {
         if let Some(h) = self.held() {
             return engine_cadrs::held_bbox(h).map(|(lo, hi)| Aabb::new(Point3::from(lo), Point3::from(hi)));
         }
@@ -223,17 +223,18 @@ impl Solid {
 
     /// The face nearest `p` and its distance, at any distance (unlike [`face_at`](Solid::face_at),
     /// which picks only within `tol::PICK`). A point nearest an edge goes to the face whose own
-    /// surface it is nearer; `NotFound` for the empty solid.
+    /// region holds the point's foot on that face's surface: just inside a hole's rim, the hole's
+    /// wall. `NotFound` for the empty solid.
     ///
     /// ```
     /// use yack::prelude::*;
     /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
-    /// let (f, d) = b.nearest_face([5.0, 5.0, 12.0])?;
-    /// assert_eq!(f, b.face_at([5.0, 5.0, 10.0])?);
-    /// assert!((d - 2.0).abs() < 1e-9);
+    /// let near = b.nearest_face([5.0, 5.0, 12.0])?;
+    /// assert_eq!(near.face, b.face_at([5.0, 5.0, 10.0])?);
+    /// assert!((near.distance - 2.0).abs() < 1e-9);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<(crate::FaceId, f64)> {
+    pub fn nearest_face(&self, p: impl Into<Point3>) -> Result<NearestFace> {
         let op = "nearest_face";
         let p = p.into();
         let b = self.form(op)?.ok_or_else(|| crate::Error::not_found(op, "self", "the solid is empty"))?;
@@ -241,27 +242,27 @@ impl Solid {
             let (f, d) = yack_springrep::facade::api::nearest_face(b, engine::p3(p))
                 .map_err(|e| engine::error(op, e))?
                 .ok_or_else(|| crate::Error::not_found(op, "p", "the solid has no faces"))?;
-            Ok((self.face_id(f), d))
+            Ok(NearestFace { face: self.face_id(f), distance: d })
         })
     }
 
-    /// The least distance between the two solids and where it is reached: `(distance, on self,
-    /// on other)`. `Invalid` if either solid is empty.
+    /// The least distance between the two solids and where it is reached. `Invalid` if either
+    /// solid is empty.
     ///
     /// ```
     /// use yack::prelude::*;
     /// let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
     /// let other = block(&Frame::at([15.0, 0.0, 0.0]), [1.0, 1.0, 1.0])?;
-    /// let (d, on_self, on_other) = b.closest_pair(&other)?;
-    /// assert!((d - 5.0).abs() < 1e-9 && on_self.x == 10.0 && on_other.x == 15.0);
+    /// let c = b.closest_pair(&other)?;
+    /// assert!((c.distance - 5.0).abs() < 1e-9 && c.on_self.x == 10.0 && c.on_other.x == 15.0);
     /// # Ok::<(), yack::Error>(())
     /// ```
-    pub fn closest_pair(&self, other: &Solid) -> Result<(f64, Point3, Point3)> {
+    pub fn closest_pair(&self, other: &Solid) -> Result<Closest> {
         let op = "closest_pair";
         let (a, b) = (self.need(op)?, other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
         firewall::run(op, || {
             distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
-                .map(|c| (c.distance, engine::point(c.on_a), engine::point(c.on_b)))
+                .map(|c| Closest { distance: c.distance, on_self: engine::point(c.on_a), on_other: engine::point(c.on_b) })
                 .map_err(|e| engine::error(op, e))
         })
     }

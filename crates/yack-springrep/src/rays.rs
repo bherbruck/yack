@@ -302,6 +302,55 @@ impl<'a> Rays<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cone under a non-uniform scale and shear (conformance stretches-369ef83ce9d5f331): every
+    /// point of a grid about it is placed as its preimage lies in the cone, worked out exactly.
+    /// Its narrow end passes near its wide rim, where four seeds of the global projection once all
+    /// lay, and a ray's exact crossing of the side there was thrown out as off the face.
+    #[test]
+    fn a_sheared_cone_places_points_as_their_preimages_lie() {
+        let o = Vec3::new(-0.1369187722614813, -0.1927317277546228, 9.496120663976027);
+        let x = Vec3::new(0.9862312463263244, 0.0011868763560915257, 0.16536783270678776);
+        let z = Vec3::new(0.1653720918704991, -0.007078186740360178, -0.9862058459078631);
+        let (r0, r1, h) = (3.753950727109955, 0.9541105874096755, 14.435434108066273);
+        let cone = crate::primitive::cone(&Frame::new(o, z, x).unwrap(), r0, r1, h, "c").unwrap();
+        let m = [
+            [-0.4538971246554957, 0.15252576458329087, 0.9555666727243001, 41.6656262880843],
+            [-0.26697402297825473, -0.5673293657946105, -1.4703977293152846, 16.072466163157856],
+            [0.05877765464764511, -1.3990214079245642, 0.7004527186325231, -15.994874937232893],
+        ];
+        let b = crate::facade::edit::affine(&cone, m).unwrap();
+        let rays = Rays::new(&b).unwrap();
+        let map = |p: Vec3| {
+            let row = |r: [f64; 4]| r[0] * p.x + r[1] * p.y + r[2] * p.z + r[3];
+            Vec3::new(row(m[0]), row(m[1]), row(m[2]))
+        };
+        let y = z.cross(x);
+        // How far inside the cone a preimage lies: along the axis within [0, h], within the radius.
+        let margin = |p: Vec3| {
+            let q = p - o;
+            let (a, b, c) = (q.dot(x), q.dot(y), q.dot(z));
+            (r0 + (r1 - r0) * c / h - (a * a + b * b).sqrt()).min(c).min(h - c)
+        };
+        // The point that was placed outside, its preimage 0.099 inside.
+        assert_eq!(rays.side(Vec3::new(36.53894920997076, 22.626132672803138, -19.18988598536717)), Side::Inside);
+        let n = 12;
+        let f = |t: usize| (t as f64 + 0.5) / n as f64;
+        let mut wrong = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    let p = o + x * ((f(i) - 0.5) * 2.4 * r0) + y * ((f(j) - 0.5) * 2.4 * r0) + z * ((f(k) * 1.2 - 0.1) * h);
+                    let want = if margin(p) > 0.0 { Side::Inside } else { Side::Outside };
+                    let got = rays.side(map(p));
+                    if got != want && margin(p).abs() > 1e-6 { // tol: a preimage on the surface may go either way
+                        wrong.push((map(p), margin(p), got));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {} placed wrong: {:?}", wrong.len(), n * n * n, &wrong[..wrong.len().min(5)]);
+    }
     use crate::{
         boolean,
         math::{Frame, Vec2},
