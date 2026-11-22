@@ -10,7 +10,7 @@ use yack_springrep::{
     geom::Curve,
     math::{Frame, Point3, Vec2, Vec3},
     profile::{NamedSegment, PointsInterp, Profile, ProfileLoop, Segment},
-    rays::{Hit, Rays},
+    rays::Hit,
     sweep::{extrude, revolve},
     topo::Brep,
 };
@@ -54,7 +54,7 @@ fn block(lo: [f64; 3], hi: [f64; 3]) -> Brep {
 }
 
 fn cast(b: &Brep, o: Point3, d: Vec3, range: (f64, f64)) -> Vec<Hit> {
-    Rays::new(b).unwrap().cast(o, d, range).unwrap()
+    yack_springrep::mesh::rays(b).unwrap().cast(o, d, range).unwrap()
 }
 
 fn assert_ts(hits: &[Hit], want: &[f64]) {
@@ -124,7 +124,7 @@ fn rays_from_inside_a_cylinder_kilometres_across_leave_through_its_side() {
     let (r, h) = (5e4, 4e4);
     let frame = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
     let b = extrude(&Profile::circle(Vec2::ZERO, 2.0 * r), &frame, h, "c").unwrap();
-    let rays = Rays::new(&b).unwrap();
+    let rays = yack_springrep::mesh::rays(&b).unwrap();
     // Directions that leave through the side before the caps from these points.
     let d = Vec3::new(0.6213, -0.2841, 0.07302).unit().unwrap();
     for p in [
@@ -152,7 +152,7 @@ fn a_ray_clipping_a_cylinder_shallower_than_the_mesh_crosses_it_twice() {
     let (r, h) = (2.0, 10.0);
     let frame = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
     let b = extrude(&Profile::circle(Vec2::ZERO, 2.0 * r), &frame, h, "c").unwrap();
-    let rays = Rays::new(&b).unwrap();
+    let rays = yack_springrep::mesh::rays(&b).unwrap();
     let d = Vec3::new(0.3713, 0.5347, 0.07591).unit().unwrap();
     let across = Vec3::new(d.y, -d.x, 0.0).unit().unwrap();
     let steep = Vec3::new(0.3713, 0.5347, 0.7591).unit().unwrap();
@@ -188,7 +188,7 @@ fn rays_from_inside_a_lens_micrometres_across_leave_where_its_spheres_say() {
         0.0026689525243786373,
     );
     let lens = intersection(&ball(ca, ra), &ball(cb, rb)).unwrap();
-    let rays = Rays::new(&lens).unwrap();
+    let rays = yack_springrep::mesh::rays(&lens).unwrap();
     let p = Vec3::new(0.001017, -0.000028, -0.000248);
     for d in [
         Vec3::new(0.3713, 0.5347, 0.7591),

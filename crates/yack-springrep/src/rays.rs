@@ -1,6 +1,6 @@
 // yack: Where a ray crosses a solid's faces, from the exact geometry.
 // Adapted from springrep@a03e8a1 src/rays.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: meshes nothing (M2): `Rays::from_tessellation` takes the mesh; mesh::rays makes it.
 //! Where a ray crosses a solid's faces, from the exact geometry.
 //!
 //! [`Rays`] meshes the arena once. A ray's candidate faces are those with a mesh triangle within
@@ -24,9 +24,6 @@ use crate::{
     geom::{Curve, Line},
     math::{Aabb, Point3, Vec3},
     math::bvh::{Bvh, segment_triangle},
-    mesh::{
-        self, MeshOptions,
-    },
     tol,
     topo::{Brep, FaceId},
 };
@@ -42,22 +39,6 @@ pub struct Hit {
     pub normal: Vec3,
     pub on_edge: bool,
 }
-
-/// The meshes tried, finest first: the mesher gives up on a very fine chord over a large part.
-const MESHES: [MeshOptions; 3] = [
-    MeshOptions {
-        linear: 0.01,
-        angular: 0.2,
-    },
-    MeshOptions {
-        linear: 0.05,
-        angular: 0.5,
-    },
-    MeshOptions {
-        linear: 0.2,
-        angular: 0.8,
-    },
-];
 
 /// How far past the ends of its range a crossing may lie and still count, and how near the
 /// surface a ray stays over a stretch it only grazes.
@@ -85,50 +66,43 @@ pub struct Rays<'a> {
 }
 
 impl<'a> Rays<'a> {
-    pub fn new(b: &'a Brep) -> Result<Rays<'a>> {
-        let mut err = None;
-        let mut found = None;
-        for opt in MESHES.iter().map(|o| mesh::seeding(o, b)) {
-            match mesh::tessellate(b, &opt) {
-                Ok(m) => {
-                    found = Some((m, opt));
-                    break;
-                }
-                Err(e) => err = Some(e),
-            }
-        }
-        let Some((m, opt)) = found else {
-            return Err(err.expect("a mesh was tried"));
-        };
-        let tree = Bvh::new(&m.positions, &m.triangles);
-        let mut face_of = vec![None; m.triangles.len()];
-        for (f, range) in &m.faces {
+    /// The caster over `b`'s faces, from a tessellation of them within `deflection`: the triangles
+    /// `positions` and `triangles` give, `faces` naming each face's run of them.
+    pub fn from_tessellation(
+        b: &'a Brep,
+        positions: &[Point3],
+        triangles: &[[u32; 3]],
+        faces: &[(FaceId, std::ops::Range<usize>)],
+        deflection: f64,
+    ) -> Rays<'a> {
+        let tree = Bvh::new(positions, triangles);
+        let mut face_of = vec![None; triangles.len()];
+        for (f, range) in faces {
             for k in range.clone() {
                 face_of[k] = Some(*f);
             }
         }
-        let tris = m
-            .triangles
+        let tris = triangles
             .iter()
             .zip(face_of)
             // The tree names triangles by index, so each keeps its place.
             .map(|(t, f)| {
                 let f = f.expect("every mesh triangle lies in its face's range");
-                (f, t.map(|i| m.positions[i as usize]))
+                (f, t.map(|i| positions[i as usize]))
             })
             .collect();
         let mut reach = Aabb::EMPTY;
-        for &q in &m.positions {
+        for &q in positions {
             reach.add(q);
         }
-        Ok(Rays {
+        Rays {
             b,
             tris,
             tree,
-            deflection: opt.linear,
+            deflection,
             domains: b.face_ids().map(|f| face_domain(b, f)).collect(),
             reach,
-        })
+        }
     }
 
     /// Whether a solid of the arena holds `p`, by the parity of a ray's crossings of its faces: a
@@ -320,7 +294,7 @@ mod tests {
             [0.05877765464764511, -1.3990214079245642, 0.7004527186325231, -15.994874937232893],
         ];
         let b = crate::facade::edit::affine(&cone, m).unwrap();
-        let rays = Rays::new(&b).unwrap();
+        let rays = crate::mesh::rays(&b).unwrap();
         let map = |p: Vec3| {
             let row = |r: [f64; 4]| r[0] * p.x + r[1] * p.y + r[2] * p.z + r[3];
             Vec3::new(row(m[0]), row(m[1]), row(m[2]))
@@ -419,7 +393,7 @@ mod tests {
         let meridian = Frame::new(Point3::ZERO, -Vec3::Y, Vec3::X).unwrap();
         let ridge = helix(&ridge_profile, &meridian, &motion, 3.0 * TAU, "hel").unwrap();
         let threaded = boolean::union(&nut, &ridge).unwrap();
-        let rays = Rays::new(&threaded).unwrap();
+        let rays = crate::mesh::rays(&threaded).unwrap();
         let a = 72.7f64.to_radians();
         let p = Point3::new(2.031 * a.cos(), 2.031 * a.sin(), 4.655);
         let dir = Vec3::new(0.3713, 0.5347, 0.7591);

@@ -5,7 +5,6 @@
 //! at a corner, and from inside the solid as from outside.
 
 use yack_springrep::{
-    distance::Nearest,
     edit::{Affine, affine},
     math::{Frame, Vec3},
     primitive::{block, cone, cylinder, sphere, torus},
@@ -43,7 +42,7 @@ fn assert_near(got: f64, want: f64, what: &str) {
 fn the_nearest_point_of_a_ball_lies_along_the_radius() {
     let c = Vec3::new(1.0, -2.0, 0.5);
     let b = sphere(&Frame::new(c, Vec3::Z, Vec3::X).unwrap(), 2.0, "sph").unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     let mut seq = Seq(1);
     for _ in 0..300 {
         let p = c + seq.within([-4.0; 3], [4.0; 3]);
@@ -67,7 +66,7 @@ fn the_nearest_point_of_a_ball_lies_along_the_radius() {
 fn the_nearest_point_of_a_block_is_on_a_face_an_edge_or_a_corner() {
     let size = [4.0, 3.0, 2.0];
     let b = block(&Frame::WORLD, Vec3::from_array(size), "blk").unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     let mut seq = Seq(2);
     for _ in 0..300 {
         let p = seq.within([-2.0; 3], [6.0, 5.0, 4.0]);
@@ -93,7 +92,7 @@ fn the_nearest_point_of_a_block_is_on_a_face_an_edge_or_a_corner() {
 fn the_nearest_point_of_a_cylinder_is_on_its_side_an_end_or_a_rim() {
     let (r, h) = (1.5, 4.0);
     let b = cylinder(&Frame::WORLD, r, h, "cyl").unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     let mut seq = Seq(3);
     for _ in 0..300 {
         let p = seq.within([-3.0, -3.0, -2.0], [3.0, 3.0, 6.0]);
@@ -112,7 +111,7 @@ fn the_nearest_point_of_a_cylinder_is_on_its_side_an_end_or_a_rim() {
 fn the_nearest_point_of_a_torus_is_on_its_tube() {
     let (major, minor) = (3.0, 1.0);
     let b = torus(&Frame::WORLD, major, minor, "tor").unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     let mut seq = Seq(4);
     for _ in 0..300 {
         let p = seq.within([-5.0, -5.0, -2.0], [5.0, 5.0, 2.0]);
@@ -126,7 +125,7 @@ fn the_nearest_point_of_a_torus_is_on_its_tube() {
 fn the_nearest_point_of_a_cone_is_on_its_side_its_base_or_its_rim() {
     let (r, h) = (2.0, 3.0);
     let b = cone(&Frame::WORLD, r, 0.0, h, "con").unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     // In the meridian plane the cone is the triangle (0, 0), (r, 0), (0, h) turned about the
     // axis: the distance to its boundary is the distance to that triangle's two outer sides.
     let to_segment = |x: f64, y: f64, a: (f64, f64), b: (f64, f64)| {
@@ -162,7 +161,7 @@ fn the_nearest_point_of_a_stretched_ball_is_found_at_its_poles_as_elsewhere() {
     };
     let f = Frame::new(c, Vec3::Z, Vec3::X).unwrap();
     let b = affine(&sphere(&f, r, "sph").unwrap(), &map).unwrap();
-    let boundary = Nearest::boundary(&b).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&b).unwrap();
     // A point of the skin is its own nearest point, at the poles of the ball it came from too.
     for lat in [0.0f64, 60.0, 85.0, 89.0, 90.0, -89.0, -90.0] {
         for lon in [10.0f64, 130.0, 250.0] {
@@ -178,7 +177,7 @@ fn the_nearest_point_of_a_stretched_ball_is_found_at_its_poles_as_elsewhere() {
 #[test]
 fn the_nearest_point_of_a_solid_to_a_point_it_holds_is_the_point() {
     let b = block(&Frame::WORLD, Vec3::new(4.0, 3.0, 2.0), "blk").unwrap();
-    let solid = Nearest::solid(&b).unwrap();
+    let solid = yack_springrep::mesh::nearest_solid(&b).unwrap();
     let inside = Vec3::new(1.0, 2.0, 0.5);
     let got = solid.to(inside).unwrap();
     assert!(got.distance == 0.0 && got.on_b.dist(inside) < 1e-12);
@@ -188,7 +187,7 @@ fn the_nearest_point_of_a_solid_to_a_point_it_holds_is_the_point() {
     assert_near(got.distance, 2.0, "outside");
     assert!(got.on_b.dist(Vec3::new(4.0, 1.0, 1.0)) < 1e-9);
     // The boundary alone is half a millimetre from the point inside.
-    let got = Nearest::boundary(&b).unwrap().to(inside).unwrap();
+    let got = yack_springrep::mesh::nearest_boundary(&b).unwrap().to(inside).unwrap();
     assert_near(got.distance, 0.5, "to the boundary");
 }
 
@@ -198,7 +197,7 @@ fn the_nearest_point_of_a_rim_is_found_either_side_of_where_the_rim_closes() {
     // the cylinder a hair to either side of that point are nearest the rim just past it.
     let (r, h) = (2.0, 5.0);
     let b = cylinder(&Frame::WORLD, r, h, "cyl").unwrap();
-    for nearest in [Nearest::boundary(&b).unwrap(), Nearest::solid(&b).unwrap()] {
+    for nearest in [yack_springrep::mesh::nearest_boundary(&b).unwrap(), yack_springrep::mesh::nearest_solid(&b).unwrap()] {
         for y in [0.021, -0.021, 0.3, -0.3, 1e-4, -1e-4, 0.0] {
             let q = Vec3::new(3.2, y, 7.2);
             let rho = q.x.hypot(q.y);
@@ -225,7 +224,7 @@ fn the_nearest_point_of_one_face_ignores_the_rest_of_the_solid() {
     };
     let p = yack_springrep::math::Point3::new(25.0, 10.0, 12.0);
     for (z, want) in [(10.0, 29f64.sqrt()), (0.0, 169f64.sqrt())] {
-        let nearest = Nearest::of(&b, &Selection::face(face(z))).unwrap();
+        let nearest = yack_springrep::mesh::nearest_of(&b, &Selection::face(face(z))).unwrap();
         let found = nearest.to(p).unwrap();
         assert_near(found.distance, want, "one face");
         assert_near(found.on_b.z, z, "on that face");

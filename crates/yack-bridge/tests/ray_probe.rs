@@ -5,7 +5,6 @@ use yack_springrep::{
     boolean,
     math::{Frame, Vec3},
     primitive,
-    rays::Rays,
 };
 
 #[test]
@@ -29,7 +28,7 @@ fn sphere_in_a_torus_hole_ray() {
     ] {
         match r {
             Ok(s) => {
-                let hits = Rays::new(&s).unwrap().cast(o, d, (0.0, 1e9)).unwrap();
+                let hits = yack_springrep::mesh::rays(&s).unwrap().cast(o, d, (0.0, 1e9)).unwrap();
                 eprintln!("{name}: {} solids, {} faces, {} hits", s.solid_ids().count(), s.face_ids().count(), hits.len());
                 for h in &hits {
                     eprintln!("   t {:.12} face {} on_edge {} normal·d {:.3e}", h.t, h.face.index(), h.on_edge, h.normal.dot(d));

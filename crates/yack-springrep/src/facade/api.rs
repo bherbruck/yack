@@ -3,7 +3,7 @@
 
 use crate::{
     Result,
-    distance::{Nearest, Selection},
+    distance::Selection,
     geom::BSpline,
     math::{Aabb, Point3, Vec3},
     measure,
@@ -54,7 +54,7 @@ pub fn face_within(b: &Brep, p: Point3, d: f64) -> Result<Pick<FaceId>> {
         if !near(&measure::face_bbox(b, f), p, d) {
             continue;
         }
-        let dist = Nearest::of(b, &Selection::face(f))?.to(p)?.distance;
+        let dist = crate::mesh::nearest_of(b, &Selection::face(f))?.to(p)?.distance;
         if dist <= d {
             found.push((dist, f));
         }
@@ -76,7 +76,7 @@ pub fn edge_within(b: &Brep, p: Point3, d: f64) -> Result<Pick<EdgeId>> {
         if b.edge(e).is_degenerate() {
             continue;
         }
-        let dist = Nearest::of(b, &Selection::edge(e))?.to(p)?.distance;
+        let dist = crate::mesh::nearest_of(b, &Selection::edge(e))?.to(p)?.distance;
         if dist <= d {
             if is_seam(b, e) { seams.push((dist, e)) } else { found.push((dist, e)) }
         }
@@ -146,7 +146,7 @@ pub fn periodic_through(points: &[[f64; 2]]) -> Result<(Vec<f64>, Vec<[f64; 2]>)
 
 /// The nearest point of face `f` to `p` (the face alone, wherever the rest of the solid lies).
 pub fn face_closest(b: &Brep, f: FaceId, p: Point3) -> Result<Point3> {
-    Ok(Nearest::of(b, &Selection::face(f))?.to(p)?.on_b)
+    Ok(crate::mesh::nearest_of(b, &Selection::face(f))?.to(p)?.on_b)
 }
 
 /// The face nearest `p` and its distance; ties (a point nearest a shared edge) go to the face whose
@@ -156,7 +156,7 @@ pub fn face_closest(b: &Brep, f: FaceId, p: Point3) -> Result<Point3> {
 pub fn nearest_face(b: &Brep, p: Point3) -> Result<Option<(FaceId, f64)>> {
     let mut best: Option<(f64, f64, FaceId)> = None;
     for f in b.face_ids() {
-        let d = Nearest::of(b, &Selection::face(f))?.to(p)?.distance;
+        let d = crate::mesh::nearest_of(b, &Selection::face(f))?.to(p)?.distance;
         let s = &b.face(f).surface;
         let uv = s.project(p);
         let off = s.eval(uv.x, uv.y).dist(p);
@@ -338,7 +338,7 @@ pub fn blend_strays(out: &Brep, feature: &str, part: &str, near: &[Point3], reac
     for (i, &f) in blend.iter().enumerate() {
         let d = near
             .iter()
-            .filter_map(|&p| Nearest::of(out, &Selection::face(f)).ok()?.to(p).ok().map(|c| c.distance))
+            .filter_map(|&p| crate::mesh::nearest_of(out, &Selection::face(f)).ok()?.to(p).ok().map(|c| c.distance))
             .fold(f64::INFINITY, f64::min);
         let r = root(&mut group, i);
         let e = best.entry(r).or_insert(f64::INFINITY);

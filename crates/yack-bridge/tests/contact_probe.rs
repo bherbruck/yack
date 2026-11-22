@@ -5,7 +5,6 @@ use yack_springrep::{
     boolean, distance,
     math::{Frame, Vec3},
     measure, primitive,
-    rays::Rays,
 };
 
 fn frame(o: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
@@ -19,11 +18,11 @@ fn sphere_in_a_torus_hole_is_two_pieces() {
     let t = primitive::torus(&frame([-2.4536287888669417, -0.4188831209451287, -2.3224440845692773], z, x), 1.6819245919605297, 0.5900110918968451, "t").unwrap();
     let s = primitive::sphere(&frame([-2.3263451224619023, 1.254419428097376, -1.2897887365120186], z, x), 2.000610796586716, "s").unwrap();
     let u = boolean::union(&t, &s).unwrap();
-    let c = distance::closest(&t, &distance::Selection::body(&t), &s, &distance::Selection::body(&s)).unwrap();
+    let c = yack_springrep::mesh::closest(&t, &distance::Selection::body(&t), &s, &distance::Selection::body(&s)).unwrap();
     let (a, b) = (c.on_a, c.on_b);
     let mid = (a + b) * 0.5;
     let dir = (b - a).unit().unwrap();
-    let rays = Rays::new(&u).unwrap();
+    let rays = yack_springrep::mesh::rays(&u).unwrap();
     let lines = [
         format!("pieces in the union: {}", u.solid_ids().count()),
         format!("gap {:e} between {a:?} and {b:?}", c.distance),

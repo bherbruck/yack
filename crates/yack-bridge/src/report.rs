@@ -5,7 +5,7 @@ use yack_springrep::{
     check,
     math::Vec3,
     measure,
-    rays::{Rays, Side},
+    rays::Side,
     topo::Brep,
 };
 
@@ -189,7 +189,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
             ));
         }
     }
-    match (Rays::new(s), Rays::new(&back)) {
+    match (yack_springrep::mesh::rays(s), yack_springrep::mesh::rays(&back)) {
         (Ok(rs), Ok(rb)) => {
             let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(&body, f)).collect();
             for p in samples(s) {

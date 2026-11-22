@@ -1,6 +1,7 @@
 // yack: The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 // Adapted from springrep@a03e8a1 src/distance.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: meshes nothing (M2): sides are made from a tessellation mesh::query makes; `closest`
+// and Nearest's constructors moved there.
 //! The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 //!
 //! Both sides are meshed, and the closest pair of mesh pieces gives the distance to within the two
@@ -25,9 +26,7 @@ use crate::{
     geom::{Curve, Surface},
     math::{Aabb, Point3, Vec3},
     math::bvh::{Bvh, on_segment, on_triangle, segment_triangle, segments},
-    mesh::{
-        self, MeshOptions,
-    },
+    geom::MeshOptions,
     tol,
     topo::{Brep, EdgeId, FaceId, SolidId, VertexId},
 };
@@ -119,7 +118,7 @@ impl Piece {
 }
 
 /// One side, expanded: its vertices, its mesh pieces, and its solids' meshes.
-struct Side<'a> {
+pub(crate) struct Side<'a> {
     b: &'a Brep,
     vertices: Vec<VertexId>,
     pieces: Vec<Piece>,
@@ -128,24 +127,17 @@ struct Side<'a> {
     deflection: f64,
 }
 
-/// The meshes tried, finest first: the mesher gives up on a very fine chord over a large part.
-const MESHES: [MeshOptions; 3] = [
-    MeshOptions {
-        linear: 0.01,
-        angular: 0.2,
-    },
-    MeshOptions {
-        linear: 0.05,
-        angular: 0.5,
-    },
-    MeshOptions {
-        linear: 0.2,
-        angular: 0.8,
-    },
-];
-
 impl<'a> Side<'a> {
-    fn new(b: &'a Brep, sel: &Selection) -> Result<Side<'a>> {
+    /// The side `sel` names, from a tessellation of `b` made within `opt`: the triangles
+    /// `positions` and `triangles` give, `faces` naming each face's run of them.
+    pub(crate) fn from_tessellation(
+        b: &'a Brep,
+        sel: &Selection,
+        positions: &[Point3],
+        triangles: &[[u32; 3]],
+        faces_of: &[(FaceId, std::ops::Range<usize>)],
+        opt: &MeshOptions,
+    ) -> Side<'a> {
         let mut faces = sel.faces.clone();
         for &s in &sel.solids {
             faces.extend(b.solid_faces(s));
@@ -167,21 +159,7 @@ impl<'a> Side<'a> {
         vertices.sort();
         vertices.dedup();
 
-        let mut err = None;
-        let mut found = None;
-        for opt in MESHES.iter().map(|o| mesh::seeding(o, b)) {
-            match mesh::tessellate(b, &opt) {
-                Ok(m) => {
-                    found = Some((m, opt));
-                    break;
-                }
-                Err(e) => err = Some(e),
-            }
-        }
-        let Some((m, opt)) = found else {
-            return Err(err.expect("a mesh was tried"));
-        };
-        let tri = |t: &[u32; 3]| t.map(|i| m.positions[i as usize]);
+        let tri = |t: &[u32; 3]| t.map(|i| positions[i as usize]);
         let wanted: BTreeMap<FaceId, ()> = faces.iter().map(|&f| (f, ())).collect();
         let solid_faces: BTreeMap<FaceId, ()> = sel
             .solids
@@ -190,8 +168,8 @@ impl<'a> Side<'a> {
             .map(|f| (f, ()))
             .collect();
         let mut pieces = Vec::new();
-        for (f, range) in &m.faces {
-            for t in &m.triangles[range.clone()] {
+        for (f, range) in faces_of {
+            for t in &triangles[range.clone()] {
                 if wanted.contains_key(f) {
                     pieces.push(Piece::Tri(*f, tri(t)));
                 }
@@ -201,7 +179,7 @@ impl<'a> Side<'a> {
             let edge = b.edge(e);
             let Some(c) = &edge.curve else { continue };
             let (t0, t1) = edge.range;
-            let ts = mesh::edge_params(c, t0, t1, &opt);
+            let ts = crate::geom::edge_params(c, t0, t1, opt);
             for w in ts.windows(2) {
                 pieces.push(Piece::Seg(e, [c.eval(w[0]), c.eval(w[1])]));
             }
@@ -209,13 +187,13 @@ impl<'a> Side<'a> {
         for &v in &vertices {
             pieces.push(Piece::Pt(v, b.vertex(v).point));
         }
-        Ok(Side {
+        Side {
             b,
             vertices,
             pieces,
             solid_faces: solid_faces.into_keys().collect(),
             deflection: opt.linear,
-        })
+        }
     }
 
     /// The exact geometry an entity lies on.
@@ -552,54 +530,33 @@ fn offer(answer: &mut Option<Closest>, c: Closest) {
 /// thousands of pieces all equally close.
 const SEEDS_PER_PAIR: usize = 32;
 
-/// The closest distance between selection `sa` of `a` and `sb` of `b`, and a point of each at it.
-pub fn closest(a: &Brep, sa: &Selection, b: &Brep, sb: &Selection) -> Result<Closest> {
-    between(&Side::new(a, sa)?, &Side::new(b, sb)?)
-}
 
 /// An arena prepared for asking which of its points is nearest a point: its faces, edges and
 /// vertices, meshed once.
 pub struct Nearest<'a> {
     side: Side<'a>,
+    /// How a point to measure from is made a side: the mesher's, as the arena's own was.
+    point: for<'p> fn(&'p Brep, &Selection) -> Result<Side<'p>>,
 }
 
 impl<'a> Nearest<'a> {
-    /// The arena's boundary alone: a point inside a solid is as far as its nearest wall.
-    pub fn boundary(b: &'a Brep) -> Result<Nearest<'a>> {
-        let faces = Selection {
-            faces: b.face_ids().collect(),
-            ..Selection::default()
-        };
-        Ok(Nearest {
-            side: Side::new(b, &faces)?,
-        })
+    /// The nearest-point search over `side`, measuring from points made sides by `point`.
+    pub(crate) fn from_side(side: Side<'a>, point: for<'p> fn(&'p Brep, &Selection) -> Result<Side<'p>>) -> Nearest<'a> {
+        Nearest { side, point }
     }
+}
 
-    /// The faces, edges, vertices and solids `selection` names: the nearest point of one face, say,
-    /// wherever the rest of the arena lies.
-    pub fn of(b: &'a Brep, selection: &Selection) -> Result<Nearest<'a>> {
-        Ok(Nearest {
-            side: Side::new(b, selection)?,
-        })
-    }
-
-    /// The arena's solids, insides counted in: a point a solid holds is its own nearest point.
-    pub fn solid(b: &'a Brep) -> Result<Nearest<'a>> {
-        Ok(Nearest {
-            side: Side::new(b, &Selection::body(b))?,
-        })
-    }
-
+impl<'a> Nearest<'a> {
     /// The nearest point to `p`, as `on_b`, and its distance; `on_a` is `p`.
     pub fn to(&self, p: Point3) -> Result<Closest> {
         let mut point = Brep::new();
         let v = point.add_vertex(p);
-        between(&Side::new(&point, &Selection::vertex(v))?, &self.side)
+        between(&(self.point)(&point, &Selection::vertex(v))?, &self.side)
     }
 }
 
-/// [`closest`] between two sides already expanded.
-fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
+/// The closest distance between two sides already expanded.
+pub(crate) fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     let (a, b) = (side_a.b, side_b.b);
     let (pa, pb) = (&side_a.pieces, &side_b.pieces);
     if pa.is_empty() || pb.is_empty() {

@@ -9,7 +9,7 @@ use yack_springrep::{
     edit::{Affine, affine},
     math::{Frame, Vec3},
     primitive::{block, cylinder, sphere, torus},
-    rays::{Rays, Side},
+    rays::Side,
     topo::Brep,
 };
 
@@ -42,7 +42,7 @@ const NEAR: f64 = 1e-3;
 fn points_about_a_cylinder_are_held_where_the_closed_form_says() {
     let (r, h) = (2.0, 10.0);
     let b = cylinder(&Frame::WORLD, r, h, "cyl").unwrap();
-    let holds = Rays::new(&b).unwrap();
+    let holds = yack_springrep::mesh::rays(&b).unwrap();
     let mut seq = Seq(11);
     for _ in 0..20_000 {
         let p = seq.within([-3.0, -3.0, -2.0], [3.0, 3.0, 12.0]);
@@ -58,7 +58,7 @@ fn points_about_a_cylinder_are_held_where_the_closed_form_says() {
 #[test]
 fn points_about_a_block_are_held_where_its_slabs_say() {
     let b = block(&Frame::WORLD, Vec3::new(4.0, 3.0, 2.0), "blk").unwrap();
-    let holds = Rays::new(&b).unwrap();
+    let holds = yack_springrep::mesh::rays(&b).unwrap();
     let size = [4.0, 3.0, 2.0];
     let mut seq = Seq(5);
     for _ in 0..20_000 {
@@ -76,7 +76,7 @@ fn points_about_a_block_are_held_where_its_slabs_say() {
 fn a_torus_holds_its_tube_and_neither_its_hole_nor_a_void_cut_in_a_block() {
     let (major, minor) = (3.0, 1.0);
     let ring = torus(&Frame::WORLD, major, minor, "tor").unwrap();
-    let holds = Rays::new(&ring).unwrap();
+    let holds = yack_springrep::mesh::rays(&ring).unwrap();
     let mut seq = Seq(3);
     for _ in 0..5_000 {
         let p = seq.within([-4.5, -4.5, -1.5], [4.5, 4.5, 1.5]);
@@ -91,7 +91,7 @@ fn a_torus_holds_its_tube_and_neither_its_hole_nor_a_void_cut_in_a_block() {
     let c = Vec3::new(3.0, 3.0, 3.0);
     let centre = Frame::new(c, Vec3::Z, Vec3::X).unwrap();
     let hollow = difference(&outer, &sphere(&centre, 1.5, "sph").unwrap()).unwrap();
-    let holds = Rays::new(&hollow).unwrap();
+    let holds = yack_springrep::mesh::rays(&hollow).unwrap();
     for _ in 0..5_000 {
         let p = seq.within([-1.0; 3], [7.0; 3]);
         let q = p.to_array();
@@ -108,7 +108,7 @@ fn a_torus_holds_its_tube_and_neither_its_hole_nor_a_void_cut_in_a_block() {
 #[test]
 fn an_arena_with_no_solid_holds_no_point() {
     let empty = Brep::default();
-    assert_eq!(Rays::new(&empty).unwrap().holds(Vec3::ZERO), Some(false));
+    assert_eq!(yack_springrep::mesh::rays(&empty).unwrap().holds(Vec3::ZERO), Some(false));
 }
 
 /// A ball stretched and sheared, as the conformance case that found this: its skin is a rational
@@ -167,7 +167,7 @@ fn a_point_near_a_stretched_balls_pole_projects_onto_its_skin_there() {
 #[test]
 fn a_stretched_ball_holds_the_points_its_ball_did() {
     let (b, map, c, r) = stretched_ball();
-    let holds = Rays::new(&b).unwrap();
+    let holds = yack_springrep::mesh::rays(&b).unwrap();
     let mut seq = Seq(7);
     for _ in 0..20_000 {
         let l = seq.within([-1.2 * r; 3], [1.2 * r; 3]);
@@ -183,7 +183,7 @@ fn a_stretched_ball_holds_the_points_its_ball_did() {
 fn a_point_of_the_boundary_is_on_it_and_a_step_off_is_in_or_out() {
     let (r, h) = (2.0, 10.0);
     let b = cylinder(&Frame::WORLD, r, h, "cyl").unwrap();
-    let rays = Rays::new(&b).unwrap();
+    let rays = yack_springrep::mesh::rays(&b).unwrap();
     // On the side, on each end, on a rim, and where the side's seam meets a rim.
     for p in [
         Vec3::new(r * 0.6, r * 0.8, 4.0),
@@ -207,7 +207,7 @@ fn a_point_of_the_boundary_is_on_it_and_a_step_off_is_in_or_out() {
     assert_eq!(rays.side(Vec3::new(0.5, -0.3, -1e-3)), Side::Outside);
 
     let b = block(&Frame::WORLD, Vec3::new(4.0, 3.0, 2.0), "blk").unwrap();
-    let rays = Rays::new(&b).unwrap();
+    let rays = yack_springrep::mesh::rays(&b).unwrap();
     // On a face, along an edge and at a corner.
     for p in [
         Vec3::new(1.0, 1.0, 2.0),

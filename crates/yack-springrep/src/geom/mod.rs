@@ -4,6 +4,7 @@
 //! Curves and surfaces, each with evaluation, derivatives, projection and parameter ranges.
 
 mod bspline;
+mod chord;
 mod curve;
 mod intersection;
 mod nurbs;
@@ -12,6 +13,7 @@ pub(crate) use nurbs::tests::octant;
 mod surface;
 
 pub use bspline::BSpline;
+pub use chord::{MeshOptions, edge_params};
 pub use curve::{Circle, Curve, Ellipse, Line};
 pub use intersection::{IntersectionCurve, UvPair};
 pub(crate) use intersection::{

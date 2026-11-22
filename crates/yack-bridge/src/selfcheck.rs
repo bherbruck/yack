@@ -5,7 +5,7 @@ use yack_cadrs::native::math::P2;
 use yack_cadrs::native::{Body, P3, V3, classify};
 use yack_springrep::{
     math::Vec3,
-    rays::{Rays, Side},
+    rays::Side,
     topo::Brep,
 };
 
@@ -76,7 +76,7 @@ fn probes(body: &Body) -> Vec<P3> {
 /// Refuses `back` (springrep's form of `body`) where springrep and cadrs place a probe point apart.
 /// A point either calls on the boundary is skipped: there the engines may round either way.
 pub(crate) fn same_sides(body: &Body, back: &Brep) -> Result<()> {
-    let rays = Rays::new(back).map_err(|e| Error::Rejected(vec![format!("no ray caster for the body: {e}")]))?;
+    let rays = yack_springrep::mesh::rays(back).map_err(|e| Error::Rejected(vec![format!("no ray caster for the body: {e}")]))?;
     let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(body, f)).collect();
     // One classifier for every probe: its face boxes, box tree and ray grids are built once, not
     // per point (bench spiroid-face-gear spent 23 s rebuilding them per probe).

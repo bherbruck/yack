@@ -543,7 +543,6 @@ mod tests {
         math::{Frame, Vec2, Vec3},
         measure,
         profile::Profile,
-        rays::Rays,
         sweep::extrude,
     };
     use std::f64::consts::PI;
@@ -653,7 +652,7 @@ mod tests {
         );
         assert!((most - 1.0 / center).abs() < 1e-4 / center, "{got:?}");
         assert!(least < 1e-4 / center, "{got:?}");
-        let r = Rays::new(&out).unwrap();
+        let r = crate::mesh::rays(&out).unwrap();
         let hits = r
             .cast(
                 Point3::new(9.0, 9.0, 10.0 - 1e-5),

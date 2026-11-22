@@ -6,7 +6,7 @@
 use std::f64::consts::{PI, TAU};
 
 use yack_springrep::{
-    distance::{self, Closest, Selection},
+    distance::{Closest, Selection},
     geom::Curve,
     math::{Frame, Point3, Vec2, Vec3},
     measure,
@@ -54,7 +54,7 @@ fn block(lo: [f64; 3], hi: [f64; 3]) -> Brep {
 }
 
 fn bodies(a: &Brep, b: &Brep) -> Closest {
-    distance::closest(a, &Selection::body(a), b, &Selection::body(b)).unwrap()
+    yack_springrep::mesh::closest(a, &Selection::body(a), b, &Selection::body(b)).unwrap()
 }
 
 /// The distance, to rounding, and that both points lie that far apart.
@@ -217,13 +217,13 @@ fn faces_edges_and_vertices_measure_as_themselves() {
         face_at(&b, Vec3::new(5.0, 3.0, 3.0)),
     );
     // The box's floor and roof are its height apart, though they bound one solid.
-    let c = distance::closest(&b, &Selection::face(bottom), &b, &Selection::face(top)).unwrap();
+    let c = yack_springrep::mesh::closest(&b, &Selection::face(bottom), &b, &Selection::face(top)).unwrap();
     assert_distance(c, 3.0);
     // A corner of a second box set 1 above and 2 beyond, to the first's roof: its edge (10, 6) is
     // the nearest part of the roof.
     let other = block([12.0, 7.0, 4.0], [14.0, 9.0, 5.0]);
     let v = vertex_at(&other, Vec3::new(12.0, 7.0, 4.0));
-    let c = distance::closest(&other, &Selection::vertex(v), &b, &Selection::face(top)).unwrap();
+    let c = yack_springrep::mesh::closest(&other, &Selection::vertex(v), &b, &Selection::face(top)).unwrap();
     assert_distance(c, (4.0f64 + 1.0 + 1.0).sqrt());
 }
 
@@ -295,7 +295,7 @@ fn a_point_just_inside_a_holes_rim_is_as_far_as_the_rim_not_on_the_face() {
     // the top face is not there and the rim is the nearest thing, and on the face the distance is
     // nothing. A chord of the rim's polygon cuts 12 µm inside the circle at this radius.
     let plate = drilled_plate();
-    let boundary = distance::Nearest::boundary(&plate).unwrap();
+    let boundary = yack_springrep::mesh::nearest_boundary(&plate).unwrap();
     for (off, want) in [(-0.005, 0.005), (-0.001, 0.001), (0.003, 0.0)] {
         for turn in [0.1f64, 1.3, 2.9, 4.4] {
             let r = 10.0 + off;
@@ -318,7 +318,7 @@ fn a_dowel_in_a_hole_is_as_far_from_the_plate_as_its_clearance() {
     let at = Frame::new(Vec3::new(15.0, 15.0, -3.0), Vec3::Z, Vec3::X).unwrap();
     for clearance in [0.002, 0.02, 0.2] {
         let dowel = primitive::cylinder(&at, 10.0 - clearance, 8.0, "dowel").unwrap();
-        let c = distance::closest(
+        let c = yack_springrep::mesh::closest(
             &plate,
             &Selection::body(&plate),
             &dowel,

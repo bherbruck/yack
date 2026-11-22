@@ -18,7 +18,6 @@ use crate::{
     geom::{Circle, Curve, Line, Surface},
     math::{Frame, Point3, Vec2, Vec3},
     measure::{bbox, in_face, uv_polygons},
-    rays::Rays,
     topo::{Brep, FaceId},
 };
 
@@ -101,7 +100,7 @@ pub fn hidden_lines(b: &Brep, direction: Vec3, tolerance: f64) -> Result<Drawing
         }
     }
 
-    let rays = Rays::new(b)?;
+    let rays = crate::mesh::rays(b)?;
     let eps = 1e-9 * scale;
     // Hidden where the ray toward the viewer leaves the solid. It starts a hair off the faces the
     // point lies on, out of the solid, so it runs beside them rather than along them.

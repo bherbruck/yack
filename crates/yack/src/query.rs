@@ -140,7 +140,7 @@ impl Solid {
         let op = "classify";
         let Some(b) = self.form(op)? else { return Ok(vec![Side::Out; points.len()]) };
         firewall::run(op, || {
-            let caster = rays::Rays::new(b).map_err(|e| engine::error(op, e))?;
+            let caster = mesh::rays(b).map_err(|e| engine::error(op, e))?;
             Ok(sr_points(points)
                 .map(|p| match caster.side(p) {
                     rays::Side::Inside => Side::In,
@@ -166,7 +166,7 @@ impl Solid {
         let op = "closest";
         let Some(b) = self.form(op)? else { return Ok(Vec::new()) };
         firewall::run(op, || {
-            let nearest = distance::Nearest::solid(b).map_err(|e| engine::error(op, e))?;
+            let nearest = mesh::nearest_solid(b).map_err(|e| engine::error(op, e))?;
             sr_points(points).map(|p| nearest.to(p).map(|c| engine::point(c.on_b)).map_err(|e| engine::error(op, e))).collect()
         })
     }
@@ -217,7 +217,7 @@ impl Solid {
         let a = self.form(op)?.ok_or_else(|| crate::Error::invalid(op, "self", "the solid is empty"))?;
         let b = other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?;
         firewall::run(op, || {
-            distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
+            mesh::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| c.distance)
                 .map_err(|e| engine::error(op, e))
         })
@@ -263,7 +263,7 @@ impl Solid {
         let op = "closest_pair";
         let (a, b) = (self.need(op)?, other.form(op)?.ok_or_else(|| crate::Error::invalid(op, "other", "the solid is empty"))?);
         firewall::run(op, || {
-            distance::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
+            mesh::closest(a, &distance::Selection::body(a), b, &distance::Selection::body(b))
                 .map(|c| Closest { distance: c.distance, on_self: engine::point(c.on_a), on_other: engine::point(c.on_b) })
                 .map_err(|e| engine::error(op, e))
         })
@@ -372,7 +372,7 @@ impl Solid {
     /// ```
     pub fn raycast(&self, rays: &[Ray]) -> Result<Vec<Vec<f64>>> {
         let Some(b) = self.form("raycast")? else { return Ok(vec![Vec::new(); rays.len()]) };
-        let caster = rays::Rays::new(b).map_err(|e| engine::error("raycast", e))?;
+        let caster = mesh::rays(b).map_err(|e| engine::error("raycast", e))?;
         rays
             .iter()
             .map(|r| {

@@ -6,7 +6,6 @@ use yack_springrep::{
     boolean, draw,
     math::{Frame, Vec3},
     primitive,
-    rays::Rays,
 };
 
 #[test]
@@ -18,7 +17,7 @@ fn box_behind_a_box_seen_lines() {
     let u = boolean::union(&a, &b).unwrap();
     let d = Vec3::new(0.3074569148383761, -0.4625450798448814, -0.8315781951382322).unit().unwrap();
     let dr = draw::hidden_lines(&u, d, 0.01).unwrap();
-    let rays = Rays::new(&u).unwrap();
+    let rays = yack_springrep::mesh::rays(&u).unwrap();
     // Hidden where the ray toward the viewer from just in front of the point meets material.
     let hidden = |p: Vec3| {
         let hits = rays.cast(p - d * 1e-6, -d, (0.0, 1e3)).unwrap();

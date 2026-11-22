@@ -13,7 +13,7 @@ use std::collections::BinaryHeap;
 
 use crate::{
     Result, boolean,
-    distance::{self, Selection},
+    distance::{Selection},
     math::{Aabb, Point3, Transform, Vec3},
     measure,
     math::bvh::{Bvh, moved_box, on_triangle, ray_triangle, triangles},
@@ -310,7 +310,7 @@ pub fn meeting(a: &Body, b: &Body, rel: &Transform) -> Result<Meeting> {
     }
     let mut placed = b.brep.clone();
     placed.transform(rel);
-    let gap = distance::closest(
+    let gap = crate::mesh::closest(
         &a.brep,
         &Selection::body(&a.brep),
         &placed,

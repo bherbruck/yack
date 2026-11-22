@@ -6,7 +6,7 @@ use yack_springrep::{
     facade::edit,
     math::{Frame, Vec3},
     primitive,
-    rays::{Rays, Side},
+    rays::Side,
 };
 
 #[test]
@@ -37,7 +37,7 @@ fn sheared_cone_classification() {
         let margin = (rad - (a * a + b * b).sqrt()).min(c).min(h - c);
         (margin > 0.0, margin)
     };
-    let rays = Rays::new(&mapped).unwrap();
+    let rays = yack_springrep::mesh::rays(&mapped).unwrap();
     let n = 16;
     let (mut wrong, mut total) = (0, 0);
     for i in 0..n {
@@ -80,7 +80,7 @@ fn sheared_cone_one_point() {
     for f in mapped.face_ids() {
         eprintln!("  face {} {}", f.index(), mapped.face(f).surface.kind());
     }
-    let rays = Rays::new(&mapped).unwrap();
+    let rays = yack_springrep::mesh::rays(&mapped).unwrap();
     // Exactly inside (preimage margin +0.099), placed Outside.
     let p = Vec3::new(36.53894920997076, 22.626132672803138, -19.18988598536717);
     eprintln!("side {:?}", rays.side(p));

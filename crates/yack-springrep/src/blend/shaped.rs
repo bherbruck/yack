@@ -983,7 +983,7 @@ fn corner_cube(at: Point3, a: &[Vec3; 3], size: f64) -> Result<Brep> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{rays::Rays, topo::FaceName};
+    use crate::topo::FaceName;
 
     /// A prism on the polygon `pts`, `h` tall, its sides named `e0`, `e1`, … from the first edge.
     fn prism(pts: &[[f64; 2]], h: f64) -> Brep {
@@ -1113,7 +1113,7 @@ mod tests {
         let rounds = 27.0 - 9.0 * k_ - (1.0 - PI / 6.0);
         assert!(inside > 0.0 && inside < rounds, "{inside} against {rounds}");
         // The point 1 in from two faces on the third, where a ball's corner would touch, is cut.
-        let r = Rays::new(&out).unwrap();
+        let r = crate::mesh::rays(&out).unwrap();
         let hits = r
             .cast(
                 Point3::new(9.0, 9.0, 10.0 - 1e-4),

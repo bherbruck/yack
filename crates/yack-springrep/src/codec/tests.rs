@@ -235,7 +235,7 @@ fn the_bytes_do_not_depend_on_what_was_asked_of_the_solid() {
     let before = bytes(&b);
     measure::volume(&b);
     measure::area(&b);
-    let rays = crate::rays::Rays::new(&b).unwrap();
+    let rays = crate::mesh::rays(&b).unwrap();
     rays.side(p(5.0, 5.0, 5.0));
     let square = Profile::rect(Vec2::new(10.0, 10.0), 4.0, 4.0);
     let post = extrude(&square, &at_z(-5.0), 20.0, "post").unwrap();
