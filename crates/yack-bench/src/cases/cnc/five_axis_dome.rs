@@ -5,10 +5,7 @@ use yack::prelude::*;
 pub fn build() -> Result<Solid> {
     // The program as data, as the cutter's rigid motion relative to the part: slides, turns about the z axis and
     // turns about level lines through the origin; each tool is made at its first pose, its axis along it.
-    let n = |lat: f64, lon: f64| {
-        let (l, p) = (lat.to_radians(), lon.to_radians());
-        Vec3::new(l.cos() * p.cos(), l.cos() * p.sin(), l.sin())
-    };
+    let n = |lat: f64, lon: f64| Dir3::spherical(deg(lat), deg(lon)).vec();
     let slide = |v: Vec3, by: f64| Motion::slide(v * by);
     let about = |axis: Vec3, by: f64| Motion::turn(Point3::ORIGIN, axis, rad(0.0), deg(by));
     let (up, level) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, -1.0, 0.0));

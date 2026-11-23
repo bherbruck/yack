@@ -3,7 +3,7 @@
 use yack::prelude::*;
 pub fn build() -> Result<Solid> {
     // data: g along the line where the pitch cones touch, d square to it; the blank's quadrilateral s·g + u·d in (ρ, z)
-    let (s5, tan20) = (5f64.sqrt(), 20f64.to_radians().tan());
+    let (s5, tan20) = (5f64.sqrt(), deg(20.0).tan());
     let (g, d) = ([2.0 / s5, 0.0, 1.0 / s5], [-1.0 / s5, 0.0, 2.0 / s5]);
     let (ae, ai) = (15.0 * s5, 15.0 * s5 - 10.0);
     let at = |s: f64, u: f64| [s * g[0] + u * d[0], s * g[2] + u * d[2]];
