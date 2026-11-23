@@ -88,6 +88,14 @@ impl Param {
             _ => None,
         }
     }
+
+    /// A string's text, its `''` escapes undone (see [`Param::Str`]).
+    pub fn string(&self) -> Option<&str> {
+        match self {
+            Param::Str(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 /// One record: an entity type's name and its parameters.
@@ -564,6 +572,14 @@ mod tests {
         assert_eq!(f.entities.keys().copied().collect::<Vec<_>>(), [2, 5, 9]);
         // A header without its ENDSEC is no file.
         assert!(parse("ISO-10303-21;\nHEADER;\nFILE_NAME('a');\n").is_err());
+    }
+
+    #[test]
+    fn a_string_reads_as_its_text_and_nothing_else_does() {
+        let f = parse("DATA;\n#1=A('it''s',.T.,#1,\"0F\");\nENDSEC;").unwrap();
+        let p = f.part(1, "A").unwrap();
+        assert_eq!(p[0].string(), Some("it's"));
+        assert!(p[1..].iter().all(|q| q.string().is_none()));
     }
 
     #[test]
