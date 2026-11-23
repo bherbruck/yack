@@ -8,10 +8,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use yack_p21::{File, Param};
+
 use super::{
     WRITER,
     geometry::{Geometry, Placing},
-    part21::{self, File, Param},
+    part21,
     topology,
 };
 use crate::{
@@ -157,8 +159,8 @@ fn params(f: &File, id: u64, kind: &str) -> Option<Vec<Param>> {
 }
 
 fn refs(p: Option<&Param>) -> Vec<u64> {
-    p.and_then(Param::as_list)
-        .map(|l| l.iter().filter_map(Param::as_ref).collect())
+    p.and_then(Param::list)
+        .map(|l| l.iter().filter_map(Param::reference).collect())
         .unwrap_or_default()
 }
 
@@ -166,10 +168,16 @@ fn refs(p: Option<&Param>) -> Vec<u64> {
 /// carries `name, items, context`).
 fn representation(f: &File, id: u64) -> Option<(Vec<u64>, Option<u64>)> {
     let e = f.get(id)?;
-    let (_, p) = e.parts.iter().find(|(k, p)| {
-        k.ends_with("REPRESENTATION") && !k.contains("RELATIONSHIP") && p.len() >= 3
-    })?;
-    Some((refs(p.get(1)), p.get(2).and_then(Param::as_ref)))
+    let p = &e
+        .records()
+        .iter()
+        .find(|r| {
+            r.name.ends_with("REPRESENTATION")
+                && !r.name.contains("RELATIONSHIP")
+                && r.params.len() >= 3
+        })?
+        .params;
+    Some((refs(p.get(1)), p.get(2).and_then(Param::reference)))
 }
 
 struct Assembly<'a> {
@@ -196,51 +204,50 @@ impl<'a> Assembly<'a> {
             visits: std::cell::Cell::new(0),
         };
         let mut nauo_place: HashMap<u64, u64> = HashMap::new();
-        for e in &file.entities {
+        for (_, e) in part21::entities(file) {
             if let Some(p) = e.part("SHAPE_DEFINITION_REPRESENTATION") {
                 let (Some(pds), Some(rep)) = (
-                    p.first().and_then(Param::as_ref),
-                    p.get(1).and_then(Param::as_ref),
+                    p.first().and_then(Param::reference),
+                    p.get(1).and_then(Param::reference),
                 ) else {
                     continue;
                 };
                 if let Some(pd) = params(file, pds, "PRODUCT_DEFINITION_SHAPE")
-                    .and_then(|q| q.get(2).and_then(Param::as_ref))
+                    .and_then(|q| q.get(2).and_then(Param::reference))
                 {
                     a.reps.entry(pd).or_default().push(rep);
                 }
             } else if let Some(p) = e.part("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION") {
                 let (Some(rel), Some(pds)) = (
-                    p.first().and_then(Param::as_ref),
-                    p.get(1).and_then(Param::as_ref),
+                    p.first().and_then(Param::reference),
+                    p.get(1).and_then(Param::reference),
                 ) else {
                     continue;
                 };
                 if let Some(nauo) = params(file, pds, "PRODUCT_DEFINITION_SHAPE")
-                    .and_then(|q| q.get(2).and_then(Param::as_ref))
+                    .and_then(|q| q.get(2).and_then(Param::reference))
                 {
                     nauo_place.insert(nauo, rel);
                 }
-            } else if !e.has("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")
+            } else if !e.is("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")
                 && let Some(p) = e.part("REPRESENTATION_RELATIONSHIP").or_else(|| {
                     e.part("SHAPE_REPRESENTATION_RELATIONSHIP")
                         .filter(|p| p.len() >= 4)
                 })
                 && let (Some(r1), Some(r2)) = (
-                    p.get(2).and_then(Param::as_ref),
-                    p.get(3).and_then(Param::as_ref),
+                    p.get(2).and_then(Param::reference),
+                    p.get(3).and_then(Param::reference),
                 )
             {
                 a.links.entry(r1).or_default().push(r2);
                 a.links.entry(r2).or_default().push(r1);
             }
         }
-        for (i, e) in file.entities.iter().enumerate() {
+        for (id, e) in part21::entities(file) {
             if let Some(p) = e.part("NEXT_ASSEMBLY_USAGE_OCCURRENCE") {
-                let id = file.ids[i];
                 let (Some(parent), Some(child)) = (
-                    p.get(3).and_then(Param::as_ref),
-                    p.get(4).and_then(Param::as_ref),
+                    p.get(3).and_then(Param::reference),
+                    p.get(4).and_then(Param::reference),
                 ) else {
                     continue;
                 };
@@ -314,7 +321,7 @@ impl<'a> Assembly<'a> {
             };
             for it in items {
                 let Some(e) = self.file.get(it) else { continue };
-                if SOLIDS.contains(&e.kind()) {
+                if SOLIDS.contains(&part21::kind(e)) {
                     if out.len() >= MAX_PLACEMENTS {
                         return cyclic(it, "the assembly places too many solids");
                     }
@@ -339,10 +346,10 @@ impl<'a> Assembly<'a> {
 
     /// A `MAPPED_ITEM`'s source representation and its placement in the target.
     fn mapped(&self, geo: &mut Geometry, p: &[Param]) -> Option<(u64, Placing)> {
-        let map = params(self.file, p.get(1)?.as_ref()?, "REPRESENTATION_MAP")?;
-        let origin = geo.transform_of(map.first()?.as_ref()?).ok()?;
-        let src = map.get(1)?.as_ref()?;
-        let target = geo.transform_of(p.get(2)?.as_ref()?).ok()?;
+        let map = params(self.file, p.get(1)?.reference()?, "REPRESENTATION_MAP")?;
+        let origin = geo.transform_of(map.first()?.reference()?).ok()?;
+        let src = map.get(1)?.reference()?;
+        let target = geo.transform_of(p.get(2)?.reference()?).ok()?;
         Some((src, origin.inverse().then(&target)))
     }
 
@@ -350,11 +357,11 @@ impl<'a> Assembly<'a> {
     fn placement(&self, geo: &mut Geometry, child: u64, rel: u64) -> Option<Placing> {
         let e = self.file.get(rel)?;
         let rr = e.part("REPRESENTATION_RELATIONSHIP")?;
-        let (r1, r2) = (rr.get(2)?.as_ref()?, rr.get(3)?.as_ref()?);
+        let (r1, r2) = (rr.get(2)?.reference()?, rr.get(3)?.reference()?);
         let op = e
             .part("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")?
             .first()?
-            .as_ref()?;
+            .reference()?;
         let child_reps: Vec<u64> = self
             .reps
             .get(&child)
@@ -367,9 +374,9 @@ impl<'a> Assembly<'a> {
         let oe = self.file.get(op)?;
         if let Some(it) = oe.part("ITEM_DEFINED_TRANSFORMATION") {
             geo.use_context(context(r1)).ok()?;
-            let a = geo.transform_of(it.get(2)?.as_ref()?).ok()?;
+            let a = geo.transform_of(it.get(2)?.reference()?).ok()?;
             geo.use_context(context(r2)).ok()?;
-            let b = geo.transform_of(it.get(3)?.as_ref()?).ok()?;
+            let b = geo.transform_of(it.get(3)?.reference()?).ok()?;
             let (from, to) = if child_is_r1 { (a, b) } else { (b, a) };
             Some(from.inverse().then(&to))
         } else {
@@ -477,25 +484,25 @@ pub fn read_part(text: &[u8], feature: &str) -> Result<Brep> {
 /// gave them; otherwise each is `<feature>.face_<i>`, numbered in the order the solids are placed.
 pub fn read(text: &[u8], feature: &str) -> Result<Import> {
     let file = part21::parse(text)?;
-    let ours = file.originating_system() == Some(WRITER);
+    let ours = part21::originating_system(&file) == Some(WRITER);
     let mut geo = Geometry::new(&file);
     let mut placements = Assembly::new(&file).placements(&mut geo)?;
     if placements.is_empty() {
         // Without a product structure, a solid takes its units and uncertainty from a
         // representation that holds it, if one does.
         let mut contexts: HashMap<u64, u64> = HashMap::new();
-        for &id in &file.ids {
+        for &id in &file.order {
             if let Some((items, Some(ctx))) = representation(&file, id) {
                 for it in items {
                     contexts.entry(it).or_insert(ctx);
                 }
             }
         }
-        for (i, e) in file.entities.iter().enumerate() {
-            if SOLIDS.contains(&e.kind()) {
+        for (id, e) in part21::entities(&file) {
+            if SOLIDS.contains(&part21::kind(e)) {
                 placements.push(Placement {
-                    solid: file.ids[i],
-                    context: contexts.get(&file.ids[i]).copied(),
+                    solid: id,
+                    context: contexts.get(&id).copied(),
                     at: Placing::IDENTITY,
                     product: None,
                     uses: Vec::new(),
@@ -606,22 +613,22 @@ pub fn read(text: &[u8], feature: &str) -> Result<Import> {
 }
 
 fn text(p: Option<&Param>) -> Option<String> {
-    p.and_then(Param::as_str)
+    p.and_then(Param::string)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
 /// The name of the product a product definition defines, or its id where it has no name.
 fn product_name(file: &File, pd: u64) -> Option<String> {
-    let formation = params(file, pd, "PRODUCT_DEFINITION")?.get(2)?.as_ref()?;
+    let formation = params(file, pd, "PRODUCT_DEFINITION")?.get(2)?.reference()?;
     let formed = file.get(formation)?;
     let product = formed
-        .parts
+        .records()
         .iter()
-        .find(|(k, _)| k.starts_with("PRODUCT_DEFINITION_FORMATION"))?
-        .1
+        .find(|r| r.name.starts_with("PRODUCT_DEFINITION_FORMATION"))?
+        .params
         .get(2)?
-        .as_ref()?;
+        .reference()?;
     let p = params(file, product, "PRODUCT")?;
     text(p.get(1)).or_else(|| text(p.first()))
 }
@@ -646,14 +653,14 @@ fn all_refs(p: &Param, out: &mut Vec<u64>) {
 fn colour_under(file: &File, id: u64, depth: usize) -> Option<[f64; 3]> {
     let e = file.get(id)?;
     if let Some(p) = e.part("COLOUR_RGB") {
-        let at = |i: usize| p.get(i).and_then(Param::as_f64);
+        let at = |i: usize| p.get(i).and_then(Param::real);
         return Some([at(1)?, at(2)?, at(3)?]);
     }
     if let Some(p) = e
         .part("DRAUGHTING_PRE_DEFINED_COLOUR")
         .or_else(|| e.part("PRE_DEFINED_COLOUR"))
     {
-        return Some(match p.first().and_then(Param::as_str)? {
+        return Some(match p.first().and_then(Param::string)? {
             "red" => [1.0, 0.0, 0.0],
             "green" => [0.0, 1.0, 0.0],
             "blue" => [0.0, 0.0, 1.0],
@@ -669,8 +676,8 @@ fn colour_under(file: &File, id: u64, depth: usize) -> Option<[f64; 3]> {
         return None;
     }
     let mut below = Vec::new();
-    for (_, ps) in &e.parts {
-        ps.iter().for_each(|p| all_refs(p, &mut below));
+    for r in e.records() {
+        r.params.iter().for_each(|p| all_refs(p, &mut below));
     }
     below
         .into_iter()
@@ -683,27 +690,27 @@ fn colours(file: &File) -> HashMap<u64, [f64; 3]> {
     // Usage, side style, fill area, fill style, fill colour, colour.
     const DEPTH: usize = 6;
     let mut out = HashMap::new();
-    for e in &file.entities {
+    for (_, e) in part21::entities(file) {
         let Some(p) = e
             .part("STYLED_ITEM")
             .or_else(|| e.part("OVER_RIDING_STYLED_ITEM"))
         else {
             continue;
         };
-        let Some(item) = p.get(2).and_then(Param::as_ref) else {
+        let Some(item) = p.get(2).and_then(Param::reference) else {
             continue;
         };
         let mut styles = Vec::new();
         for assignment in refs(p.get(1)) {
             if let Some(a) = file.get(assignment) {
-                for (_, ps) in &a.parts {
-                    ps.iter().for_each(|x| all_refs(x, &mut styles));
+                for r in a.records() {
+                    r.params.iter().for_each(|x| all_refs(x, &mut styles));
                 }
             }
         }
         let colour = styles
             .into_iter()
-            .filter(|&s| file.get(s).is_some_and(|x| x.has("SURFACE_STYLE_USAGE")))
+            .filter(|&s| file.get(s).is_some_and(|x| x.is("SURFACE_STYLE_USAGE")))
             .find_map(|s| colour_under(file, s, DEPTH));
         if let Some(c) = colour {
             out.entry(item).or_insert(c);
@@ -723,12 +730,12 @@ fn weight(file: &File, solid: u64) -> usize {
         let Some(e) = file.get(id) else {
             return Vec::new();
         };
-        let Some(p) = e.parts.first().map(|p| &p.1) else {
+        let Some(p) = e.records().first().map(|r| &r.params) else {
             return Vec::new();
         };
         match p.get(at) {
-            Some(Param::List(l)) => l.iter().filter_map(Param::as_ref).collect(),
-            Some(x) => x.as_ref().into_iter().collect(),
+            Some(Param::List(l)) => l.iter().filter_map(Param::reference).collect(),
+            Some(x) => x.reference().into_iter().collect(),
             None => Vec::new(),
         }
     };
@@ -737,13 +744,13 @@ fn weight(file: &File, solid: u64) -> usize {
     let mut total = 0;
     for sh in shells {
         let sh = match file.get(sh).and_then(|e| e.part("ORIENTED_CLOSED_SHELL")) {
-            Some(p) => p.get(2).and_then(Param::as_ref).unwrap_or(sh),
+            Some(p) => p.get(2).and_then(Param::reference).unwrap_or(sh),
             None => sh,
         };
         for f in refs_of(sh, 1) {
             total += 1;
             let Some(face) = file.get(f) else { continue };
-            let Some(s) = face.parts[0].1.get(2).and_then(Param::as_ref) else {
+            let Some(s) = face.records()[0].params.get(2).and_then(Param::reference) else {
                 continue;
             };
             let Some(e) = file.get(s) else { continue };
@@ -756,8 +763,8 @@ fn weight(file: &File, solid: u64) -> usize {
                 (None, Some(p)) => p.get(3),
                 _ => None,
             };
-            total += net.and_then(Param::as_list).map_or(0, |rows| {
-                rows.iter().filter_map(Param::as_list).map(<[_]>::len).sum()
+            total += net.and_then(Param::list).map_or(0, |rows| {
+                rows.iter().filter_map(Param::list).map(<[_]>::len).sum()
             });
         }
     }

@@ -1,138 +1,14 @@
-// yack: The STEP exchange structure (ISO 10303-21): a parser of the header and the data section into
+// yack: STEP's exchange structure as the readers take it: yack-p21's file, its names and
+// enumerations upper-cased, its strings' control directives decoded; and the writer's string encoding.
 // Adapted from springrep@a03e8a1 src/step/part21.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: parsing delegated to yack-p21 (M3 native rewrite); springrep's types, accessors and
-// string codec kept, the instances in the file's order, names and enumerations upper-cased.
-//! The STEP exchange structure (ISO 10303-21): a parser of the header and the data section into
-//! entity instances, and the string encoding the writer uses.
+// Changes: parsing delegated to yack-p21 (M3 native rewrite) and its types used directly; the
+// string codec kept.
+//! STEP's exchange structure as the readers take it: [`yack_p21`]'s file, normalised as springrep
+//! read it, and the string encoding the writer uses.
 
-use std::collections::HashMap;
+use yack_p21::{Entity, File, Param, Record};
 
 use crate::{Error, Result};
-
-/// One parameter of an entity instance.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Param {
-    Ref(u64),
-    Int(i64),
-    Real(f64),
-    Str(String),
-    Enum(String),
-    List(Vec<Param>),
-    /// `$`: no value.
-    Unset,
-    /// `*`: the value is derived from other attributes.
-    Derived,
-    /// A value tagged with its type, such as `LENGTH_MEASURE(0.01)`.
-    Typed(String, Box<Param>),
-}
-
-impl Param {
-    pub(super) fn as_ref(&self) -> Option<u64> {
-        match self {
-            Param::Ref(r) => Some(*r),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_f64(&self) -> Option<f64> {
-        match self {
-            Param::Real(x) => Some(*x),
-            Param::Int(i) => Some(*i as f64),
-            Param::Typed(_, p) => p.as_f64(),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_i64(&self) -> Option<i64> {
-        match self {
-            Param::Int(i) => Some(*i),
-            Param::Real(x) if x.fract() == 0.0 => Some(*x as i64),
-            Param::Typed(_, p) => p.as_i64(),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_list(&self) -> Option<&[Param]> {
-        match self {
-            Param::List(l) => Some(l),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_str(&self) -> Option<&str> {
-        match self {
-            Param::Str(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// A logical or boolean: `.T.` or `.F.`; `.U.` and anything else is `None`.
-    pub(super) fn as_bool(&self) -> Option<bool> {
-        match self {
-            Param::Enum(e) if e == "T" => Some(true),
-            Param::Enum(e) if e == "F" => Some(false),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_enum(&self) -> Option<&str> {
-        match self {
-            Param::Enum(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-/// An entity instance: one `(TYPE, parameters)` part for a simple instance, several for a complex
-/// one written as `(A(..) B(..))`.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Entity {
-    pub parts: Vec<(String, Vec<Param>)>,
-}
-
-impl Entity {
-    /// The type of a simple instance; a complex one has no single type.
-    pub(super) fn kind(&self) -> &str {
-        if self.parts.len() == 1 {
-            &self.parts[0].0
-        } else {
-            ""
-        }
-    }
-
-    /// The parameters of the part named `kind`, of a simple or a complex instance.
-    pub(super) fn part(&self, kind: &str) -> Option<&[Param]> {
-        self.parts
-            .iter()
-            .find(|(k, _)| k == kind)
-            .map(|(_, p)| p.as_slice())
-    }
-
-    pub(super) fn has(&self, kind: &str) -> bool {
-        self.parts.iter().any(|(k, _)| k == kind)
-    }
-}
-
-/// A parsed exchange file: its header entities and its data section, by instance id.
-#[derive(Debug, Default)]
-pub(super) struct File {
-    pub header: Vec<Entity>,
-    pub ids: Vec<u64>,
-    pub entities: Vec<Entity>,
-    index: HashMap<u64, usize>,
-}
-
-impl File {
-    pub(super) fn get(&self, id: u64) -> Option<&Entity> {
-        self.index.get(&id).map(|&i| &self.entities[i])
-    }
-
-    /// The `originating_system` field of the header's `FILE_NAME`.
-    pub(super) fn originating_system(&self) -> Option<&str> {
-        let f = self.header.iter().find_map(|e| e.part("FILE_NAME"))?;
-        f.get(5)?.as_str()
-    }
-}
 
 fn err<T>(msg: impl Into<String>, at: usize) -> Result<T> {
     Err(Error::InvalidInput(format!(
@@ -170,27 +46,62 @@ fn opens_as_part21(s: &[u8]) -> bool {
 
 /// A yack-p21 parameter as springrep's: names and enumerations upper-cased, strings with their
 /// control directives decoded and their line breaks dropped, a binary as its hex string.
-fn param(p: &yack_p21::Param) -> Param {
-    use yack_p21::Param as P;
+/// One parameter as springrep read it: names and enumerations upper-cased, strings with their
+/// line breaks dropped and control directives decoded, a binary as its hex string.
+fn normalise(p: &mut Param) {
     match p {
-        P::Int(i) => Param::Int(*i),
-        P::Real(x) => Param::Real(*x),
-        P::Str(s) => {
+        Param::Str(s) => {
             let raw: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
-            Param::Str(decode_string(&raw))
+            *s = decode_string(&raw);
         }
-        P::Binary(h) => Param::Str(h.clone()),
-        P::Enum(e) => Param::Enum(e.to_ascii_uppercase()),
-        P::Ref(r) => Param::Ref(*r),
-        P::List(l) => Param::List(l.iter().map(param).collect()),
-        P::Typed(n, inner) => Param::Typed(n.to_ascii_uppercase(), Box::new(param(inner))),
-        P::Unset => Param::Unset,
-        P::Derived => Param::Derived,
+        Param::Binary(h) => {
+            let hex = std::mem::take(h);
+            *p = Param::Str(hex);
+        }
+        Param::Enum(e) => e.make_ascii_uppercase(),
+        Param::List(l) => l.iter_mut().for_each(normalise),
+        Param::Typed(n, inner) => {
+            n.make_ascii_uppercase();
+            normalise(inner);
+        }
+        _ => {}
     }
 }
 
-fn part(r: &yack_p21::Record) -> (String, Vec<Param>) {
-    (r.name.to_ascii_uppercase(), r.params.iter().map(param).collect())
+fn normalise_record(r: &mut Record) {
+    r.name.make_ascii_uppercase();
+    r.params.iter_mut().for_each(normalise);
+}
+
+/// The instances in the order the file gives them.
+pub(super) fn entities(f: &File) -> impl Iterator<Item = (u64, &Entity)> {
+    f.order.iter().filter_map(|&id| f.get(id).map(|e| (id, e)))
+}
+
+/// The `originating_system` field of the header's `FILE_NAME`.
+pub(super) fn originating_system(f: &File) -> Option<&str> {
+    let name = f.header.iter().find(|r| r.name == "FILE_NAME")?;
+    name.params.get(5)?.string()
+}
+
+/// An integer, or a real with no fraction (a file may write a degree or an index as `2.`, and
+/// springrep has always read it as 2).
+pub(super) fn integral(p: &Param) -> Option<i64> {
+    match p {
+        Param::Int(i) => Some(*i),
+        Param::Real(x) if x.fract() == 0.0 => Some(*x as i64),
+        Param::Typed(_, inner) => integral(inner),
+        _ => None,
+    }
+}
+
+/// The type of an instance of one record, written simple or as a one-record complex instance;
+/// a complex instance of several records has none (`""`).
+pub(super) fn kind(e: &Entity) -> &str {
+    match e.records() {
+        [r] => &r.name,
+        _ => "",
+    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -275,25 +186,14 @@ pub(super) fn parse(text: &[u8]) -> Result<File> {
     if !opens_as_part21(text) {
         return err("not an ISO-10303-21 file", 0);
     }
-    let read = yack_p21::parse(&String::from_utf8_lossy(text))
+    let mut file = yack_p21::parse(&String::from_utf8_lossy(text))
         .map_err(|e| Error::InvalidInput(format!("STEP: {}", e.detail)))?;
-    let mut file = File {
-        header: read
-            .header
-            .iter()
-            .map(|r| Entity {
-                parts: vec![part(r)],
-            })
-            .collect(),
-        ..File::default()
-    };
-    for &id in &read.order {
-        let Some(e) = read.get(id) else { continue };
-        file.index.insert(id, file.entities.len());
-        file.ids.push(id);
-        file.entities.push(Entity {
-            parts: e.records().iter().map(part).collect(),
-        });
+    file.header.iter_mut().for_each(normalise_record);
+    for e in file.entities.values_mut() {
+        match e {
+            Entity::Simple(r) => normalise_record(r),
+            Entity::Complex(rs) => rs.iter_mut().for_each(normalise_record),
+        }
     }
     Ok(file)
 }
@@ -311,23 +211,23 @@ mod tests {
             #3=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#2,'it''s','\\X2\\00E9\\X0\\');\n\
             ENDSEC;\nEND-ISO-10303-21;\n";
         let f = parse(text).unwrap();
-        assert_eq!(f.originating_system(), Some("sys /* x */"));
+        assert_eq!(originating_system(&f), Some("sys /* x */"));
         let p = f.get(1).unwrap();
-        assert_eq!(p.kind(), "CARTESIAN_POINT");
-        let xyz = p.parts[0].1[1].as_list().unwrap();
-        assert_eq!(xyz[1].as_f64(), Some(15.0));
+        assert_eq!(kind(p), "CARTESIAN_POINT");
+        let xyz = p.records()[0].params[1].list().unwrap();
+        assert_eq!(xyz[1].real(), Some(15.0));
         assert_eq!(xyz[2], Param::Int(-2));
         let u = f.get(2).unwrap();
-        assert_eq!(u.kind(), "");
-        assert_eq!(u.part("SI_UNIT").unwrap()[0].as_enum(), Some("MILLI"));
+        assert_eq!(kind(u), "");
+        assert_eq!(u.part("SI_UNIT").unwrap()[0].enumeration(), Some("MILLI"));
         let m = f
             .get(3)
             .unwrap()
             .part("UNCERTAINTY_MEASURE_WITH_UNIT")
             .unwrap();
-        assert_eq!(m[0].as_f64(), Some(1e-7));
-        assert_eq!(m[2].as_str(), Some("it's"));
-        assert_eq!(m[3].as_str(), Some("é"));
+        assert_eq!(m[0].real(), Some(1e-7));
+        assert_eq!(m[2].string(), Some("it's"));
+        assert_eq!(m[3].string(), Some("é"));
     }
 
     #[test]
@@ -349,19 +249,23 @@ mod tests {
         for s in ["plain", "a.b;c.d", "quote ' and \\ slash", "ünïcode ✓"] {
             let text = format!("ISO-10303-21;\nDATA;\n#1=A({});\nENDSEC;\n", encode_string(s));
             let f = parse(text.as_bytes()).unwrap();
-            assert_eq!(f.get(1).unwrap().part("A").unwrap()[0].as_str(), Some(s));
+            assert_eq!(f.part(1, "A").unwrap()[0].string(), Some(s));
         }
     }
 
     #[test]
     fn keeps_the_file_order_and_refuses_a_file_without_its_opening() {
         let text = b"ISO-10303-21;\nHEADER;\nFILE_NAME('a','',(''),(''),'','sys','');\nENDSEC;\n\
-            DATA;\n#9=a(.t.);\n#2=B(#9);\nENDSEC;\nEND-ISO-10303-21;\n";
+            DATA;\n#9=a(.t.,2.,LENGTH(3.));\n#2=(B(#9));\nENDSEC;\nEND-ISO-10303-21;\n";
         let f = parse(text).unwrap();
-        assert_eq!(f.ids, [9, 2]);
-        assert_eq!(f.get(9).unwrap().kind(), "A");
-        assert_eq!(f.get(9).unwrap().parts[0].1[0].as_bool(), Some(true));
-        assert_eq!(f.originating_system(), Some("sys"));
+        assert_eq!(entities(&f).map(|(id, _)| id).collect::<Vec<_>>(), [9, 2]);
+        let a = f.get(9).unwrap();
+        assert_eq!(kind(a), "A");
+        assert_eq!(a.records()[0].params[0].boolean(), Some(true));
+        assert_eq!(integral(&a.records()[0].params[1]), Some(2));
+        assert_eq!(integral(&a.records()[0].params[2]), Some(3));
+        assert_eq!(kind(f.get(2).unwrap()), "B");
+        assert_eq!(originating_system(&f), Some("sys"));
         assert!(parse(b"DATA;\n#1=A(1);\nENDSEC;\n").is_err());
         assert!(parse(b"/* c */ iso-10303-21 ;\nDATA;\n#1=A(1);\nENDSEC;\n").is_ok());
     }

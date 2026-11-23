@@ -11,7 +11,9 @@
 use std::collections::HashMap;
 
 use super::geometry::Geometry;
-use super::part21::Param;
+use yack_p21::Param;
+
+use super::part21;
 use crate::{
     Error, Result,
     build::{Raw, RawEdge, RawFace, Use, assemble, edge_range, heal, param_of},
@@ -224,14 +226,14 @@ impl<'g, 'a> Reader<'g, 'a> {
         let Some(e) = self.geo.file.get(id) else {
             return bad(id, "missing instance");
         };
-        for (k, p) in &e.parts {
-            if kinds.contains(&k.as_str()) {
-                return Ok((k.as_str(), p.as_slice()));
+        for r in e.records() {
+            if kinds.contains(&r.name.as_str()) {
+                return Ok((r.name.as_str(), r.params.as_slice()));
             }
         }
         unsupported(
             id,
-            &format!("{} where {} was expected", e.kind(), kinds.join(" or ")),
+            &format!("{} where {} was expected", part21::kind(e), kinds.join(" or ")),
         )
     }
 
@@ -256,7 +258,7 @@ impl<'g, 'a> Reader<'g, 'a> {
         let vs = self.vertex(self.geo.reference(id, a.get(1))?)?;
         let ve = self.vertex(self.geo.reference(id, a.get(2))?)?;
         let curve = self.geo.curve(self.geo.reference(id, a.get(3))?)?;
-        let flip = a.get(4).and_then(Param::as_bool) == Some(false);
+        let flip = a.get(4).and_then(Param::boolean) == Some(false);
         let (start, end) = if flip { (ve, vs) } else { (vs, ve) };
         self.raw.edges.push(RawEdge {
             id,
@@ -287,7 +289,7 @@ impl<'g, 'a> Reader<'g, 'a> {
     /// The uses of a `POLY_LOOP`'s straight sides, each side shared with the face across it.
     fn poly_loop(&mut self, lp: u64, la: &[Param], forward: bool) -> Result<Vec<Use>> {
         let mut corners = Vec::new();
-        for p in la.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+        for p in la.get(1).and_then(Param::list).unwrap_or(&[]) {
             corners.push(self.corner(self.geo.reference(lp, Some(p))?)?);
         }
         corners.dedup();
@@ -336,7 +338,7 @@ impl<'g, 'a> Reader<'g, 'a> {
         let (kind, a) = self.params(id, &["FACE_OUTER_BOUND", "FACE_BOUND"])?;
         let outer = kind == "FACE_OUTER_BOUND";
         let lp = self.geo.reference(id, a.get(1))?;
-        let orient = a.get(2).and_then(Param::as_bool) != Some(false);
+        let orient = a.get(2).and_then(Param::boolean) != Some(false);
         let (lk, la) = self.params(lp, &["EDGE_LOOP", "VERTEX_LOOP", "POLY_LOOP"])?;
         match lk {
             "VERTEX_LOOP" => {
@@ -353,11 +355,11 @@ impl<'g, 'a> Reader<'g, 'a> {
             _ => {}
         }
         let mut uses = Vec::new();
-        for oe in la.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+        for oe in la.get(1).and_then(Param::list).unwrap_or(&[]) {
             let oe = self.geo.reference(lp, Some(oe))?;
             let (_, p) = self.params(oe, &["ORIENTED_EDGE"])?;
             let (edge, flip) = self.edge(self.geo.reference(oe, p.get(3))?)?;
-            let along = p.get(4).and_then(Param::as_bool) != Some(false);
+            let along = p.get(4).and_then(Param::boolean) != Some(false);
             uses.push(Use {
                 edge,
                 reversed: ((along == orient) ^ flip_face) == flip,
@@ -835,12 +837,12 @@ impl<'g, 'a> Reader<'g, 'a> {
 
     fn face(&mut self, id: u64, flip_face: bool) -> Result<usize> {
         let (_, a) = self.params(id, &["ADVANCED_FACE", "FACE_SURFACE"])?;
-        let name = a.first().and_then(Param::as_str).unwrap_or("").to_string();
+        let name = a.first().and_then(Param::string).unwrap_or("").to_string();
         let mut surface = self.geo.surface(self.geo.reference(id, a.get(2))?)?;
-        let same_sense = a.get(3).and_then(Param::as_bool) != Some(false);
+        let same_sense = a.get(3).and_then(Param::boolean) != Some(false);
         let mut bounds = Vec::new();
         let mut apexes = Vec::new();
-        for bd in a.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+        for bd in a.get(1).and_then(Param::list).unwrap_or(&[]) {
             match self.bound(self.geo.reference(id, Some(bd))?, flip_face)? {
                 Bound::Edges(outer, uses) => bounds.push((outer, uses)),
                 Bound::Vertex(v) => apexes.push(v),
@@ -953,7 +955,8 @@ impl<'g, 'a> Reader<'g, 'a> {
         let Some(e) = self.geo.file.get(id) else {
             return bad(id, "missing instance");
         };
-        let (kind, a) = (&e.parts[0].0, &e.parts[0].1);
+        let first = &e.records()[0];
+        let (kind, a) = (&first.name, &first.params);
         let mut shells: Vec<u64> = Vec::new();
         match kind.as_str() {
             "MANIFOLD_SOLID_BREP" | "FACETED_BREP" => {
@@ -961,7 +964,7 @@ impl<'g, 'a> Reader<'g, 'a> {
             }
             "BREP_WITH_VOIDS" => {
                 shells.push(self.geo.reference(id, a.get(1))?);
-                for v in a.get(2).and_then(Param::as_list).unwrap_or(&[]) {
+                for v in a.get(2).and_then(Param::list).unwrap_or(&[]) {
                     shells.push(self.geo.reference(id, Some(v))?);
                 }
             }
@@ -975,12 +978,12 @@ impl<'g, 'a> Reader<'g, 'a> {
                 .get(sh)
                 .and_then(|e| e.part("ORIENTED_CLOSED_SHELL"))
             {
-                flip = p.get(3).and_then(Param::as_bool) == Some(false);
+                flip = p.get(3).and_then(Param::boolean) == Some(false);
                 sh = self.geo.reference(sh, p.get(2))?;
             }
             let (_, p) = self.params(sh, &["CLOSED_SHELL"])?;
             let mut faces = Vec::new();
-            for f in p.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+            for f in p.get(1).and_then(Param::list).unwrap_or(&[]) {
                 faces.push(self.face(self.geo.reference(sh, Some(f))?, flip)?);
             }
             self.raw.shells.push(faces);
@@ -1097,7 +1100,7 @@ fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> {
     let mut points: Vec<Point3> = Vec::new();
     let mut index: HashMap<(u64, usize), usize> = HashMap::new();
     let mut triangles: Vec<[usize; 3]> = Vec::new();
-    for item in solid.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+    for item in solid.get(1).and_then(Param::list).unwrap_or(&[]) {
         let fid = geo.reference(id, Some(item))?;
         let entity = geo.file.get(fid);
         let (face, complex) = match (
@@ -1118,7 +1121,7 @@ fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> {
             return bad(list, "expected a coordinates list");
         };
         let mut xyz = Vec::new();
-        for c in coords.get(2).and_then(Param::as_list).unwrap_or(&[]) {
+        for c in coords.get(2).and_then(Param::list).unwrap_or(&[]) {
             let v = geo.numbers(list, Some(c))?;
             if v.len() != 3 || v.iter().any(|x| !x.is_finite()) {
                 return bad(list, "expected three finite coordinates");
@@ -1128,10 +1131,10 @@ fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> {
         // Triangle corners index the face's own points, which index the coordinates list.
         let own: Vec<usize> = face
             .get(5)
-            .and_then(Param::as_list)
+            .and_then(Param::list)
             .unwrap_or(&[])
             .iter()
-            .map(|p| p.as_i64().map_or(0, |i| i as usize))
+            .map(|p| part21::integral(p).map_or(0, |i| i as usize))
             .collect();
         let corner = |k: i64| -> Option<usize> {
             let k = usize::try_from(k).ok()?.checked_sub(1)?;
@@ -1144,14 +1147,14 @@ fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> {
         };
         let lists = |at: usize| -> Vec<Vec<i64>> {
             face.get(at)
-                .and_then(Param::as_list)
+                .and_then(Param::list)
                 .unwrap_or(&[])
                 .iter()
                 .map(|l| {
-                    l.as_list()
+                    l.list()
                         .unwrap_or(&[])
                         .iter()
-                        .filter_map(Param::as_i64)
+                        .filter_map(part21::integral)
                         .collect()
                 })
                 .collect()
@@ -1208,13 +1211,9 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
 /// together become one, faces are turned so each shared edge runs opposite ways in its two faces,
 /// and the solid is healed onto its faces' surfaces as a read one is.
 pub(super) fn sew(geo: &mut Geometry, tolerance: f64) -> Result<Brep> {
-    let shells: Vec<u64> = geo
-        .file
-        .ids
-        .iter()
-        .zip(&geo.file.entities)
-        .filter(|(_, e)| matches!(e.kind(), "OPEN_SHELL" | "CLOSED_SHELL"))
-        .map(|(&id, _)| id)
+    let shells: Vec<u64> = part21::entities(geo.file)
+        .filter(|(_, e)| matches!(part21::kind(e), "OPEN_SHELL" | "CLOSED_SHELL"))
+        .map(|(id, _)| id)
         .collect();
     let mut rd = Reader {
         geo,
@@ -1228,7 +1227,7 @@ pub(super) fn sew(geo: &mut Geometry, tolerance: f64) -> Result<Brep> {
     let mut faces = Vec::new();
     for sh in shells {
         let (_, p) = rd.params(sh, &["OPEN_SHELL", "CLOSED_SHELL"])?;
-        for f in p.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+        for f in p.get(1).and_then(Param::list).unwrap_or(&[]) {
             faces.push(rd.face(rd.geo.reference(sh, Some(f))?, false)?);
         }
     }

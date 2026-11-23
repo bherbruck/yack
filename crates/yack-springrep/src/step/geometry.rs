@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::part21::{Entity, File, Param};
+use yack_p21::{Entity, File, Param};
+
+use super::part21;
 use crate::{
     Error, Result,
     geom::{
@@ -39,7 +41,7 @@ impl Units {
 }
 
 fn si_prefix(p: &Param) -> f64 {
-    match p.as_enum() {
+    match p.enumeration() {
         Some("EXA") => 1e18,
         Some("PETA") => 1e15,
         Some("TERA") => 1e12,
@@ -174,12 +176,12 @@ impl<'a> Geometry<'a> {
         let Some(p) = e.part("GLOBAL_UNIT_ASSIGNED_CONTEXT") else {
             return Ok(units);
         };
-        for u in p.first().and_then(Param::as_list).unwrap_or(&[]) {
-            let Some(uid) = u.as_ref() else { continue };
+        for u in p.first().and_then(Param::list).unwrap_or(&[]) {
+            let Some(uid) = u.reference() else { continue };
             let ue = self.entity(uid)?;
-            if ue.has("LENGTH_UNIT") {
+            if ue.is("LENGTH_UNIT") {
                 units.length = self.unit_factor(uid, 1000.0)?;
-            } else if ue.has("PLANE_ANGLE_UNIT") {
+            } else if ue.is("PLANE_ANGLE_UNIT") {
                 units.angle = self.unit_factor(uid, 1.0)?;
             }
         }
@@ -195,20 +197,20 @@ impl<'a> Geometry<'a> {
             .part("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT")?;
         let mut named = None;
         let mut largest: Option<f64> = None;
-        for u in p.first().and_then(Param::as_list).unwrap_or(&[]) {
-            let Some(q) = u.as_ref().and_then(|id| self.file.get(id)) else {
+        for u in p.first().and_then(Param::list).unwrap_or(&[]) {
+            let Some(q) = u.reference().and_then(|id| self.file.get(id)) else {
                 continue;
             };
             let Some(a) = q.part("UNCERTAINTY_MEASURE_WITH_UNIT") else {
                 continue;
             };
             let (Some(v), Some(unit)) = (
-                a.first().and_then(Param::as_f64),
-                a.get(1).and_then(Param::as_ref),
+                a.first().and_then(Param::real),
+                a.get(1).and_then(Param::reference),
             ) else {
                 continue;
             };
-            if !self.entity(unit).is_ok_and(|e| e.has("LENGTH_UNIT")) {
+            if !self.entity(unit).is_ok_and(|e| e.is("LENGTH_UNIT")) {
                 continue;
             }
             let Ok(mm) = self.unit_factor(unit, 1000.0) else {
@@ -219,7 +221,7 @@ impl<'a> Geometry<'a> {
                 continue;
             }
             if a.get(2)
-                .and_then(Param::as_str)
+                .and_then(Param::string)
                 .is_some_and(|n| n.eq_ignore_ascii_case("distance_accuracy_value"))
             {
                 named = Some(d);
@@ -243,14 +245,14 @@ impl<'a> Geometry<'a> {
             return Ok(si_base * si.first().map_or(1.0, si_prefix));
         }
         if let Some(cb) = e.part("CONVERSION_BASED_UNIT") {
-            let Some(m) = cb.get(1).and_then(Param::as_ref) else {
+            let Some(m) = cb.get(1).and_then(Param::reference) else {
                 return bad(id, "conversion-based unit without a measure");
             };
             let me = self.entity(m)?;
-            let p = &me.parts[0].1;
+            let p = &me.records()[0].params;
             let (Some(v), Some(base)) = (
-                p.first().and_then(Param::as_f64),
-                p.get(1).and_then(Param::as_ref),
+                p.first().and_then(Param::real),
+                p.get(1).and_then(Param::reference),
             ) else {
                 return bad(m, "malformed unit measure");
             };
@@ -267,11 +269,11 @@ impl<'a> Geometry<'a> {
     }
 
     fn reals(&self, id: u64, p: Option<&Param>) -> Result<Vec<f64>> {
-        let Some(l) = p.and_then(Param::as_list) else {
+        let Some(l) = p.and_then(Param::list) else {
             return bad(id, "expected a list of numbers");
         };
         l.iter()
-            .map(|x| x.as_f64().ok_or(()))
+            .map(|x| x.real().ok_or(()))
             .collect::<std::result::Result<_, _>>()
             .or_else(|_| bad(id, "expected numbers"))
     }
@@ -287,14 +289,14 @@ impl<'a> Geometry<'a> {
     }
 
     pub(super) fn real(&self, id: u64, p: Option<&Param>) -> Result<f64> {
-        match p.and_then(Param::as_f64) {
+        match p.and_then(Param::real) {
             Some(x) => Ok(x),
             None => bad(id, "expected a number"),
         }
     }
 
     pub(super) fn reference(&self, id: u64, p: Option<&Param>) -> Result<u64> {
-        match p.and_then(Param::as_ref) {
+        match p.and_then(Param::reference) {
             Some(r) => Ok(r),
             None => bad(id, "expected an instance reference"),
         }
@@ -365,14 +367,14 @@ impl<'a> Geometry<'a> {
     pub(super) fn placement(&mut self, id: u64) -> Result<Frame> {
         let e = self.entity(id)?;
         let Some(a) = e.part("AXIS2_PLACEMENT_3D") else {
-            return unsupported(id, &format!("placement {}", e.kind()));
+            return unsupported(id, &format!("placement {}", part21::kind(e)));
         };
         let origin = self.point(self.reference(id, a.get(1))?)?;
-        let z = match a.get(2).and_then(Param::as_ref) {
+        let z = match a.get(2).and_then(Param::reference) {
             Some(r) => self.direction(r)?,
             None => Vec3::Z,
         };
-        let x = match a.get(3).and_then(Param::as_ref) {
+        let x = match a.get(3).and_then(Param::reference) {
             Some(r) => self.direction(r)?,
             None if z.x.abs() < 0.9 => Vec3::X,
             None => Vec3::Y,
@@ -384,12 +386,12 @@ impl<'a> Geometry<'a> {
     /// may also scale uniformly.
     pub(super) fn transform_of(&mut self, id: u64) -> Result<Placing> {
         let e = self.entity(id)?;
-        if e.has("AXIS2_PLACEMENT_3D") {
+        if e.is("AXIS2_PLACEMENT_3D") {
             return Ok(Placing::rigid(self.placement(id)?.to_transform()));
         }
         if let Some(a) = e.part("CARTESIAN_TRANSFORMATION_OPERATOR_3D") {
             let dir = |s: &Self, i: usize, d: Vec3| -> Result<Vec3> {
-                match a.get(i).and_then(Param::as_ref) {
+                match a.get(i).and_then(Param::reference) {
                     Some(r) => s.direction(r),
                     None => Ok(d),
                 }
@@ -397,11 +399,11 @@ impl<'a> Geometry<'a> {
             let x = dir(self, 2, Vec3::X)?;
             let y = dir(self, 3, Vec3::Y)?;
             let origin = self.point(self.reference(id, a.get(4))?)?;
-            let scale = a.get(5).and_then(Param::as_f64).unwrap_or(1.0);
+            let scale = a.get(5).and_then(Param::real).unwrap_or(1.0);
             if !(scale > 0.0 && scale.is_finite()) {
                 return bad(id, "a transformation's scale must be positive");
             }
-            let z = match a.get(6).and_then(Param::as_ref) {
+            let z = match a.get(6).and_then(Param::reference) {
                 Some(r) => self.direction(r)?,
                 None => x.cross(y),
             };
@@ -414,7 +416,7 @@ impl<'a> Geometry<'a> {
                 scale,
             });
         }
-        unsupported(id, &format!("transformation {}", e.kind()))
+        unsupported(id, &format!("transformation {}", part21::kind(e)))
     }
 
     pub(super) fn curve(&mut self, id: u64) -> Result<Curve> {
@@ -428,10 +430,11 @@ impl<'a> Geometry<'a> {
 
     fn make_curve(&mut self, id: u64) -> Result<Curve> {
         let e = self.entity(id)?;
-        if e.has("B_SPLINE_CURVE_WITH_KNOTS") {
+        if e.is("B_SPLINE_CURVE_WITH_KNOTS") {
             return self.bspline_curve(id, e).map(|c| Curve::Nurbs(Box::new(c)));
         }
-        let (kind, a) = &e.parts[0];
+        let first = &e.records()[0];
+        let (kind, a) = (&first.name, &first.params);
         match kind.as_str() {
             "LINE" => {
                 let origin = self.point(self.reference(id, a.get(1))?)?;
@@ -476,7 +479,7 @@ impl<'a> Geometry<'a> {
     }
 
     fn degree(&self, id: u64, p: Option<&Param>) -> Result<usize> {
-        match p.and_then(Param::as_i64) {
+        match p.and_then(part21::integral) {
             Some(d) if d > 0 => Ok(d as usize),
             _ => bad(id, "bad B-spline degree"),
         }
@@ -493,7 +496,7 @@ impl<'a> Geometry<'a> {
         };
         let degree = self.degree(id, head.first())?;
         let mut ctrl = Vec::new();
-        for p in head.get(1).and_then(Param::as_list).unwrap_or(&[]) {
+        for p in head.get(1).and_then(Param::list).unwrap_or(&[]) {
             ctrl.push(self.point(self.reference(id, Some(p))?)?);
         }
         let knots = self.knot_vector(id, knots.first(), knots.get(1))?;
@@ -515,12 +518,13 @@ impl<'a> Geometry<'a> {
 
     fn make_surface(&mut self, id: u64) -> Result<Surface> {
         let e = self.entity(id)?;
-        if e.has("B_SPLINE_SURFACE_WITH_KNOTS") {
+        if e.is("B_SPLINE_SURFACE_WITH_KNOTS") {
             return self
                 .bspline_surface(id, e)
                 .map(|s| Surface::Nurbs(Box::new(s)));
         }
-        let (kind, a) = &e.parts[0];
+        let first = &e.records()[0];
+        let (kind, a) = (&first.name, &first.params);
         let frame = |s: &mut Self| -> Result<Frame> { s.placement(s.reference(id, a.get(1))?) };
         match kind.as_str() {
             "PLANE" => Ok(Surface::Plane(Plane {
@@ -554,7 +558,7 @@ impl<'a> Geometry<'a> {
                 let ax = self.reference(id, a.get(2))?;
                 let p = self.params(ax, "AXIS1_PLACEMENT")?;
                 let origin = self.point(self.reference(ax, p.get(1))?)?;
-                let axis = match p.get(2).and_then(Param::as_ref) {
+                let axis = match p.get(2).and_then(Param::reference) {
                     Some(r) => self.direction(r)?,
                     None => Vec3::Z,
                 };
@@ -583,15 +587,15 @@ impl<'a> Geometry<'a> {
         };
         let du = self.degree(id, head.first())?;
         let dv = self.degree(id, head.get(1))?;
-        let rows = head.get(2).and_then(Param::as_list).unwrap_or(&[]);
+        let rows = head.get(2).and_then(Param::list).unwrap_or(&[]);
         let nu = rows.len();
         let nv = rows
             .first()
-            .and_then(Param::as_list)
+            .and_then(Param::list)
             .map_or(0, <[Param]>::len);
         let mut ctrl = Vec::with_capacity(nu * nv);
         for r in rows {
-            let r = r.as_list().unwrap_or(&[]);
+            let r = r.list().unwrap_or(&[]);
             if r.len() != nv {
                 return bad(id, "ragged control net");
             }
@@ -604,7 +608,7 @@ impl<'a> Geometry<'a> {
         let weights = match e.part("RATIONAL_B_SPLINE_SURFACE") {
             Some(w) => {
                 let mut out = Vec::with_capacity(nu * nv);
-                for r in w.first().and_then(Param::as_list).unwrap_or(&[]) {
+                for r in w.first().and_then(Param::list).unwrap_or(&[]) {
                     out.extend(self.reals(id, Some(r))?);
                 }
                 Some(out)
