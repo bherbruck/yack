@@ -160,7 +160,7 @@ Only `yack`, the temporaries themselves and `from_cadrs.rs` port modules may dep
 | T4 | `topo/codec.rs` ↔ `codec` | All encoding moves into `codec`. Memos are no longer encoded |
 | T5 | blend and `edit::affine` use `step::topology::Parts` | Move it, with the STEP reader's raw assembly, heal and `mesh::solid`, to a new `build` module (yack-build, L7), since it needs check and heal, which topo cannot see |
 | T6 | `boolean/snap.rs` → `edit::tweak` | Move `tweak` and `through` to `src/tweak/` (layer 7) |
-| T7 | `boolean` → `sweep::extrude` for the half-space slab | Build it with `build` |
+| T7 | `sweep::along` → `boolean::union` (sweep sits below boolean) | `along` takes the join from its caller (the facade passes `boolean::union`); `boolean` → `sweep::extrude` for the half-space slab is allowed by the map and stays |
 | T8 | `blend` ↔ `pick` ↔ `edit` | `EdgeName` and `edges_named` move to `topo::names`. `pick` is dissolved. `plane_of` moves to `geom` |
 | T9 | `check` ↔ `measure` | `loop_area` and `fans_at_vertices` move to `topo` |
 | T10 | `measure` → `boolean` (section) | `section` and `section_area` move to `boolean` (to `locate` as plane SSI later) |
