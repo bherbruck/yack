@@ -1,2 +1,3 @@
-# yack-cadrs lines of code (gate 12; may only fall)
-yack-cadrs 172206
+# yack-cadrs lines of code (gate 12): `yack-cadrs/native` (src/native/**) may only fall; `yack-cadrs/glue` (src/facade/** + yack_glue.rs) is recorded, not ratcheted, until M4
+yack-cadrs/glue 3825
+yack-cadrs/native 143983
