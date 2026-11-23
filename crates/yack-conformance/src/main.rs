@@ -107,6 +107,19 @@ impl Kernel for Yack {
                 Primitive::Screw { profile, rise, angle: a, .. } => {
                     make::screw(f, &sketch(profile)?, Lead::per_radian(*rise), rad(*a))
                 }
+                // api.md, sweep: "all lengths, radii and angles must be positive"; yack reads a
+                // negative arc angle as a turn toward −x.
+                Primitive::Sweep { path: p, .. }
+                    if p.iter().any(|q| {
+                        matches!(q, model::PathSeg::Arc { angle, .. } if *angle < 0.0)
+                    }) =>
+                {
+                    Err(yack::Error::invalid(
+                        "sweep",
+                        "path",
+                        "an arc's angle is negative; the protocol's sweep angles are positive",
+                    ))
+                }
                 Primitive::Sweep { profile, path: p, .. } => {
                     make::sweep(f, &sketch(profile)?, &path(p))
                 }
@@ -115,6 +128,17 @@ impl Kernel for Yack {
                 }
                 Primitive::Slab { size, knots_u, knots_v, heights, .. } => {
                     make::slab(f, *size, knots_u, knots_v, heights)
+                }
+                // api.md, loft: "The profile must have one loop"; yack lofts a profile with holes.
+                Primitive::Loft { profile, .. } if profile.loops.len() > 1 => {
+                    Err(yack::Error::invalid(
+                        "loft",
+                        "profile",
+                        format!(
+                            "the profile has {} loops; the protocol's loft profile has one",
+                            profile.loops.len()
+                        ),
+                    ))
                 }
                 Primitive::Loft { profile, scale, height, .. } => {
                     make::loft(f, &sketch(profile)?, *scale, *height)
@@ -230,6 +254,16 @@ impl Kernel for Yack {
     // ---- edits ----
     fn offset(&self, s: &Solid, distance: f64) -> Res<Solid> {
         rec((|| -> Res<Solid> {
+            // api.md, offset: "`distance` must be positive"; yack's offset is signed.
+            if distance < 0.0 {
+                return Err(r(yack::Error::invalid(
+                    "offset",
+                    "distance",
+                    format!(
+                        "distance {distance} is negative; the protocol's offset distance is positive"
+                    ),
+                )));
+            }
             s.offset(distance).map_err(r)
         })())
     }
@@ -260,7 +294,19 @@ impl Kernel for Yack {
     }
     fn draft(&self, s: &Solid, at: &[V], origin: V, pull: V, a: f64) -> Res<Solid> {
         rec((|| -> Res<Solid> {
-            s.draft(&faces(s, at)?, origin, pull, rad(a)).map_err(r)
+            let named = faces(s, at)?;
+            // api.md, draft: "each face must be a plane"; yack drafts curved faces too. Whether a
+            // plane meets the neutral plane stays with the kernel's draft.
+            for &id in &named {
+                if !matches!(s.face(id).map_err(r)?.kind(), yack::SurfaceKind::Plane { .. }) {
+                    return Err(r(yack::Error::invalid(
+                        "draft",
+                        "faces",
+                        "a named face is not a plane; the protocol drafts plane faces only",
+                    )));
+                }
+            }
+            s.draft(&named, origin, pull, rad(a)).map_err(r)
         })())
     }
     fn transform(&self, s: &Solid, m: [[f64; 4]; 3]) -> Res<Solid> {

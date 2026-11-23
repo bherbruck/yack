@@ -2,10 +2,14 @@
 # M2 pure-move window, run by the builder as one request: pre build + copy, apply the move, post build,
 # tests compile, clippy, copy. On any failure after the apply it restores exactly the files the apply
 # touched (in yack-springrep's src/ and tests/, and any --external file), never anything else.
-# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--external FILE...]
+# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--touches FILE...] [--external FILE...]
 set -u
 TAG=$1; APPLY=$2; FILTER=$3; shift 3; tag=$(echo $TAG | tr A-Z a-z)
-EXT=(); APPLY_ARGS=()
+# --touches FILE...: the springrep files the move edits, when other springrep files hold another
+# worker's uncommitted work (lead's ruling for T7); only these must be clean, and the guard over the
+# untouched springrep files still catches any save into the others mid-window
+EXT=(); APPLY_ARGS=(); ONLY=()
+if [ "${1:-}" = "--touches" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--external" ]; do ONLY+=("$1"); shift; done; fi
 if [ "${1:-}" = "--external" ]; then shift; EXT=("$@"); APPLY_ARGS=(--with-external "$@"); fi
 Y=/home/brenn/github/yack; R=/home/brenn/github/yack-ref/bin; SR=$Y/crates/yack-springrep
 cd $Y
@@ -16,7 +20,7 @@ others() { { git diff -- $FC "${EXCL[@]}"; git status --short --untracked-files=
 build() { cargo build -p xtask && cargo build --release -p yack-conformance -p yack-bench; }
 snap() { mkdir -p $R/$1 && cp bin/release/yack-conformance bin/release/yack-bench bin/debug/xtask $R/$1/; }
 
-dirty=$(git status --short -- crates/yack-springrep "${EXT[@]}")
+if [ ${#ONLY[@]} -gt 0 ]; then dirty=$(git status --short -- "${ONLY[@]}" "${EXT[@]}"); else dirty=$(git status --short -- crates/yack-springrep "${EXT[@]}"); fi
 if [ -n "$dirty" ]; then echo "$TAG ABORT: files the move touches have uncommitted changes:"; echo "$dirty"; exit 1; fi
 # yack-springrep's own files outside the move: hashed at the start, and again at the end over every file
 # the apply did not touch, so another worker's save into the crate mid-window is caught too
