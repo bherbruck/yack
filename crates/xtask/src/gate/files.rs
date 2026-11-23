@@ -174,7 +174,7 @@ pub fn provenance(ctx: &Ctx, out: &mut Out) {
 }
 
 /// The SPDX expression of `yack`'s normal/build dependency closure.
-fn closure_spdx(ctx: &Ctx) -> String {
+pub(crate) fn closure_spdx(ctx: &Ctx) -> String {
     let mut seen = BTreeSet::new();
     let mut stack = vec!["yack".to_string()];
     let mut apache = false;

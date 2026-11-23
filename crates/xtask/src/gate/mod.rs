@@ -6,6 +6,7 @@ pub mod api;
 mod cases;
 mod deps;
 mod files;
+pub(crate) use files::closure_spdx;
 pub mod lex;
 mod lints;
 pub mod modgraph;

@@ -1,10 +1,12 @@
 // yack: `cargo xtask`, the gates and benchmark drivers (PLAN §5, §6.6). Std only.
 mod bench;
+mod bundle;
 mod conformance;
 mod digest;
 mod gate;
 mod json;
 mod meta;
+mod step_gap;
 mod toml;
 
 use std::process::ExitCode;
@@ -124,6 +126,8 @@ fn run(cmd: &str, args: &[String]) -> ExitCode {
         "digest" => digest::run(args),
         "ci" => ci(args),
         "digest-proxy" => digest::proxy(args),
+        "bundle" => bundle::run(args),
+        "step-gap" => step_gap::run(args),
         other => {
             eprintln!("xtask: `{other}` is not implemented yet\n\n{HELP}");
             ExitCode::FAILURE
