@@ -91,20 +91,6 @@ fn one_guide_turns_a_profile_drawn_the_other_way() {
     assert!((area(&k, b) - 50.0).abs() < 1e-6, "{}", area(&k, b));
 }
 
-#[test]
-fn a_line_swept_along_a_line_is_a_rectangle() {
-    // A 4 mm line swept 7 mm along a line square to it, keeping its orientation: 4 × 7 = 28.
-    let mut k = NativeKernel::new();
-    let spec = CurveSweepSpec {
-        profile: vec![line([0.0, 0.0, 0.0], [0.0, 0.0, 4.0])],
-        path: vec![line([0.0, 0.0, 0.0], [7.0, 0.0, 0.0])],
-        frame: SweepFrame::KeepOrientation,
-        source: 1,
-    };
-    let b = k.sweep_curves(&spec).unwrap().bodies[0];
-    valid(&k, b);
-    assert!((area(&k, b) - 28.0).abs() < 1e-6, "{}", area(&k, b));
-}
 
 /// A 10 × 10 square sheet in the plane z = 0, corner at the origin (the Fill of its sides).
 fn square(k: &mut NativeKernel) -> BodyId {
@@ -130,24 +116,6 @@ fn square(k: &mut NativeKernel) -> BodyId {
     k.fill(&spec).unwrap().bodies[0]
 }
 
-#[test]
-fn a_curve_projected_onto_a_plane_lands_on_it() {
-    // A line 5 mm above the square, dropped straight down: the same line on it.
-    let mut k = NativeKernel::new();
-    let sq = square(&mut k);
-    let spec = ProjectCurveSpec {
-        curves: vec![line([2.0, 1.0, 5.0], [8.0, 9.0, 5.0])],
-        faces: vec![(sq, FaceId(0))],
-        direction: Vector3::new(0.0, 0.0, -1.0),
-    };
-    let pieces = k.project_curve(&spec).unwrap();
-    assert_eq!(pieces.len(), 1);
-    let p = &pieces[0];
-    let (a, b) = (p.poles[0], p.poles[p.poles.len() - 1]);
-    assert!((a - Point3::new(2.0, 1.0, 0.0)).norm() < 1e-6, "{a:?}");
-    assert!((b - Point3::new(8.0, 9.0, 0.0)).norm() < 1e-6, "{b:?}");
-    assert!(p.poles.iter().all(|q| q.z.abs() < 1e-9));
-}
 
 #[test]
 fn a_face_split_along_a_line_across_it_keeps_its_area() {

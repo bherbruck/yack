@@ -102,15 +102,6 @@ impl Ax3 {
     }
 }
 
-/// A hyperbola (DRAW's `hyperbola`): C + a·cosh t·X + b·sinh t·Y.
-#[derive(Debug, Clone, Copy)]
-pub struct Hyperbola {
-    pub c: P3,
-    pub x: V3,
-    pub y: V3,
-    pub a: f64,
-    pub b: f64,
-}
 
 
 
@@ -352,35 +343,7 @@ pub fn sub<'a>(subs: &'a [Shape], n: usize, of: &str, kind: &str) -> Result<&'a 
     })
 }
 
-/// The marker of [`known_failure`]'s panic for a known failure that panicked.
-pub const KNOWN_FAILURE_PANICKED: &str = "a known failure panicked";
 
-/// Ends a generated known failure (`tools/smlib_known_failures/`): `r` is the case's run
-/// under `catch_unwind`. A known failure must still fail, and fail by returning its error:
-/// this panics (failing the test) when the case passes ("a known failure now passes", the
-/// gate's STALE) or when it panicked, unless the panic's message contains `expected_panic`
-/// (the list's `[panic: …]`; the gate's PANIC otherwise, a bug the known failure would hide).
-pub fn known_failure(case: &str, r: std::thread::Result<Result<()>>, expected_panic: Option<&str>) {
-    match r {
-        Ok(Ok(())) => {
-            panic!("a known failure now passes: remove `{case}` from its known-failure list")
-        }
-        Ok(Err(e)) => eprintln!("known failure {case}: {e:?}"),
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| payload.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            match expected_panic {
-                Some(want) if msg.contains(want) => {
-                    eprintln!("known failure {case}: panicked as expected: {msg}")
-                }
-                _ => panic!("{KNOWN_FAILURE_PANICKED}: {case}: {msg}"),
-            }
-        }
-    }
-}
 
 impl NativeKernel {
     // --- Geometry ---------------------------------------------------------------------------
@@ -422,25 +385,6 @@ impl NativeKernel {
     }
 
 
-    /// `hyperbola name x y z [nx ny nz [xx xy xz]] major minor` (OCCT's: C + major·cosh t·X +
-    /// minor·sinh t·Y; an edge of it needs its parameters, see [`NativeKernel::mkedge_hyperbola`]).
-    pub fn hyperbola(
-        &self,
-        o: [f64; 3],
-        n: Option<[f64; 3]>,
-        x: Option<[f64; 3]>,
-        major: f64,
-        minor: f64,
-    ) -> Hyperbola {
-        let (c, x, y) = ax2_of(o, n, x);
-        Hyperbola {
-            c,
-            x,
-            y,
-            a: major,
-            b: minor,
-        }
-    }
 
 
     /// `orientation name F|R` (and `treverse`): the shape as it is, or turned round (a wire's or
@@ -504,14 +448,6 @@ impl NativeKernel {
         }))
     }
 
-    /// `mkedge name curve t0 t1`.
-    pub fn mkedge(&self, c: &Curve, t0: f64, t1: f64) -> Shape {
-        Shape::Edge(DEdge {
-            curve: c.clone(),
-            t0,
-            t1,
-        })
-    }
 
 
     /// `ellipse name x y z [nx ny nz [xx xy xz]] major minor` (normal +z, OCCT's x direction
@@ -1026,194 +962,11 @@ impl NativeKernel {
         Ok(Shape::Body(res.bodies[0]))
     }
 
-    /// `pcylinder name [plane] r h angle` (degrees): a sector of the cylinder.
-    pub fn pcylinder_a(&mut self, ax: Option<&Ax3>, r: f64, h: f64, angle: f64) -> Result<Shape> {
-        let ax = ax.copied().unwrap_or(Ax3 {
-            origin: P3::origin(),
-            z: V3::z(),
-            x: V3::x(),
-        });
-        if angle >= 360.0 - 1e-9 {
-            return self.pcylinder_on(&ax, r, h);
-        }
-        let p = nalgebra::Point2::new;
-        let a = angle.to_radians();
-        let s = self.revolve_section(&ax, &[p(0.0, 0.0), p(r, 0.0), p(r, h), p(0.0, h)], a)?;
-        if let Shape::Body(b) = &s {
-            set_order(
-                *b,
-                one_axis_order(
-                    &ax,
-                    (r, 0.0f64.min(h)),
-                    (r, 0.0f64.max(h)),
-                    (r, h / 2.0),
-                    false,
-                    a,
-                ),
-            );
-        }
-        Ok(s)
-    }
-
-    /// `pcone name [plane] r1 r2 h angle` (degrees).
-    pub fn pcone_a(
-        &mut self,
-        ax: Option<&Ax3>,
-        r1: f64,
-        r2: f64,
-        h: f64,
-        angle: f64,
-    ) -> Result<Shape> {
-        let ax = ax.copied().unwrap_or(Ax3 {
-            origin: P3::origin(),
-            z: V3::z(),
-            x: V3::x(),
-        });
-        if angle >= 360.0 - 1e-9 {
-            return self.pcone_on(&ax, r1, r2, h);
-        }
-        let p = nalgebra::Point2::new;
-        let mut pts = vec![p(0.0, 0.0)];
-        if r1 > 0.0 {
-            pts.push(p(r1, 0.0));
-        }
-        if r2 > 0.0 {
-            pts.push(p(r2, h));
-        }
-        pts.push(p(0.0, h));
-        let a = angle.to_radians();
-        let s = self.revolve_section(&ax, &pts, a)?;
-        if let Shape::Body(b) = &s {
-            set_order(
-                *b,
-                one_axis_order(
-                    &ax,
-                    (r1, 0.0),
-                    (r2, h),
-                    ((r1 + r2) / 2.0, h / 2.0),
-                    false,
-                    a,
-                ),
-            );
-        }
-        Ok(s)
-    }
 
 
 
-    /// `ptorus name [plane] R r a1 a2 [angle]`: a torus zone, the pipe's circle from a1 to a2
-    /// (degrees about its centre, from the outside) closed by planes square to the axis down to
-    /// it (as OCCT's revolved primitives), turned by `angle`.
-    pub fn ptorus_zone(
-        &mut self,
-        ax: Option<&Ax3>,
-        big: f64,
-        r: f64,
-        a1: f64,
-        a2: f64,
-        angle: f64,
-    ) -> Result<Shape> {
-        let ax = ax.copied().unwrap_or(Ax3 {
-            origin: P3::origin(),
-            z: V3::z(),
-            x: V3::x(),
-        });
-        let (a1, a2) = (a1.to_radians(), a2.to_radians());
-        let c = nalgebra::Point2::new(big, 0.0);
-        let (p1, p2) = (
-            nalgebra::Point2::new(big + r * a1.cos(), r * a1.sin()),
-            nalgebra::Point2::new(big + r * a2.cos(), r * a2.sin()),
-        );
-        if (a2 - a1).abs() >= TAU - 1e-9 {
-            return self.ptorus_a(Some(&ax), big, r, angle);
-        }
-        let mut curves = vec![Curve2::Arc {
-            center: c,
-            radius: r,
-            start_angle: a1,
-            sweep: a2 - a1,
-            source: None,
-        }];
-        let (q2, q1) = (
-            nalgebra::Point2::new(0.0, p2.y),
-            nalgebra::Point2::new(0.0, p1.y),
-        );
-        if p2.x.abs() > 1e-12 {
-            curves.push(l2(p2, q2));
-        }
-        if (q2 - q1).norm() > 1e-12 {
-            curves.push(l2(q2, q1));
-        }
-        if p1.x.abs() > 1e-12 {
-            curves.push(l2(q1, p1));
-        }
-        let region = Region {
-            outer: Loop { curves },
-            holes: vec![],
-            source: None,
-        };
-        let res = self.revolve(
-            &Profile::new(self.meridian(&ax), vec![region]),
-            Axis {
-                origin: ax.origin,
-                dir: nalgebra::Unit::new_normalize(ax.z),
-            },
-            angle.min(360.0).to_radians(),
-        )?;
-        let am = (a1 + a2) / 2.0;
-        set_order(
-            res.bodies[0],
-            one_axis_order(
-                &ax,
-                (p1.x, p1.y),
-                (p2.x, p2.y),
-                (big + r * am.cos(), r * am.sin()),
-                false,
-                angle.min(360.0).to_radians(),
-            ),
-        );
-        Ok(Shape::Body(res.bodies[0]))
-    }
 
-    /// `ptorus name [plane] R r angle` (degrees of longitude).
-    pub fn ptorus_a(&mut self, ax: Option<&Ax3>, big: f64, r: f64, angle: f64) -> Result<Shape> {
-        let ax = ax.copied().unwrap_or(Ax3 {
-            origin: P3::origin(),
-            z: V3::z(),
-            x: V3::x(),
-        });
-        let region = Region {
-            outer: Loop {
-                curves: vec![Curve2::Circle {
-                    center: nalgebra::Point2::new(big, 0.0),
-                    radius: r,
-                    source: None,
-                }],
-            },
-            holes: vec![],
-            source: None,
-        };
-        let res = self.revolve(
-            &Profile::new(self.meridian(&ax), vec![region]),
-            Axis {
-                origin: ax.origin,
-                dir: nalgebra::Unit::new_normalize(ax.z),
-            },
-            angle.min(360.0).to_radians(),
-        )?;
-        set_order(
-            res.bodies[0],
-            one_axis_order(
-                &ax,
-                (big + r, 0.0),
-                (big + r, 0.0),
-                (big - r, 0.0),
-                true,
-                angle.min(360.0).to_radians(),
-            ),
-        );
-        Ok(Shape::Body(res.bodies[0]))
-    }
+
 
 
     /// `pcone name plane r1 r2 h`.
@@ -1248,17 +1001,6 @@ impl NativeKernel {
         Ok(s)
     }
 
-    /// `psphere name r`.
-    pub fn psphere(&mut self, r: f64) -> Result<Shape> {
-        self.psphere_on(
-            &Ax3 {
-                origin: P3::origin(),
-                z: V3::z(),
-                x: V3::x(),
-            },
-            r,
-        )
-    }
 
     pub fn psphere_on(&mut self, ax: &Ax3, r: f64) -> Result<Shape> {
         let half = Region {
@@ -1411,72 +1153,6 @@ impl NativeKernel {
         Ok(Some(Shape::Body(r.bodies[0])))
     }
 
-    /// `revol name face x y z dx dy dz angle` (degrees).
-    pub fn revol(
-        &mut self,
-        f: &Shape,
-        x: f64,
-        y: f64,
-        z: f64,
-        dx: f64,
-        dy: f64,
-        dz: f64,
-        angle: f64,
-    ) -> Result<Shape> {
-        let axis = Axis {
-            origin: P3::new(x, y, z),
-            dir: nalgebra::Unit::new_normalize(V3::new(dx, dy, dz)),
-        };
-        if let Some(s) = self.sweep_lower(
-            f,
-            &BodySweep::Rotate {
-                axis,
-                angle: angle.to_radians(),
-            },
-        )? {
-            return Ok(s);
-        }
-        if let Some(sheet) = self.sheet_shape(f)? {
-            return Ok(Shape::Body(
-                crate::Kernel::sweep_body(
-                    self,
-                    sheet,
-                    &BodySweep::Rotate {
-                        axis,
-                        angle: angle.to_radians(),
-                    },
-                )?
-                .bodies[0],
-            ));
-        }
-        let profile = face_profile(f)?;
-        let (o, d) = (P3::new(x, y, z), V3::new(dx, dy, dz).normalize());
-        let a = angle.to_radians();
-        let r = self.revolve(
-            &profile,
-            Axis {
-                origin: o,
-                dir: nalgebra::Unit::new_normalize(d),
-            },
-            a,
-        )?;
-        if let Shape::Face { loops, .. } = f {
-            let closed = a.abs() >= TAU - 1e-9;
-            let at = |p: &P3, s: f64| {
-                let th = a * s;
-                let w = p - o;
-                let along = d * w.dot(&d);
-                let r = w - along;
-                o + along + r * th.cos() + d.cross(&r) * th.sin()
-            };
-            let swept = |p: &P3| {
-                let w = p - o;
-                (w - d * w.dot(&d)).norm() > 1e-9 * (1.0 + w.norm())
-            };
-            set_order(r.bodies[0], sweep_order(loops, &at, &swept, closed));
-        }
-        Ok(Shape::Body(r.bodies[0]))
-    }
 
 
 
@@ -3353,32 +3029,6 @@ impl NativeKernel {
         }
     }
 
-    /// The edges of a shape that isn't a body's (an edge, a wire, a planar face's loops, a
-    /// compound of them), each once.
-    fn loose_edges_of(s: &Shape) -> Option<Vec<DEdge>> {
-        let mut out: Vec<DEdge> = Vec::new();
-        let mut add = |e: &DEdge| {
-            let m = e.curve.point(0.5 * (e.t0 + e.t1));
-            if !out
-                .iter()
-                .any(|o| (o.curve.point(0.5 * (o.t0 + o.t1)) - m).norm() <= super::tol::CONFUSION)
-            {
-                out.push(e.clone());
-            }
-        };
-        match s {
-            Shape::Edge(e) => add(e),
-            Shape::Wire(w) => w.iter().for_each(add),
-            Shape::Face { loops, .. } => loops.iter().flatten().for_each(add),
-            Shape::Compound(v) => {
-                for x in v {
-                    Self::loose_edges_of(x)?.iter().for_each(&mut add);
-                }
-            }
-            _ => return None,
-        }
-        Some(out)
-    }
 
     /// A shape's edges, when it is edges (a wire, an edge).
     fn edges_of(s: &Shape) -> Option<Vec<super::edge_bop::Piece>> {
@@ -3696,118 +3346,6 @@ impl NativeKernel {
 
     // --- Sub-shapes, blends -----------------------------------------------------------------
 
-    /// `explode shape e`: the body's edges (in the kernel's order, not OCCT's).
-    pub fn explode_edges(&self, s: &Shape) -> Result<Vec<Shape>> {
-        // A face's: its loops' edges in their order (OCCT's for a prism's side: the profile
-        // edge, the side edge at its end, the far copy, the side edge at its start).
-        if let Shape::BodyFace(b, f) = s {
-            let (b, body) = (*b, self.get(*b)?);
-            let face = body
-                .faces
-                .get(f.0 as usize)
-                .ok_or_else(|| err("explode: no such face"))?;
-            let mut out: Vec<Shape> = Vec::new();
-            for c in face.loops.iter().flatten() {
-                let e = Shape::BodyEdge(b, EdgeId(c.edge as u64));
-                if !body.edges[c.edge].degenerate && !out.iter().any(|x| matches!((x, &e), (Shape::BodyEdge(_, a), Shape::BodyEdge(_, z)) if a == z)) {
-                    out.push(e);
-                }
-            }
-            return Ok(out);
-        }
-        if let Some(es) = Self::loose_edges_of(s) {
-            return Ok(es.into_iter().map(Shape::Edge).collect());
-        }
-        let b = self.body_of(s)?;
-        let body = self.get(b)?;
-        let mut ids: Vec<usize> = (0..body.edges.len())
-            .filter(|&i| !body.edges[i].degenerate)
-            .collect();
-        // A primitive: OCCT's order, each reference point's nearest edge (by midpoint); its
-        // degenerate edges count, as OCCT's do.
-        if let Some(o) = order_of(b) {
-            if o.edges.len() != ids.len() && o.edges.len() == body.edges.len() {
-                ids = (0..body.edges.len()).collect();
-            }
-            if crate::native::env_flag!("CADRS_ORDER_DEBUG") {
-                eprintln!(
-                    "explode e: OCCT order has {} edges, the body {} ({} not degenerate)",
-                    o.edges.len(),
-                    body.edges.len(),
-                    ids.len()
-                );
-            }
-            let mid = |i: usize| body.edges[i].point(body.edges[i].mid_t());
-            if o.edges.len() == ids.len() {
-                ids = o
-                    .edges
-                    .iter()
-                    .map(|p| {
-                        *ids.iter()
-                            .min_by(|&&x, &&y| (mid(x) - p).norm().total_cmp(&(mid(y) - p).norm()))
-                            .unwrap()
-                    })
-                    .collect();
-            } else if o.edges.len() > ids.len() && o.edges.len() <= body.edges.len() {
-                // Some of OCCT's degenerate edges (a cone's apex) but not all of ours: each
-                // reference point takes the nearest edge not yet taken, when that takes every edge
-                // that isn't degenerate.
-                let mut taken: Vec<usize> = Vec::new();
-                for p in &o.edges {
-                    if let Some(i) = (0..body.edges.len())
-                        .filter(|i| !taken.contains(i))
-                        .min_by(|&x, &y| (mid(x) - p).norm().total_cmp(&(mid(y) - p).norm()))
-                    {
-                        taken.push(i);
-                    }
-                }
-                if ids.iter().all(|i| taken.contains(i)) {
-                    ids = taken;
-                } else if o.edges.len() - o.degenerate.len() == ids.len() {
-                    // The body has none of them: the order without.
-                    let kept: Vec<&P3> = o
-                        .edges
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| !o.degenerate.contains(i))
-                        .map(|(_, p)| p)
-                        .collect();
-                    ids = kept
-                        .iter()
-                        .map(|p| {
-                            *ids.iter()
-                                .min_by(|&&x, &&y| {
-                                    (mid(x) - *p).norm().total_cmp(&(mid(y) - *p).norm())
-                                })
-                                .unwrap()
-                        })
-                        .collect();
-                }
-            } else if o.edges.len() - o.degenerate.len() == ids.len() {
-                let kept: Vec<&P3> = o
-                    .edges
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| !o.degenerate.contains(i))
-                    .map(|(_, p)| p)
-                    .collect();
-                ids = kept
-                    .iter()
-                    .map(|p| {
-                        *ids.iter()
-                            .min_by(|&&x, &&y| {
-                                (mid(x) - *p).norm().total_cmp(&(mid(y) - *p).norm())
-                            })
-                            .unwrap()
-                    })
-                    .collect();
-            }
-        }
-        Ok(ids
-            .into_iter()
-            .map(|i| Shape::BodyEdge(b, EdgeId(i as u64)))
-            .collect())
-    }
 
 
 
@@ -4121,19 +3659,6 @@ fn orient_chain(es: &mut [DEdge]) -> Result<()> {
     Ok(())
 }
 
-/// The two edges as a corner: `a` running into the shared point, `b` out of it.
-fn meet(a: &DEdge, b: &DEdge) -> Result<(DEdge, DEdge)> {
-    for ra in [false, true] {
-        for rb in [false, true] {
-            let a2 = if ra { a.reversed() } else { a.clone() };
-            let b2 = if rb { b.reversed() } else { b.clone() };
-            if (a2.end() - b2.start()).norm() < 1e-6 {
-                return Ok((a2, b2));
-            }
-        }
-    }
-    Err(err("the edges don't share a vertex"))
-}
 
 /// How far past the feature's height (BRepFeat's HeightMax) its limit faces are searched and
 /// its limit solids reach.
@@ -4316,30 +3841,9 @@ fn bezier_spans(c: &super::nurbs::NurbsCurve) -> Vec<Vec<super::nurbs::H>> {
         .collect()
 }
 
-/// A planar primitive for the fillet: a line or a circle in the corner's plane.
-#[derive(Clone, Copy)]
-enum Prim2 {
-    Line {
-        p: nalgebra::Point2<f64>,
-        d: nalgebra::Vector2<f64>,
-    },
-    Circle {
-        c: nalgebra::Point2<f64>,
-        r: f64,
-    },
-}
 
 
 
-fn offset(p: &Prim2, s: f64) -> Prim2 {
-    match *p {
-        Prim2::Line { p, d } => {
-            let nrm = nalgebra::Vector2::new(-d.y, d.x).normalize();
-            Prim2::Line { p: p + nrm * s, d }
-        }
-        Prim2::Circle { c, r } => Prim2::Circle { c, r: r + s },
-    }
-}
 
 
 
@@ -4347,111 +3851,11 @@ fn offset(p: &Prim2, s: f64) -> Prim2 {
 mod tests {
     use super::*;
 
-    /// Each exploded edge's middle point (a degenerate edge's: its vertex), and whether it is
-    /// degenerate.
-    fn exploded(k: &NativeKernel, s: &Shape) -> Vec<(P3, bool)> {
-        let Shape::Body(b) = s else {
-            panic!("not a body")
-        };
-        let body = k.get(*b).unwrap();
-        k.explode_edges(s)
-            .unwrap()
-            .iter()
-            .map(|e| {
-                let Shape::BodyEdge(_, id) = e else {
-                    panic!("not an edge")
-                };
-                let ed = &body.edges[id.0 as usize];
-                (ed.point(ed.mid_t()), ed.degenerate)
-            })
-            .collect()
-    }
 
-    fn near(p: &P3, q: [f64; 3]) -> bool {
-        (p - P3::from(q)).norm() < 1e-6
-    }
 
-    /// A wedge whose top narrows to a line (`wedge s 40 100 100 0`): OCCT's 9 edges, its sides'
-    /// common edge at the top counted once and the top's zero-length edges left out, so s_5 is
-    /// the edge along z at (40, 0) (blend simple_a7).
-    #[test]
-    fn wedge_narrowed_to_a_line_explodes_as_occt() {
-        let mut k = NativeKernel::new();
-        let s = k.wedge(40.0, 100.0, 100.0, [0.0, 0.0, 0.0, 100.0]).unwrap();
-        let es = exploded(&k, &s);
-        assert_eq!(es.len(), 9);
-        assert!(near(&es[4].0, [40.0, 0.0, 50.0]), "{:?}", es[4]);
-        assert!(near(&es[8].0, [20.0, 0.0, 100.0]), "{:?}", es[8]);
-    }
 
-    /// A quarter cone up to its apex (`pcone s 50 0 120 90`): OCCT lists the apex's degenerate
-    /// edge first, so s_3 is the base's arc (blend simple_c9).
-    #[test]
-    fn partial_cone_explodes_with_its_apex_edge() {
-        let mut k = NativeKernel::new();
-        let s = k.pcone_a(None, 50.0, 0.0, 120.0, 90.0).unwrap();
-        let es = exploded(&k, &s);
-        assert_eq!(es.len(), 7);
-        assert!(es[0].1 && near(&es[0].0, [0.0, 0.0, 120.0]), "{:?}", es[0]);
-        let r = std::f64::consts::FRAC_1_SQRT_2 * 50.0;
-        assert!(near(&es[2].0, [r, r, 0.0]), "{:?}", es[2]);
-    }
 
-    /// A face revolved 270° whose wire runs along the axis: a degenerate edge where each lateral
-    /// face meets the axis, the axis edge once (11 edges; blend simple_h4's s_10 is the slant's
-    /// copy at the end).
-    #[test]
-    fn revolution_touching_its_axis_explodes_as_occt() {
-        let mut k = NativeKernel::new();
-        let w1 = k.ellipse([0.0, 0.0, 0.0], None, None, 15.0, 10.0);
-        let w1 = k.mkedge(&w1, 0.0, std::f64::consts::FRAC_PI_2);
-        let w1 = k.trotate(&w1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 90.0).unwrap();
-        let w2 = k
-            .polyline(&[
-                [0.0, 0.0, 10.0],
-                [0.0, 0.0, -10.0],
-                [25.0, 0.0, -10.0],
-                [15.0, 0.0, 0.0],
-            ])
-            .unwrap();
-        let w = k.wire(&[&w1, &w2]).unwrap();
-        let w = k.mkplane(&w).unwrap();
-        let s = k.revol(&w, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 270.0).unwrap();
-        let es = exploded(&k, &s);
-        assert_eq!(es.len(), 11);
-        assert!(es[1].1 && es[4].1 && !es[9].1);
-        assert!(near(&es[9].0, [0.0, -20.0, -5.0]), "{:?}", es[9]);
-    }
 
-    /// A triangle piped along a quarter circle, its face looking back along the spine: OCCT
-    /// explores the loop backwards from its first edge, start face first, so s_4 is the edge
-    /// swept from the triangle's first vertex (blend simple_i1).
-    #[test]
-    fn pipe_explodes_as_occt() {
-        let mut k = NativeKernel::new();
-        let w = k.circle(-20.0, 0.0, 0.0, 20.0);
-        let w = k.mkedge(&w, 0.0, std::f64::consts::FRAC_PI_2);
-        let w = k.wire(&[&w]).unwrap();
-        let profile = k
-            .polyline(&[
-                [0.0, 0.0, 0.0],
-                [10.0, 0.0, 0.0],
-                [5.0, 0.0, 5.0],
-                [0.0, 0.0, 0.0],
-            ])
-            .unwrap();
-        let profile = k.mkplane(&profile).unwrap();
-        let s = k.pipe(&w, &profile).unwrap();
-        let es = exploded(&k, &s);
-        assert_eq!(es.len(), 9);
-        assert!(
-            near(&es[0].0, [5.0, 0.0, 0.0]) && near(&es[1].0, [2.5, 0.0, 2.5]),
-            "{:?}",
-            &es[..2]
-        );
-        let h = 20.0 * std::f64::consts::FRAC_1_SQRT_2;
-        assert!(near(&es[3].0, [h - 20.0, h, 0.0]), "{:?}", es[3]);
-    }
 
     /// A script's sub-shape past the end of an explode is a "topology mismatch" failure, not an
     /// index out of bounds (review 4: 17 blend known failures panicked in their test code).
@@ -4469,30 +3873,6 @@ mod tests {
         assert!(sub(&subs, 0, "s", "edges").is_err());
     }
 
-    /// A known failure passes the test by failing with its error, or with the panic it lists.
-    #[test]
-    fn known_failure_that_fails_or_panics_as_listed() {
-        known_failure("g c", Ok(Err(err("the area differs"))), None);
-        known_failure(
-            "g c",
-            Err(Box::new("index out of bounds: the len is 6")),
-            Some("index out of bounds"),
-        );
-    }
 
-    #[test]
-    #[should_panic(expected = "a known failure now passes: remove `g c`")]
-    fn known_failure_that_passes_is_stale() {
-        known_failure("g c", Ok(Ok(())), None);
-    }
 
-    #[test]
-    #[should_panic(expected = "a known failure panicked: g c: index out of bounds")]
-    fn known_failure_that_panics_fails_loudly() {
-        known_failure(
-            "g c",
-            Err(Box::new(String::from("index out of bounds: the len is 6"))),
-            None,
-        );
-    }
 }

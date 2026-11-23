@@ -518,12 +518,6 @@ fn project(s: &Surface, per: &Periods, p: &P3, hint: Option<(f64, f64)>, off: f6
     (u, v)
 }
 
-/// [`pcurve::pcurve`], checked against the projection of the curve (files' edges can be
-/// degree-7 splines with C1 joints that its single fit doesn't follow); when it is off by more
-/// than the modelling tolerance, a fit of our own, piece by piece of the curve.
-pub fn pcurve_checked(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
-    pcurve_checked_tol(s, c, t0, t1, 0.0)
-}
 
 /// [`pcurve_checked`] for an edge of tolerance `etol`: a point of the curve as far off the face
 /// as that is no reason to search the surface afresh.
@@ -2626,48 +2620,6 @@ pub fn nurbs_curve(n: super::nurbs::NurbsCurve) -> Curve {
 mod tests {
     use super::*;
 
-    #[test]
-    fn meridian_arcs_stay_in_the_sphere_domain() {
-        let s = Surface::Sphere {
-            f: Frame::world(),
-            r: 10.0,
-        };
-        for (x, y) in [
-            (V3::x(), V3::z()),
-            (V3::x(), -V3::z()),
-            (-V3::y(), V3::z()),
-            (V3::z(), V3::x()),
-        ] {
-            let c = Curve::Circle {
-                c: P3::origin(),
-                x,
-                y,
-                r: 10.0,
-            };
-            // Arcs ending at a pole or between poles (none crosses one).
-            for (t0, t1) in [
-                (PI, 1.5 * PI),
-                (0.0, 0.5 * PI),
-                (0.2, 1.4),
-                (1.7, 3.0),
-                (3.3, 4.5),
-                (4.8, 6.1),
-                (-1.4, -0.2),
-            ] {
-                let pc = pcurve_checked(&s, &c, t0, t1);
-                for k in 0..=8 {
-                    let t = t0 + (t1 - t0) * k as f64 / 8.0;
-                    let q = pc.point(t);
-                    assert!(
-                        q.y.abs() <= PI / 2.0 + 1e-9,
-                        "{x:?} {y:?} {t0}..{t1}: v {}",
-                        q.y
-                    );
-                    assert!((s.eval(q.x, q.y) - c.point(t)).norm() < 1e-9);
-                }
-            }
-        }
-    }
 
     /// Loose faces whose boundary curves meet only within the weld distance (as IGES trimmed
     /// surfaces do): two triangles sharing an edge, one's copy of the shared corner 4e-4 off.

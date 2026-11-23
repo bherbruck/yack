@@ -16,25 +16,6 @@ fn volume(k: &DefaultKernel, body: BodyId) -> f64 {
     k.mass_properties(body).unwrap().volume
 }
 
-#[test]
-fn planes_are_the_named_ones() {
-    let (xy, xz, yz) = (Plane::xy(2.0), Plane::xz(3.0), Plane::yz(4.0));
-    assert_eq!(xy.to_model([1.0, 5.0].into()), p3(1.0, 5.0, 2.0));
-    assert_eq!(xz.to_model([1.0, 5.0].into()), p3(1.0, 3.0, 5.0));
-    assert_eq!(yz.to_model([1.0, 5.0].into()), p3(4.0, 1.0, 5.0));
-    // A plane's x axis is made square to its normal.
-    let leaning = Plane::new(Point3::origin(), Vector3::new(1.0, 0.0, 1.0), Vector3::z());
-    assert!((leaning.x_dir.into_inner() - Vector3::x()).norm() < 1e-15);
-    // A plane through an axis has the axis as its sketch y.
-    for dir in [Vector3::z(), Vector3::x(), Vector3::new(1.0, 2.0, -3.0)] {
-        let axis = Axis::new(p3(1.0, 2.0, 3.0), dir);
-        let on = Plane::through_axis(&axis);
-        assert!((on.y_dir().into_inner() - axis.dir.into_inner()).norm() < 1e-12);
-        assert!(on.x_dir.dot(&axis.dir).abs() < 1e-12);
-        let square = Plane::square_to(axis.origin, dir);
-        assert!((square.normal.into_inner() - axis.dir.into_inner()).norm() < 1e-12);
-    }
-}
 
 #[test]
 fn a_rectangle_extruded_is_its_block() {

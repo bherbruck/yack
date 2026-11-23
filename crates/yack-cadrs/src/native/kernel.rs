@@ -945,42 +945,9 @@ impl Kernel for NativeKernel {
         super::curve_loft::loft_curves(self, spec)
     }
 
-    fn project_curve(&self, spec: &ProjectCurveSpec) -> Result<Vec<Bspline3>> {
-        super::curve_split::project_curve(self, spec)
-    }
 
-    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
-    fn face_blend(&mut self, spec: &FaceBlendSpec) -> Result<OpResult> {
-        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
-    }
 
-    fn sweep_curves(&mut self, spec: &CurveSweepSpec) -> Result<OpResult> {
-        super::curve_loft::sweep_curves(self, spec)
-    }
 
-    fn evolved(&mut self, spine: &[PathCurve], profile: &[Region]) -> Result<OpResult> {
-        let segs = super::sweep::path::path_segments(self, spine)?;
-        let (segs, _) = super::sweep::path::chain(segs).map_err(|_| {
-            KernelError::InvalidParameter(
-                "The spine's curves must join end to end in one chain".into(),
-            )
-        })?;
-        let spine: Vec<(Curve, f64, f64)> = segs
-            .into_iter()
-            .map(|s| {
-                if s.rev {
-                    (s.c, s.t1, s.t0)
-                } else {
-                    (s.c, s.t0, s.t1)
-                }
-            })
-            .collect();
-        let id = super::evolved::evolved(self, &spine, profile)?;
-        Ok(OpResult {
-            bodies: vec![id],
-            history: History::default(),
-        })
-    }
 
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult> {
         let r = super::sweep::path::sweep_with(self, profile, spec)?;
@@ -1042,15 +1009,6 @@ impl Kernel for NativeKernel {
         super::sweep_solid::cut_swept(self, target, tool, motion)
     }
 
-    fn cut_swept_indexed(
-        &mut self,
-        target: BodyId,
-        tool: BodyId,
-        motion: &SolidMotion,
-        copies: usize,
-    ) -> Result<OpResult> {
-        super::sweep_solid::cut_swept_indexed(self, target, tool, motion, copies)
-    }
 
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
         use nalgebra::{Point2, Unit};
@@ -1248,9 +1206,6 @@ impl Kernel for NativeKernel {
         super::sweep::path::sweep_with_law(self, profile, spec, law)
     }
 
-    fn sweep_chain(&mut self, pieces: &[(Profile, SweepSpec, SweepLaw)]) -> Result<OpResult> {
-        super::sweep::chain::sweep_chain(self, pieces)
-    }
 
     #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
     fn cells(&mut self, bodies: &[BodyId], select: &[(usize, bool)]) -> Result<Vec<BodyId>> {
@@ -1353,16 +1308,6 @@ impl Kernel for NativeKernel {
         })
     }
 
-    #[allow(unused_variables, reason = "M4.0b: refuses, its arguments unread")]
-    fn fillet_smooth(
-        &mut self,
-        body: BodyId,
-        edges: &[EdgeId],
-        spec: &FilletSpec,
-        setback: f64,
-    ) -> Result<OpResult> {
-        Err(KernelError::Unsupported("removed in M4.0b: not reached from yack"))
-    }
 
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult> {
         super::surfacing::thicken(self, spec)
@@ -1372,9 +1317,6 @@ impl Kernel for NativeKernel {
         super::surfacing::fill(self, spec)
     }
 
-    fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
-        super::surfacing::sew_sheets(self, bodies, tol)
-    }
 
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
         let r = super::surfacing::sew(self, bodies, tol);
@@ -1410,9 +1352,6 @@ impl Kernel for NativeKernel {
         })
     }
 
-    fn offset_meshed(&mut self, body: BodyId, distance: f64) -> Result<OpResult> {
-        super::sweep_solid::offset_meshed(self, body, distance)
-    }
 
     fn draft(&mut self, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {
         self.at_working_size(body, |k, body, by| {
@@ -2017,19 +1956,6 @@ impl Kernel for NativeKernel {
         Ok(e.edges.get_or_init(|| edge_infos(&e.body)).clone())
     }
 
-    fn edges_shown(&self, body: BodyId, short: f64) -> Result<Vec<EdgeInfo>> {
-        let e = self.entry(body)?;
-        if let Some(full) = e.edges.get() {
-            return Ok(full.clone());
-        }
-        let (at, infos) = e
-            .edges_shown
-            .get_or_init(|| (short, edge_infos_with(&e.body, Detail::Shown(short))));
-        if *at == short {
-            return Ok(infos.clone());
-        }
-        Ok(edge_infos_with(&e.body, Detail::Shown(short)))
-    }
 
     fn face_count(&self, body: BodyId) -> Result<usize> {
         Ok(self.get(body)?.faces.len())
@@ -2164,10 +2090,6 @@ impl Kernel for NativeKernel {
         Ok(self.get(body)?.solids.len())
     }
 
-    fn size_hint(&self, body: BodyId) -> Result<f64> {
-        // (The box of its vertices, edges and faces' control points: no search for extremes.)
-        Ok(self.get(body)?.bbox().diagonal())
-    }
 
     fn bounding_box(&self, body: BodyId) -> Result<Aabb> {
         let e = self.entry(body)?;
@@ -2212,14 +2134,6 @@ impl Kernel for NativeKernel {
         Ok(super::hlr::project(&inputs, frame, opts))
     }
 
-    fn silhouettes(
-        &self,
-        body: BodyId,
-        view: &SilhouetteView,
-        tolerance: f64,
-    ) -> Result<Vec<SilhouetteCurve>> {
-        super::silhouette::kernel_silhouettes(self, body, view, tolerance)
-    }
 
     fn min_distance(&self, a: &DistanceTarget, b: &DistanceTarget) -> Result<DistanceResult> {
         super::distance::kernel_distance(self, a, b, super::distance::Sense::Min)

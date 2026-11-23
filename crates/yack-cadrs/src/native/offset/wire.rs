@@ -209,26 +209,6 @@ fn join_arc(v: P3, n1: V2, phi: f64, l: f64) -> Piece2 {
     }
 }
 
-/// The plane through `pts` fitting them best (least squares): its centroid and normal, when
-/// every point lies within `rel` of the points' extent from it.
-pub fn best_plane(pts: &[P3], rel: f64) -> Option<(P3, V3)> {
-    if pts.len() < 3 {
-        return None;
-    }
-    let o = P3::from(pts.iter().fold(V3::zeros(), |s, p| s + p.coords) / pts.len() as f64);
-    let cov = pts.iter().fold(nalgebra::Matrix3::zeros(), |m, p| {
-        let d = p - o;
-        m + d * d.transpose()
-    });
-    let eig = nalgebra::SymmetricEigen::new(cov);
-    let k = eig.eigenvalues.imin();
-    let n: V3 = eig.eigenvectors.column(k).into();
-    let n = n.try_normalize(tol::TINY)?;
-    let size = pts.iter().map(|p| (p - o).norm()).fold(0.0, f64::max);
-    pts.iter()
-        .all(|p| (p - o).dot(&n).abs() <= rel * size)
-        .then_some((o, n))
-}
 
 /// The curve projected onto the plane z = 0 (a wire only nearly planar, fitted to that plane),
 /// with its range: unchanged when it lies in the plane already.
@@ -1820,13 +1800,4 @@ mod tests {
         assert_eq!(inn[0].len(), 5);
     }
 
-    #[test]
-    fn nearly_planar_points_fit_a_plane() {
-        let pts: Vec<P3> = (0..20)
-            .map(|i| P3::new(i as f64, (i * i) as f64 * 0.1, 1e-4 * (i % 3) as f64))
-            .collect();
-        let (_, n) = best_plane(&pts, 1e-2).unwrap();
-        assert!(n.z.abs() > 0.999);
-        assert!(best_plane(&pts, 1e-9).is_none());
-    }
 }

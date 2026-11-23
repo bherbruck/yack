@@ -667,66 +667,10 @@ pub struct BsplineSurface {
     pub weights: Vec<Vec<f64>>,
 }
 
-/// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet. See
-/// [`Kernel::sweep_curves`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct CurveSweepSpec {
-    /// The profile: curves joined end to end into one open chain.
-    pub profile: Vec<PathCurve>,
-    /// The path: curves joined end to end.
-    pub path: Vec<PathCurve>,
-    /// How the profile turns as it goes.
-    pub frame: SweepFrame,
-    /// The caller's id for the sweep's face.
-    pub source: u64,
-}
 
-/// How a [`CurveSweepSpec`]'s profile turns along its path.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SweepFrame {
-    /// It keeps its angle to the path (turning as little as it can about it).
-    Follow,
-    /// It keeps its orientation in space.
-    KeepOrientation,
-    /// It keeps its angle to these faces along the path (none: the faces along a path of
-    /// edges).
-    LockFaces(Vec<(BodyId, FaceId)>),
-}
 
-/// A Face blend (Onshape's, rolling ball): a blend between two faces that meet along an edge,
-/// the walls trimmed to it and joined with it into one sheet. See [`Kernel::face_blend`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct FaceBlendSpec {
-    /// The first wall's face.
-    pub side1: (BodyId, FaceId),
-    /// The second wall's face.
-    pub side2: (BodyId, FaceId),
-    /// The ball's size.
-    pub size: BlendSize,
-    /// The caller's id for the blend face.
-    pub source: u64,
-}
 
-/// How big a face blend's ball is.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BlendSize {
-    /// A constant radius (mm).
-    Radius(f64),
-    /// The radius whose contacts on the two faces lie this far apart (mm): a constant width.
-    Width(f64),
-}
 
-/// A Projected curve (Onshape's, Curve to face): curves projected along a direction onto faces.
-/// See [`Kernel::project_curve`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProjectCurveSpec {
-    /// The curves to project, joined end to end.
-    pub curves: Vec<PathCurve>,
-    /// The faces they land on.
-    pub faces: Vec<(BodyId, FaceId)>,
-    /// The way they are projected (a unit vector).
-    pub direction: Vector3<f64>,
-}
 
 /// How a sweep's profile turns as it follows the path (Onshape's profile control, PS19.6).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1920,16 +1864,6 @@ pub enum BodyClass {
 }
 
 impl BodyClass {
-    /// The kind a sweep of this kind makes (a point sweeps an edge, an edge a face, a face a
-    /// solid), if it makes one.
-    pub fn swept(self) -> Option<BodyClass> {
-        match self {
-            Self::Point => Some(Self::Wire),
-            Self::Wire => Some(Self::Sheet),
-            Self::Sheet => Some(Self::Solid),
-            _ => None,
-        }
-    }
 }
 
 /// How [`crate::Kernel::sweep_body`] moves a body: straight along a vector, or turned about an

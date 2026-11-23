@@ -3191,34 +3191,6 @@ fn contour(
     })
 }
 
-/// [`crate::Kernel::offset_meshed`].
-pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Result<OpResult> {
-    if !distance.is_finite() {
-        return Err(KernelError::InvalidParameter(
-            "The offset distance isn't finite".into(),
-        ));
-    }
-    let b = std::sync::Arc::clone(k.get(body)?);
-    let md =
-        super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
-            .ok_or(KernelError::Unsupported(
-                "offsetting a solid whose mesh doesn't close",
-            ))?;
-    let bb = b.bbox().grow(distance.max(0.0));
-    let ext = bb.max - bb.min;
-    let h = ext.max() / 100.0;
-    let lo = bb.min - V3::repeat(2.0 * h);
-    let n = [0, 1, 2].map(|i| 8 * ((ext[i] + 4.0 * h) / h / 8.0).ceil() as usize + 1);
-    // Inside the offset where the body's signed distance is below the offset's.
-    contour(
-        k,
-        lo,
-        n,
-        h,
-        &|p: &P3| distance - md.distance(p),
-        web_time::Instant::now(),
-    )
-}
 
 /// The endless motion that cuts `target` as the rigid `motion` cuts it, where its ends keep clear
 /// of the target: a turn whose missing part (from its end round to its start) never carries the
@@ -3880,39 +3852,6 @@ fn cut_by_pieces(
     Some(acc)
 }
 
-/// [`crate::Kernel::cut_swept`].
-/// [`cut_swept`] at each of `copies` places of the tool a whole turn apart about the target's
-/// axis (the second turn's): a gear's every tooth space, cut by a motion that doesn't repeat
-/// (a face mill's roll). Generated exactly, one plug made and its copies subtracted together,
-/// or an error at once where its contacts can't be followed.
-pub fn cut_swept_indexed(
-    k: &mut NativeKernel,
-    target: BodyId,
-    tool: BodyId,
-    motion: &SolidMotion,
-    copies: usize,
-) -> Result<OpResult> {
-    let SolidMotion::Rigid { steps } = motion else {
-        return Err(KernelError::Unsupported(
-            "an indexed cut by a motion of two turns",
-        ));
-    };
-    let Some(RigidStep::Turn { axis, .. }) = steps.get(1).copied() else {
-        return Err(KernelError::Unsupported(
-            "an indexed cut by a motion of two turns",
-        ));
-    };
-    let b = std::sync::Arc::clone(k.get(tool)?);
-    let _ = axis;
-    match super::sweep_generate::cut(k, target, &b, steps, (copies > 1).then_some(copies)) {
-        Some(r) => r,
-        // (Not cut a tooth at a time by the meshed sweep: seconds a tooth, its faces a mesh's,
-        // and it may not close. The caller is told at once.)
-        None => Err(KernelError::Unsupported(
-            "a generated cut the tool's contacts can't be followed for exactly",
-        )),
-    }
-}
 
 /// `target` less what any tool fills carried upright along a path whose every move is clear
 /// above the target or straight along `up` (a drill's program: down a hole in pecks, up, over

@@ -15,11 +15,7 @@
 //! curves are cubics through points along each edge inverted onto the exported surface (a
 //! rational arc's parameter isn't our angle; a seam's two uses each on its own side).
 
-use std::fmt::Write;
 
-use super::math::P3;
-use super::nurbs::{NurbsCurve, NurbsSurface};
-use super::topo::Body;
 
 
 

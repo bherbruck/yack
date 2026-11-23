@@ -131,20 +131,6 @@ impl TessParams {
         Ok(p)
     }
 
-    /// The same with a maximum edge length and aspect ratio (each 0 for no limit).
-    ///
-    /// # Errors
-    /// [`KernelError::InvalidInput`] for a negative or non-finite limit, or an aspect ratio
-    /// below [`MIN_ASPECT`].
-    pub fn with_limits(self, max_edge: f64, max_aspect: f64) -> Result<Self> {
-        let p = Self {
-            max_edge,
-            max_aspect,
-            ..self
-        };
-        p.validate()?;
-        Ok(p)
-    }
 
     /// Checks the controls (see the fields).
     ///
@@ -2766,47 +2752,7 @@ mod tests {
         assert!((super::super::mass::face_area(&b, 0).0 - w * h).abs() < 1e-6 * w * h);
     }
 
-    #[test]
-    fn params_are_checked() {
-        assert!(TessParams::new(0.0, 0.5).is_err());
-        assert!(TessParams::new(-1.0, 0.5).is_err());
-        assert!(TessParams::new(f64::NAN, 0.5).is_err());
-        assert!(TessParams::new(0.1, 0.0).is_err());
-        let p = TessParams::new(0.1, 0.5).unwrap();
-        assert!(p.with_limits(-1.0, 0.0).is_err());
-        assert!(p.with_limits(1.0, 1.0).is_err());
-        assert!(p.with_limits(1.0, f64::INFINITY).is_err());
-        assert_eq!(p.with_limits(2.0, 4.0).unwrap().max_aspect, 4.0);
-        assert!(
-            TessParams::try_from(Tessellation {
-                deflection: 0.0,
-                angle: 0.1
-            })
-            .is_err()
-        );
-        // The lenient form (internal callers) falls back to the default instead.
-        assert_eq!(
-            TessParams::lenient(0.0, 0.0).chord,
-            Tessellation::default().deflection
-        );
-    }
 
-    #[test]
-    fn polyline_meets_chord_and_length() {
-        // A circle of radius 10 sampled at only its ends and middle.
-        let c = |t: f64| P3::new(10.0 * t.cos(), 10.0 * t.sin(), 0.0);
-        let p = TessParams::new(0.01, 1.0)
-            .unwrap()
-            .with_limits(0.5, 0.0)
-            .unwrap();
-        let ts = refine_polyline(c, &[0.0, 1.5, 3.0], &p);
-        for w in ts.windows(2) {
-            let (a, b) = (c(w[0]), c(w[1]));
-            assert!((b - a).norm() <= 0.5 + 1e-12);
-            assert!(seg_dist3(&c(0.5 * (w[0] + w[1])), &a, &b) <= 0.01);
-        }
-        assert_eq!((ts[0], ts[ts.len() - 1]), (0.0, 3.0));
-    }
 
     #[test]
     fn mesh_check_counts() {

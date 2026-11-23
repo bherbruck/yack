@@ -1120,10 +1120,6 @@ fn orient_shells(b: &mut Body) {
     }
 }
 
-/// The number of faces on a mirrored frame (OCCT's statshape "Indirect Surface").
-pub fn count_indirect(b: &Body) -> usize {
-    b.faces.iter().filter(|f| indirect(&f.surf)).count()
-}
 
 #[cfg(test)]
 mod tests {
@@ -1185,46 +1181,7 @@ mod tests {
         }
     }
 
-    /// A sphere split by angle and closed: the poles' edges split with it.
-    #[test]
-    fn upgrades_of_a_sphere() {
-        let mut k = NativeKernel::new();
-        let s = k.psphere(3.0).unwrap();
-        let b = body_of(&k, s);
-        let v0 = volume(&b);
-        for op in [
-            HealOp::SplitAngle { max_angle: 1.0 },
-            HealOp::SplitClosed,
-            HealOp::ToBSpline,
-        ] {
-            let h = heal(&b, &[op]).unwrap();
-            valid(&h.body);
-            assert!(
-                (volume(&h.body) - v0).abs() < 1e-6 * v0,
-                "{op:?}: {} vs {v0}",
-                volume(&h.body)
-            );
-        }
-    }
 
-    /// A box mirrored (its frames left-handed) made direct: no indirect faces left, the body
-    /// unchanged in volume and valid.
-    #[test]
-    fn direct_faces_of_a_mirrored_box() {
-        let mut k = NativeKernel::new();
-        let s = k.pcylinder(1.0, 2.0).unwrap();
-        let m = Affine {
-            m: nalgebra::Matrix3::from_diagonal(&V3::new(1.0, -1.0, 1.0)),
-            t: V3::zeros(),
-        };
-        let b = body_of(&k, s).transformed(&m);
-        assert!(count_indirect(&b) > 0);
-        valid(&b);
-        let h = heal(&b, &[HealOp::DirectFaces]).unwrap();
-        assert_eq!(count_indirect(&h.body), 0);
-        valid(&h.body);
-        assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
-    }
 
     /// Fix and the tolerance steps leave a sound body as it is (in volume and validity).
     #[test]

@@ -40,10 +40,6 @@ impl Plane {
         Plane::new(P3::new(0.0, y, 0.0), V3::x(), -V3::y())
     }
 
-    /// The plane x = `x`: sketch (x, y) the model's (y, z), normal +x (the Right plane, moved).
-    pub fn yz(x: f64) -> Self {
-        Plane::new(P3::new(x, 0.0, 0.0), V3::y(), V3::x())
-    }
 
     /// A plane through `origin` square to `normal`, with a sketch x axis of the kernel's
     /// choosing (the model's x made square to the normal, or its y where the normal is nearly
@@ -657,17 +653,6 @@ impl LoftSpec {
 }
 
 impl CurveLoftSpec {
-    /// A sheet lofted through `sections` in order (each a wire, or a point at either end) along
-    /// `guides`, with no end conditions.
-    pub fn new(sections: Vec<CurveSection>, guides: Vec<Vec<PathCurve>>) -> Self {
-        CurveLoftSpec {
-            sections,
-            guides,
-            start: CurveLoftEnd::default(),
-            end: CurveLoftEnd::default(),
-            source: 0,
-        }
-    }
 }
 
 impl FillSpec {
@@ -685,15 +670,6 @@ impl FillSpec {
         }
     }
 
-    /// The flat fill of the polygon through `points` on `plane`.
-    pub fn polygon<P: Into<P2> + Copy>(plane: Plane, points: &[P]) -> Self {
-        let sides: Vec<(Plane, Curve2)> = Loop::polygon(points)
-            .curves
-            .into_iter()
-            .map(|c| (plane, c))
-            .collect();
-        FillSpec::sketched(&sides)
-    }
 
     /// The fill of a closed chain of a body's edges.
     pub fn edges(body: BodyId, edges: &[EdgeId]) -> Self {
@@ -747,11 +723,6 @@ impl ThickenSpec {
 
 
 
-    /// Its bends mitred: the moved faces extended until they meet.
-    pub fn mitred(mut self) -> Self {
-        self.sharp = true;
-        self
-    }
 }
 
 impl OffsetSpec {
@@ -800,20 +771,7 @@ impl FaceInput {
 }
 
 impl FaceReplacement {
-    /// `face` given `surface`, its edges the crossings nearest the old ones.
-    pub fn new(face: FaceId, surface: Surface) -> Self {
-        FaceReplacement {
-            face,
-            surface,
-            domain: None,
-        }
-    }
 
-    /// The part of the surface the face lies on, in the surface's own parameters.
-    pub fn over(mut self, domain: ((f64, f64), (f64, f64))) -> Self {
-        self.domain = Some(domain);
-        self
-    }
 }
 
 impl Primitive {

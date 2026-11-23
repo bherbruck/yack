@@ -7,38 +7,12 @@
 //! [`Kernel::max_distance`](crate::Kernel::max_distance)) and faces made from a surface
 //! ([`Kernel::face_from_surface`](crate::Kernel::face_from_surface)).
 
-use nalgebra::{Point2, Point3, Vector3};
+use nalgebra::Point3;
 
 use crate::{BodyId, EdgeId, FaceId, VertexId};
 
-/// How a body is seen for its silhouettes.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SilhouetteView {
-    /// Along a direction (a drawing view): where n·dir = 0.
-    Parallel(Vector3<f64>),
-    /// From an eye point (a perspective view): where n·(p − eye) = 0.
-    Perspective(Point3<f64>),
-}
 
-/// One silhouette curve of a face, in model space.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SilhouetteCurve {
-    /// The face it lies on.
-    pub face: FaceId,
-    /// Points along it, its chords within the tolerance asked for.
-    pub points: Vec<Point3<f64>>,
-    /// The points' (u, v) on the face's surface.
-    pub uv: Vec<Point2<f64>>,
-    /// It ends where it starts (a whole circle, a loop round a torus).
-    pub closed: bool,
-}
 
-impl SilhouetteCurve {
-    /// The polyline's length.
-    pub fn length(&self) -> f64 {
-        self.points.windows(2).map(|w| (w[1] - w[0]).norm()).sum()
-    }
-}
 
 /// One side of a distance query.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -989,34 +989,6 @@ pub fn sewn_solid(b: Body, tol: f64) -> Result<Body> {
     Ok(b)
 }
 
-/// Sheets joined along their coincident edges into one (Onshape's Add of surfaces): each face
-/// continues its input face.
-pub fn sew_sheets(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
-    let mut b = Body::default();
-    let mut from = Vec::new();
-    for id in bodies {
-        let src = k.get(*id)?;
-        from.extend((0..src.faces.len()).map(|f| InputFace {
-            body: *id,
-            face: FaceId(f as u64),
-        }));
-        b.append(src);
-    }
-    let b = sew_faces(b, tol)?;
-    let history = History {
-        modified: from
-            .into_iter()
-            .enumerate()
-            .map(|(i, f)| (FaceId(i as u64), f))
-            .collect(),
-        ..History::default()
-    };
-    let id = k.insert(b);
-    Ok(OpResult {
-        bodies: vec![id],
-        history,
-    })
-}
 
 /// Faces sewn into one sheet: coincident vertices and edges merged, the faces oriented
 /// consistently (the sheet may stay open), one shell per edge-connected piece and no solids;

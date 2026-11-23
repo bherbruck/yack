@@ -384,10 +384,6 @@ impl EdgeFaces {
         self.start.len().saturating_sub(1)
     }
 
-    /// Whether there are no edges.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 
     /// Each edge's faces, in the edges' order.
     pub fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {

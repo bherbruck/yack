@@ -14519,31 +14519,6 @@ mod tests {
         (id, b)
     }
 
-    /// OCCT blend simple_r3: an R0.5 fillet along a sheet's edge whose rails leave their faces
-    /// across the sheet's free edges, which lie 2.5e-6 off their faces' p-curves (the read
-    /// model's edge tolerance says 1e-6). The rails' exits, solved on the p-curves, are on the
-    /// boundary all the same (it went to the blend tool: ten seconds instead of a hundredth).
-    #[test]
-    fn a_rail_exit_on_a_free_edge_off_its_curve() {
-        use crate::native::draw::Shape;
-        // The fast gate sets CADRS_OCCT_DATA without the dataset being there.
-        let Ok(root) = crate::native::switch("CADRS_OCCT_DATA") else {
-            return;
-        };
-        let path = format!("{root}/brep/4_N1(hlacg05).draw");
-        if !std::path::Path::new(&path).exists() {
-            return;
-        }
-        let mut k = NativeKernel::new();
-        let s = k.restore(&path).unwrap();
-        let s = k.tscale(&s, 0.0, 0.0, 0.0, 1000.0).unwrap();
-        let Shape::BodyEdge(id, e) = k.explode_edges(&s).unwrap()[0].clone() else {
-            unreachable!()
-        };
-        let b = (**k.get(id).unwrap()).clone();
-        let (out, _) = fillet_edges(&b, id, &[e.0 as usize], 0.5).unwrap();
-        assert!(out.check().is_empty(), "{:?}", out.check());
-    }
 
     /// The balls' velocities along the spine (blends card 1's tangent, one linear solve) agree
     /// with central differences of solved balls: on a hole's rim (a circle between a plane
@@ -15113,25 +15088,6 @@ mod tests {
         assert_eq!(out.check_with(CheckLevel::Full), Vec::<String>::new());
     }
 
-    /// A torus zone's rim filleted (OCCT blend simple J5): the closed strip's rail on the torus
-    /// crosses its seam once; other balls touching both faces with a contact on the seam (round
-    /// the torus's far side) were once taken as a second crossing.
-    #[test]
-    fn a_torus_zones_rim_fillet_crosses_its_seam_once() {
-        use crate::native::draw::Shape;
-        let mut k = NativeKernel::new();
-        let s = k.ptorus_zone(None, 20.0, 5.0, 0.0, 150.0, 360.0).unwrap();
-        let Shape::Body(id) = k.tscale(&s, 0.0, 0.0, 0.0, 10.0).unwrap() else {
-            unreachable!()
-        };
-        let b = (**k.get(id).unwrap()).clone();
-        // The rim at 150°: the circle of radius 200 + 50 cos 150° at height 50 sin 150°.
-        let e = (0..b.edges.len()).find(|&e| matches!(b.edges[e].curve, Curve::Circle { r, .. } if (r - (200.0 + 50.0 * (150f64).to_radians().cos())).abs() < 1e-6)).unwrap();
-        let (out, _) = fillet_edges(&b, id, &[e], 10.0)
-            .map_err(|e| format!("{e}"))
-            .unwrap();
-        assert_eq!(out.check_with(CheckLevel::Full), Vec::<String>::new());
-    }
 
     /// A block with a notch, one of the notch's walls leaning: the notch's two top edges
     /// filleted meet at the top of its inside corner, whose edge is concave (OCCT blend simple

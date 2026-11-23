@@ -79,20 +79,20 @@ pub use projection::{
     ProjClass, ProjCurve, ProjEdge, ProjSource, ProjVisibility, ProjectOptions, Projection,
     ViewFrame,
 };
-pub use query::{
-    DistanceLocation, DistanceResult, DistanceTarget, SilhouetteCurve, SilhouetteView, UvRect,
-};
-pub use types::{Aabb, Axis, BlendSize, BodyClass, BodyId, BodyKind, BodySweep, BoolOp, Bspline3,
-    BsplineSurface, Chain, ChamferCorners, ChamferMeasure, ChamferOpts, ChamferSpec, Circle3,
-    Curve2, CurveKind, CurveLoftEnd, CurveLoftSpec, CurveSection, CurveSweepSpec, CylindricalBox,
-    DraftSpec, EdgeId, EdgeInfo, Ellipse3, Extent, ExtrudeEnd, ExtrudeSpec, FaceBlendSpec, FaceId,
-    FaceInfo, FaceInput, FaceReplacement, FillCurve, FillSpec, FilletLaw, FilletProfile,
-    FilletSize, FilletSpec, History, InputFace, LoftCondition, LoftEnd, LoftSection, LoftSpec,
-    Loop, MassProperties, Motion, OffsetSpec, Origin, PathCurve, PlanarStep, Plane, PointClass,
-    Primitive, Profile, ProjectCurveSpec, RayHit, Region, RevolveEnd, RevolveSpec, RigidStep,
-    ShellSpec, SolidMotion, SplitTool, SurfaceKind, SweepControl, SweepCorners, SweepFrame,
-    SweepLaw, SweepSpec, Tessellation, ThickenSpec, Transform, TriMesh, VertexId, VertexInfo,
-    bezier_point, ellipse_point, offset_ellipse_point, spline_nurbs, unsourced_curve};
+pub use query::DistanceLocation; pub use query::DistanceResult; pub use query::DistanceTarget; pub use query::UvRect;
+
+
+pub use types::Aabb; pub use types::Axis; pub use types::BodyClass; pub use types::BodyId; pub use types::BodyKind; pub use types::BodySweep; pub use types::BoolOp; pub use types::Bspline3; pub use types::BsplineSurface; pub use types::Chain; pub use types::ChamferCorners; pub use types::ChamferMeasure; pub use types::ChamferOpts; pub use types::ChamferSpec; pub use types::Circle3; pub use types::Curve2; pub use types::CurveKind; pub use types::CurveLoftEnd; pub use types::CurveLoftSpec; pub use types::CurveSection; pub use types::CylindricalBox; pub use types::DraftSpec; pub use types::EdgeId; pub use types::EdgeInfo; pub use types::Ellipse3; pub use types::Extent; pub use types::ExtrudeEnd; pub use types::ExtrudeSpec; pub use types::FaceId; pub use types::FaceInfo; pub use types::FaceInput; pub use types::FaceReplacement; pub use types::FillCurve; pub use types::FillSpec; pub use types::FilletLaw; pub use types::FilletProfile; pub use types::FilletSize; pub use types::FilletSpec; pub use types::History; pub use types::InputFace; pub use types::LoftCondition; pub use types::LoftEnd; pub use types::LoftSection; pub use types::LoftSpec; pub use types::Loop; pub use types::MassProperties; pub use types::Motion; pub use types::OffsetSpec; pub use types::Origin; pub use types::PathCurve; pub use types::PlanarStep; pub use types::Plane; pub use types::PointClass; pub use types::Primitive; pub use types::Profile; pub use types::RayHit; pub use types::Region; pub use types::RevolveEnd; pub use types::RevolveSpec; pub use types::RigidStep; pub use types::ShellSpec; pub use types::SolidMotion; pub use types::SplitTool; pub use types::SurfaceKind; pub use types::SweepControl; pub use types::SweepCorners; pub use types::SweepLaw; pub use types::SweepSpec; pub use types::Tessellation; pub use types::ThickenSpec; pub use types::Transform; pub use types::TriMesh; pub use types::VertexId; pub use types::VertexInfo; pub use types::bezier_point; pub use types::ellipse_point; pub use types::offset_ellipse_point; pub use types::spline_nurbs; pub use types::unsourced_curve;
+
+
+
+
+
+
+
+
+
+
 
 /// The kernel cadrs builds with: the native (pure Rust) B-rep kernel.
 pub use native::NativeKernel as DefaultKernel;
@@ -548,19 +548,6 @@ pub trait Kernel {
         Err(KernelError::Unsupported("cuts by swept solids"))
     }
 
-    /// [`Kernel::cut_swept`] at each of `copies` places of the tool a whole turn apart about the
-    /// axis of the motion's second turn (the target's): every tooth space of a gear cut by a
-    /// motion that doesn't repeat, a face mill's roll.
-    fn cut_swept_indexed(
-        &mut self,
-        target: BodyId,
-        tool: BodyId,
-        motion: &SolidMotion,
-        copies: usize,
-    ) -> Result<OpResult> {
-        let _ = (target, tool, motion, copies);
-        Err(KernelError::Unsupported("indexed cuts by swept solids"))
-    }
 
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
     /// point as it goes (`law`, in proportion to the length travelled). The path must run on
@@ -578,15 +565,6 @@ pub trait Kernel {
         }
     }
 
-    /// Sweeps made one after another, each by its law ([`Kernel::sweep_with_law`]), and joined
-    /// end to end into one body: a piece that starts on the section the one before ends on (its
-    /// profile that section, as the law left it) is glued there, the two caps gone and their
-    /// edges one, with no boolean (a herringbone gear's halves, each twisting its own way).
-    /// Pieces that meet any other way are united. Faces as each sweep's.
-    fn sweep_chain(&mut self, pieces: &[(Profile, SweepSpec, SweepLaw)]) -> Result<OpResult> {
-        let _ = pieces;
-        Err(KernelError::Unsupported("sweeps joined end to end"))
-    }
 
     /// A loft through sections (P3.7, PS20), with start and end conditions. Faces: the side of
     /// each curve of the first profile section (`ProfileCurve { region: spec.source, .. }`), and
@@ -630,50 +608,9 @@ pub trait Kernel {
     /// sides (none where the profiles meet in a point).
     fn loft_curves(&mut self, spec: &CurveLoftSpec) -> Result<OpResult>;
 
-    /// Curves projected along a direction onto faces (Onshape's Projected curve, Curve to
-    /// face): one cubic B-spline per stretch that lands on the faces, within a hair of the true
-    /// projection.
-    fn project_curve(&self, spec: &ProjectCurveSpec) -> Result<Vec<Bspline3>>;
 
-    /// A face blend (Onshape's Face blend, rolling ball) between two faces that meet along an
-    /// edge: one sheet of the walls' bodies' faces (those that continue, trimmed to the blend:
-    /// `modified`) and the blend face (`ProfileCurve { region: spec.source, .. }`).
-    fn face_blend(&mut self, spec: &FaceBlendSpec) -> Result<OpResult>;
 
-    /// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet of
-    /// one face, `ProfileCurve { region: spec.source, curve }` (the profile's first sketch curve's
-    /// `source`, else `unsourced_curve(0, 0)`), its first edge the profile and its last the
-    /// profile where the path ends.
-    fn sweep_curves(&mut self, spec: &CurveSweepSpec) -> Result<OpResult>;
 
-    /// An evolved solid (OCCT's `BRepOffsetAPI_MakeEvolved` in volume mode): the `profile`'s
-    /// regions swept along the planar `spine`, held square to it, with the profile's x measured
-    /// outwards from the spine in the spine's plane and its y up from that plane. The spine's
-    /// curves (lines and circular arcs) are chained end to end; a closed spine is taken
-    /// counter-clockwise about its plane's normal, which is "up". Where the spine turns away from
-    /// the profile's side, the corner is filled by the profile turned about the corner (arc
-    /// joins, as OCCT's offsets); where it turns in, the sweeps overlap. The profile must lie on
-    /// one side of x = 0. No history.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use yack_cadrs::{Curve2, DefaultKernel, Kernel, Loop, PathCurve, Plane, Region};
-    /// # use nalgebra::Point2;
-    /// let line = |a: (f64, f64), b: (f64, f64)| Curve2::Line { a: Point2::new(a.0, a.1), b: Point2::new(b.0, b.1), source: None };
-    /// // A 40 × 20 rectangle on the top plane, and a 5 × 3 square outside it.
-    /// let c = [(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)];
-    /// let spine: Vec<PathCurve> = (0..4).map(|i| PathCurve::Sketch { plane: Plane::top(), curve: line(c[i], c[(i + 1) % 4]) }).collect();
-    /// let s = [(0.0, 0.0), (5.0, 0.0), (5.0, 3.0), (0.0, 3.0)];
-    /// let square = Region { outer: Loop { curves: (0..4).map(|i| line(s[i], s[(i + 1) % 4])).collect() }, holes: vec![], source: None };
-    /// let mut k = DefaultKernel::new();
-    /// let r = Kernel::evolved(&mut k, &spine, &[square])?;
-    /// // Four prisms along the sides and four quarter turns at the corners: h (2w(a + b) + πw²).
-    /// let want = 3.0 * (2.0 * 5.0 * 60.0 + std::f64::consts::PI * 25.0);
-    /// assert!((k.mass_properties(r.bodies[0])?.volume - want).abs() < 1e-6 * want);
-    /// # Ok::<(), yack_cadrs::KernelError>(())
-    /// ```
-    fn evolved(&mut self, spine: &[PathCurve], profile: &[Region]) -> Result<OpResult>;
 
     /// Splits a body with a tool (P3.7, PS18.5) into one body holding every piece (a boolean
     /// feature then makes each solid a part with [`Kernel::split_solids`]). The body's faces are
@@ -788,22 +725,6 @@ pub trait Kernel {
         t: Vector3<f64>,
     ) -> Result<OpResult>;
 
-    /// A copy of the body scaled about `center` by `factors` along the model's x, y and z
-    /// (each greater than zero; Onshape's Transform, Scale non-uniformly).
-    fn scale_axes(
-        &mut self,
-        body: BodyId,
-        center: Point3<f64>,
-        factors: Vector3<f64>,
-    ) -> Result<OpResult> {
-        if !factors.iter().all(|f| *f > 0.0 && f.is_finite()) {
-            return Err(KernelError::InvalidParameter(
-                "The scale must be positive".into(),
-            ));
-        }
-        let m = nalgebra::Matrix3::from_diagonal(&factors);
-        self.transform_affine(body, m, center.coords - m * center.coords)
-    }
 
     /// The solid bounded by `faces` of `body` and a flat cap across each loop of their free
     /// edges (P3.8): the pocket (or boss) the faces bound, which a face pattern or a face mirror
@@ -1059,15 +980,6 @@ pub trait Kernel {
     /// ```
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult>;
 
-    /// The body grown by a ball of radius `distance` (shrunk where negative: the points at least
-    /// that far inside), meshed: the level set of the body's signed distance contoured on a grid
-    /// of a hundredth of its reach and made solid (within about the grid's step squared over the
-    /// surface's curvature radius). For an offset [`Kernel::offset`] can't make exactly (a
-    /// shrink past a face's curvature, its swallowtails trimmed).
-    fn offset_meshed(&mut self, body: BodyId, distance: f64) -> Result<OpResult> {
-        let _ = (body, distance);
-        Err(KernelError::Unsupported("meshed offsets"))
-    }
 
     /// The solid with faces given new surfaces (SMLib's `SmBrep::LocalOperation`, a direct
     /// edit): the edges and vertices round them recomputed where the new surfaces meet their
@@ -1112,21 +1024,6 @@ pub trait Kernel {
         to: f64,
     ) -> Result<OpResult>;
 
-    /// Onshape's *Smooth fillet corners* (Final, PS14.6): the fillet of `edges` as
-    /// [`Kernel::fillet_with`] (a constant-radius circular one), then at every vertex of `body`
-    /// where three or more filleted edges meet, the corner set back: everything of the fillet
-    /// within `ρ = √(setback² + r²)` of the vertex (the fillets' ends and the default corner
-    /// patch; the contact lines on the faces end `setback` from the vertex) is replaced by one
-    /// N-sided patch meeting every face around it tangentially (G1). The patch is generated
-    /// `FromVertex`. A corner the kernel can't fill is an error saying so (`InvalidGeometry`, or
-    /// `InvalidResult` for a patch that doesn't close).
-    fn fillet_smooth(
-        &mut self,
-        body: BodyId,
-        edges: &[EdgeId],
-        spec: &FilletSpec,
-        setback: f64,
-    ) -> Result<OpResult>;
 
     /// The outward unit normals of `face` at the points of it nearest `points` (exact, from
     /// its surface; Final: to check that faces meet tangentially).
@@ -1142,12 +1039,6 @@ pub trait Kernel {
     /// `body`. A body with one solid, or a surface body, comes back as one copy.
     fn split_solids(&mut self, body: BodyId) -> Result<Vec<OpResult>>;
 
-    /// [`Kernel::split_solids`] for an imported file's shape, which may also hold loose shells
-    /// (CAD files often write a part's solids as bare shells): each closed loose shell becomes a
-    /// solid of its own and each open one a surface body, as Onshape's import makes them.
-    fn split_imported(&mut self, body: BodyId) -> Result<Vec<OpResult>> {
-        self.split_solids(body)
-    }
 
     /// Gathers copies of `bodies` into one body without merging them (a compound: P3H.6's
     /// Composite part). Its faces are the inputs' faces in order (the first body's, then the
@@ -1177,9 +1068,6 @@ pub trait Kernel {
     /// Sews surface bodies that meet along their edges into one solid, if they close it.
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
 
-    /// Sheets joined along their edges that coincide (within `tol`) into one sheet (Onshape's
-    /// Add of surfaces). Each face continues (`modified`) the input face it was.
-    fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
 
     /// Forgets a body (for example when a rebuild cache evicts a feature's output). Unknown ids
     /// are ignored. Ids are never reused, so a released id stays unknown.
@@ -1249,12 +1137,6 @@ pub trait Kernel {
         Ok(self.faces(body)?.len())
     }
 
-    /// [`Kernel::edges`] for showing the body: the lengths exact below `short` (a sliver's), the
-    /// others perhaps only their chord (no more than the length, and no less than `short`).
-    fn edges_shown(&self, body: BodyId, short: f64) -> Result<Vec<EdgeInfo>> {
-        let _ = short;
-        self.edges(body)
-    }
 
     /// Volume, area, centroid and inertia (unit density) from the exact geometry: analytic
     /// faces integrated in closed form or by Gauss quadrature to near machine precision, not
@@ -1340,11 +1222,6 @@ pub trait Kernel {
     /// A tight axis-aligned bounding box of the body's exact geometry.
     fn bounding_box(&self, body: BodyId) -> Result<Aabb>;
 
-    /// About how big the body is: the diagonal of a box sure to hold it, perhaps larger than
-    /// [`Kernel::bounding_box`]'s but quick (for choosing a mesh's tolerance).
-    fn size_hint(&self, body: BodyId) -> Result<f64> {
-        Ok(self.bounding_box(body)?.diagonal())
-    }
 
     /// Where the line through `origin` along the unit `dir` crosses the body's faces, sorted by
     /// `t` (hits behind the origin have negative `t`). Up to next uses it to find what lies
@@ -1444,17 +1321,6 @@ pub trait Kernel {
         opts: &ProjectOptions,
     ) -> Result<Projection>;
 
-    /// The silhouette curves of every face of `body` seen along a direction or from an eye
-    /// point: where the face's normal is square to the line of sight (SMLib's
-    /// `CreateSilhouetteCurves` clipped to the face), hidden or not, as model-space polylines
-    /// within `tolerance` (mm), with their (u, v). A face seen edge-on (wholly on its
-    /// silhouette) gives the sides of its uv box that lie in it, as SMLib does.
-    fn silhouettes(
-        &self,
-        body: BodyId,
-        view: &SilhouetteView,
-        tolerance: f64,
-    ) -> Result<Vec<SilhouetteCurve>>;
 
     /// The minimum distance between two points, edges, faces or bodies (their boundaries), and
     /// the closest points. `EmptyResult` when either side has no geometry.

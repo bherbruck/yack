@@ -40,7 +40,6 @@ use super::curve::Curve;
 use super::math::*;
 use super::surface::Surface;
 use super::tol;
-use super::topo::Body;
 use super::uvdomain::FaceDomain;
 
 /// How a face is seen.
@@ -76,51 +75,7 @@ pub enum SilGeom {
     Poly { pts: Vec<P3>, uv: Vec<P2> },
 }
 
-/// One silhouette curve of a face.
-#[derive(Debug, Clone)]
-pub struct Silhouette {
-    /// The face's index in its body.
-    pub face: usize,
-    pub geom: SilGeom,
-    /// A whole closed curve (a full circle, or a polyline ending where it starts).
-    pub closed: bool,
-}
 
-impl Silhouette {
-    /// The curve's length.
-    pub fn length(&self) -> f64 {
-        match &self.geom {
-            SilGeom::Exact { curve, t } => curve.length(t.0, t.1),
-            SilGeom::Poly { pts, .. } => pts.windows(2).map(|w| (w[1] - w[0]).norm()).sum(),
-        }
-    }
-
-    /// Points along the curve, its chords within `tol`, with their (u, v) on `surf` (the
-    /// face's surface).
-    pub fn samples(&self, surf: &Surface, tol: f64) -> (Vec<P3>, Vec<P2>) {
-        match &self.geom {
-            SilGeom::Exact { curve, t } => {
-                let pts: Vec<P3> = curve
-                    .sample_params(t.0, t.1, tol, 0.1)
-                    .into_iter()
-                    .map(|s| curve.point(s))
-                    .collect();
-                let mut hint = None;
-                let uv = pts
-                    .iter()
-                    .map(|p| {
-                        let (u, v) =
-                            surf.project(p, hint.or_else(|| Some(surf.project_coarse(p, 16))));
-                        hint = Some((u, v));
-                        P2::new(u, v)
-                    })
-                    .collect();
-                (pts, uv)
-            }
-            SilGeom::Poly { pts, uv } => (pts.clone(), uv.clone()),
-        }
-    }
-}
 
 /// How finely to trace.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,85 +103,8 @@ pub enum Found {
     Whole,
 }
 
-/// The silhouettes of every face of `body` (`polys`: its faces' uv polygons).
-pub fn body_silhouettes(
-    body: &Body,
-    polys: &[Vec<Vec<P2>>],
-    view: &View,
-    opts: &SilOptions,
-) -> Vec<Silhouette> {
-    (0..body.faces.len())
-        .into_par_iter()
-        .flat_map_iter(|fi| face_silhouettes(body, fi, &polys[fi], view, opts))
-        .collect()
-}
 
-/// The silhouettes of face `fi` of `body` (`polys`: its uv polygons).
-pub fn face_silhouettes(
-    body: &Body,
-    fi: usize,
-    polys: &[Vec<P2>],
-    view: &View,
-    opts: &SilOptions,
-) -> Vec<Silhouette> {
-    let dom = FaceDomain::new(&body.faces[fi].surf, polys);
-    let curves = match domain_silhouettes(&dom, view, opts) {
-        Found::Curves(cs) => cs,
-        Found::Whole => box_sides(&dom),
-    };
-    curves
-        .into_iter()
-        .map(|(geom, closed)| Silhouette {
-            face: fi,
-            geom,
-            closed,
-        })
-        .collect()
-}
 
-/// The sides of the face's uv box, as iso-curves, where they lie in the face (a seen edge-on
-/// face's silhouette, as SMLib gives it). Of two sides a period apart, one.
-fn box_sides(dom: &FaceDomain) -> Vec<(SilGeom, bool)> {
-    let s = dom.surf;
-    let ((u0, u1), (v0, v1)) = (dom.ub, dom.vb);
-    let full = |a: f64, b: f64, periodic: bool| periodic && ((b - a) - TAU).abs() < tol::ANGULAR;
-    let mut out = Vec::new();
-    let mut side = |fixed_u: bool, at: f64| {
-        let Some(c) = super::face_build::iso_curve(s, fixed_u, at) else {
-            return;
-        };
-        let (t0, t1) = if fixed_u { (v0, v1) } else { (u0, u1) };
-        let inside = |t: f64| {
-            if fixed_u {
-                dom.contains(at, t, false)
-            } else {
-                dom.contains(t, at, false)
-            }
-        };
-        // Runs where a side only touches the face (a disc's box) are the boundary band's width.
-        for run in clip(t0, t1, 64, inside)
-            .into_iter()
-            .filter(|r| r.1 - r.0 > 1e-2 * (t1 - t0))
-        {
-            out.push((
-                SilGeom::Exact {
-                    curve: c.clone(),
-                    t: run,
-                },
-                false,
-            ));
-        }
-    };
-    side(false, v0);
-    if !full(v0, v1, s.v_periodic()) {
-        side(false, v1);
-    }
-    side(true, u0);
-    if !full(u0, u1, s.u_periodic()) {
-        side(true, u1);
-    }
-    out
-}
 
 /// The silhouettes of a surface over a face's domain.
 pub fn domain_silhouettes(dom: &FaceDomain, view: &View, opts: &SilOptions) -> Found {
@@ -881,50 +759,6 @@ fn chains(segs: &[(usize, usize)]) -> Vec<Vec<usize>> {
     out
 }
 
-/// [`crate::Kernel::silhouettes`] for the native kernel.
-pub fn kernel_silhouettes(
-    k: &super::NativeKernel,
-    body: crate::BodyId,
-    view: &crate::SilhouetteView,
-    tolerance: f64,
-) -> crate::Result<Vec<crate::SilhouetteCurve>> {
-    use crate::{KernelError, SilhouetteView};
-    if !(tolerance > 0.0 && tolerance.is_finite()) {
-        return Err(KernelError::InvalidParameter(format!(
-            "a silhouette tolerance of {tolerance} mm"
-        )));
-    }
-    let v = match view {
-        SilhouetteView::Parallel(d)
-            if d.iter().all(|x| x.is_finite()) && d.norm() > tol::DEGENERATE =>
-        {
-            View::Parallel(*d)
-        }
-        SilhouetteView::Perspective(e) if e.iter().all(|x| x.is_finite()) => View::Perspective(*e),
-        _ => {
-            return Err(KernelError::InvalidParameter(
-                "a view direction must be a finite non-zero vector, an eye point finite".into(),
-            ));
-        }
-    };
-    let e = k.entry(body)?;
-    let opts = SilOptions {
-        tol: tolerance,
-        ..SilOptions::default()
-    };
-    Ok(body_silhouettes(&e.body, e.polys(), &v, &opts)
-        .into_iter()
-        .map(|s| {
-            let (points, uv) = s.samples(&e.body.faces[s.face].surf, tolerance);
-            crate::SilhouetteCurve {
-                face: crate::FaceId(s.face as u64),
-                points,
-                uv,
-                closed: s.closed,
-            }
-        })
-        .collect())
-}
 
 #[cfg(test)]
 mod tests {

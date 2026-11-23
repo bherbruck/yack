@@ -79,17 +79,8 @@ impl Bvh {
         Bvh { root, boxes }
     }
 
-    pub fn len(&self) -> usize {
-        self.boxes.len()
-    }
 
-    pub fn is_empty(&self) -> bool {
-        self.boxes.is_empty()
-    }
 
-    pub fn bbox(&self, i: usize) -> &Bbox {
-        &self.boxes[i]
-    }
 
     /// The boxes overlapping `q`, in no particular order.
     pub fn query(&self, q: &Bbox) -> Vec<usize> {
