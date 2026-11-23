@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = []
+deps = ["yack-p21"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 

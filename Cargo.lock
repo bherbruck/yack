@@ -200,6 +200,9 @@ dependencies = [
 [[package]]
 name = "yack-springrep"
 version = "1.0.1"
+dependencies = [
+ "yack-p21",
+]
 
 [[package]]
 name = "yack-step"

@@ -1,6 +1,7 @@
 // yack: The STEP exchange structure (ISO 10303-21): a parser of the header and the data section into
 // Adapted from springrep@a03e8a1 src/step/part21.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: parsing delegated to yack-p21 (M3 native rewrite); springrep's types, accessors and
+// string codec kept, the instances in the file's order, names and enumerations upper-cased.
 //! The STEP exchange structure (ISO 10303-21): a parser of the header and the data section into
 //! entity instances, and the string encoding the writer uses.
 
@@ -140,216 +141,56 @@ fn err<T>(msg: impl Into<String>, at: usize) -> Result<T> {
     )))
 }
 
-/// How deeply parameter lists may nest; real files use a handful of levels, and the parser
-/// recurses once per level.
-const MAX_DEPTH: usize = 64;
-
-struct Lexer<'a> {
-    s: &'a [u8],
-    i: usize,
-    depth: usize,
+/// Whether the text opens with the exchange structure's `ISO-10303-21;`, after any white space
+/// and comments: yack-p21 reads the sections wherever they are, and a file without it is refused.
+fn opens_as_part21(s: &[u8]) -> bool {
+    let mut i = 0;
+    let skip = |mut i: usize| loop {
+        while s.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if s.get(i..).is_some_and(|r| r.starts_with(b"/*")) {
+            i = find(&s[i + 2..], b"*/").map_or(s.len(), |k| i + k + 4);
+        } else {
+            return i;
+        }
+    };
+    i = skip(i);
+    let word = b"ISO-10303-21";
+    let Some(head) = s.get(i..i + word.len()) else {
+        return false;
+    };
+    let after = s.get(i + word.len()).copied();
+    let continues = after.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+    if !head.eq_ignore_ascii_case(word) || continues {
+        return false;
+    }
+    s.get(skip(i + word.len())) == Some(&b';')
 }
 
-impl<'a> Lexer<'a> {
-    fn skip_ws(&mut self) {
-        loop {
-            while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
-                self.i += 1;
-            }
-            if self.s.get(self.i..).is_some_and(|r| r.starts_with(b"/*")) {
-                match find(&self.s[self.i + 2..], b"*/") {
-                    Some(k) => self.i += k + 4,
-                    None => self.i = self.s.len(),
-                }
-            } else {
-                return;
-            }
+/// A yack-p21 parameter as springrep's: names and enumerations upper-cased, strings with their
+/// control directives decoded and their line breaks dropped, a binary as its hex string.
+fn param(p: &yack_p21::Param) -> Param {
+    use yack_p21::Param as P;
+    match p {
+        P::Int(i) => Param::Int(*i),
+        P::Real(x) => Param::Real(*x),
+        P::Str(s) => {
+            let raw: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
+            Param::Str(decode_string(&raw))
         }
+        P::Binary(h) => Param::Str(h.clone()),
+        P::Enum(e) => Param::Enum(e.to_ascii_uppercase()),
+        P::Ref(r) => Param::Ref(*r),
+        P::List(l) => Param::List(l.iter().map(param).collect()),
+        P::Typed(n, inner) => Param::Typed(n.to_ascii_uppercase(), Box::new(param(inner))),
+        P::Unset => Param::Unset,
+        P::Derived => Param::Derived,
     }
+}
 
-    fn peek(&mut self) -> Option<u8> {
-        self.skip_ws();
-        self.s.get(self.i).copied()
-    }
-
-    fn expect(&mut self, c: u8) -> Result<()> {
-        if self.peek() == Some(c) {
-            self.i += 1;
-            Ok(())
-        } else {
-            err(format!("expected '{}'", c as char), self.i)
-        }
-    }
-
-    fn keyword(&mut self) -> Result<String> {
-        self.skip_ws();
-        let start = self.i;
-        while self.i < self.s.len()
-            && (self.s[self.i].is_ascii_alphanumeric()
-                || self.s[self.i] == b'_'
-                || self.s[self.i] == b'-')
-        {
-            self.i += 1;
-        }
-        if self.i == start {
-            return err("expected a keyword", start);
-        }
-        Ok(String::from_utf8_lossy(&self.s[start..self.i]).to_ascii_uppercase())
-    }
-
-    fn number(&mut self) -> Result<Param> {
-        let start = self.i;
-        let mut real = false;
-        while self.i < self.s.len() {
-            match self.s[self.i] {
-                b'0'..=b'9' | b'+' | b'-' => {}
-                b'.' | b'E' | b'e' => real = true,
-                _ => break,
-            }
-            self.i += 1;
-        }
-        let text = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("");
-        if !real && let Ok(v) = text.parse::<i64>() {
-            return Ok(Param::Int(v));
-        }
-        // `1.` and `1.E3` are valid STEP reals that Rust's parser also accepts.
-        match text.parse::<f64>() {
-            Ok(v) => Ok(Param::Real(v)),
-            Err(_) => err(format!("bad number '{text}'"), start),
-        }
-    }
-
-    fn string(&mut self) -> Result<String> {
-        self.i += 1;
-        let mut raw = Vec::new();
-        loop {
-            match self.s.get(self.i) {
-                None => return err("unterminated string", self.i),
-                Some(b'\'') if self.s.get(self.i + 1) == Some(&b'\'') => {
-                    raw.push(b'\'');
-                    self.i += 2;
-                }
-                Some(b'\'') => {
-                    self.i += 1;
-                    break;
-                }
-                Some(b'\n') | Some(b'\r') => self.i += 1,
-                Some(&c) => {
-                    raw.push(c);
-                    self.i += 1;
-                }
-            }
-        }
-        Ok(decode_string(&raw))
-    }
-
-    fn param(&mut self) -> Result<Param> {
-        match self.peek() {
-            Some(b'#') => {
-                self.i += 1;
-                match self.number()? {
-                    Param::Int(v) if v >= 0 => Ok(Param::Ref(v as u64)),
-                    _ => err("bad instance reference", self.i),
-                }
-            }
-            Some(b'\'') => Ok(Param::Str(self.string()?)),
-            Some(b'.') => {
-                self.i += 1;
-                let start = self.i;
-                while self.i < self.s.len() && self.s[self.i] != b'.' {
-                    self.i += 1;
-                }
-                if self.i >= self.s.len() {
-                    return err("unterminated enumeration", start);
-                }
-                let e = String::from_utf8_lossy(&self.s[start..self.i]).to_ascii_uppercase();
-                self.i += 1;
-                Ok(Param::Enum(e))
-            }
-            Some(b'$') => {
-                self.i += 1;
-                Ok(Param::Unset)
-            }
-            Some(b'*') => {
-                self.i += 1;
-                Ok(Param::Derived)
-            }
-            Some(b'(') => Ok(Param::List(self.list()?)),
-            Some(b'"') => {
-                self.i += 1;
-                let start = self.i;
-                while self.i < self.s.len() && self.s[self.i] != b'"' {
-                    self.i += 1;
-                }
-                if self.i >= self.s.len() {
-                    return err("unterminated binary", start);
-                }
-                let v = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
-                self.i += 1;
-                Ok(Param::Str(v))
-            }
-            Some(c) if c.is_ascii_digit() || c == b'-' || c == b'+' => self.number(),
-            Some(c) if c.is_ascii_alphabetic() || c == b'_' => {
-                let k = self.keyword()?;
-                let mut l = self.list()?;
-                let inner = if l.len() == 1 {
-                    l.pop().unwrap_or(Param::Unset)
-                } else {
-                    Param::List(l)
-                };
-                Ok(Param::Typed(k, Box::new(inner)))
-            }
-            _ => err("unexpected character in parameters", self.i),
-        }
-    }
-
-    fn list(&mut self) -> Result<Vec<Param>> {
-        if self.depth >= MAX_DEPTH {
-            return err("parameter lists nest too deeply", self.i);
-        }
-        self.depth += 1;
-        let out = self.list_items();
-        self.depth -= 1;
-        out
-    }
-
-    fn list_items(&mut self) -> Result<Vec<Param>> {
-        self.expect(b'(')?;
-        let mut out = Vec::new();
-        if self.peek() == Some(b')') {
-            self.i += 1;
-            return Ok(out);
-        }
-        loop {
-            out.push(self.param()?);
-            match self.peek() {
-                Some(b',') => self.i += 1,
-                Some(b')') => {
-                    self.i += 1;
-                    return Ok(out);
-                }
-                _ => return err("expected ',' or ')'", self.i),
-            }
-        }
-    }
-
-    /// `TYPE(..)` or a complex `(A(..) B(..))`, up to the terminating `;`.
-    fn entity(&mut self) -> Result<Entity> {
-        let mut parts = Vec::new();
-        if self.peek() == Some(b'(') {
-            self.i += 1;
-            while self.peek() != Some(b')') {
-                let k = self.keyword()?;
-                parts.push((k, self.list()?));
-            }
-            self.i += 1;
-        } else {
-            let k = self.keyword()?;
-            parts.push((k, self.list()?));
-        }
-        self.expect(b';')?;
-        Ok(Entity { parts })
-    }
+fn part(r: &yack_p21::Record) -> (String, Vec<Param>) {
+    (r.name.to_ascii_uppercase(), r.params.iter().map(param).collect())
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -431,60 +272,28 @@ pub(super) fn encode_string(s: &str) -> String {
 
 /// Parses an exchange file.
 pub(super) fn parse(text: &[u8]) -> Result<File> {
-    let mut lx = Lexer {
-        s: text,
-        i: 0,
-        depth: 0,
-    };
-    let mut file = File::default();
-    let k = lx.keyword()?;
-    if k != "ISO-10303-21" {
+    if !opens_as_part21(text) {
         return err("not an ISO-10303-21 file", 0);
     }
-    lx.expect(b';')?;
-    let mut in_data = false;
-    loop {
-        match lx.peek() {
-            None => break,
-            Some(b'#') if in_data => {
-                lx.i += 1;
-                let id = match lx.number()? {
-                    Param::Int(v) if v >= 0 => v as u64,
-                    _ => return err("bad instance id", lx.i),
-                };
-                lx.expect(b'=')?;
-                let e = lx.entity()?;
-                file.index.insert(id, file.entities.len());
-                file.ids.push(id);
-                file.entities.push(e);
-            }
-            Some(_) => {
-                let k = lx.keyword()?;
-                match k.as_str() {
-                    "HEADER" => lx.expect(b';')?,
-                    "DATA" => {
-                        if lx.peek() == Some(b'(') {
-                            lx.list()?;
-                        }
-                        lx.expect(b';')?;
-                        in_data = true;
-                    }
-                    "ENDSEC" => {
-                        lx.expect(b';')?;
-                        in_data = false;
-                    }
-                    "END-ISO-10303-21" => break,
-                    _ if !in_data => {
-                        let params = lx.list()?;
-                        lx.expect(b';')?;
-                        file.header.push(Entity {
-                            parts: vec![(k, params)],
-                        });
-                    }
-                    _ => return err(format!("unexpected '{k}' in the data section"), lx.i),
-                }
-            }
-        }
+    let read = yack_p21::parse(&String::from_utf8_lossy(text))
+        .map_err(|e| Error::InvalidInput(format!("STEP: {}", e.detail)))?;
+    let mut file = File {
+        header: read
+            .header
+            .iter()
+            .map(|r| Entity {
+                parts: vec![part(r)],
+            })
+            .collect(),
+        ..File::default()
+    };
+    for &id in &read.order {
+        let Some(e) = read.get(id) else { continue };
+        file.index.insert(id, file.entities.len());
+        file.ids.push(id);
+        file.entities.push(Entity {
+            parts: e.records().iter().map(part).collect(),
+        });
     }
     Ok(file)
 }
@@ -538,13 +347,22 @@ mod tests {
     #[test]
     fn strings_round_trip() {
         for s in ["plain", "a.b;c.d", "quote ' and \\ slash", "ünïcode ✓"] {
-            let enc = encode_string(s);
-            let mut lx = Lexer {
-                s: enc.as_bytes(),
-                i: 0,
-                depth: 0,
-            };
-            assert_eq!(lx.string().unwrap(), s);
+            let text = format!("ISO-10303-21;\nDATA;\n#1=A({});\nENDSEC;\n", encode_string(s));
+            let f = parse(text.as_bytes()).unwrap();
+            assert_eq!(f.get(1).unwrap().part("A").unwrap()[0].as_str(), Some(s));
         }
+    }
+
+    #[test]
+    fn keeps_the_file_order_and_refuses_a_file_without_its_opening() {
+        let text = b"ISO-10303-21;\nHEADER;\nFILE_NAME('a','',(''),(''),'','sys','');\nENDSEC;\n\
+            DATA;\n#9=a(.t.);\n#2=B(#9);\nENDSEC;\nEND-ISO-10303-21;\n";
+        let f = parse(text).unwrap();
+        assert_eq!(f.ids, [9, 2]);
+        assert_eq!(f.get(9).unwrap().kind(), "A");
+        assert_eq!(f.get(9).unwrap().parts[0].1[0].as_bool(), Some(true));
+        assert_eq!(f.originating_system(), Some("sys"));
+        assert!(parse(b"DATA;\n#1=A(1);\nENDSEC;\n").is_err());
+        assert!(parse(b"/* c */ iso-10303-21 ;\nDATA;\n#1=A(1);\nENDSEC;\n").is_ok());
     }
 }
