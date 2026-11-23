@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::fmt::Write as _;
 
-use super::{WRITER, part21::encode_string};
+use yack_p21::encode_text;
+
+use super::WRITER;
 use crate::{
     Error, Result,
     geom::{BSpline, Cone, Curve, Ruled, Surface},
@@ -574,7 +576,7 @@ impl Writer {
         };
         Ok(self.add(format!(
             "ADVANCED_FACE({},{},#{s},{same})",
-            encode_string(&names.join(";")),
+            encode_text(&names.join(";")),
             refs(&bounds)
         )))
     }
@@ -1034,7 +1036,7 @@ impl Writer {
         let _ = writeln!(
             text,
             "FILE_NAME({n},'',(''),(''),'',{},'');",
-            encode_string(WRITER)
+            encode_text(WRITER)
         );
         text += "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n";
         text += &self.out;
@@ -1053,7 +1055,7 @@ pub fn write(b: &Brep, name: &str) -> Result<String> {
 /// file is the n-th face here. A reader that keeps the file's order can tell its faces by it.
 pub fn write_faces(b: &Brep, name: &str) -> Result<(String, Vec<FaceId>)> {
     let mut w = Writer::new();
-    let n = encode_string(name);
+    let n = encode_text(name);
     let shared = w.shared();
     let (_, pds) = w.product(&shared, &n);
     let (_, faces) = w.body(b, &n, pds, None)?;
@@ -1091,12 +1093,12 @@ pub fn write_assembly(name: &str, parts: &[Part], instances: &[Instance]) -> Res
         )));
     }
     let mut w = Writer::new();
-    let n = encode_string(name);
+    let n = encode_text(name);
     let shared = w.shared();
     let (root, root_shape) = w.product(&shared, &n);
     let mut made = Vec::with_capacity(parts.len());
     for part in parts {
-        let pn = encode_string(part.name);
+        let pn = encode_text(part.name);
         let (pd, pds) = w.product(&shared, &pn);
         let (rep, _) = w.body(part.brep, &pn, pds, part.colour)?;
         made.push((pd, rep));
@@ -1125,7 +1127,7 @@ pub fn write_assembly(name: &str, parts: &[Part], instances: &[Instance]) -> Res
         let used = w.add(format!(
             "NEXT_ASSEMBLY_USAGE_OCCURRENCE('{}',{},'',#{root},#{pd},$)",
             k + 1,
-            encode_string(i.name)
+            encode_text(i.name)
         ));
         let shape = w.add(format!("PRODUCT_DEFINITION_SHAPE('','',#{used})"));
         let moved = w.add(format!(

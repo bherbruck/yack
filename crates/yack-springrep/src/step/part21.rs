@@ -1,10 +1,10 @@
 // yack: STEP's exchange structure as the readers take it: yack-p21's file, its names and
-// enumerations upper-cased, its strings' control directives decoded; and the writer's string encoding.
+// enumerations upper-cased, its strings' control directives decoded.
 // Adapted from springrep@a03e8a1 src/step/part21.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: parsing delegated to yack-p21 (M3 native rewrite) and its types used directly; the
-// string codec kept.
+// string codec moved to yack-p21 (decode_text, encode_text).
 //! STEP's exchange structure as the readers take it: [`yack_p21`]'s file, normalised as springrep
-//! read it, and the string encoding the writer uses.
+//! read it.
 
 use yack_p21::{Entity, File, Param, Record};
 
@@ -50,10 +50,7 @@ fn opens_as_part21(s: &[u8]) -> bool {
 /// line breaks dropped and control directives decoded, a binary as its hex string.
 fn normalise(p: &mut Param) {
     match p {
-        Param::Str(s) => {
-            let raw: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
-            *s = decode_string(&raw);
-        }
+        Param::Str(s) => *s = yack_p21::decode_text(s),
         Param::Binary(h) => {
             let hex = std::mem::take(h);
             *p = Param::Str(hex);
@@ -108,80 +105,6 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Decodes the control directives of ISO 10303-21 strings that carry text: `\X2\…\X0\` and
-/// `\X4\…\X0\` (UTF-16 and UTF-32 hex), `\X\hh` (one ISO 8859-1 byte), and `\\`.
-fn decode_string(raw: &[u8]) -> String {
-    let hex =
-        |b: &[u8]| -> Option<u32> { u32::from_str_radix(std::str::from_utf8(b).ok()?, 16).ok() };
-    let mut out = String::new();
-    let mut i = 0;
-    while i < raw.len() {
-        let rest = &raw[i..];
-        if rest.starts_with(b"\\\\") {
-            out.push('\\');
-            i += 2;
-            continue;
-        }
-        let wide = if rest.starts_with(b"\\X2\\") {
-            Some(4)
-        } else if rest.starts_with(b"\\X4\\") {
-            Some(8)
-        } else {
-            None
-        };
-        if let (Some(width), Some(end)) = (wide, find(&rest[4.min(rest.len())..], b"\\X0\\")) {
-            let units: Vec<u32> = rest[4..4 + end].chunks(width).filter_map(hex).collect();
-            if width == 4 {
-                let u16s: Vec<u16> = units.iter().map(|&u| u as u16).collect();
-                out.push_str(&String::from_utf16_lossy(&u16s));
-            } else {
-                out.extend(units.iter().filter_map(|&u| char::from_u32(u)));
-            }
-            i += 4 + end + 4;
-            continue;
-        }
-        if rest.starts_with(b"\\X\\")
-            && rest.len() >= 5
-            && let Some(c) = hex(&rest[3..5]).and_then(char::from_u32)
-        {
-            out.push(c);
-            i += 5;
-            continue;
-        }
-        let n = rest[1..]
-            .iter()
-            .position(|&c| c == b'\\')
-            .map_or(rest.len(), |k| k + 1);
-        out.push_str(&String::from_utf8_lossy(&rest[..n]));
-        i += n;
-    }
-    out
-}
-
-/// Encodes `s` as an ISO 10303-21 string literal: quotes doubled, backslashes escaped, and
-/// anything outside printable ASCII as `\X2\` hex.
-pub(super) fn encode_string(s: &str) -> String {
-    let mut out = String::from("'");
-    for c in s.chars() {
-        match c {
-            '\'' => out.push_str("''"),
-            '\\' => out.push_str("\\\\"),
-            ' '..='~' => out.push(c),
-            _ => {
-                let mut buf = [0u16; 2];
-                out.push_str("\\X2\\");
-                for u in c.encode_utf16(&mut buf) {
-                    out.push_str(&format!("{u:04X}"));
-                }
-                out.push_str("\\X0\\");
-            }
-        }
-    }
-    out.push('\'');
-    out
-}
-
-/// Parses an exchange file.
 pub(super) fn parse(text: &[u8]) -> Result<File> {
     if !opens_as_part21(text) {
         return err("not an ISO-10303-21 file", 0);
@@ -247,7 +170,7 @@ mod tests {
     #[test]
     fn strings_round_trip() {
         for s in ["plain", "a.b;c.d", "quote ' and \\ slash", "ünïcode ✓"] {
-            let text = format!("ISO-10303-21;\nDATA;\n#1=A({});\nENDSEC;\n", encode_string(s));
+            let text = format!("ISO-10303-21;\nDATA;\n#1=A({});\nENDSEC;\n", yack_p21::encode_text(s));
             let f = parse(text.as_bytes()).unwrap();
             assert_eq!(f.part(1, "A").unwrap()[0].string(), Some(s));
         }
