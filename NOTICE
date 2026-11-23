@@ -15,7 +15,8 @@ Donor projects (code in this tree)
 ----------------------------------
 - springrep (https://github.com/springcraft-ai/springrep) @ a03e8a1 (v1.0.1), MIT,
   Copyright (c) 2026 Springcraft, Inc.
-  In: crates/yack-springrep (src/, tests/, build.rs, README.md; temporary, deleted by M3).
+  In: crates/yack-springrep (src/, tests/, build.rs, README.md; temporary, deleted by M3), and
+  crates/yack-p21/src/text.rs (the Part 21 string codec, adapted from src/step/part21.rs).
   The full MIT licence text is crates/yack-springrep/LICENSE-springrep; every copied file
   carries a provenance header.
 - cadrs (https://github.com/rvdende/cadrs, crates/cadrs_kernel) @ eb5899ef, MIT OR Apache-2.0,

@@ -9,6 +9,9 @@
 
 use std::collections::BTreeMap;
 
+mod text;
+pub use text::{decode_text, encode_text};
+
 use yack_base::{Error, Result, Stage};
 
 /// One parameter of a record.
