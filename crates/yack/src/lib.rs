@@ -37,7 +37,7 @@ mod solid;
 pub mod step;
 mod values;
 
-pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3};
+pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3, Toolpath};
 pub use solid::Solid;
 pub use values::{
     Closest, CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, Interference, Issue, Mesh, NearestFace,
@@ -55,6 +55,17 @@ pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigid, Sim
 /// ```
 pub fn deg(d: f64) -> Angle {
     yack_math::deg(d)
+}
+
+/// An angle of `n` whole turns (a screw's thirty turns: `turns(30.0)`).
+///
+/// ```
+/// use yack::prelude::*;
+/// assert_eq!(turns(0.25).radians(), std::f64::consts::FRAC_PI_2);
+/// # Ok::<(), yack::Error>(())
+/// ```
+pub fn turns(n: f64) -> Angle {
+    yack_math::turns(n)
 }
 
 /// An angle of `r` radians.
@@ -76,9 +87,9 @@ pub mod prelude {
         sweep_helix, sweep_scaled, loft_to_point,
     };
     pub use crate::{
-        Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2,
+        Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, Toolpath, PathPiece, Patch, Plane, Point2,
         Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg,
-        rad,
+        rad, turns,
     };
 }
 

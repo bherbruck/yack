@@ -4,7 +4,8 @@ yack: pub const SUPPORTS: &[&str]
 yack: pub const VERSION: &str
 yack: pub fn deg(d: f64) -> Angle
 yack: pub fn rad(r: f64) -> Angle
-yack: pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3}
+yack: pub fn turns(n: f64) -> Angle
+yack: pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3, Toolpath}
 yack: pub use solid::Solid
 yack: pub use values::{Closest, CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, Interference, Issue, Mesh, NearestFace, Join, Plane, Ray, Role, Side, Split, SurfaceKind, Tag, VertexId, VertexRef,}
 yack: pub use yack_base::{Error, ErrorKind, Result, Stage}
@@ -56,6 +57,7 @@ yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<So
 yack::input: impl Lead { pub fn per_radian(mm: f64) -> Lead }
 yack::input: impl Lead { pub fn per_turn(mm: f64) -> Lead }
 yack::input: impl Lead { pub fn polynomial(coefficients: Vec<f64>) -> Lead }
+yack::input: impl Loop { pub fn closed_spline(degree: u32, ctrl: &[[f64; 2]]) -> Result<Loop> }
 yack::input: impl Loop { pub fn is_ccw(&self) -> bool }
 yack::input: impl Loop { pub fn labels(&self) -> &[Option<Tag>] }
 yack::input: impl Loop { pub fn new(segments: Vec<Segment>) -> Result<Loop> }
@@ -74,6 +76,7 @@ yack::input: impl Motion { pub fn then(legs: Vec<Motion>) -> Motion }
 yack::input: impl Motion { pub fn through(points: &[Point3]) -> Result<Motion> }
 yack::input: impl Motion { pub fn together(legs: Vec<Motion>) -> Motion }
 yack::input: impl Motion { pub fn turn(axis_point: impl Into<Point3>, axis: impl Into<Vec3>, from: Angle, to: Angle) -> Motion }
+yack::input: impl Patch { pub fn transformed(&self, m: impl Into<crate::Similarity>) -> Result<Patch> }
 yack::input: impl Pen { pub fn arc_ccw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn arc_cw_to(self, end: impl Into<Point2>, center: impl Into<Point2>) -> Pen }
 yack::input: impl Pen { pub fn close(self) -> Result<Loop> }
@@ -93,6 +96,13 @@ yack::input: impl Spline3 { pub fn ctrl(&self) -> &[Point3] }
 yack::input: impl Spline3 { pub fn degree(&self) -> u32 }
 yack::input: impl Spline3 { pub fn knots(&self) -> &[f64] }
 yack::input: impl Spline3 { pub fn new(degree: u32, knots: Vec<f64>, ctrl: Vec<Point3>) -> Result<Spline3> }
+yack::input: impl Toolpath { pub fn along_loop(self, frame: &crate::Frame, path: &Loop) -> Result<Toolpath> }
+yack::input: impl Toolpath { pub fn at(&self) -> Point3 }
+yack::input: impl Toolpath { pub fn line_to(mut self, p: impl Into<Point3>) -> Toolpath }
+yack::input: impl Toolpath { pub fn motion(&self) -> Motion }
+yack::input: impl Toolpath { pub fn slide(mut self, by: impl Into<Vec3>) -> Toolpath }
+yack::input: impl Toolpath { pub fn starting_at(p: impl Into<Point3>) -> Toolpath }
+yack::input: impl Toolpath { pub fn turn(mut self, axis_point: impl Into<Point3>, axis: impl Into<Vec3>, by: Angle) -> Result<Toolpath> }
 yack::make: impl Spline3 { pub fn conical_helix(axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, x: impl Into<crate::Vec3>, r0: f64, r1: f64, height: f64, start: Angle, turns: f64,) -> Result<Spline3> }
 yack::make: pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid>
 yack::make: pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid>
@@ -120,7 +130,7 @@ yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, 
 yack::make: pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist: Angle, end_scale: f64) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
 yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus, extrude_drafted, ruled, sweep_helix, sweep_scaled, loft_to_point,}
-yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad,}
+yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, Toolpath, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad, turns,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn bbox(&self) -> Option<Aabb> }
 yack::query: impl Solid { pub fn betti(&self) -> [u64; 3] }

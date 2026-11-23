@@ -24,6 +24,17 @@ pub fn deg(d: f64) -> Angle {
     Angle(d.to_radians())
 }
 
+/// An angle of `n` whole turns (`n · 2π` radians).
+///
+/// ```
+/// use yack_math::*;
+/// assert_eq!(turns(0.5).radians(), std::f64::consts::PI);
+/// # Ok::<(), yack_base::Error>(())
+/// ```
+pub fn turns(n: f64) -> Angle {
+    Angle(n * core::f64::consts::TAU)
+}
+
 /// An angle of `r` radians.
 ///
 /// ```

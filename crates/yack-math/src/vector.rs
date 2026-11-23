@@ -68,6 +68,22 @@ pub struct Vec3 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dir3(Vec3);
 
+impl Dir3 {
+    /// The direction at `latitude` above the xy plane and `longitude` round the z axis from x:
+    /// `(cos lat · cos lon, cos lat · sin lon, sin lat)`.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// let d = Dir3::spherical(deg(90.0), deg(0.0));
+    /// assert!((d.vec().z - 1.0).abs() < 1e-15);
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn spherical(latitude: crate::Angle, longitude: crate::Angle) -> Dir3 {
+        let (l, p) = (latitude.radians(), longitude.radians());
+        Dir3(Vec3::new(l.cos() * p.cos(), l.cos() * p.sin(), l.sin()))
+    }
+}
+
 impl Point2 {
     /// The point `(x, y)`.
     ///

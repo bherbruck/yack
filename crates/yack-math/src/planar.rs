@@ -349,6 +349,29 @@ pub fn check_profile(op: &'static str, outer: &LoopShape, holes: &[LoopShape]) -
     Ok(())
 }
 
+/// A closed uniform B-spline of `degree` on `ctrl` as a periodic spline segment holds it: the
+/// control points with the first `degree` repeated at the end, and the knots `0, 1, 2, …`
+/// (`ctrl.len() + 2 · degree + 1` of them).
+///
+/// ```
+/// use yack_math::{Point2, planar};
+/// let ctrl = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]].map(Point2::from);
+/// let (knots, wrapped) = planar::closed_spline(3, &ctrl);
+/// assert_eq!((knots.len(), wrapped.len()), (11, 7));
+/// ```
+pub fn closed_spline(degree: u32, ctrl: &[Point2]) -> (Vec<f64>, Vec<Point2>) {
+    let d = usize::try_from(degree).unwrap_or(0);
+    let wrapped: Vec<Point2> = ctrl.iter().chain(ctrl.iter().take(d)).copied().collect();
+    let n = u32::try_from(wrapped.len() + d + 1).unwrap_or(0);
+    ((0..n).map(f64::from).collect(), wrapped)
+}
+
+/// `knots` run backwards over the same span (a reversed curve's): `first + last − k`, last to first.
+pub fn knots_reversed(knots: &[f64]) -> Vec<f64> {
+    let (a, b) = (knots.first().copied().unwrap_or(0.0), knots.last().copied().unwrap_or(0.0));
+    knots.iter().rev().map(|k| a + b - k).collect()
+}
+
 /// The points where a chain of circles, taken in order round an outline (counter-clockwise),
 /// meets the common tangents that join each circle to the next: per circle, the point where the
 /// line from the previous circle arrives, then where the line to the next one leaves. A circle

@@ -10,12 +10,14 @@ mod angle;
 mod frame;
 pub mod planar;
 mod vector;
+mod toolpath;
 mod view;
 mod xform;
 
 pub use aabb::Aabb;
-pub use angle::{Angle, deg, rad};
+pub use angle::{Angle, deg, rad, turns};
 pub use frame::{Frame, LoopLeg};
 pub use vector::{Dir3, Point2, Point3, Vec3};
+pub use toolpath::{slide_to, turned_about};
 pub use view::{mean, mesh_volume, steps, per_radian_of, per_turn_of, relative_gap, scale2, scale_length, turns_of, view_axes, view_point};
 pub use xform::{Affine, Rigid, Similarity};

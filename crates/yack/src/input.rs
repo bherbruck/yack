@@ -352,6 +352,22 @@ impl Loop {
         Loop::labelled(op, vec![Segment::PeriodicSpline { degree: 3, knots, ctrl }], vec![None])
     }
 
+    /// The closed uniform B-spline of `degree` with control points `ctrl` (it passes near them,
+    /// not through them; for a curve through points, [`Loop::through`]).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let cam = Loop::closed_spline(3, &[[3.5, 0.0], [4.5, -1.5], [8.0, -1.5], [12.0, -1.0], [12.0, 1.0], [8.0, 1.5], [4.5, 1.5]])?;
+    /// assert_eq!(cam.segments().len(), 1);
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn closed_spline(degree: u32, ctrl: &[[f64; 2]]) -> Result<Loop> {
+        let op = "Loop::closed_spline";
+        let pts: Vec<Point2> = ctrl.iter().map(|&c| Point2::from(c)).collect();
+        let (knots, ctrl) = yack_math::planar::closed_spline(degree, &pts);
+        Loop::labelled(op, vec![Segment::PeriodicSpline { degree, knots, ctrl }], vec![None])
+    }
+
     /// Start drawing a loop at `p`.
     ///
     /// ```
@@ -1005,6 +1021,175 @@ pub enum Patch {
         /// One weight per control point (rational), or none.
         weights: Option<Vec<Vec<f64>>>,
     },
+}
+
+impl Patch {
+    /// This patch moved by `m` (a [`Rigid`](crate::Rigid) motion or a [`Similarity`](crate::Similarity)).
+    /// A mirror also turns the patch over (its net's rows, or its boundary chain, run the other
+    /// way), so a mirrored half of a part still faces out.
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let net = vec![vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)], vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)]];
+    /// let half = Patch::Bezier { ctrl: net };
+    /// let other = half.transformed(Similarity::mirror([0.0; 3], [0.0, 1.0, 0.0])?)?;
+    /// assert!(matches!(other, Patch::Bezier { ref ctrl } if ctrl[0][0] == Point3::new(0.0, -1.0, 0.0)));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn transformed(&self, m: impl Into<crate::Similarity>) -> Result<Patch> {
+        let m: crate::Similarity = m.into();
+        let flip = m.is_mirror();
+        let net = |ctrl: &[Vec<Point3>]| -> Vec<Vec<Point3>> {
+            ctrl.iter()
+                .map(|row| {
+                    let mut r: Vec<Point3> = row.iter().map(|&p| m.point(p)).collect();
+                    if flip {
+                        r.reverse();
+                    }
+                    r
+                })
+                .collect()
+        };
+        let chain = |boundary: &[Spline3]| -> Result<Vec<Spline3>> {
+            let mut out = boundary
+                .iter()
+                .map(|c| {
+                    let mut ctrl: Vec<Point3> = c.ctrl().iter().map(|&p| m.point(p)).collect();
+                    let knots = if flip {
+                        ctrl.reverse();
+                        yack_math::planar::knots_reversed(c.knots())
+                    } else {
+                        c.knots().to_vec()
+                    };
+                    Spline3::new(c.degree(), knots, ctrl)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if flip {
+                out.reverse();
+            }
+            Ok(out)
+        };
+        Ok(match self {
+            Patch::Bezier { ctrl } => Patch::Bezier { ctrl: net(ctrl) },
+            Patch::PlanarFill { boundary } => Patch::PlanarFill { boundary: chain(boundary)? },
+            Patch::Fill { boundary } => Patch::Fill { boundary: chain(boundary)? },
+            Patch::Bspline { degree, knots, ctrl, weights } => {
+                let [ku, kv] = knots;
+                let kv = if flip { yack_math::planar::knots_reversed(kv) } else { kv.clone() };
+                let weights = weights.as_ref().map(|w| {
+                    w.iter()
+                        .map(|row| {
+                            let mut r = row.clone();
+                            if flip {
+                                r.reverse();
+                            }
+                            r
+                        })
+                        .collect()
+                });
+                Patch::Bspline { degree: *degree, knots: [ku.clone(), kv], ctrl: net(ctrl), weights }
+            }
+        })
+    }
+}
+
+/// A tool's path drawn move by move from where the tool is, as a CAM program reads: absolute
+/// moves (`line_to`), relative ones (`slide`), turns, and contour passes round a [`Loop`]. It
+/// keeps the tool's position, so each move needs only where it goes; [`Toolpath::motion`] gives
+/// the [`Motion`] for [`Solid::cut_swept`](crate::Solid::cut_swept) or [`Solid::swept`](crate::Solid::swept).
+///
+/// ```
+/// use yack::prelude::*;
+/// // down 2 into a 10 mm plate, across 20, round a half turn, back up
+/// let path = Toolpath::starting_at([0.0, 0.0, 5.0])
+///     .line_to([0.0, 0.0, -2.0])
+///     .line_to([20.0, 0.0, -2.0])
+///     .turn([20.0, 5.0, -2.0], [0.0, 0.0, 1.0], deg(180.0))?
+///     .slide([0.0, 0.0, 7.0]);
+/// let end = path.at(); // round the half turn to (20, 10), then up 7
+/// assert!((end.x - 20.0).abs() < 1e-9 && (end.y - 10.0).abs() < 1e-9 && (end.z - 5.0).abs() < 1e-9);
+/// let mill = cylinder(&Frame::at([0.0, 0.0, 5.0]), 1.0, 10.0)?;
+/// let cut = block(&Frame::at([-5.0, -5.0, -10.0]), [40.0, 25.0, 10.0])?.cut_swept(&mill, &path.motion())?;
+/// assert!(cut.volume() < 40.0 * 25.0 * 10.0);
+/// # Ok::<(), yack::Error>(())
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toolpath {
+    at: Point3,
+    legs: Vec<Motion>,
+}
+
+impl Toolpath {
+    /// A toolpath with the tool at `p` (where the tool solid is drawn).
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn starting_at(p: impl Into<Point3>) -> Toolpath {
+        Toolpath { at: p.into(), legs: Vec::new() }
+    }
+
+    /// Where the tool is after the moves so far.
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn at(&self) -> Point3 {
+        self.at
+    }
+
+    /// A straight move to `p` (nothing when the tool is already there).
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn line_to(mut self, p: impl Into<Point3>) -> Toolpath {
+        let p = p.into();
+        if let Some(by) = yack_math::slide_to(self.at, p) {
+            self.legs.push(Motion::slide(by));
+            self.at = p;
+        }
+        self
+    }
+
+    /// A straight move by `by`.
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn slide(mut self, by: impl Into<Vec3>) -> Toolpath {
+        let by = by.into();
+        self.at = crate::Rigid::translation(by).point(self.at);
+        self.legs.push(Motion::slide(by));
+        self
+    }
+
+    /// A turn of the tool by `by` about the line through `axis_point` along `axis` (an arc of the
+    /// tool's path round that line; the tool turns with it, as [`Motion::turn`]).
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn turn(mut self, axis_point: impl Into<Point3>, axis: impl Into<Vec3>, by: Angle) -> Result<Toolpath> {
+        let (q, a) = (axis_point.into(), axis.into());
+        self.at = yack_math::turned_about(self.at, q, a, by).map_err(|e| e.in_op("Toolpath::turn"))?;
+        self.legs.push(Motion::turn(q, a, crate::rad(0.0), by));
+        Ok(self)
+    }
+
+    /// A contour pass once round `path` drawn in `frame`'s xy plane: a move to the loop's start,
+    /// then round it as [`Motion::along_loop`] (ending back at the start).
+    ///
+    /// ```
+    /// use yack::prelude::*;
+    /// let square = Loop::polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])?.rounded(2.0)?;
+    /// let path = Toolpath::starting_at([5.0, 0.0, 5.0]).line_to([5.0, 0.0, -1.0]).along_loop(&Frame::at([0.0, 0.0, -1.0]), &square)?;
+    /// assert!(path.motion() != Motion::then(vec![]));
+    /// # Ok::<(), yack::Error>(())
+    /// ```
+    pub fn along_loop(self, frame: &crate::Frame, path: &Loop) -> Result<Toolpath> {
+        let start = path.shape.polyline.first().copied().unwrap_or_else(|| Point2::new(0.0, 0.0));
+        let mut s = self.line_to(frame.point([start.x, start.y, 0.0]));
+        s.legs.push(Motion::along_loop(frame, path)?);
+        Ok(s)
+    }
+
+    /// The toolpath as one motion (the moves in order).
+    ///
+    /// (Its example is on [`Toolpath`].)
+    pub fn motion(&self) -> Motion {
+        Motion::then(self.legs.clone())
+    }
 }
 
 /// A patch's net as cadrs takes it: degree (u, v), knots (u, v), poles, weights; `Invalid` for a

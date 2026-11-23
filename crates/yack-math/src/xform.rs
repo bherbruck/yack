@@ -286,6 +286,20 @@ impl Similarity {
     }
 }
 
+impl Similarity {
+    /// Whether the map reverses handedness (a mirror): its linear part's determinant is negative.
+    ///
+    /// ```
+    /// use yack_math::*;
+    /// assert!(Similarity::mirror([0.0; 3], [1.0, 0.0, 0.0])?.is_mirror());
+    /// assert!(!Similarity::from(Rigid::translation([1.0, 0.0, 0.0])).is_mirror());
+    /// # Ok::<(), yack_base::Error>(())
+    /// ```
+    pub fn is_mirror(&self) -> bool {
+        det(&self.0) < 0.0
+    }
+}
+
 impl From<Rigid> for Similarity {
     fn from(r: Rigid) -> Similarity {
         Similarity(r.0)
