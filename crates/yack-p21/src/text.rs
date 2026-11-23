@@ -19,6 +19,20 @@ pub fn decode_text(raw: &str) -> String {
     let hex = |b: &[u8]| -> Option<u32> { u32::from_str_radix(std::str::from_utf8(b).ok()?, 16).ok() };
     let mut out = String::new();
     let mut i = 0;
+    // The first `\X0\` at or after `from`, cached: a search runs only once `i` has passed the
+    // terminator it found, so a string of openers with no terminator is read in linear time
+    // (each opener searching to the end made it quadratic). `None` means none after `from`.
+    let mut term: Option<(usize, Option<usize>)> = None;
+    let mut terminator_after = |from: usize| -> Option<usize> {
+        match term {
+            Some((at, found)) if at <= from && found.is_none_or(|t| t >= from) => found,
+            _ => {
+                let found = bytes.get(from..).and_then(|b| find(b, b"\\X0\\")).map(|k| from + k);
+                term = Some((from, found));
+                found
+            }
+        }
+    };
     while let Some(rest) = bytes.get(i..).filter(|r| !r.is_empty()) {
         if rest.starts_with(b"\\\\") {
             out.push('\\');
@@ -34,7 +48,7 @@ pub fn decode_text(raw: &str) -> String {
         };
         if let Some(width) = wide
             && let Some(body) = rest.get(4..)
-            && let Some(end) = find(body, b"\\X0\\")
+            && let Some(end) = terminator_after(i + 4).map(|t| t - (i + 4))
         {
             let units: Vec<u32> = body.get(..end).unwrap_or_default().chunks(width).filter_map(hex).collect();
             if width == 4 {
@@ -94,6 +108,70 @@ mod tests {
             let f = crate::parse(&text).unwrap();
             let raw = f.part(1, "A").unwrap()[0].string().unwrap();
             assert_eq!(decode_text(raw), s);
+        }
+    }
+
+    #[test]
+    fn openers_without_a_terminator_are_kept_and_read_in_linear_time() {
+        // 50,000 openers and no `\X0\`: each used to search to the end (quadratic, minutes);
+        // with the cached terminator this is one pass. Kept as written, as before.
+        // (`a` between openers, so no two backslashes meet and read as an escaped `\\`)
+        let raw = "\\X2\\a".repeat(50_000);
+        assert_eq!(decode_text(&raw), raw);
+        // A terminator after many openers still closes only the last one, as before.
+        let mixed = format!("{}\\X2\\00E9\\X0\\", "\\X4\\".repeat(3));
+        assert_eq!(decode_text(&mixed), decode_text_reference(&mixed));
+    }
+
+    /// The original search, kept to check the cached one gives the same text.
+    fn decode_text_reference(raw: &str) -> String {
+        let bytes: Vec<u8> = raw.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
+        let hex = |b: &[u8]| -> Option<u32> { u32::from_str_radix(std::str::from_utf8(b).ok()?, 16).ok() };
+        let mut out = String::new();
+        let mut i = 0;
+        while let Some(rest) = bytes.get(i..).filter(|r| !r.is_empty()) {
+            if rest.starts_with(b"\\\\") {
+                out.push('\\');
+                i += 2;
+                continue;
+            }
+            let wide = if rest.starts_with(b"\\X2\\") { Some(4) } else if rest.starts_with(b"\\X4\\") { Some(8) } else { None };
+            if let Some(width) = wide
+                && let Some(body) = rest.get(4..)
+                && let Some(end) = find(body, b"\\X0\\")
+            {
+                let units: Vec<u32> = body.get(..end).unwrap_or_default().chunks(width).filter_map(hex).collect();
+                if width == 4 {
+                    let u16s: Vec<u16> = units.iter().map(|&u| u as u16).collect();
+                    out.push_str(&String::from_utf16_lossy(&u16s));
+                } else {
+                    out.extend(units.iter().filter_map(|&u| char::from_u32(u)));
+                }
+                i += 4 + end + 4;
+                continue;
+            }
+            if rest.starts_with(b"\\X\\")
+                && let Some(c) = rest.get(3..5).and_then(hex).and_then(char::from_u32)
+            {
+                out.push(c);
+                i += 5;
+                continue;
+            }
+            let n = rest.get(1..).and_then(|r| r.iter().position(|&c| c == b'\\')).map_or(rest.len(), |k| k + 1);
+            out.push_str(&String::from_utf8_lossy(rest.get(..n).unwrap_or_default()));
+            i += n;
+        }
+        out
+    }
+
+    #[test]
+    fn the_cached_search_matches_the_original_on_every_directive_mix() {
+        for raw in [
+            "", "plain", "\\X2\\00E9\\X0\\", "\\X4\\0001D11E\\X0\\", "\\X2\\\\X2\\00E9\\X0\\", "\\X2\\00E9",
+            "a\\X2\\00E9\\X0\\b\\X4\\0001D11E\\X0\\c", "\\X2\\0041\\X0\\\\X2\\0042\\X0\\", "\\X4\\\\X0\\",
+            "\\X\\E9t\\X\\e9", "a\\\\b", "\\S\\a", "\\X2\\00\r\nE9\\X0\\", "\\X2\\x\\X0\\\\X2\\", "\\X0\\\\X2\\0041\\X0\\",
+        ] {
+            assert_eq!(decode_text(raw), decode_text_reference(raw), "{raw:?}");
         }
     }
 
