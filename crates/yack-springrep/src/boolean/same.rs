@@ -63,7 +63,7 @@ fn match_vertices(x: &Brep, y: &Brep) -> Option<Vec<VertexId>> {
             }
             let d = y.vertex(w).point.dist(p);
             if !taken[k]
-                && crate::math::within(d, tol::between(tv, y.vertex_tolerance(w)), p)
+                && crate::math::within(d, tol::coincidence(tv, y.vertex_tolerance(w)), p)
                 && best.is_none_or(|b| d < b.0)
             {
                 best = Some((d, k));
@@ -98,7 +98,7 @@ fn match_edges(x: &Brep, y: &Brep, vmap: &[VertexId]) -> Option<Vec<EdgeId>> {
                 return false;
             }
             let other = y.edge(f);
-            let reach = tol::between(x.edge_tolerance(e), y.edge_tolerance(f));
+            let reach = tol::coincidence(x.edge_tolerance(e), y.edge_tolerance(f));
             match (&edge.curve, &other.curve) {
                 (None, None) => true,
                 (Some(c), Some(d)) => {

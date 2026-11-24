@@ -4,6 +4,10 @@
 //! Internal crate; the public face is the `yack` crate, which re-exports these as they are.
 #![deny(missing_docs)]
 
+// springrep's own error, beside D7's until each crate converts (D26).
+#[allow(missing_docs)]
+pub mod kernel;
+
 use core::fmt;
 
 /// What kind of refusal an [`Error`] is. The adapter matches on this alone.

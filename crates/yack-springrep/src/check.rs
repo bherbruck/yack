@@ -1132,7 +1132,7 @@ fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
     by_x.sort_by(|a, b| a.0.total_cmp(&b.0));
     for &(v, tv) in &tolerant {
         let p = b.vertex(v).point;
-        let reach = tol::between(tv, widest);
+        let reach = tol::coincidence(tv, widest);
         let from = by_x.partition_point(|&(x, _)| x < p.x - reach);
         for &(x, w) in &by_x[from..] {
             if x > p.x + reach {
@@ -1142,7 +1142,7 @@ fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
                 continue;
             }
             let d = b.vertex(w).point.dist(p);
-            if d > tol::LINEAR && d <= tol::between(tv, b.vertex_tolerance(w)) {
+            if d > tol::LINEAR && d <= tol::coincidence(tv, b.vertex_tolerance(w)) {
                 out.push((v.min(w), v.max(w)));
             }
         }

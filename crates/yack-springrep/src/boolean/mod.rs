@@ -861,7 +861,7 @@ impl<'a> Work<'a> {
         let mut best: Option<(f64, usize)> = None;
         let mut consider = |i: usize| {
             let d = self.pool[i].dist(p);
-            if d <= tol::between(t, self.vtol[i]) && best.is_none_or(|b| d < b.0) {
+            if d <= tol::coincidence(t, self.vtol[i]) && best.is_none_or(|b| d < b.0) {
                 best = Some((d, i));
             }
         };
@@ -1576,7 +1576,7 @@ impl<'a> Work<'a> {
             for &bb in &self.edge_base[1] {
                 let b = &self.bases[bb];
                 let Some(cb) = &b.curve else { continue };
-                if !overlap(&padded(&a.bbox, tol::between(a.tol, b.tol)), &b.bbox)
+                if !overlap(&padded(&a.bbox, tol::coincidence(a.tol, b.tol)), &b.bbox)
                     || !self.edges_near(ba, bb)
                 {
                     continue;
@@ -1892,7 +1892,7 @@ impl<'a> Work<'a> {
                 continue;
             }
             let (d, t) = csi::curve_distance(curve, base.range, p);
-            if d <= tol::between(base.tol, self.vtol[vi]).max(grazing(vi)) {
+            if d <= tol::coincidence(base.tol, self.vtol[vi]).max(grazing(vi)) {
                 out.push((t, vi, d));
             }
         }
@@ -2148,7 +2148,7 @@ impl<'a> Work<'a> {
                     let pj = &self.pieces[j];
                     let cj = self.bases[pj.base].curve.as_ref().expect("has a curve");
                     let within =
-                        tol::between(self.bases[pj.base].tol, self.bases[self.pieces[i].base].tol);
+                        tol::coincidence(self.bases[pj.base].tol, self.bases[self.pieces[i].base].tol);
                     let same = [0.25, 0.5, 0.75].iter().all(|&f| {
                         csi::curve_distance(cj, pj.range, self.piece_point(i, f)).0 <= within
                     });

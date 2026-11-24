@@ -31,6 +31,20 @@ pub fn within(d: f64, t: f64, magnitude: f64) -> bool {
     d.abs() <= t * scale
 }
 
+// From springrep's tol.rs (M3 W1', D26).
+/// The parameter tolerance on a curve whose speed at the point is `speed` mm per unit parameter.
+pub fn param(speed: f64) -> f64 {
+    LINEAR / speed.max(1e-300)
+}
+
+/// The distance within which two entities whose local tolerances are `a` and `b` coincide: the
+/// sum of the two, less the one [`LINEAR`] two exact entities share, so that those still coincide
+/// within [`LINEAR`]. Only imported vertices and edges, and a vertex a boolean places where two
+/// solids graze, carry a tolerance above it.
+pub fn coincidence(a: f64, b: f64) -> f64 {
+    (a + b - LINEAR).max(LINEAR)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

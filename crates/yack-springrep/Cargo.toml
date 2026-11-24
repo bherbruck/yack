@@ -14,6 +14,9 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+yack-base = { path = "../yack-base" }
+yack-numeric = { path = "../yack-numeric" }
+yack-tol = { path = "../yack-tol" }
 yack-p21 = { path = "../yack-p21" }
 
 [lints.rust]
