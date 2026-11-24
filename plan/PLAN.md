@@ -780,7 +780,7 @@ seeds 1–3.
 | M5.5 | `step` | units, BREP_WITH_VOIDS, FACETED_BREP, `step_check` on every write | NIST 33/33; step-conformance 17/17; "B-rep" verdict on 506/506 |
 | M5.6 | `numeric` (`fmath`) | deterministic transcendentals | wasm32 = x86_64 digests on 500 cases |
 | M5.7 | perf (lead assigns per crate) | top 20 slowest tests per benchmark; spline/helical sweeps | suite ≤ 0.7× springrep; `sweep-along-a-spline` ≤ 1 s; bench mean ≤ 3.2 ms |
-| M5.8 | API owner + bench owners | cut case LOC (pen, array points, selection predicates) | mean ≤ 8; total ≤ 14 |
+| M5.8 | API owner + bench owners | cut case LOC (pen, array points, selection predicates) | mean ≤ 8; total ≤ 14. **Done 2026-11-24:** mean 6.67; 8 cases over 14, each long by its program or geometry data, listed with a reason in `crates/yack-bench/README.md` ("Data-bound cases") |
 | M5.9 | owners of failing cases | the last failures, one case at a time; donor bake-off rows for solidcore/solidcraft where they win | **conformance 100% on seeds 0–3; bench ≥ 505/506, 0 wrong** |
 
 ### M6: Corpora and release
