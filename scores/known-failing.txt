@@ -13,3 +13,6 @@ seed2 invalid-new-acts-f6db81a94b8b1b28  # suite generator assumes the smallest 
 seed2 part-brackets-gusset-bf80d64fac83e0fb  # suite's volume ignores the hole breaking out of the wall top (0.69 mm³); see swarm/done/issue-suite-expectations.md
 seed2 separated-d8fce262a9f8a8b7  # pieces closer than a step of the suite's ray march (B26); our 4 crossings are right; see swarm/done/issue-suite-expectations.md
 seed3 invalid-new-acts-4b7383970fb1e256  # suite generator assumes the smallest side is the face width; see swarm/done/issue-suite-expectations.md
+seed0 projections-ae6d1b45b7175f55  # suite marks outline points hidden where a grazing ray's rounding makes a sliver (B38); ours lie on the exact silhouette (5.7e-16); see swarm/done/w-m11-conformance-reference-issues.md §4
+seed3 projections-efec3338c153cbee  # same grazing-ray sliver on a cylinder's generators (B38); see swarm/done/w-m11-conformance-reference-issues.md §4
+seed0 projections-eb712599cd54d823  # suite's sampled occlusion misses a 1.79e-3 mm seen stub; exact rational occlusion gives our seen/hidden lengths (B38); see swarm/done/w-m11-conformance-reference-issues.md §5
