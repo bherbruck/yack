@@ -48,15 +48,11 @@ pub fn build() -> Result<Solid> {
         holes.extend([slide(v, -40.0), slide(v, 40.0), about(up, 30.0)]);
     }
     let (a, s) = (n(3.0, 0.0), n(40.0, 15.0));
-    let bull = Loop::starting_at([0.0, 0.0]).line_to([6.0, 0.0]).arc_ccw_to([8.0, 2.0], [6.0, 2.0]);
-    let bull = Profile::new(bull.line_to([8.0, 40.0]).line_to([0.0, 40.0]).close()?, vec![])?;
-    let bull = revolve(&Frame::at([first, 0.0, 50.0]), &bull, deg(360.0))?;
-    let ball = Loop::starting_at([0.0, 0.0]).arc_ccw_to([4.0, 4.0], [0.0, 4.0]).line_to([4.0, 40.0]);
-    let ball = Profile::new(ball.line_to([0.0, 40.0]).close()?, vec![])?;
-    let ball = revolve(&Frame::along(Point3::ORIGIN + a * 90.0, a)?, &ball, deg(360.0))?;
+    let bull = cutter(&Frame::at([first, 0.0, 50.0]), Cutter::BullNose { corner_radius: 2.0 }, 8.0, 40.0)?;
+    let ball = cutter(&Frame::along(Point3::ORIGIN + a * 90.0, a)?, Cutter::Ball, 4.0, 40.0)?;
     let pose = Frame::along(Point3::ORIGIN + s * 70.0, s)?;
-    let drill = Profile::polygon(&[[0.0, 0.0], [2.5, 2.5], [2.5, 40.0], [0.0, 40.0]])?;
-    let (face_mill, drill) = (cylinder(&pose, 5.0, 40.0)?, revolve(&pose, &drill, deg(360.0))?);
+    let face_mill = cylinder(&pose, 5.0, 40.0)?;
+    let drill = cutter(&pose, Cutter::Drill { point_angle: deg(90.0) }, 2.5, 40.0)?;
     let blank = cylinder(&Frame::WORLD, 50.0, 45.0)?;
     let blank = blank.cut_swept(&bull, &Motion::then(rough))?.cut_swept(&ball, &Motion::then(finish))?;
     blank.cut_swept(&face_mill, &Motion::then(seats))?.cut_swept(&drill, &Motion::then(holes))

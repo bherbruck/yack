@@ -22,8 +22,6 @@ pub fn build() -> Result<Solid> {
     }
     legs.push(Motion::slide(Vec3::new(0.0, 0.0, 15.0)));
     // The bull-nose mill, its tip at (102, 60, 5): flat end radius 2.5, corner radius 1.5, side radius 4, 25 long.
-    let side = Loop::starting_at([0.0, 0.0]).line_to([2.5, 0.0]).arc_ccw_to([4.0, 1.5], [2.5, 1.5]);
-    let side = side.line_to([4.0, 25.0]).line_to([0.0, 25.0]).close()?;
-    let mill = revolve(&Frame::at([102.0, 60.0, 5.0]), &Profile::new(side, vec![])?, deg(360.0))?;
+    let mill = cutter(&Frame::at([102.0, 60.0, 5.0]), Cutter::BullNose { corner_radius: 1.5 }, 4.0, 25.0)?;
     block(&Frame::at([0.0, 0.0, -16.0]), [120.0, 120.0, 16.0])?.cut_swept(&mill, &Motion::then(legs))
 }

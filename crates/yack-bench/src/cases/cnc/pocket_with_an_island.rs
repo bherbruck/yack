@@ -33,12 +33,11 @@ pub fn build() -> Result<Solid> {
     for [x, y] in [[8.0, 8.0], [152.0, 8.0], [152.0, 102.0], [8.0, 102.0]] {
         holes = [5.0, -5.0, 2.0, -10.0, 2.0, -14.0, 5.0].iter().fold(holes, |h, &z| h.line_to([x, y, z]));
     }
-    let drill = Loop::polygon(&[[0.0, 0.0], [4.0, 4.0], [4.0, 30.0], [0.0, 30.0]])?;
     let plate = block(&Frame::at([0.0, 0.0, -20.0]), [160.0, 110.0, 20.0])?;
     let mill = cylinder(&Frame::at([0.0, 0.0, 5.0]), 5.0, 30.0)?;
     let plate = plate.cut_swept(&mill, &pocket.motion())?;
     let borer = cylinder(&Frame::at([60.0, 55.0, 5.0]), 3.0, 30.0)?;
     let plate = plate.cut_swept(&borer, &bore.line_to([60.0, 55.0, 5.0]).motion())?;
-    let drill = revolve(&Frame::at([8.0, 8.0, 5.0]), &Profile::new(drill, vec![])?, deg(360.0))?;
+    let drill = cutter(&Frame::at([8.0, 8.0, 5.0]), Cutter::Drill { point_angle: deg(90.0) }, 4.0, 30.0)?;
     plate.cut_swept(&drill, &holes.motion())
 }

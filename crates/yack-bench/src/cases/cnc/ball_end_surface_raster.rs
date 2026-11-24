@@ -13,8 +13,6 @@ pub fn build() -> Result<Solid> {
     }
     points.push(Point3::new(-5.0, 80.0, 5.0));
     // the ball-end mill, radius 3, its tip at (−5, 0, 5)
-    let side = Loop::starting_at([0.0, 0.0]).arc_ccw_to([3.0, 3.0], [0.0, 3.0]);
-    let side = side.line_to([3.0, 30.0]).line_to([0.0, 30.0]);
-    let mill = revolve(&Frame::at([-5.0, 0.0, 5.0]), &Profile::new(side.close()?, vec![])?, deg(360.0))?;
+    let mill = cutter(&Frame::at([-5.0, 0.0, 5.0]), Cutter::Ball, 3.0, 30.0)?;
     block(&Frame::at([0.0, 0.0, -20.0]), [100.0, 80.0, 20.0])?.cut_swept(&mill, &Motion::through(&points)?)
 }
