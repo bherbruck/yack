@@ -188,7 +188,10 @@ fn knots_between(knots: &[f64], domain: (f64, f64), period: Option<f64>, lo: f64
     match period {
         Some(p) if p > 0.0 && lo.is_finite() && hi.is_finite() => {
             let (first, last) = (((lo - domain.0) / p).floor(), ((hi - domain.0) / p).ceil());
-            let pieces = (last - first + 1.0) * (inner.len() + 1) as f64;
+            // A run touches at most one period more than it spans whole: the periods looped over
+            // below reach a period past each end, which the cap must not count (bench fillet/tee-
+            // of-two-cylinders: a closed spline of 4094 spans run once round, counted as 12282).
+            let pieces = (((hi - lo) / p).ceil() + 1.0) * (inner.len() + 1) as f64;
             if !pieces.is_finite() || pieces > MAX_PIECES {
                 return Err(too_many(pieces));
             }
