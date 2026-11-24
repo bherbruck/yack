@@ -55,7 +55,7 @@ pub fn measure_file(text: &str) -> Result<FileMeasure> {
     let sum = model.vertices.iter().fold(Vec3::ZERO, |s, p| s + p.to_vec());
     let origin = Point3::ORIGIN + sum * (1.0 / n);
     let size = model.vertices.iter().map(|p| p.distance(origin)).fold(1.0, f64::max);
-    let m = Measurer { origin, size, gauss: gauss(GAUSS_POINTS) };
+    let m = Measurer { origin, size, gauss: gauss(GAUSS_POINTS), spline_inner: gauss(SPLINE_INNER_POINTS) };
     let mut out = FileMeasure { volume: 0.0, area: 0.0, faces: Vec::new() };
     for f in &model.faces {
         let fm = m.face(f).map_err(|e| Error { detail: format!("face #{}: {}", f.id, e.detail), ..e })?;
@@ -68,6 +68,13 @@ pub fn measure_file(text: &str) -> Result<FileMeasure> {
 
 /// Points of the Gauss–Legendre rule on every quadrature piece.
 const GAUSS_POINTS: usize = 10;
+
+/// Points of the rule along a spline surface's knot span in the inner integral: the area integrand
+/// there is the root of a polynomial of high degree, which ten points leave a few parts in a
+/// million short (bench loft/twisted-thin-blade, swept/drum-screwed-across-ring-sector: only their
+/// spline faces' areas were off). Thirteen close both at 1.16 times the bench's measuring time;
+/// geometry/high-degree-bezier-dome (degree 15) needs sixteen, at 1.4 times, and is left short.
+const SPLINE_INNER_POINTS: usize = 13;
 
 /// How many pieces an edge's run between breaks is cut into (more on a spline surface, whose own
 /// knots the edge crosses unseen).
@@ -128,6 +135,8 @@ struct Measurer {
     origin: Point3,
     size: f64,
     gauss: Vec<(f64, f64)>,
+    /// The rule of the inner integral over a spline surface (see [`SPLINE_INNER_POINTS`]).
+    spline_inner: Vec<(f64, f64)>,
 }
 
 impl Measurer {
@@ -231,11 +240,12 @@ impl Measurer {
         if from > to {
             cuts.reverse();
         }
+        let rule = if matches!(s, Surface::Spline(_)) { &self.spline_inner } else { &self.gauss };
         let mut out = [0.0; 2];
         let mut a = from;
         for b in cuts.into_iter().chain(std::iter::once(to)) {
             let (mid, half) = ((a + b) / 2.0, (b - a) / 2.0);
-            for &(x, w) in &self.gauss {
+            for &(x, w) in rule {
                 let t = mid + half * x;
                 let r = if ax == 1 { self.f(s, fixed, t) } else { self.f(s, t, fixed) };
                 out[0] += r[0] * w * half;
