@@ -37,5 +37,13 @@ fi
 D="../yack-ref/bin/corpus-$(git rev-parse --short HEAD)"
 mkdir -p "$D"
 cp bin/release/yack-corpus bin/debug/xtask "$D/"
+# one digest-class run at a time in a swarm (BRIEF): hold swarm/DIGEST.lock through the grading
+if [ -d swarm ]; then
+    until mkdir swarm/DIGEST.lock 2>/dev/null; do
+        echo "corpus-nightly: swarm/DIGEST.lock is held; waiting" >&2
+        sleep 60
+    done
+    trap 'rmdir swarm/DIGEST.lock' EXIT
+fi
 echo "corpus-nightly: grading from $D (nice 10, --jobs $JOBS, --timeout $TIMEOUT)"
 nice -n 10 "$D/xtask" corpus smlib --bin "$D" --jobs "$JOBS" --timeout "$TIMEOUT"
