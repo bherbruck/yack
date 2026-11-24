@@ -37,6 +37,9 @@ fn sound_files_measure_as_the_grader_reads_them() {
         // Circles passing near a sphere's poles (bench singular/napkin-ring-poles-near-its-rims;
         // grader's values from ladder33).
         ("napkin-ring-poles-near-its-rims.step", 268.08257310632916, 402.12385965949363),
+        // Rim circles through a sphere's poles, where a run along the pole turns either way round
+        // (bench singular/napkin-ring-poles-on-its-rims; grader's values from ladder33).
+        ("napkin-ring-poles-on-its-rims.step", 268.08257310631564, 402.12385965948533),
         // Lofted spline faces of degree 7 whose areas a ten-point inner rule left short (bench
         // loft/twisted-thin-blade; grader's values from ladder33).
         ("twisted-thin-blade.step", 959.999999999628, 7351.884474935814),

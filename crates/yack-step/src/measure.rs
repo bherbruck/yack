@@ -322,6 +322,9 @@ impl Measurer {
         let mut nodes = Vec::new();
         let mut first: Option<(f64, f64)> = None;
         let mut last: Option<(f64, f64)> = None;
+        // The last run along a pole line: where its nodes start and end, its ends, and how many
+        // edges had been seen before it.
+        let mut pole_run: Option<(usize, usize, Uv, Uv, usize)> = None;
         for u in uses {
             if self.degenerate(u) {
                 continue;
@@ -343,7 +346,32 @@ impl Measurer {
                 placed.push(p);
             }
             match last {
-                Some(l) => self.join(s, l, start, &mut nodes)?,
+                Some(mut l) => {
+                    // A run along a pole line may turn either way round the pole: the ends' longitudes
+                    // say only where it starts and stops, not which way it goes. Where the walk then
+                    // meets an edge a whole period from where it arrived (away from any pole), the run
+                    // went the wrong way: it is lengthened by that period, and the walk since carried
+                    // across with it (bench singular/napkin-ring-poles-on-its-rims: a rim circle through
+                    // a sphere's pole came back to the seam at u = 0, the seam's other side at 2π).
+                    if let (Some((at, to, pa, pb, before)), Some(shift)) = (pole_run, self.period_apart(s, l, start)) {
+                        let tail: Vec<Node> = nodes.split_off(to);
+                        nodes.truncate(at);
+                        self.join(s, pa, (pb.0 + shift.0, pb.1 + shift.1), &mut nodes)?;
+                        let moved = |n: Node| Node { u: n.u + shift.0, v: n.v + shift.1, ..n };
+                        nodes.extend(tail.into_iter().map(moved));
+                        for x in seen.iter_mut().skip(before) {
+                            x.1 = (x.1.0 + shift.0, x.1.1 + shift.1);
+                            x.2 = (x.2.0 + shift.0, x.2.1 + shift.1);
+                        }
+                        l = (l.0 + shift.0, l.1 + shift.1);
+                        pole_run = None;
+                    }
+                    let at = nodes.len();
+                    self.join(s, l, start, &mut nodes)?;
+                    if nodes.len() > at {
+                        pole_run = Some((at, nodes.len(), l, start, seen.len() - 1));
+                    }
+                }
                 None => first = Some(start),
             }
             nodes.extend(edge);
@@ -450,6 +478,25 @@ impl Measurer {
         let periods = s.periods();
         let close = |x: f64, y: f64, p: Option<f64>| (x - y).abs() <= SAME_UV * p.unwrap_or(1.0);
         close(a.0, b.0, periods[0]) && close(a.1, b.1, periods[1])
+    }
+
+    /// The whole periods from `a` to `b` where they are one point of the surface a period or more
+    /// apart in its parameters and `a` is off any pole line (where a run between them is no run
+    /// along a pole).
+    fn period_apart(&self, s: &Surface, a: Uv, b: Uv) -> Option<(f64, f64)> {
+        let periods = s.periods();
+        let whole = |d: f64, p: Option<f64>| match p {
+            Some(p) if p > 0.0 => (d / p).round() * p,
+            _ => 0.0,
+        };
+        let shift = (whole(b.0 - a.0, periods[0]), whole(b.1 - a.1, periods[1]));
+        if shift == (0.0, 0.0) || !self.same_uv(s, (a.0 + shift.0, a.1 + shift.1), b) {
+            return None;
+        }
+        let (_, su, sv) = s.d1(a.0, a.1);
+        let (lu, lv) = (su.length(), sv.length());
+        let on_pole = lu <= SINGULAR * lv.max(self.size) || lv <= SINGULAR * lu.max(self.size);
+        (!on_pole).then_some(shift)
     }
 
     /// Whether the edge use has no length (a degenerate edge at a pole): the join covers it.
