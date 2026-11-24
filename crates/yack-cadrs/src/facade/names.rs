@@ -159,8 +159,13 @@ pub fn roles(out: &Body, input: Option<&Body>, history: &History, how: &Naming) 
         let stays = in_place(out, i, input, from);
         kept_in_place[i] |= stays;
         match how.shell {
-            // A moved copy of an input face is a cavity wall.
-            Some(Wall::Inward) if !stays => push(&mut roles[i], FaceRole::Part("inner".into())),
+            // A moved copy of an input face is a cavity wall: `inner`, and `inner_f<k>` for the
+            // input face k it offsets (as springrep's shell names it; both forms number faces
+            // alike).
+            Some(Wall::Inward) if !stays => {
+                push(&mut roles[i], FaceRole::Part("inner".into()));
+                push(&mut roles[i], FaceRole::Part(format!("inner_f{}", from.face.0)));
+            }
             // The new outside of an outward wall carries no name.
             Some(Wall::Outward) if !stays => {}
             _ => push(&mut roles[i], FaceRole::Keep(*from)),
