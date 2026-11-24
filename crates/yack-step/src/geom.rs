@@ -191,9 +191,18 @@ fn knots_between(knots: &[f64], domain: (f64, f64), period: Option<f64>, lo: f64
             // A run touches at most one period more than it spans whole: the periods looped over
             // below reach a period past each end, which the cap must not count (bench fillet/tee-
             // of-two-cylinders: a closed spline of 4094 spans run once round, counted as 12282).
-            let pieces = (((hi - lo) / p).ceil() + 1.0) * (inner.len() + 1) as f64;
+            let per = (inner.len() + 1) as f64;
+            let pieces = (((hi - lo) / p).ceil() + 1.0) * per;
             if !pieces.is_finite() || pieces > MAX_PIECES {
                 return Err(too_many(pieces));
+            }
+            // The periods the loop runs over, bounded by themselves too: far from zero `first` and
+            // `last` round apart from the span (at 1e20 by thousands of periods), and past i64 the
+            // casts saturate.
+            let looped = (last - first + 1.0) * per;
+            let fits = |x: f64| x.abs() < i64::MAX as f64;
+            if !(looped.is_finite() && looped <= MAX_PIECES + 2.0 * per && fits(first) && fits(last)) {
+                return Err(too_many(looped));
             }
             for k in (first as i64)..=(last as i64) {
                 let shift = k as f64 * p;
@@ -593,6 +602,18 @@ mod tests {
                 let (iu, iv) = s.invert(p, Some((u, v)), 1e-12);
                 let q = s.d1(iu, iv).0;
                 assert!(q.distance(p) < 1e-12, "{s:?} at {u},{v}: {iu},{iv}");
+            }
+        }
+    }
+
+    #[test]
+    fn far_runs_of_a_closed_spline_are_bounded() {
+        // Far from zero the periods a run touches round apart from its span; with a tiny period
+        // they pass i64. Each comes back promptly, refused or within the cap.
+        let knots = [0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0];
+        for (p, lo, hi) in [(1.0, 1e20, 1e20 + 16384.0), (0.1, 1e20, 1e20), (1e-300, 1e20, 1e20), (1e-3, -1e20, -1e20 + 1.0)] {
+            if let Ok(cuts) = knots_between(&knots, (0.0, 1.0), Some(p), lo, hi) {
+                assert!(cuts.len() as f64 <= MAX_PIECES, "{p} {lo} {hi}: {} cuts", cuts.len());
             }
         }
     }
