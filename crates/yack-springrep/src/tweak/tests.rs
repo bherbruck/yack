@@ -5,6 +5,29 @@ use super::*;
 use crate::edit::{draft, offset_faces};
 use crate::{measure, profile::Profile, sweep, topo::FaceName};
 
+/// The octant of the sphere of radius `r` about the origin, as the rational biquadratic of
+/// Piegl and Tiller. A copy of yack-geom's test helper, whose cfg(test) items another crate's
+/// tests cannot see (M3 W3).
+fn octant(r: f64) -> crate::geom::Surface {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let equator = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)];
+    let mut ctrl = Vec::new();
+    let mut weights = Vec::new();
+    for &(x, y, wu) in &equator {
+        for (j, wv) in [1.0, w, 1.0].into_iter().enumerate() {
+            ctrl.push(match j {
+                0 => crate::math::Vec3::new(x, y, 0.0),
+                1 => crate::math::Vec3::new(x, y, r),
+                _ => crate::math::Vec3::new(0.0, 0.0, r),
+            });
+            weights.push(wu * wv);
+        }
+    }
+    let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let n = crate::geom::NurbsSurface::new((2, 2), (k.clone(), k), (3, 3), ctrl, Some(weights)).unwrap();
+    crate::geom::Surface::Nurbs(Box::new(n))
+}
+
 fn cube() -> Brep {
     let p = Profile::rect(Vec2::ZERO, 10.0, 10.0);
     sweep::extrude(&p, &Frame::WORLD, 10.0, "box").unwrap()
@@ -153,7 +176,7 @@ fn a_spline_sphere_octant_offset_is_the_octant_of_the_grown_sphere() {
     // The octant of the R5 sphere as a rational B-spline, offset 0.5 along its normal: the fitted
     // bicubic must lie on the R5.5 sphere about the same centre wherever it is sampled, not only at
     // the points it was checked at.
-    let s = crate::geom::octant(5.0);
+    let s = octant(5.0);
     let crate::geom::Surface::Nurbs(n) = &s else {
         panic!("the octant is a spline")
     };

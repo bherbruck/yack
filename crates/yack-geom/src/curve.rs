@@ -1,6 +1,6 @@
 // yack: 3-D curves: lines, circles and ellipses in closed form, B-splines, and intersection curves.
 // Adapted from springrep@a03e8a1 src/geom/curve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/geom/curve.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
 //! 3-D curves: lines, circles and ellipses in closed form, B-splines, and intersection curves.
 
 use std::f64::consts::{PI, TAU};
@@ -90,7 +90,7 @@ impl Curve {
     }
 
     /// The spline the curve evaluates, for the B-spline and intersection curves.
-    pub(crate) fn spline(&self) -> Option<&BSpline> {
+    pub fn spline(&self) -> Option<&BSpline> {
         match self {
             Curve::BSpline(b) => Some(b),
             Curve::Intersection(c) => Some(&c.approx),
@@ -389,7 +389,7 @@ impl Curve {
         bb
     }
 
-    pub fn extremes(&self, dir: Vec3, t0: f64, t1: f64) -> Vec<f64> {
+    #[allow(clippy::panic)] pub fn extremes(&self, dir: Vec3, t0: f64, t1: f64) -> Vec<f64> {
         let in_range = |base: f64| -> Vec<f64> {
             let mut out = Vec::new();
             let k0 = ((t0 - base) / PI).floor() as i64;
@@ -409,7 +409,7 @@ impl Curve {
                 in_range((e.minor * dir.dot(e.frame.y)).atan2(e.major * dir.dot(e.frame.x)))
             }
             _ if self.spline().is_some() => {
-                self.spline().expect("checked above").extremes(dir, t0, t1)
+                self.spline().unwrap_or_else(|| panic!("checked above")).extremes(dir, t0, t1)
             }
             _ => {
                 let mut cuts = vec![t0];
@@ -440,7 +440,7 @@ impl Curve {
 /// bisection pins it to the last bit. The other quadrants follow by symmetry. On an axis the
 /// equation loses a term, and the answer is the vertex on that axis, or, on the longer axis
 /// inside the centres of curvature of its vertices, the point whose normal passes through.
-pub(crate) fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
+pub fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
     let (px, py) = (x.abs(), y.abs());
     let (a2, b2) = (a * a, b * b);
     let (u, v) = if px == 0.0 && py == 0.0 {

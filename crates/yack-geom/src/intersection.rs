@@ -1,6 +1,6 @@
 // yack: Intersection curves of surface pairs with no closed form: a cubic B-spline through points
 // Adapted from springrep@a03e8a1 src/geom/intersection.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/geom/intersection.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
 //! Intersection curves of surface pairs with no closed form: a cubic B-spline through points
 //! refined onto both surfaces, with enough points that the spline stays within tolerance of both.
 
@@ -19,7 +19,7 @@ pub struct IntersectionCurve {
 }
 
 /// The distance from `p` to the nearest point of `s`.
-pub(crate) fn distance_to(s: &Surface, p: Point3) -> f64 {
+pub fn distance_to(s: &Surface, p: Point3) -> f64 {
     let uv = s.project(p);
     s.eval(uv.x, uv.y).dist(p)
 }
@@ -29,13 +29,13 @@ pub type UvPair = (Vec2, Vec2);
 
 /// The point on both surfaces nearest `p`, by alternating tangent-plane steps. `None` where the
 /// surfaces are tangent, so the step has no unique solution, or it does not converge.
-pub(crate) fn refine_onto_both(a: &Surface, b: &Surface, p: Point3) -> Option<Point3> {
+pub fn refine_onto_both(a: &Surface, b: &Surface, p: Point3) -> Option<Point3> {
     refine(a, b, p, None, None).map(|r| r.0)
 }
 
 /// [`refine_onto_both`] from `hints`, the parameters of a point near `p` on each surface, and the
 /// refined point's own parameters with it.
-pub(crate) fn refine_onto_both_near(
+pub fn refine_onto_both_near(
     a: &Surface,
     b: &Surface,
     p: Point3,
@@ -47,7 +47,7 @@ pub(crate) fn refine_onto_both_near(
 /// The point on both surfaces in the plane through `p` square to the unit `across`. Where a curve
 /// turns sharply, the nearest point of the intersection can lie on another stretch of it; held to
 /// the plane square to the curve's direction, the point stays between its neighbours.
-pub(crate) fn refine_across(a: &Surface, b: &Surface, p: Point3, across: Vec3) -> Option<Point3> {
+pub fn refine_across(a: &Surface, b: &Surface, p: Point3, across: Vec3) -> Option<Point3> {
     refine(a, b, p, None, Some(across)).map(|r| r.0)
 }
 
@@ -140,7 +140,7 @@ fn cross_roots(
 /// gradient from the point `step` ahead. Where the surfaces are nearly tangent the nearest point
 /// of both to a point ahead can lie across a thin lens; held to `a` and moved only square to the
 /// contour, the step stays on its own side.
-pub(crate) fn refine_on_contour(
+pub fn refine_on_contour(
     a: &Surface,
     b: &Surface,
     (ua, ub): UvPair,
@@ -267,7 +267,7 @@ struct Node {
 
 /// Points that refine onto one place are one point; a branch shorter than the tolerance has no
 /// curve to fit.
-fn distinct(nodes: Vec<Node>, closed: bool) -> Result<Vec<Node>> {
+#[allow(clippy::panic)] fn distinct(nodes: Vec<Node>, closed: bool) -> Result<Vec<Node>> {
     let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
     let count = nodes.len();
     for (i, n) in nodes.into_iter().enumerate() {
@@ -275,7 +275,7 @@ fn distinct(nodes: Vec<Node>, closed: bool) -> Result<Vec<Node>> {
             out.push(n);
         } else if !closed && i + 1 == count && out.len() > 1 {
             // An open curve ends at its last node, where it is cut off: the point beside it goes.
-            *out.last_mut().expect("checked") = n;
+            *out.last_mut().unwrap_or_else(|| panic!("checked")) = n;
         }
     }
     while closed && out.len() > 1 && out[0].p.dist(out[out.len() - 1].p) <= tol::LINEAR {
@@ -659,7 +659,7 @@ impl IntersectionCurve {
 mod tests {
     use super::*;
     use crate::{
-        geom::{Cylinder, Surface},
+        Cylinder, Surface,
         math::{Frame, Vec3},
     };
 

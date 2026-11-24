@@ -20,7 +20,7 @@ pub mod edit;
 // yack: glue the yack facade calls (not springrep code).
 pub mod facade;
 use yack_base::kernel as error;
-pub mod geom;
+pub use yack_geom as geom;
 pub(crate) mod intersect;
 pub(crate) mod locate;
 pub mod loft;

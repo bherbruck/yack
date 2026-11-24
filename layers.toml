@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math"]
+deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 
@@ -313,6 +313,14 @@ license = "MIT OR Apache-2.0"
 # the M2 target (PLAN §3.4, T1-T12): each module maps to the crate it becomes (§3.1) and may name
 # the modules of that crate's allow-list, plus siblings bound for the same crate. `pick` is
 # dissolved (T8) and has no entry; `facade` is yack's glue and may name everything.
+[modules.yack-geom]
+chord = []
+curve = []
+nurbs = []
+surface = []
+bspline = ["nurbs"]
+intersection = ["nurbs", "bspline"]
+
 [modules.yack-springrep]
 error = []
 tol = []

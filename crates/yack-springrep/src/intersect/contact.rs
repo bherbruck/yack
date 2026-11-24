@@ -258,6 +258,29 @@ mod tests {
     use crate::geom::{Cylinder, Plane, Sphere};
     use crate::math::Frame;
 
+    /// The octant of the sphere of radius `r` about the origin, as the rational biquadratic of
+    /// Piegl and Tiller. A copy of yack-geom's test helper, whose cfg(test) items another crate's
+    /// tests cannot see (M3 W3).
+    fn octant(r: f64) -> crate::geom::Surface {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let equator = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)];
+        let mut ctrl = Vec::new();
+        let mut weights = Vec::new();
+        for &(x, y, wu) in &equator {
+            for (j, wv) in [1.0, w, 1.0].into_iter().enumerate() {
+                ctrl.push(match j {
+                    0 => crate::math::Vec3::new(x, y, 0.0),
+                    1 => crate::math::Vec3::new(x, y, r),
+                    _ => crate::math::Vec3::new(0.0, 0.0, r),
+                });
+                weights.push(wu * wv);
+            }
+        }
+        let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let n = crate::geom::NurbsSurface::new((2, 2), (k.clone(), k), (3, 3), ctrl, Some(weights)).unwrap();
+        crate::geom::Surface::Nurbs(Box::new(n))
+    }
+
     fn cyl(o: [f64; 3], z: [f64; 3], r: f64) -> Surface {
         let frame = Frame::from_axis(Vec3::from_array(o), Vec3::from_array(z)).unwrap();
         Surface::Cylinder(Cylinder { frame, radius: r })
@@ -267,7 +290,7 @@ mod tests {
     fn a_plane_on_a_spline_sphere_s_pole_touches_it_there() {
         // The plane z = 2 meets the sphere of radius 2 at its pole, where the octant's parameters
         // do not move: the gap is (x² + y²)/4, so they stay within the tolerance for √(4·tol) mm.
-        let sphere = crate::geom::octant(2.0);
+        let sphere = octant(2.0);
         let frame = Frame::from_axis(Vec3::new(0.0, 0.0, 2.0), Vec3::Z).unwrap();
         let plane = Surface::Plane(Plane { frame });
         let t = touch_at(&plane, &sphere, Vec3::new(0.0, 0.0, 2.0)).expect("a point touch");

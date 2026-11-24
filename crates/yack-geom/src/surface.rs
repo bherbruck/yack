@@ -1,6 +1,6 @@
 // yack: Surfaces: the analytic five in closed form, and the swept and ruled surfaces built on curves.
 // Adapted from springrep@a03e8a1 src/geom/surface.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/geom/surface.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
 //! Surfaces: the analytic five in closed form, and the swept and ruled surfaces built on curves.
 //!
 //! Each surface's natural normal is `∂S/∂u × ∂S/∂v`; a face whose material lies on that side is
@@ -344,7 +344,7 @@ impl Surface {
 
     /// The parameters of the surface point nearest `p`. A periodic parameter comes back in its
     /// first period.
-    pub fn project(&self, p: Point3) -> Vec2 {
+    #[allow(clippy::panic)] pub fn project(&self, p: Point3) -> Vec2 {
         match self {
             Surface::Plane(s) => {
                 let l = s.frame.to_local(p);
@@ -371,7 +371,7 @@ impl Surface {
             }
             Surface::Extrusion(s) if s.curve.spline().is_some() => {
                 let (a, b) = s.curve.domain();
-                let spline = s.curve.spline().expect("checked above");
+                let spline = s.curve.spline().unwrap_or_else(|| panic!("checked above"));
                 // The nearest point lies on the generator through the curve point nearest `p`
                 // seen along the extrusion.
                 let u = spline.nearest(p, Some(s.dir), a, b);
@@ -443,7 +443,7 @@ impl Surface {
 
     /// [`Surface::project_near`] with the partial derivatives there, a spline's from its span
     /// polynomials.
-    pub(crate) fn project_near_d1(&self, p: Point3, hint: Vec2) -> (Vec2, Vec3, Vec3) {
+    pub fn project_near_d1(&self, p: Point3, hint: Vec2) -> (Vec2, Vec3, Vec3) {
         let uv = self.project_near_raw(p, hint);
         let (_, su, sv) = match self {
             Surface::Nurbs(n) => n.d1_by_polys(uv.x, uv.y),
@@ -590,7 +590,7 @@ fn curve_seeds(c: &Curve, a: f64, b: f64) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::{BSpline, Circle};
+    use crate::{BSpline, Circle};
 
     fn frame() -> Frame {
         Frame::new(Vec3::new(1.0, -2.0, 0.5), Vec3::new(0.2, 0.3, 1.0), Vec3::X).unwrap()
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn a_spline_normal_at_a_pole_is_its_limit() {
         // At the octant's pole every `u` is the point (0, 0, r), where the sphere's normal is +z.
-        let s = crate::geom::octant(2.0);
+        let s = crate::octant(2.0);
         for u in [0.0, 0.3, 0.5, 1.0] {
             let n = s.normal(u, 1.0);
             assert!(n.dist(Vec3::Z) < 1e-14, "u {u}: {n:?}");

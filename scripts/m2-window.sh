@@ -53,7 +53,7 @@ touched() {
 restore() {
   # plain cp + touch: a restored file must look newer than what the build made from the moved one,
   # or cargo keeps the stale artifacts (cp -a would restore the old mtime)
-  for f in $TOUCHED; do if [ -f "$BK/$f" ]; then cp "$BK/$f" "$SR/$f" && touch "$SR/$f"; else rm -f "$SR/$f"; fi; done
+  for f in $TOUCHED; do if [ -f "$BK/$f" ]; then mkdir -p "$(dirname "$SR/$f")" && cp "$BK/$f" "$SR/$f" && touch "$SR/$f"; else rm -f "$SR/$f"; fi; done
   for f in "${EXT[@]}"; do
     if [ -e "$BK/ext/$f" ]; then cp "$BK/ext/$f" "$f" && touch "$f"; else rm -f "$f"; rmdir -p --ignore-fail-on-non-empty "$(dirname $f)" 2>/dev/null; fi
   done

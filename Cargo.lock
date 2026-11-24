@@ -186,6 +186,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-geom"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-math",
+ "yack-numeric",
+ "yack-tol",
+]
+
+[[package]]
 name = "yack-linalg"
 version = "0.0.0"
 
@@ -223,6 +233,7 @@ name = "yack-springrep"
 version = "1.0.1"
 dependencies = [
  "yack-base",
+ "yack-geom",
  "yack-math",
  "yack-numeric",
  "yack-p21",

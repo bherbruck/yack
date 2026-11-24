@@ -1,6 +1,6 @@
 // yack: Non-rational B-spline curves, and cubic interpolation through point lists.
 // Adapted from springrep@a03e8a1 src/geom/bspline.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/geom/bspline.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
 //! Non-rational B-spline curves, and cubic interpolation through point lists.
 
 use std::sync::{Arc, OnceLock};
@@ -199,7 +199,7 @@ impl BSpline {
 
     /// The point and its first `nd` derivatives at `t`, from the span's polynomial about the
     /// nearer end of the span: exact at both ends, and its local parameter at most ½.
-    pub fn eval_ders(&self, t: f64, nd: usize) -> [Vec3; 3] {
+    #[allow(clippy::panic)] pub fn eval_ders(&self, t: f64, nd: usize) -> [Vec3; 3] {
         let t = self.wrap(t);
         let i = self.span(t);
         let (t0, t1) = (self.knots[i], self.knots[i + 1]);
@@ -208,7 +208,7 @@ impl BSpline {
         let (s, end) = if x > 0.5 { (x - 1.0, 1) } else { (x, 0) };
         let c = &self.polys()[i]
             .as_ref()
-            .expect("a span holds its parameter")[end];
+            .unwrap_or_else(|| panic!("a span holds its parameter"))[end];
         let p = self.degree;
         let (mut p0, mut p1, mut p2) = (c[p], Vec3::ZERO, Vec3::ZERO);
         for k in (0..p).rev() {
@@ -663,7 +663,7 @@ impl BSpline {
     }
 }
 
-pub(crate) fn chord_params(points: &[Vec3], closed: bool) -> Result<Vec<f64>> {
+pub fn chord_params(points: &[Vec3], closed: bool) -> Result<Vec<f64>> {
     let mut params = vec![0.0];
     let n = points.len();
     let count = if closed { n } else { n - 1 };

@@ -1,6 +1,6 @@
 // yack: Rational B-spline curves and surfaces of any degree up to [`MAX_DEGREE`], with explicit knot
 // Adapted from springrep@a03e8a1 src/geom/nurbs.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/geom/nurbs.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
 //! Rational B-spline curves and surfaces of any degree up to [`MAX_DEGREE`], with explicit knot
 //! vectors, as STEP files carry them. A curve or surface whose two ends meet is periodic in that
 //! parameter: evaluation wraps into the knot domain, so an edge or loop may run across the join.
@@ -262,7 +262,7 @@ fn raised<const N: usize>(u: &[f64], i: usize, t: f64, q: usize, below: &[f64; N
 
 /// The values and first `nd` derivatives at `t` of the degree-`p` B-spline functions of knots `u`
 /// that are nonzero on span `i`: `out[k][j]` is the `k`-th derivative of function `i − p + j`.
-pub(crate) fn basis_derivatives<const N: usize>(
+pub fn basis_derivatives<const N: usize>(
     p: usize,
     u: &[f64],
     i: usize,
@@ -307,7 +307,7 @@ pub(crate) fn basis_derivatives<const N: usize>(
 /// coefficient of `sᵏ` in function `i − p + j`. Each is the Taylor series at `e`, from every
 /// derivative there, scaled by the span's width so the coefficients stay of the functions' own
 /// size.
-pub(crate) fn span_poly(p: usize, u: &[f64], i: usize, end: bool) -> Vec<Vec<f64>> {
+pub fn span_poly(p: usize, u: &[f64], i: usize, end: bool) -> Vec<Vec<f64>> {
     let e = if end { u[i + 1] } else { u[i] };
     let width = u[i + 1] - u[i];
     let ders = basis_derivatives::<M>(p, u, i, e, p);
@@ -362,7 +362,7 @@ pub struct Patch {
 /// in homogeneous coordinates, `rows` along u of `cols` along v. The patch lies in their convex
 /// hull, and so does each half a split leaves, in its own.
 #[derive(Clone, Debug)]
-pub(crate) struct Bezier {
+pub struct Bezier {
     pub lo: Vec2,
     pub hi: Vec2,
     rows: usize,
@@ -372,7 +372,7 @@ pub(crate) struct Bezier {
 
 impl Bezier {
     /// The box of the control points, which holds the patch.
-    pub(crate) fn bbox(&self) -> Aabb {
+    pub fn bbox(&self) -> Aabb {
         let mut bb = Aabb::EMPTY;
         for q in &self.net {
             bb.add(Vec3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]));
@@ -381,7 +381,7 @@ impl Bezier {
     }
 
     /// The patch's two halves, cut across u or across v at the middle (de Casteljau).
-    pub(crate) fn halves(&self, across_u: bool) -> [Bezier; 2] {
+    pub fn halves(&self, across_u: bool) -> [Bezier; 2] {
         let (lines, len) = if across_u {
             (self.cols, self.rows)
         } else {
@@ -426,7 +426,7 @@ impl Bezier {
 
     /// The patch with each control point, in homogeneous coordinates, put through a linear map:
     /// the same piece of surface in other coordinates.
-    pub(crate) fn mapped(&self, f: impl Fn([f64; 4]) -> [f64; 4]) -> Bezier {
+    pub fn mapped(&self, f: impl Fn([f64; 4]) -> [f64; 4]) -> Bezier {
         Bezier {
             lo: self.lo,
             hi: self.hi,
@@ -437,14 +437,14 @@ impl Bezier {
     }
 
     /// The control points.
-    pub(crate) fn points(&self) -> &[[f64; 4]] {
+    pub fn points(&self) -> &[[f64; 4]] {
         &self.net
     }
 
     /// The least and greatest slope of homogeneous coordinate `c` across u and across v, each
     /// over the patch's own unit square: its derivative is a Bézier patch whose control values
     /// are the steps between neighbouring control points, so it lies between their extremes.
-    pub(crate) fn slopes(&self, c: usize) -> [(f64, f64); 2] {
+    pub fn slopes(&self, c: usize) -> [(f64, f64); 2] {
         let at = |i: usize, j: usize| self.net[i * self.cols + j][c];
         let span = |values: &mut dyn Iterator<Item = f64>| {
             values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
@@ -467,7 +467,7 @@ impl Bezier {
 
     /// The patch at `(s, t)` of its own unit square, and its slopes across u and across v there,
     /// all in homogeneous coordinates (de Casteljau).
-    pub(crate) fn at(&self, s: f64, t: f64) -> [[f64; 4]; 3] {
+    pub fn at(&self, s: f64, t: f64) -> [[f64; 4]; 3] {
         let mix = |a: [f64; 4], b: [f64; 4], x: f64| -> [f64; 4] {
             std::array::from_fn(|c| (1.0 - x) * a[c] + x * b[c])
         };
@@ -494,7 +494,7 @@ impl Bezier {
     }
 
     /// Whether the patch runs further across u than across v, by its control points' spread.
-    pub(crate) fn longer_in_u(&self) -> bool {
+    pub fn longer_in_u(&self) -> bool {
         let point = |i: usize, j: usize| {
             let q = self.net[i * self.cols + j];
             Vec3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])
@@ -508,7 +508,7 @@ impl Bezier {
 }
 
 /// The matrix that turns a polynomial's values at `0, 1/n, …, 1` into its Bézier coefficients.
-fn bernstein_from_values(n: usize) -> Vec<Vec<f64>> {
+#[allow(clippy::panic)] fn bernstein_from_values(n: usize) -> Vec<Vec<f64>> {
     let binomial = |k: usize| (0..k).fold(1.0, |b, i| b * (n - i) as f64 / (i + 1) as f64);
     let size = n + 1;
     // Each row: the Bernstein functions at one node, then that row of the identity.
@@ -525,7 +525,7 @@ fn bernstein_from_values(n: usize) -> Vec<Vec<f64>> {
     for col in 0..size {
         let pivot = (col..size)
             .max_by(|&a, &b| m[a][col].abs().total_cmp(&m[b][col].abs()))
-            .expect("a row is left");
+            .unwrap_or_else(|| panic!("a row is left"));
         m.swap(col, pivot);
         let by = m[col].clone();
         for (row, values) in m.iter_mut().enumerate() {
@@ -599,7 +599,7 @@ impl NurbsCurve {
     }
 
     /// The curve exactly as [`NurbsCurve::new`] made it, from its parts and its period.
-    pub(crate) fn restore(
+    pub fn restore(
         degree: usize,
         knots: Vec<f64>,
         ctrl: Vec<Point3>,
@@ -647,7 +647,7 @@ impl NurbsCurve {
 
     /// The box of the control points that shape the curve at `t`. Its weights being positive, the
     /// curve over the knot span there lies in their convex hull, and so in the box.
-    pub(crate) fn span_box(&self, t: f64) -> Aabb {
+    pub fn span_box(&self, t: f64) -> Aabb {
         let t = self.basis.wrap(t, self.period);
         let (p, i) = (self.basis.degree, self.basis.span(t));
         let mut bb = Aabb::EMPTY;
@@ -690,7 +690,7 @@ impl NurbsCurve {
 
     /// The curve's denominator at `t`, the blend of its weights there: 1 on a polynomial curve.
     /// The curve times it is a polynomial over each piece, where the curve itself is not.
-    pub(crate) fn weight(&self, t: f64) -> f64 {
+    pub fn weight(&self, t: f64) -> f64 {
         let Some(weights) = &self.weights else {
             return 1.0;
         };
@@ -782,9 +782,9 @@ impl IsoLine<'_> {
     }
 
     /// The span polynomial over free span `i` about its end `end`, the held parameter put in.
-    fn collapse(&self, i: usize, end: usize) -> IsoSeries {
+    #[allow(clippy::panic)] fn collapse(&self, i: usize, end: usize) -> IsoSeries {
         let s = self.surface;
-        let (hi, hx, he, hw) = self.held.expect("a polynomial iso line");
+        let (hi, hx, he, hw) = self.held.unwrap_or_else(|| panic!("a polynomial iso line"));
         let (pu, pv) = (s.bu.degree, s.bv.degree);
         let c = if self.along_v {
             s.cell(hi, i, he, end)
@@ -923,7 +923,7 @@ impl NurbsSurface {
     }
 
     /// The surface exactly as [`NurbsSurface::new`] made it, from its parts and its periods.
-    pub(crate) fn restore(
+    pub fn restore(
         degrees: (usize, usize),
         knots: (Vec<f64>, Vec<f64>),
         counts: (usize, usize),
@@ -1046,7 +1046,7 @@ impl NurbsSurface {
 
     /// [`NurbsSurface::d1`] from the span polynomials where they evaluate the surface: a Horner
     /// pass in place of the basis recurrence, equal to rounding.
-    pub(crate) fn d1_by_polys(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+    pub fn d1_by_polys(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
         if !self.by_polys() {
             return self.d1(u, v);
         }
@@ -1059,7 +1059,7 @@ impl NurbsSurface {
     /// `v` with `u = at` when `along_v`, else along `u` with `v = at`. Each control point of the
     /// curve is a row of the net, in homogeneous coordinates, blended by the held parameter's basis
     /// there, so the curve is the surface exactly.
-    pub fn iso_curve(&self, along_v: bool, at: f64) -> NurbsCurve {
+    #[allow(clippy::panic)] pub fn iso_curve(&self, along_v: bool, at: f64) -> NurbsCurve {
         let (held, free, period) = if along_v {
             (&self.bu, &self.bv, self.u_period)
         } else {
@@ -1089,7 +1089,7 @@ impl NurbsSurface {
             weights.push(w);
         }
         NurbsCurve::new(free.degree, free.knots.clone(), ctrl, Some(weights))
-            .expect("a row of a valid net is a valid curve")
+            .unwrap_or_else(|_| panic!("a row of a valid net is a valid curve"))
     }
 
     /// The surface along one parameter with the other held at `at`: [`IsoLine::d1`] gives what
@@ -1418,7 +1418,7 @@ impl NurbsSurface {
     /// Each of [`NurbsSurface::patches`] as a Bézier patch. A patch lies within one span of each
     /// parameter, where the surface is a polynomial in homogeneous coordinates, so its values at a
     /// grid of points fix its Bézier control points.
-    pub(crate) fn beziers(&self) -> &[Bezier] {
+    pub fn beziers(&self) -> &[Bezier] {
         self.beziers.get_or_init(|| {
             let (pu, pv) = (self.bu.degree, self.bv.degree);
             let (mu, mv) = (bernstein_from_values(pu), bernstein_from_values(pv));
@@ -1528,7 +1528,7 @@ impl NurbsSurface {
     }
 
     /// The point, its first partial derivatives and its second, `(S, Su, Sv, Suu, Suv, Svv)`.
-    pub(crate) fn d2(&self, u: f64, v: f64) -> [Vec3; 6] {
+    pub fn d2(&self, u: f64, v: f64) -> [Vec3; 6] {
         if !self.by_polys() {
             return if self.bu.degree.max(self.bv.degree) < 8 {
                 self.d2_n::<8>(u, v)
@@ -1997,7 +1997,7 @@ fn pole_of(at: &[Vec3; 6]) -> Option<usize> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
@@ -2467,7 +2467,7 @@ pub(crate) mod tests {
 
     /// The octant of the sphere of radius `r` about the origin, as the rational biquadratic of
     /// Piegl and Tiller: `u` round the equator from +x to +y, `v` up to the pole at +z, `v = 1`.
-    pub(crate) fn octant(r: f64) -> crate::geom::Surface {
+    pub fn octant(r: f64) -> crate::Surface {
         let w = FRAC_1_SQRT_2;
         let equator = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)];
         let mut ctrl = Vec::new();
@@ -2484,7 +2484,7 @@ pub(crate) mod tests {
         }
         let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let n = NurbsSurface::new((2, 2), (k.clone(), k), (3, 3), ctrl, Some(weights)).unwrap();
-        crate::geom::Surface::Nurbs(Box::new(n))
+        crate::Surface::Nurbs(Box::new(n))
     }
 
     #[test]
