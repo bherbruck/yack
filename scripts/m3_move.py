@@ -99,7 +99,7 @@ def use_names(text, here):
 def idents(text):
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
-    return set(re.findall(r"(?<![\w:])[A-Za-z_]\w*", text))
+    return set(re.findall(r"(?<![\w:.])[A-Za-z_]\w*", text))  # `.field` and `.method()` need no import
 
 
 def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, preamble="", own_at=None):
@@ -389,36 +389,33 @@ def crate_names(texts):
 
 
 def allow_items(text, pattern, lint, note, f):
-    """`#[allow(lint)]` on each item of live code that names `pattern`, with `note` as a trailing
-    comment, on the item's own line so no file grows: a `use`, a struct field, or else the
-    enclosing fn. Nothing wider, so a new use elsewhere still trips the lint."""
-    cut = text.find("#[cfg(test)]")
+    """`#[allow(lint)]` on each top-level item of live code that names `pattern` anywhere (signature,
+    body, fields, derive): a `use`, fn, struct, enum, impl, type, const or static at the crate's top,
+    on the item's own line so no file grows, `note` trailing. An `impl` block gets it whole, as clippy
+    reports a method's uses under it; a struct gets it for its fields and its derives. Nothing wider,
+    so a new use in another item still trips the lint."""
+    # only an inline tests module ends the live code (a `#[cfg(test)] mod tests;` line does not)
+    cut = text.find("#[cfg(test)]\nmod tests {")
     live, tests = (text, "") if cut < 0 else (text[:cut], text[cut:])
     lines = live.split("\n")
+    head = re.compile(r"(#\[[^\]]*\]\s*)*(pub(\([^)]*\))?\s+)?((const|unsafe|async)\s+)*"
+                      r"(use|fn|struct|enum|union|impl|type|const|static|trait|mod)\b")
     done = set()
     tag = f"#[allow({lint})] "
     for k, l in enumerate(list(lines)):
         if not re.search(pattern, l) or l.lstrip().startswith("//"):
             continue
-        ind0 = len(l) - len(l.lstrip())
-        owner = next((lines[i] for i in range(k - 1, -1, -1)
-                      if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) < ind0
-                      and not lines[i].lstrip().startswith(("//", "#"))), "")
-        in_struct = re.match(r"\s*(pub(\([^)]*\))?\s+)?(struct|enum|union)\s", owner)
-        if re.match(r"\s*(pub(\([^)]*\))?\s+)?use\s", l) or (in_struct and re.match(r"\s+(pub(\([^)]*\))?\s+)?\w+:\s", l)):
-            j = k
-        else:
-            ind = len(l) - len(l.lstrip())
-            j = next((i for i in range(k, -1, -1) if re.match(r"\s*(#\[[^\]]*\]\s*)*(pub(\([^)]*\))?\s+)?(const\s+)?fn\s", lines[i])
-                      and len(lines[i]) - len(lines[i].lstrip()) <= ind), None)
-            if j is None:
-                raise SystemExit(f"{f}:{k + 1}: no item to hang the allow on")
-        if j in done:
+        # an item line may begin with its own attributes (`#[allow(..)] fn ..`); a line that is only an
+        # attribute (`#[derive(..)]`) is not the item
+        j = next((i for i in range(k, -1, -1) if lines[i] and not lines[i][0].isspace()
+                  and not lines[i].startswith(("//", "}")) and not re.fullmatch(r"(#\[[^\]]*\]\s*)+", lines[i])
+                  and head.match(lines[i])), None)
+        if j is None:
+            raise SystemExit(f"{f}:{k + 1}: no top-level item to hang the allow on")
+        if j in done or tag in lines[j]:
             continue
         done.add(j)
-        lj = lines[j]
-        ind = len(lj) - len(lj.lstrip())
-        lines[j] = " " * ind + tag + lj.lstrip() + f" // {note}"
+        lines[j] = tag + lines[j] + f" // {note}"
     return "\n".join(lines) + tests
 
 
@@ -522,3 +519,121 @@ def precise_pub(crates_texts, outside):
             files[f] = t
         made[krate] = sorted({n for i in need for n in items[i][3]})
     return crates_texts, made
+
+
+def split_test_file(test_path, parent_path, modpath, forbidden, dest_name, dest_doc, transform=None, preamble="",
+                    own_at=None):
+    """split_tests for a tests module in a file of its own (`#[cfg(test)] mod tests;` in the parent):
+    it is wrapped as the parent's inline module, split, and unwrapped back into its file. If no test
+    stays, the file is emptied of tests and the parent's `mod tests;` goes."""
+    parent, tests = rd(parent_path), rd(test_path)
+    decl = "#[cfg(test)]\nmod tests;\n"
+    if parent.count(decl) != 1:
+        raise SystemExit(f"{parent_path}: no single `#[cfg(test)] mod tests;`")
+    k = tests.index("\nuse ")
+    thead, tbody = tests[:k + 1], tests[k + 1:]
+    tmp = parent_path + ".split"
+    wr(tmp, parent.replace(decl, "") + "\n#[cfg(test)]\nmod tests {\n"
+       + "\n".join(("    " + l) if l.strip() else "" for l in tbody.rstrip("\n").split("\n")) + "\n}\n")
+    try:
+        out = split_tests(tmp, modpath, forbidden, dest_name, dest_doc, transform=transform, preamble=preamble,
+                          own_at=own_at)
+        left = rd(tmp)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    k = left.find("#[cfg(test)]\nmod tests {\n")
+    if k < 0:  # every test moved
+        os.remove(test_path)
+        wr(parent_path, parent.replace(decl, ""))
+        return out
+    inner = left[k + len("#[cfg(test)]\nmod tests {\n"):].rstrip("\n")
+    inner = inner[:inner.rstrip().rfind("}")]
+    wr(test_path, thead + "\n".join(l[4:] if l.startswith("    ") else l for l in inner.rstrip("\n").split("\n")) + "\n")
+    return out
+
+
+def test_reach_guard(crates_texts, made_pub, test_texts, aliases):
+    """Names outside tests reach (by `alias::..::name` or a `use` of the alias) that stay crate-private
+    after precise_pub: each would stop those tests compiling. Returns {crate: sorted names}."""
+    out = {}
+    for krate, files in crates_texts.items():
+        private = set()
+        for t in files.values():
+            for m in re.finditer(r"pub\(crate\)\s+(?:(?:const|unsafe)\s+)*(?:fn|struct|enum|const|static|type|trait|mod)\s+(\w+)", t):
+                private.add(m.group(1))
+        private -= set(made_pub.get(krate, []))
+        reached = set()
+        for t in test_texts:
+            t = re.sub(r"//[^\n]*", "", t)
+            for a in aliases[krate]:
+                reached |= set(re.findall(r"\b" + a + r"::(?:\w+::)*(\w+)", t))
+                for g in re.findall(r"\b" + a + r"::\{([^}]*)\}", t):
+                    reached |= set(re.findall(r"\w+", g))
+        hit = sorted(private & reached)
+        if hit:
+            out[krate] = hit
+    return out
+
+
+def public_paths(files):
+    """{module path tuple: names reachable there from outside} for a moved crate's files {rel: text}:
+    the root's pub items and `pub use` names, and each `pub mod`'s file likewise."""
+    def pub_names(t):
+        t = live_text(t)
+        # an item may carry its allow on its own line (`#[allow(..)] pub fn ..`, W3-W6's per-item allows)
+        names = set(re.findall(r"(?m)^\s*(?:#\[[^\]]*\]\s*)*pub\s+(?:(?:const|unsafe)\s+)*(?:fn|struct|enum|const|static|type|trait|mod)\s+(\w+)", t))
+        for u in re.findall(r"(?m)^\s*pub\s+use\s+([^;]+);", t):
+            u = re.sub(r"\s+", "", u)
+            if "{" in u:
+                names |= {x.split("as")[-1] for x in re.findall(r"[\w]+(?:as\w+)?", u.split("{", 1)[1])}
+            else:
+                names.add(u.split("::")[-1])
+        return names
+    out = {(): pub_names(files["lib.rs"])}
+    for m in re.findall(r"(?m)^\s*pub\s+mod\s+(\w+)\s*;", live_text(files["lib.rs"])):
+        for cand in (f"{m}.rs", f"{m}/mod.rs"):
+            if cand in files:
+                out[(m,)] = pub_names(files[cand])
+    return out
+
+
+def path_guard(crates_files, test_texts, aliases):
+    """Paths outside tests use into a moved crate (`alias::a::b`, `use crate::alias::{..}`) that do not
+    resolve to a public item there. Returns {crate: sorted paths}."""
+    bad = {}
+    for krate, files in crates_files.items():
+        pp = public_paths(files)
+        hits = set()
+        for t in test_texts:
+            t = re.sub(r"//[^\n]*", "", t)
+            for a in aliases[krate]:
+                for m in re.finditer(r"\b" + a + r"((?:::\w+)+)(?:::\{([^}]*)\})?", t):
+                    segs = m.group(1).strip(":").split("::")
+                    leaves = [x.strip() for x in m.group(2).split(",") if x.strip()] if m.group(2) else [segs.pop()]
+                    for leaf in leaves:
+                        leaf = leaf.split("::")[0]
+                        mod = tuple(segs)
+                        if leaf in ("self", "*") or (mod in pp and leaf in pp[mod]):
+                            continue
+                        if not mod and leaf in pp.get((), set()):
+                            continue
+                        # `a::f(..)` calls a free fn; `a::T::new` names an associated item of T, fine if T is
+                        if mod and mod[:1] in [(x,) for x in pp.get((), set())] and len(mod) == 1 and (mod[0],) not in pp:
+                            continue
+                        hits.add("::".join([a] + list(mod) + [leaf]))
+        if hits:
+            bad[krate] = sorted(hits)
+    return bad
+
+
+def deps_guard(ws, krate, deps):
+    """A new crate's Cargo deps must sit in its layers.toml row (gate 1): stop before the window if not."""
+    s = rd(os.path.join(ws, "layers.toml"))
+    m = re.search(r"(?ms)^\[crate\." + re.escape(krate) + r"\]\n.*?^deps = \[([^\]]*)\]", s)
+    if not m:
+        raise SystemExit(f"layers.toml: no row for {krate}")
+    row = {x.strip().strip('"') for x in m.group(1).split(",") if x.strip()}
+    extra = sorted(set(deps) - row)
+    if extra:
+        raise SystemExit(f"{krate}: Cargo deps {extra} are not in its layers.toml row {sorted(row)}")

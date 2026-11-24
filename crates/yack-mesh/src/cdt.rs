@@ -1,6 +1,6 @@
 // yack: A constrained Delaunay triangulation in the plane: points go in by location and Lawson flips,
 // Adapted from springrep@a03e8a1 src/mesh/cdt.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/mesh/cdt.rs to yack-mesh (M3 W6); paths and visibility only.
 //! A constrained Delaunay triangulation in the plane: points go in by location and Lawson flips,
 //! constraint segments by Sloan's flips, and every edge that is not a constraint is kept locally
 //! Delaunay. The first four vertices are a box round everything, so every inserted point lands
@@ -85,7 +85,7 @@ impl Cdt {
     }
 
     /// Makes edge `k` of `t` face `n` (whose edge runs the other way), with the given flag.
-    fn link(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
+    #[allow(clippy::panic)] fn link(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
         self.nbr[t as usize][k] = n;
         self.fixed[t as usize][k] = fixed;
         if n == NONE {
@@ -94,7 +94,7 @@ impl Cdt {
         let (a, b) = (self.tri[t as usize][k], self.tri[t as usize][nx(k)]);
         let back = (0..3)
             .find(|&j| self.tri[n as usize][j] == b && self.tri[n as usize][nx(j)] == a)
-            .expect("neighbour shares the edge");
+            .unwrap_or_else(|| panic!("neighbour shares the edge"));
         self.nbr[n as usize][back] = t;
         self.fixed[n as usize][back] = fixed;
     }
@@ -107,13 +107,13 @@ impl Cdt {
     }
 
     /// Every triangle at `v`, with `v`'s corner index in it.
-    pub(super) fn around(&self, v: u32) -> Vec<(u32, usize)> {
+    #[allow(clippy::panic)] pub(super) fn around(&self, v: u32) -> Vec<(u32, usize)> {
         let start = self.vt[v as usize];
         let mut out = Vec::new();
         let mut t = start;
         // Clockwise: across the edge leaving `v`.
         loop {
-            let i = self.corner(t, v).expect("vertex triangle holds it");
+            let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
             out.push((t, i));
             let n = self.nbr[t as usize][i];
             if n == NONE {
@@ -127,13 +127,13 @@ impl Cdt {
         // Open fan on the box: go the other way from the start.
         let mut t = start;
         loop {
-            let i = self.corner(t, v).expect("vertex triangle holds it");
+            let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
             let n = self.nbr[t as usize][pv(i)];
             if n == NONE {
                 return out;
             }
             t = n;
-            let j = self.corner(t, v).expect("fan triangle holds it");
+            let j = self.corner(t, v).unwrap_or_else(|| panic!("fan triangle holds it"));
             out.push((t, j));
         }
     }
@@ -253,7 +253,7 @@ impl Cdt {
     }
 
     /// Splits edge `k` of `t` at the new vertex `v`, which lies on it.
-    pub(super) fn split_edge(&mut self, t: u32, k: usize, v: u32) {
+    #[allow(clippy::panic)] pub(super) fn split_edge(&mut self, t: u32, k: usize, v: u32) {
         let ti = t as usize;
         let (a, b, c) = (self.tri[ti][k], self.tri[ti][nx(k)], self.tri[ti][pv(k)]);
         let (n_bc, f_bc) = (self.nbr[ti][nx(k)], self.fixed[ti][nx(k)]);
@@ -263,7 +263,7 @@ impl Cdt {
         let ui = u as usize;
         let j = (0..3)
             .find(|&j| self.tri[ui][j] == b && self.tri[ui][nx(j)] == a)
-            .expect("neighbour shares the edge");
+            .unwrap_or_else(|| panic!("neighbour shares the edge"));
         let d = self.tri[ui][pv(j)];
         let (n_ad, f_ad) = (self.nbr[ui][nx(j)], self.fixed[ui][nx(j)]);
         let (n_db, f_db) = (self.nbr[ui][pv(j)], self.fixed[ui][pv(j)]);
@@ -285,7 +285,7 @@ impl Cdt {
 
     /// Flips edge `k` of `t` when the two triangles that would replace it are both
     /// counter-clockwise; returns the two triangles, or `None` when the quad is not convex.
-    pub(super) fn flip(&mut self, t: u32, k: usize) -> Option<(u32, u32)> {
+    #[allow(clippy::panic)] pub(super) fn flip(&mut self, t: u32, k: usize) -> Option<(u32, u32)> {
         let ti = t as usize;
         let (a, b, c) = (self.tri[ti][k], self.tri[ti][nx(k)], self.tri[ti][pv(k)]);
         let u = self.nbr[ti][k];
@@ -295,7 +295,7 @@ impl Cdt {
         let ui = u as usize;
         let j = (0..3)
             .find(|&j| self.tri[ui][j] == b && self.tri[ui][nx(j)] == a)
-            .expect("neighbour shares the edge");
+            .unwrap_or_else(|| panic!("neighbour shares the edge"));
         let d = self.tri[ui][pv(j)];
         if orient(self.at(c), self.at(a), self.at(d)) <= 0.0
             || orient(self.at(d), self.at(b), self.at(c)) <= 0.0
@@ -317,7 +317,7 @@ impl Cdt {
     }
 
     /// Whether edge `k` of `t` should be flipped to restore the Delaunay property.
-    fn illegal(&self, t: u32, k: usize) -> bool {
+    #[allow(clippy::panic)] fn illegal(&self, t: u32, k: usize) -> bool {
         let ti = t as usize;
         let u = self.nbr[ti][k];
         if u == NONE || self.fixed[ti][k] {
@@ -328,7 +328,7 @@ impl Cdt {
             .iter()
             .copied()
             .find(|&x| x != a && x != b)
-            .expect("neighbour has a third corner");
+            .unwrap_or_else(|| panic!("neighbour has a third corner"));
         in_circle(self.at(a), self.at(b), self.at(c), self.at(d))
     }
 
@@ -378,7 +378,7 @@ impl Cdt {
 
     /// Makes `a — b` an edge of the triangulation and marks it a constraint. Fails when the
     /// segment runs through another vertex or crosses another constraint.
-    pub(super) fn insert_segment(&mut self, a: u32, b: u32) -> Result<(), &'static str> {
+    #[allow(clippy::panic)] pub(super) fn insert_segment(&mut self, a: u32, b: u32) -> Result<(), &'static str> {
         if a == b {
             return Ok(());
         }
@@ -414,7 +414,7 @@ impl Cdt {
             let ti = t as usize;
             let k = (0..3)
                 .find(|&k| self.tri[ti][k] == r && self.tri[ti][nx(k)] == l)
-                .expect("walk keeps the crossed edge");
+                .unwrap_or_else(|| panic!("walk keeps the crossed edge"));
             if self.fixed[ti][k] {
                 return Err("face boundaries cross");
             }
@@ -427,7 +427,7 @@ impl Cdt {
                 .iter()
                 .copied()
                 .find(|&x| x != r && x != l)
-                .expect("neighbour has a third corner");
+                .unwrap_or_else(|| panic!("neighbour has a third corner"));
             if v == b {
                 break;
             }

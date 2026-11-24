@@ -1,6 +1,6 @@
 // yack: Plane predicates for the triangulation. The orientation test is exact, so point location, the
 // Adapted from springrep@a03e8a1 src/mesh/predicates.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/mesh/predicates.rs to yack-mesh (M3 W6); paths and visibility only.
 //! Plane predicates for the triangulation. The orientation test is exact, so point location, the
 //! convexity of a flip and the side of a constraint never contradict one another; the in-circle
 //! test only decides which of two valid triangulations to keep, so a rounded answer is enough.

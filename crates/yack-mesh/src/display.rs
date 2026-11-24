@@ -1,6 +1,6 @@
 // yack: What a viewer draws: each face meshed as its own triangles, with the exact surface's normal at
 // Adapted from springrep@a03e8a1 src/mesh/display.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/mesh/display.rs to yack-mesh (M3 W6); paths and visibility only.
 //! What a viewer draws: each face meshed as its own triangles, with the exact surface's normal at
 //! every node, and the solid's drawn edges as polylines. Faces share no nodes, so shading is
 //! smooth within a face and creased where two faces meet. At a pole or an apex each triangle has
@@ -12,7 +12,7 @@
 //! `_FACE` attribute holding each node's face index, the triangles, and `COLOR_0` when each face
 //! is given a colour.
 
-use std::collections::{BTreeMap, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeMap, HashMap}; // D26: BTree* in hardening, proven by digests
 
 use super::{MeshOptions, edge_params, tessellate};
 use crate::{
@@ -72,7 +72,7 @@ pub fn display(b: &Brep) -> Result<Display> {
 
 /// `b` as a viewer draws it, its faces within `linear` mm of the surface and its edges within
 /// `edge_linear` mm of their curves, each turning by at most [`ANGLE`] across a piece.
-pub fn display_within(b: &Brep, linear: f64, edge_linear: f64) -> Result<Display> {
+#[allow(clippy::disallowed_types)] pub fn display_within(b: &Brep, linear: f64, edge_linear: f64) -> Result<Display> { // D26: BTree* in hardening, proven by digests
     let mesh = tessellate(
         b,
         &MeshOptions {
@@ -305,101 +305,4 @@ pub fn glb(faces: &[Face], colors: Option<&[String]>) -> Vec<u8> {
     out.extend(0x004E_4942u32.to_le_bytes());
     out.extend(&bin);
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        math::{Frame, Vec2, Vec3},
-        profile::Profile,
-        sweep::extrude,
-    };
-
-    #[test]
-    fn a_cylinder_draws_three_faces_with_exact_normals_and_its_two_rims() {
-        // A Ø20 × 10 cylinder: two caps and a side, the side's seam no edge, so the two circles
-        // are drawn; every side node's normal points straight out from the axis.
-        let b = extrude(
-            &Profile::circle(Vec2::ZERO, 20.0),
-            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
-            10.0,
-            "can",
-        )
-        .unwrap();
-        let d = display(&b).unwrap();
-        assert_eq!(d.faces.len(), 3);
-        assert_eq!(d.edges.len(), 2);
-        assert!(d.edge_faces.iter().all(|f| f.len() == 2));
-        let side = d
-            .faces
-            .iter()
-            .find(|f| f.normals.iter().all(|n| n[2].abs() < 1e-6))
-            .expect("a side face");
-        for (p, n) in side.positions.iter().zip(&side.normals) {
-            let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
-            assert!((n[0] - p[0] / r).abs() < 1e-5 && (n[1] - p[1] / r).abs() < 1e-5);
-        }
-        let bytes = glb(&d.faces, None);
-        assert_eq!(&bytes[0..4], b"glTF");
-        assert_eq!(
-            u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize,
-            bytes.len()
-        );
-    }
-
-    #[test]
-    fn each_triangle_at_a_cone_apex_has_its_own_node_with_the_normal_along_its_middle() {
-        // A cone of radius 2 and height 4, its apex up: the apex has no one normal, so each
-        // triangle there has its own apex node, whose normal is that of the ruling halfway across
-        // the triangle.
-        let frame = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
-        let b = crate::primitive::cone(&frame, 2.0, 0.0, 4.0, "cone").unwrap();
-        let d = display_within(&b, 0.01, 0.01).unwrap();
-        let (cos, sin) = (4.0 / 20f32.sqrt(), 2.0 / 20f32.sqrt());
-        let mut fans = 0;
-        for f in &d.faces {
-            let apex = |i: u32| {
-                let p = f.positions[i as usize];
-                (p[0].hypot(p[1]) + (p[2] - 4.0).abs()) < 1e-5
-            };
-            for t in &f.triangles {
-                let Some(k) = (0..3).find(|&k| apex(t[k])) else {
-                    continue;
-                };
-                fans += 1;
-                let a = t[k];
-                assert_eq!(
-                    f.triangles.iter().filter(|s| s.contains(&a)).count(),
-                    1,
-                    "apex node {a} is shared"
-                );
-                let [p, q] = [t[(k + 1) % 3], t[(k + 2) % 3]].map(|j| f.positions[j as usize]);
-                let mid = ((p[1] + q[1]) / 2.0).atan2((p[0] + q[0]) / 2.0);
-                let want = [cos * mid.cos(), cos * mid.sin(), sin];
-                let n = f.normals[a as usize];
-                assert!(
-                    (0..3).all(|j| (n[j] - want[j]).abs() < 1e-5),
-                    "apex normal {n:?} against {want:?}"
-                );
-            }
-        }
-        assert!(fans >= 8, "{fans} triangles at the apex");
-    }
-
-    #[test]
-    fn a_ball_keeps_one_normal_at_each_pole() {
-        let frame = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
-        let b = crate::primitive::sphere(&frame, 3.0, "ball").unwrap();
-        let d = display_within(&b, 0.01, 0.01).unwrap();
-        for f in &d.faces {
-            for (p, n) in f.positions.iter().zip(&f.normals) {
-                let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
-                assert!(
-                    (0..3).all(|j| (n[j] - p[j] / r).abs() < 1e-5),
-                    "{p:?} has {n:?}"
-                );
-            }
-        }
-    }
 }

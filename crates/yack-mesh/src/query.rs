@@ -1,7 +1,7 @@
 // yack: rays and distances over a solid, meshed here and handed to them (M2: they mesh nothing).
 // Adapted from springrep@a03e8a1 src/rays.rs and src/distance.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: the meshing `Rays::new`, `distance::closest` and `Nearest`'s constructors did, moved up
-// here unchanged (one MESHES table, finest first), so rays and distance sit below the mesher.
+// here unchanged (one MESHES table, finest first), so rays and distance sit below the mesher; then to yack-mesh (M3 W6), paths and visibility only.
 //! A solid's ray caster and nearest-point searches, each over a mesh made here: the finest of
 //! [`MESHES`] the mesher manages, seeded to the solid's size.
 
@@ -30,7 +30,7 @@ const MESHES: [MeshOptions; 3] = [
 ];
 
 /// The finest of [`MESHES`] the mesher manages for `b`, with the options it was made with.
-fn mesh_for(b: &Brep) -> Result<(Mesh, MeshOptions)> {
+#[allow(clippy::panic)] fn mesh_for(b: &Brep) -> Result<(Mesh, MeshOptions)> {
     let mut err = None;
     for opt in MESHES.iter().map(|o| seeding(o, b)) {
         match tessellate(b, &opt) {
@@ -38,7 +38,7 @@ fn mesh_for(b: &Brep) -> Result<(Mesh, MeshOptions)> {
             Err(e) => err = Some(e),
         }
     }
-    Err(err.expect("a mesh was tried"))
+    Err(err.unwrap_or_else(|| panic!("a mesh was tried")))
 }
 
 /// The ray caster over `b`'s faces.

@@ -142,7 +142,7 @@ license = "MIT OR Apache-2.0"
 layer = 6
 kind = "kernel"
 owner = "lead"
-deps = ["yack-topo", "yack-locate", "yack-gridmesh", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+deps = ["yack-topo", "yack-intersect", "yack-locate", "yack-gridmesh", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
 license = "MIT OR Apache-2.0"
 
 # ---- layer 7 ----
@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec"]
+deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 

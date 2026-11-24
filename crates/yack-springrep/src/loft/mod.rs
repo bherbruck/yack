@@ -14,6 +14,8 @@
 
 pub(crate) mod rail;
 #[cfg(test)]
+mod moved_tests;
+#[cfg(test)]
 mod tests;
 
 use std::f64::consts::TAU;

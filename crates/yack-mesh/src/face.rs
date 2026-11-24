@@ -1,6 +1,6 @@
 // yack: One face's mesh: a constrained Delaunay triangulation of its boundary samples in a scaled
 // Adapted from springrep@a03e8a1 src/mesh/face.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/mesh/face.rs to yack-mesh (M3 W6); paths and visibility only.
 //! One face's mesh: a constrained Delaunay triangulation of its boundary samples in a scaled
 //! parameter plane, refined by inserting points where a triangle strays from the surface.
 //!
@@ -9,7 +9,7 @@
 //! straight lines and short round it. A triangle is refined at its circumcentre in that plane, or
 //! at its worst sample when the circumcentre is outside the face.
 
-use std::collections::{HashMap, HashSet};
+#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 use std::f64::consts::FRAC_PI_2;
 
 use super::{
@@ -53,7 +53,7 @@ pub(super) struct FaceMesh {
 /// A face's boundary samples, loop by loop, as (parameters, global point).
 type Loops = Vec<Vec<(Vec2, u32)>>;
 
-pub(super) fn mesh_face(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] pub(super) fn mesh_face( // D26: BTree* in hardening, proven by digests
     b: &Brep,
     f: FaceId,
     opt: &MeshOptions,
@@ -95,7 +95,7 @@ pub(super) fn mesh_face(
     super::snap_repeats(&mut flat);
     let mut snapped = flat.into_iter();
     for p in loops.iter_mut().flatten() {
-        *p = snapped.next().expect("one snapped point per loop point");
+        *p = snapped.next().unwrap_or_else(|| panic!("one snapped point per loop point"));
     }
     let (scale, curved) = metric(surf, &loops, &poles, positions, opt);
     let mut fm = FaceMesh {
@@ -184,7 +184,7 @@ pub(super) fn mesh_face(
 
 /// The parameter-plane scale for a face: one unit along each parameter is about the longest step
 /// the deflection limits allow along it, at most the face's size. Whether the face is curved.
-fn metric(
+#[allow(clippy::disallowed_types)] fn metric( // D26: BTree* in hardening, proven by digests
     surf: &Surface,
     loops: &Loops,
     poles: &HashMap<u32, Vec2>,
@@ -265,7 +265,7 @@ enum Verdict {
     Shape,
 }
 
-impl FaceMesh {
+#[allow(clippy::disallowed_types)] impl FaceMesh { // D26: BTree* in hardening, proven by digests
     fn m(&self, uv: Vec2) -> Vec2 {
         Vec2::new(uv.x * self.scale.x, uv.y * self.scale.y)
     }

@@ -164,6 +164,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-check"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-geom",
+ "yack-intersect",
+ "yack-locate",
+ "yack-math",
+ "yack-measure",
+ "yack-tol",
+ "yack-topo",
+]
+
+[[package]]
 name = "yack-codec"
 version = "0.0.0"
 dependencies = [
@@ -255,6 +269,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-mesh"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-geom",
+ "yack-intersect",
+ "yack-locate",
+ "yack-math",
+ "yack-numeric",
+ "yack-tol",
+ "yack-topo",
+]
+
+[[package]]
 name = "yack-numeric"
 version = "0.0.0"
 dependencies = [
@@ -292,12 +320,14 @@ name = "yack-springrep"
 version = "1.0.1"
 dependencies = [
  "yack-base",
+ "yack-check",
  "yack-codec",
  "yack-geom",
  "yack-intersect",
  "yack-locate",
  "yack-math",
  "yack-measure",
+ "yack-mesh",
  "yack-numeric",
  "yack-p21",
  "yack-profile",

@@ -72,7 +72,8 @@ for pkg in $(for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crat
 done
 for pkg in $(for f in "${EXT[@]}"; do case $f in crates/yack-springrep/*) ;; crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
   # a shipping crate must be clippy-clean under -D warnings (the springrep ratchet above stays a count)
-  cargo clippy -p $pkg --all-targets -- -D warnings >/dev/null 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg"; cargo clippy -p $pkg --all-targets -- -D warnings 2>&1 | grep -A5 '^error' | head -40; restore; exit 1; }
+  # the full output goes to swarm/res/ (the builder's log keeps only the tail), so every site is named
+  cargo clippy -p $pkg --all-targets -- -D warnings >/dev/null 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg (all sites: swarm/res/$tag-clippy-$pkg.txt)"; cargo clippy -p $pkg --all-targets -- -D warnings > $Y/swarm/res/$tag-clippy-$pkg.txt 2>&1; grep -A3 '^error' $Y/swarm/res/$tag-clippy-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
 done
 L2=$(lints); echo "$TAG clippy warnings after: $L2"
 [ "$L2" -le "$L1" ] || { echo "$TAG clippy warnings rose $L1 -> $L2"; restore; exit 1; }

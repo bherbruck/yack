@@ -12,7 +12,7 @@
 pub mod blend;
 pub mod boolean;
 pub mod build;
-pub mod check;
+pub use yack_check as check;
 pub use yack_codec as codec;
 pub use yack_locate::distance;
 pub mod draw;
@@ -26,7 +26,7 @@ pub(crate) use yack_locate as locate;
 pub mod loft;
 pub use yack_math::kernel as math;
 pub use yack_measure as measure;
-pub mod mesh;
+pub use yack_mesh as mesh;
 pub use yack_topo::names;
 use yack_numeric as numeric;
 pub mod overlap;

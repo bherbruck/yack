@@ -1,10 +1,23 @@
 // yack: The validity checker: a solid is valid when its shells are closed oriented 2-manifolds, every
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/check.rs to yack-check (M3 W6); paths and visibility only.
 //! The validity checker: a solid is valid when its shells are closed oriented 2-manifolds, every
 //! edge lies on both its faces within tolerance, and each loop closes in its face's parameters.
 
-use std::collections::{HashMap, HashSet};
+
+// springrep's check indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names check's code uses.
+use yack_geom as geom;
+use yack_intersect as intersect;
+use yack_locate as locate;
+use yack_math::kernel as math;
+use yack_measure as measure;
+use yack_tol as tol;
+use yack_topo as topo;
+#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 use std::fmt;
 
 use crate::{
@@ -13,7 +26,6 @@ use crate::{
     topo::{domain::Domain, face_domain},
     geom::{Curve, Surface, distance_to},
     math::{Aabb, Point3, Vec2, Vec3},
-    measure, tol,
     topo::{
         Brep, CoedgeId, EdgeId, FaceId, FaceMemo, ShellId, SolidId, VertexId, coedge_params,
         fans_at_vertices,
@@ -113,7 +125,7 @@ pub fn check(b: &Brep) -> Vec<Issue> {
 /// from its vertices, and how far each coedge lies from its face's surface. A body these refuse
 /// is refused whichever way its shells face, so a reader can refuse it before working out their
 /// facing, which takes a volume per shell (bench swept/ring-carried-along-a-spline).
-pub(crate) fn check_distances(b: &Brep) -> Vec<Issue> {
+pub fn check_distances(b: &Brep) -> Vec<Issue> {
     let mut out = Vec::new();
     let mut issue = |m: String| out.push(Issue { message: m });
     for e in b.edge_ids() {
@@ -160,7 +172,7 @@ pub(crate) fn check_distances(b: &Brep) -> Vec<Issue> {
     out
 }
 
-pub(crate) fn check_structure(b: &Brep) -> Vec<Issue> {
+pub fn check_structure(b: &Brep) -> Vec<Issue> {
     check_with(b, false, None, false)
 }
 
@@ -223,12 +235,12 @@ pub fn check_each(b: &Brep) -> Vec<Issue> {
 /// input is a valid solid, so two faces cut from one meet only where the input faces they were cut
 /// from did, along edges and at vertices the result keeps; only pairs from different inputs are
 /// searched for faces passing through each other.
-pub(crate) fn check_cut(b: &Brep, sides: &[Option<usize>]) -> Vec<Issue> {
+pub fn check_cut(b: &Brep, sides: &[Option<usize>]) -> Vec<Issue> {
     check_with(b, false, Some(sides), true)
 }
 
 /// The shell each vertex belongs to, by the faces whose edges end there.
-fn vertex_shells(b: &Brep) -> HashMap<VertexId, ShellId> {
+#[allow(clippy::disallowed_types)] fn vertex_shells(b: &Brep) -> HashMap<VertexId, ShellId> { // D26: BTree* in hardening, proven by digests
     let mut out = HashMap::new();
     for f in b.face_ids() {
         let Some(sh) = b.face(f).shell else { continue };
@@ -645,7 +657,7 @@ fn stray_voids(b: &Brep) -> Vec<(SolidId, ShellId)> {
 
 /// The shells, with their solids and whether each is an outer sheet, whose faces enclose volume of
 /// the wrong sign: an outer sheet's is positive, a void's negative.
-pub(crate) fn turned_shells(b: &Brep) -> Vec<(SolidId, ShellId, bool)> {
+pub fn turned_shells(b: &Brep) -> Vec<(SolidId, ShellId, bool)> {
     let mut out = Vec::new();
     for s in b.solid_ids() {
         let solid = b.solid(s);
@@ -662,7 +674,7 @@ pub(crate) fn turned_shells(b: &Brep) -> Vec<(SolidId, ShellId, bool)> {
 
 /// For each void shell of solid `s`, the outer sheet it lies inside, as an index into its outer
 /// shells: found by a point inside one of its faces, the first sheet where that is not found.
-pub(crate) fn void_hosts(b: &Brep, s: SolidId) -> Vec<usize> {
+pub fn void_hosts(b: &Brep, s: SolidId) -> Vec<usize> {
     let shells = &b.solid(s).shells;
     let n_outer = b.solid(s).outer;
     let sheets: Vec<Vec<(Domain, Aabb)>> = shells[..n_outer]
@@ -765,7 +777,7 @@ fn in_box(p: Point3, bb: &Aabb) -> bool {
 /// What the pair tests of one check share: each face's domain, built when a point is first
 /// located in it, each edge's box, and each edge's meeting with each face.
 #[derive(Default)]
-struct PairCache {
+#[allow(clippy::disallowed_types)] struct PairCache { // D26: BTree* in hardening, proven by digests
     domains: HashMap<FaceId, Domain>,
     edge_boxes: HashMap<EdgeId, Aabb>,
     meetings: HashMap<(EdgeId, FaceId), Option<Point3>>,
@@ -832,7 +844,7 @@ impl PairCache {
 /// input of a boolean. With `each`, only faces of one solid are paired, as an import's parts may
 /// rest on one another. Two curved faces that meet only along a closed curve inside both are not
 /// found: no edge reaches it.
-fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -> Vec<Crossing> {
+#[allow(clippy::disallowed_types)] fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -> Vec<Crossing> { // D26: BTree* in hardening, proven by digests
     let faces: Vec<FaceId> = b.face_ids().collect();
     let solid_of = |f: FaceId| b.face(f).shell.and_then(|s| b.shell(s).solid);
     let mut cache = PairCache::default();
@@ -1090,7 +1102,7 @@ fn edge_meets_face(
 }
 
 /// Pairs of distinct vertices closer than the linear tolerance.
-fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
+#[allow(clippy::disallowed_types)] fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> { // D26: BTree* in hardening, proven by digests
     let cell = |x: f64| (x / (4.0 * tol::LINEAR)).floor() as i64;
     let mut grid: HashMap<[i64; 3], Vec<VertexId>> = HashMap::new();
     let mut out = Vec::new();
@@ -1153,7 +1165,7 @@ fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
 /// How many fans of faces meet at each vertex: following each corner there across the edge it
 /// leaves by, to its partner, reaches the corners of one fan. More than one is a point where
 /// pieces of the solid touch.
-pub(crate) fn vertex_fans(b: &Brep) -> HashMap<VertexId, usize> {
+#[allow(clippy::disallowed_types)] pub(crate) fn vertex_fans(b: &Brep) -> HashMap<VertexId, usize> { // D26: BTree* in hardening, proven by digests
     fans_at_vertices(b)
         .into_iter()
         .map(|(v, fs)| (v, fs.len()))
@@ -1162,7 +1174,7 @@ pub(crate) fn vertex_fans(b: &Brep) -> HashMap<VertexId, usize> {
 
 /// Where the solid touches itself: the edges more than two faces use, and the vertices those end
 /// at or that more than one fan of faces meets at.
-pub(crate) fn contacts(b: &Brep) -> (HashSet<EdgeId>, HashSet<VertexId>) {
+#[allow(clippy::disallowed_types)] pub fn contacts(b: &Brep) -> (HashSet<EdgeId>, HashSet<VertexId>) { // D26: BTree* in hardening, proven by digests
     let edges: HashSet<EdgeId> = b.radial_edges().collect();
     let mut vertices: HashSet<VertexId> = vertex_fans(b)
         .into_iter()
@@ -1176,7 +1188,7 @@ pub(crate) fn contacts(b: &Brep) -> (HashSet<EdgeId>, HashSet<VertexId>) {
 }
 
 /// The faces of `faces` that run up to where the solid touches itself.
-pub(crate) fn faces_at_contacts(b: &Brep, faces: impl IntoIterator<Item = FaceId>) -> Vec<FaceId> {
+pub fn faces_at_contacts(b: &Brep, faces: impl IntoIterator<Item = FaceId>) -> Vec<FaceId> {
     let (edges, vertices) = contacts(b);
     if edges.is_empty() && vertices.is_empty() {
         return Vec::new();

@@ -1386,7 +1386,10 @@ fn balls_touching_at_a_point_share_a_vertex_of_two_fans() {
         .vertex_ids()
         .find(|&v| u.vertex(v).point.dist(Point3::new(5.0, 0.0, 0.0)) < 1e-9)
         .expect("a vertex at the contact");
-    assert_eq!(crate::check::vertex_fans(&u).get(&at), Some(&2));
+    let (edges, vertices) = crate::check::contacts(&u);
+    assert!(edges.is_empty(), "{edges:?}");
+    assert_eq!(vertices.len(), 1, "{vertices:?}");
+    assert!(vertices.contains(&at));
 }
 
 /// A vertex loop survives the codec: the point is still a vertex both balls' faces share.

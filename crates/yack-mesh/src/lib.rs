@@ -1,11 +1,27 @@
 // yack: Tessellation. Each edge is discretised once and both its faces use those points, so the mesh of
 // Adapted from springrep@a03e8a1 src/mesh/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/mesh/mod.rs to yack-mesh (M3 W6); paths and visibility only.
 //! Tessellation. Each edge is discretised once and both its faces use those points, so the mesh of
 //! a valid solid is watertight by construction. Each face is a constrained Delaunay triangulation
 //! of those points in its parameter plane, refined until every triangle is within the deflection
 //! limits of the surface (`face`).
 
+
+// springrep's mesh indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names mesh's code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel::Result;
+use yack_locate::distance;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_intersect as intersect;
+use yack_math::kernel as math;
+use yack_locate::rays;
+use yack_tol as tol;
+use yack_topo as topo;
 mod cdt;
 pub mod display;
 mod face;
@@ -17,7 +33,7 @@ mod tests;
 pub use crate::geom::{MeshOptions, edge_params};
 pub use query::{closest, nearest_boundary, nearest_of, nearest_solid, rays};
 
-use std::collections::{HashMap, HashSet};
+#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -25,7 +41,6 @@ use cdt::BOX;
 use predicates::orient;
 
 use crate::{
-    Error, Result,
     geom::Curve,
     math::{Point3, Vec2, Vec3},
     topo::{Brep, CoedgeId, EdgeId, FaceId, SolidId},
@@ -61,7 +76,7 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 
 
 /// Tessellates every face of `b` within `opt`.
-pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> {
+#[allow(clippy::disallowed_types)] pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> { // D26: BTree* in hardening, proven by digests
     let positive = |x: f64| x > 0.0 && x.is_finite();
     if !positive(opt.linear) || !positive(opt.angular) {
         return Err(Error::InvalidInput(format!(
@@ -145,7 +160,7 @@ pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> {
 /// plane. Two edges that leave nearly one point at a small angle can have chords that cross where
 /// the curves do not; halving the curved one's chords near there separates them. Segments that
 /// still cross after the rounds are left for the face to refuse.
-fn uncross(
+#[allow(clippy::disallowed_types)] fn uncross( // D26: BTree* in hardening, proven by digests
     b: &Brep,
     edges: &[EdgeId],
     samples: &mut [Vec<(f64, u32)>],
@@ -190,7 +205,7 @@ fn uncross(
 /// Gives each of two or more edges between one pair of vertices that is left a single chord (after
 /// [`drop_unresolved`]) a sample at its middle: their chords would otherwise be one segment that
 /// all their faces use, four triangles on one edge (bench swept/tumbling-torus-full-turn, carried).
-fn separate_twins(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>], positions: &mut Vec<Point3>) {
+#[allow(clippy::disallowed_types)] fn separate_twins(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>], positions: &mut Vec<Point3>) { // D26: BTree* in hardening, proven by digests
     let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for (i, &e) in edges.iter().enumerate() {
         let edge = b.edge(e);
@@ -257,7 +272,7 @@ fn drop_unresolved(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>]) 
 }
 
 /// Where one coedge of a loop begins among a loop's points, and the parameters it ends at.
-pub(super) type Run = (usize, Vec2);
+pub type Run = (usize, Vec2);
 
 /// Lays a face's boundary out as one figure in the parameter plane of a periodic surface. Each
 /// coedge's parameters are seeded on their own, and may lie a whole period from the coedge before
@@ -266,7 +281,7 @@ pub(super) type Run = (usize, Vec2);
 /// periods into the largest. A loop that winds round the surface does not close, and a face with
 /// one is left as it is seeded. A loop already inside the largest stays where it is. `runs` gives
 /// each loop's coedges in order.
-pub(super) fn one_sheet<T>(
+pub(crate) fn one_sheet<T>(
     periods: (Option<f64>, Option<f64>),
     loops: &mut [Vec<(Vec2, T)>],
     runs: &[Vec<Run>],
@@ -367,7 +382,7 @@ pub(super) fn one_sheet<T>(
 /// Moves each parameter-plane image of a mesh point onto an earlier image of the same point when
 /// rounding alone parts them, so the face is meshed through one point there and not two a hair
 /// apart. Images a period or a pole's span apart are far more than this apart.
-pub(super) fn snap_repeats(pts: &mut [(Vec2, u32)]) {
+#[allow(clippy::disallowed_types)] pub(crate) fn snap_repeats(pts: &mut [(Vec2, u32)]) { // D26: BTree* in hardening, proven by digests
     let (mut lo, mut hi) = (
         Vec2::new(f64::INFINITY, f64::INFINITY),
         Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -391,7 +406,7 @@ pub(super) fn snap_repeats(pts: &mut [(Vec2, u32)]) {
 /// segments other than at a shared end, every segment of a loop too short to bound an area, and
 /// every curved segment with another loop point between it and its curve, which a coarse
 /// deflection leaves on the wrong side of the chord.
-fn crossing_segments(b: &Brep, f: FaceId, samples: &[Vec<(f64, u32)>]) -> Vec<(usize, usize)> {
+#[allow(clippy::panic)] fn crossing_segments(b: &Brep, f: FaceId, samples: &[Vec<(f64, u32)>]) -> Vec<(usize, usize)> {
     // Each loop's points as the face mesher takes them: every coedge's samples but its last.
     let mut segs: Vec<(Vec2, Vec2, usize, usize)> = Vec::new();
     let mut neighbours: Vec<(usize, usize)> = Vec::new();
@@ -459,7 +474,7 @@ fn crossing_segments(b: &Brep, f: FaceId, samples: &[Vec<(f64, u32)>]) -> Vec<(u
     let mut snapped = points.into_iter().map(|p| p.0);
     for mut pts in loops {
         for p in &mut pts {
-            p.0 = snapped.next().expect("one snapped point per loop point");
+            p.0 = snapped.next().unwrap_or_else(|| panic!("one snapped point per loop point"));
         }
         let first = segs.len();
         let m = pts.len();
@@ -651,7 +666,7 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
 /// whose copies along the parameter plane are one point, a point can be joined to the pole on both
 /// sides of one chord: the two triangles cover nothing, and each of their edges would be used twice
 /// too often.
-fn unfold(tris: Vec<[u32; 3]>) -> Vec<[u32; 3]> {
+#[allow(clippy::disallowed_types)] fn unfold(tris: Vec<[u32; 3]>) -> Vec<[u32; 3]> { // D26: BTree* in hardening, proven by digests
     // Each triangle turned to start at its least point: a folded pair then reads a, b, c and a, c, b.
     let turned = |g: [u32; 3]| {
         let k = (0..3).min_by_key(|&k| g[k]).unwrap_or(0);
@@ -679,7 +694,7 @@ fn unfold(tris: Vec<[u32; 3]>) -> Vec<[u32; 3]> {
 /// non-manifold; a point of the face's own in its middle keeps each face's interior edges its own.
 /// Uses are counted over triangles with three distinct points, since the copies of a pole or seam
 /// point in one face draw the same segment more than once without using it more than twice.
-fn split_shared_chords(b: &Brep, ids: &[FaceId], meshes: &mut [face::FaceMesh]) {
+#[allow(clippy::disallowed_types)] fn split_shared_chords(b: &Brep, ids: &[FaceId], meshes: &mut [face::FaceMesh]) { // D26: BTree* in hardening, proven by digests
     let key = |fm: &face::FaceMesh, a: u32, c: u32| {
         let (ga, gc) = (fm.gid[a as usize]?, fm.gid[c as usize]?);
         (ga != gc).then(|| (ga.min(gc), ga.max(gc)))
@@ -721,7 +736,7 @@ fn split_shared_chords(b: &Brep, ids: &[FaceId], meshes: &mut [face::FaceMesh]) 
 }
 
 /// `f(0..n)` in order, spread over the machine's threads.
-fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+#[allow(clippy::panic)] fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
     let threads = std::thread::available_parallelism()
         .map_or(1, |x| x.get())
         .min(n);
@@ -746,7 +761,7 @@ fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
             .collect();
         workers
             .into_iter()
-            .flat_map(|w| w.join().expect("mesh worker panicked"))
+            .flat_map(|w| w.join().unwrap_or_else(|e| panic!("mesh worker panicked: {e:?}")))
             .collect()
     });
     parts.sort_by_key(|p| p.0);
@@ -778,7 +793,7 @@ impl MeshReport {
     }
 }
 
-pub fn report(b: &Brep, mesh: &Mesh, solid: SolidId) -> MeshReport {
+#[allow(clippy::disallowed_types)] pub fn report(b: &Brep, mesh: &Mesh, solid: SolidId) -> MeshReport { // D26: BTree* in hardening, proven by digests
     let faces: HashSet<FaceId> = b.solid_faces(solid).into_iter().collect();
     let mut r = MeshReport::default();
     let mut directed: HashMap<(u32, u32), usize> = HashMap::new();
