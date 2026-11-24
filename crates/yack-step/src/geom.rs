@@ -442,12 +442,40 @@ impl Surface {
     fn start(&self, q: Point3) -> (f64, f64) {
         match self {
             Surface::Extrusion { c, d } => {
-                // The curve's point nearest `q` slid back along the extrusion, then the height.
+                // The curve's point nearest `q` across the extrusion (its distance square to the
+                // extrusion's direction), sought over a few points of each of the curve's pieces;
+                // then the height. A curve off any one plane across the extrusion has no point
+                // nearest `q` slid back onto such a plane (bench swept/coil-spring-pushed-aslant-
+                // through-plate: a directrix of 470 spans rising 1.2 along a tilted extrusion,
+                // inverted to a foot 4.7 off a point lying on it).
                 let dd = d.dot(*d);
-                let back = if dd > 0.0 { q - *d * ((q - c.d1(0.0).0).dot(*d) / dd) } else { q };
-                let u = c.invert(back, None);
-                let v = if dd > 0.0 { (q - c.d1(u).0).dot(*d) / dd } else { 0.0 };
-                (u, v)
+                if dd.is_nan() || dd <= 0.0 {
+                    return (c.invert(q, None), 0.0);
+                }
+                let across = |t: f64| {
+                    let r = q - c.d1(t).0;
+                    (r - *d * (r.dot(*d) / dd)).length()
+                };
+                let (lo, hi) = c.domain();
+                let u = match c.breaks(lo, hi) {
+                    Ok(inner) if lo.is_finite() && hi.is_finite() => {
+                        let ends: Vec<f64> = std::iter::once(lo).chain(inner).chain(std::iter::once(hi)).collect();
+                        let mut best = (across(hi), hi);
+                        for w in ends.windows(2) {
+                            let &[a, b] = w else { continue };
+                            for i in 0..4 {
+                                let t = a + (b - a) * i as f64 / 4.0;
+                                let e = across(t);
+                                if e < best.0 {
+                                    best = (e, t);
+                                }
+                            }
+                        }
+                        best.1
+                    }
+                    _ => c.invert(q - *d * ((q - c.d1(0.0).0).dot(*d) / dd), None),
+                };
+                (u, (q - c.d1(u).0).dot(*d) / dd)
             }
             Surface::Revolution { c, o, axis } => {
                 // Match radius from the axis and height along it over a coarse run of the curve,
