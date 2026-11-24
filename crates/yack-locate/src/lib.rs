@@ -4,9 +4,25 @@
 //! in M2.1 (T1) so that `check`, `measure`, `mesh`, `rays`, `distance` and `topo` need not reach
 //! into the boolean.
 
-pub(crate) mod classify;
 
-use crate::{geom::Surface, intersect::ssi::same_domain, tol, topo::domain::Domain};
+// springrep's locate indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names locate's code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_intersect as intersect;
+use yack_math::kernel as math;
+use yack_tol as tol;
+use yack_topo as topo;
+
+pub mod distance;
+pub mod rays;
+pub mod classify;
+
+use crate::{geom::Surface, intersect::ssi::same_domain, topo::domain::Domain};
 
 fn analytic(s: &Surface) -> bool {
     matches!(
@@ -24,7 +40,7 @@ fn analytic(s: &Surface) -> bool {
 /// different frames or parameterisations, or one of them against an analytic surface) by checking
 /// that each face's parameter window lies on the other surface, with the same normal line, within
 /// the tolerance.
-pub(crate) fn same_domain_faces(a: &Domain, b: &Domain) -> bool {
+pub fn same_domain_faces(a: &Domain, b: &Domain) -> bool {
     if same_domain(&a.surface, &b.surface) {
         return true;
     }

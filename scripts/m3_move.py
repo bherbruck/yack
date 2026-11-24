@@ -54,7 +54,7 @@ def items(lines, indent=""):
 def use_names(text, here):
     """name -> full path, for the `use` statements in `text` (a module at `here`, a crate:: path)."""
     out = {}
-    for m in re.finditer(r"(?m)^\s*use\s+([^;]+);", text):
+    for m in re.finditer(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);", text):
         spec = re.sub(r"\s+", "", m.group(1))
 
         def walk(prefix, s):
@@ -102,7 +102,7 @@ def idents(text):
     return set(re.findall(r"(?<![\w:])[A-Za-z_]\w*", text))
 
 
-def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, preamble=""):
+def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, preamble="", own_at=None):
     """Takes the tests in `path`'s `mod tests` that use any of `forbidden` (names its test module
     imports from modules above the destination crate) out of it. Returns the module text to place
     in springrep, with the imports it needs, and rewrites `path` to keep the rest. Moved tests may
@@ -126,14 +126,25 @@ def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, p
     for n, j, e in items(head.split("\n")):
         l = head.split("\n")[j:e]
         sig = next((x for x in l if ITEM.match(x)), "")
+        at = own_at or modpath  # a private module's items are reached where its parent re-exports them
         if re.match(r"(fn|const|static|struct|enum|type|trait)\b", sig):
-            own[n] = ("private", "::".join(modpath + [n]))
+            own[n] = ("private", "::".join(at + [n]))
         elif re.match(r"pub(\([^)]*\))?\s+(fn|const|static|struct|enum|type|trait)\b", sig):
-            own[n] = ("pub", "::".join(modpath + [n]))
+            own[n] = ("pub", "::".join(at + [n]))
     forbid = {n for n in tu if n in forbidden}
     bodies = {n: "\n".join(inner[j:e]) for n, j, e in rest}
-    moving = {n for n, b in bodies.items() if "#[test]" in b and idents(b) & forbid}
     helpers = {n for n, b in bodies.items() if "#[test]" not in b}
+    # a helper that builds with a forbidden name taints every test (and helper) that calls it
+    tainted, grow = set(forbid) | set(forbidden), True
+    while grow:
+        grow = False
+        for h in helpers - tainted:
+            if (idents(bodies[h]) | set(re.findall(r"\bcrate::(\w+)", bodies[h]))) & tainted:
+                tainted.add(h)
+                grow = True
+    # `crate::primitive::cone(..)` names a forbidden module by path, not by an imported name
+    reach = lambda b: idents(b) | set(re.findall(r"\bcrate::(\w+)", b))
+    moving = {n for n, b in bodies.items() if "#[test]" in b and reach(b) & tainted}
     changed = True
     while changed:
         changed = False
@@ -148,8 +159,9 @@ def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, p
     if transform:
         moved_text = transform(moved_text)
     stay_text = "\n\n".join(bodies[n] for n in stays)
-    if idents(stay_text) & forbid:
-        raise SystemExit(f"{path}: a staying test still uses {sorted(idents(stay_text) & forbid)}")
+    still_forbidden = (idents(stay_text) | set(re.findall(r"\bcrate::(\w+)", stay_text))) & (forbid | set(forbidden))
+    if still_forbidden:
+        raise SystemExit(f"{path}: a staying test still uses {sorted(still_forbidden)}")
     used = idents(moved_text)
     private = sorted(n for n in used if own.get(n, ("", ""))[0] == "private" and n not in moving)
     if private:
@@ -182,8 +194,11 @@ def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, p
             kept_uses.append(u)
         else:
             kept_uses.append("\n".join(f"    use {names[x]};" for x in keep))
-    new_tmod = "#[cfg(test)]\nmod tests {\n" + "\n".join(kept_uses) + "\n\n" + stay_text + "\n}\n"
-    wr(path, head + new_tmod)
+    if stay_text.strip():
+        new_tmod = "#[cfg(test)]\nmod tests {\n" + "\n".join(kept_uses) + "\n\n" + stay_text + "\n}\n"
+        wr(path, head + new_tmod)
+    else:  # every test left: no empty module whose `use super::*` would warn
+        wr(path, head.rstrip("\n") + "\n")
     return moved_mod, sorted(moving - helpers), sorted(moving & helpers)
 
 

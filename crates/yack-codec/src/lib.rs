@@ -1,20 +1,28 @@
 // yack: A compact binary encoding of built geometry, for build states kept on disk. Numbers are written
 // Adapted from springrep@a03e8a1 src/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the Writer and Reader no longer carry face memos (M2.2 T4b).
+// Changes: the Writer and Reader no longer carry face memos (M2.2 T4b); then to yack-codec (M3 W5), paths and visibility only.
 //! A compact binary encoding of built geometry, for build states kept on disk. Numbers are written
 //! as their bits, so a decoded solid is the encoded one exactly. A struct is encoded field by field
 //! through `fields!`, which names every field without `..`: a field added to the struct and not
 //! to its encoding does not compile.
 
+
+// springrep's codec indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names codec's code uses.
+use yack_geom as geom;
+use yack_math::kernel as math;
 use std::collections::{BTreeMap, BTreeSet};
 
+use yack_topo::Brep;
 use crate::{
     geom::{
         BSpline, Circle, Cone, Curve, Cylinder, Ellipse, Extrusion, IntersectionCurve, Line,
         NurbsCurve, NurbsSurface, Plane, Revolution, Ruled, Sphere, Surface, Torus,
     },
     math::{Aabb, Frame, Vec2, Vec3},
-    topo::Brep,
 };
 
 /// The solids as bytes that read back as the same solids to the last bit. Faces that share a memo
@@ -44,16 +52,16 @@ pub fn from_bytes(bytes: &[u8]) -> Option<Vec<Brep>> {
 #[derive(Default)]
 pub(crate) struct Writer(pub Vec<u8>);
 
-pub(crate) struct Reader<'a> {
+pub struct Reader<'a> {
     bytes: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
-    pub(crate) fn new(bytes: &'a [u8]) -> Reader<'a> {
+    pub fn new(bytes: &'a [u8]) -> Reader<'a> {
         Reader { bytes }
     }
 
-    pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+    pub fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         if n > self.bytes.len() {
             return None;
         }
@@ -80,13 +88,13 @@ pub(crate) trait Codec: Sized {
 /// [`Codec`] for a struct, field by field.
 macro_rules! fields {
     ($t:ident { $($f:ident),* $(,)? }) => {
-        impl $crate::codec::Codec for $t {
-            fn put(&self, w: &mut $crate::codec::Writer) {
+        impl $crate::Codec for $t {
+            fn put(&self, w: &mut $crate::Writer) {
                 let $t { $($f),* } = self;
-                $($crate::codec::Codec::put($f, w);)*
+                $($crate::Codec::put($f, w);)*
             }
-            fn get(r: &mut $crate::codec::Reader) -> Option<$t> {
-                Some($t { $($f: $crate::codec::Codec::get(r)?),* })
+            fn get(r: &mut $crate::Reader) -> Option<$t> {
+                Some($t { $($f: $crate::Codec::get(r)?),* })
             }
         }
     };
@@ -411,7 +419,7 @@ impl<T: Codec> PutPair for (u8, &T) {
 }
 
 /// A 64-bit digest of `bytes`, eight at a time: it finds a damaged or truncated file, nothing more.
-pub(crate) fn digest(bytes: &[u8]) -> u64 {
+pub fn digest(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ bytes.len() as u64;
     let (words, rest) = bytes.as_chunks::<8>();
     for &c in words {

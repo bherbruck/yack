@@ -509,3 +509,543 @@ mod intersect_march {
         assert!(!curves.is_empty());
     }
 }
+
+/// Moved from measure.rs's tests (M3 W5): they build with modules above yack-measure.
+#[cfg(test)]
+mod measure_moved {
+    use crate::math::Aabb;
+    use crate::math::Frame;
+    use crate::math::Point3;
+    use crate::math::Vec2;
+    use crate::math::Vec3;
+    use crate::measure::curvature;
+    use crate::measure::normal_at;
+    use crate::profile::NamedSegment;
+    use crate::profile::Profile;
+    use crate::profile::ProfileLoop;
+    use crate::profile::Segment;
+    use crate::sweep::extrude;
+    use crate::topo::bbox::face_box;
+
+    #[test]
+    fn a_face_moved_keeps_its_box_moved() {
+        // An assembly measures a part against another moved before each boolean: a slid part's
+        // faces keep their boxes, slid, rather than finding each spline edge's extremes again.
+        let rod = extrude(
+            &Profile::circle(Vec2::ZERO, 20.0),
+            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
+            20.0,
+            "r",
+        )
+        .unwrap();
+        let boxes: Vec<Aabb> = rod.face_ids().map(|f| face_box(&rod, f)).collect();
+        let shift = Vec3::new(3.5, -120.0, 7.25);
+        let mut slid = rod.clone();
+        slid.transform(&crate::math::Transform::translation(shift));
+        for (f, before) in slid.face_ids().zip(boxes) {
+            let kept = slid.memo(f).loose_box.get().copied();
+            assert_eq!(
+                kept.map(|b| (b.min, b.max)),
+                Some((before.min + shift, before.max + shift))
+            );
+        }
+        // Turned, a box is found again: the turned box's own would be looser.
+        let mut turned = rod.clone();
+        turned.transform(&crate::math::Transform::rotation(Vec3::ZERO, Vec3::X, 0.3));
+        assert!(
+            turned
+                .face_ids()
+                .all(|f| turned.memo(f).loose_box.get().is_none())
+        );
+    }
+
+    #[test]
+    fn a_rods_end_just_inside_its_rim_is_flat() {
+        // A rod of radius 10: its end's outline, drawn as chords, cuts up to 0.012 inside the
+        // rim, and a point of the end between a chord and the rim is still a point of the end.
+        let rod = extrude(
+            &Profile::circle(Vec2::ZERO, 20.0),
+            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
+            20.0,
+            "r",
+        )
+        .unwrap();
+        for k in 0..256 {
+            let a = std::f64::consts::TAU * k as f64 / 256.0;
+            let p = Point3::new(9.999 * a.cos(), 9.999 * a.sin(), 20.0);
+            let n = normal_at(&rod, p, 1e-6).unwrap_or_else(|| panic!("no normal at {p:?}"));
+            assert!((n - Vec3::Z).norm() < 1e-12, "{n:?} at {p:?}");
+            let bend = curvature(&rod, p).unwrap_or_else(|| panic!("no curvature at {p:?}"));
+            assert!(
+                bend[0].abs() < 1e-9 && bend[1].abs() < 1e-9,
+                "{bend:?} at {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_drilled_rods_side_bends_away_its_hole_toward_and_its_rim_is_a_crease() {
+        // A rod of radius 10, 20 long, drilled through along its axis at radius 4.
+        let circle = |radius: f64, ccw: bool, name: &str| ProfileLoop {
+            segments: vec![NamedSegment::new(
+                Segment::Circle {
+                    center: Vec2::ZERO,
+                    radius,
+                    ccw,
+                },
+                name,
+            )],
+        };
+        let p = Profile {
+            loops: vec![circle(10.0, true, "out"), circle(4.0, false, "in")],
+        };
+        let rod = extrude(
+            &p,
+            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
+            20.0,
+            "r",
+        )
+        .unwrap();
+        let near =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        let side = curvature(&rod, Point3::new(11.0, 1.0, 7.0)).unwrap();
+        assert!(near(side, [0.1, 0.0]), "{side:?}");
+        let hole = curvature(&rod, Point3::new(0.5, 3.0, 13.0)).unwrap();
+        assert!(near(hole, [0.0, -0.25]), "{hole:?}");
+        let end = curvature(&rod, Point3::new(6.0, 2.0, 20.5)).unwrap();
+        assert!(near(end, [0.0, 0.0]), "{end:?}");
+        assert!(curvature(&rod, Point3::new(10.5, 0.0, 20.5)).is_none());
+    }
+}
+
+/// Moved from measure/sample.rs's tests (M3 W5): they build with modules above yack-measure.
+#[cfg(test)]
+mod measure_sample_moved {
+    use crate::boolean::difference;
+    use crate::math::Frame;
+    use crate::math::Vec2;
+    use crate::math::Vec3;
+    use crate::measure::edge_length;
+    use crate::measure::extent;
+    use crate::measure::face_extent;
+    use crate::measure::face_samples;
+    use crate::measure::face_uv_bounds;
+    use crate::measure::solid_area;
+    use crate::measure::solid_bbox;
+    use crate::profile::Profile;
+    use crate::sweep::extrude;
+    use crate::topo::Brep;
+    use crate::topo::FaceId;
+    use crate::topo::SolidId;
+    use std::f64::consts::PI;
+
+    fn named(b: &Brep, name: &str) -> FaceId {
+        let has = |f: &FaceId| b.face(*f).names.iter().any(|n| n.to_string() == name);
+        b.face_ids().find(has).unwrap()
+    }
+
+    #[test]
+    fn a_block_s_edges_and_a_rod_s_rims_have_their_lengths() {
+        // A 20 × 10 × 5 block has four edges of each length.
+        let block = extrude(
+            &Profile::rect(Vec2::ZERO, 20.0, 10.0),
+            &Frame::WORLD,
+            5.0,
+            "b",
+        );
+        let block = block.unwrap();
+        let total: f64 = block.edge_ids().map(|e| edge_length(&block, e)).sum();
+        assert!((total - 4.0 * 35.0).abs() < 1e-9, "{total}");
+        // A Ø10 rod 7 long: two rims of 10π and the seam.
+        let rod = extrude(&Profile::circle(Vec2::ZERO, 10.0), &Frame::WORLD, 7.0, "r").unwrap();
+        let mut lengths: Vec<f64> = rod.edge_ids().map(|e| edge_length(&rod, e)).collect();
+        lengths.sort_by(f64::total_cmp);
+        assert_eq!(lengths.len(), 3);
+        assert!((lengths[0] - 7.0).abs() < 1e-9, "{lengths:?}");
+        assert!((lengths[1] - 10.0 * PI).abs() < 1e-9 && (lengths[2] - 10.0 * PI).abs() < 1e-9);
+    }
+
+    #[test]
+    fn samples_lie_on_the_face_with_its_outward_normal_and_miss_a_hole() {
+        // The top of a 20 × 20 × 5 block with a Ø10 hole through its middle: a 5 × 5 grid has
+        // points 4 mm apart from −8 to 8, and the nine within 5 mm of the middle fall in the hole
+        // but for the four at (±4, ±4), which are 5.66 mm out.
+        let block = extrude(
+            &Profile::rect(Vec2::ZERO, 20.0, 20.0),
+            &Frame::WORLD,
+            5.0,
+            "b",
+        );
+        let below = Frame::WORLD.translated(Vec3::Z * -1.0);
+        let hole = extrude(&Profile::circle(Vec2::ZERO, 10.0), &below, 7.0, "h").unwrap();
+        let drilled = difference(&block.unwrap(), &hole).unwrap();
+        let samples = face_samples(&drilled, named(&drilled, "b.end"), 5);
+        assert_eq!(samples.len(), 25 - 5);
+        for (p, n) in &samples {
+            assert!((p.z - 5.0).abs() < 1e-12 && (*n - Vec3::Z).norm() < 1e-12);
+            assert!(p.x.hypot(p.y) > 5.0);
+        }
+        // The hole's wall faces into the hole.
+        for (p, n) in face_samples(&drilled, named(&drilled, "h.side"), 4) {
+            assert!((p.x.hypot(p.y) - 5.0).abs() < 1e-9);
+            assert!((n.x * p.x + n.y * p.y + 5.0).abs() < 1e-9, "{n:?} at {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_rod_reaches_its_radius_across_and_its_length_along_whatever_the_direction() {
+        // A Ø10 rod 7 long on the z axis: ±5 along any direction square to it, 0 to 7 along it,
+        // and along the diagonal of x and z the rim's far point, (5 + 7) / √2.
+        let rod = extrude(&Profile::circle(Vec2::ZERO, 10.0), &Frame::WORLD, 7.0, "r").unwrap();
+        let near = |got: (f64, f64), want: (f64, f64)| {
+            assert!(
+                (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
+                "{got:?}"
+            );
+        };
+        near(extent(&rod, Vec3::new(3.0, 4.0, 0.0)), (-5.0, 5.0));
+        near(extent(&rod, Vec3::Z), (0.0, 7.0));
+        let slant = 1.0 / 2f64.sqrt();
+        near(
+            extent(&rod, Vec3::new(1.0, 0.0, 1.0)),
+            (-5.0 * slant, 12.0 * slant),
+        );
+        // Its wall alone runs the rod's length, and its parameters a whole turn and that length.
+        let wall = named(&rod, "r.side");
+        near(face_extent(&rod, wall, Vec3::Z), (0.0, 7.0));
+        let (lo, hi) = face_uv_bounds(&rod, wall);
+        assert!(
+            (hi.x - lo.x - std::f64::consts::TAU).abs() < 1e-9,
+            "{lo:?} {hi:?}"
+        );
+        assert!((hi.y - lo.y - 7.0).abs() < 1e-9, "{lo:?} {hi:?}");
+    }
+
+    #[test]
+    fn a_ball_reaches_its_radius_past_any_edge_it_has() {
+        // A ball of radius 3 centred 1 above the origin: its one face bulges to 4 and −2 along z
+        // and ±3 along a slant through its centre, where no edge of it reaches.
+        let centre = Frame::WORLD.translated(Vec3::Z);
+        let ball = crate::primitive::sphere(&centre, 3.0, "b").unwrap();
+        let (lo, hi) = extent(&ball, Vec3::Z);
+        assert!(
+            (lo + 2.0).abs() < 1e-9 && (hi - 4.0).abs() < 1e-9,
+            "{lo} {hi}"
+        );
+        let (lo, hi) = extent(&ball, Vec3::new(1.0, 1.0, 0.0));
+        assert!(
+            (lo + 3.0).abs() < 1e-9 && (hi - 3.0).abs() < 1e-9,
+            "{lo} {hi}"
+        );
+    }
+
+    #[test]
+    fn each_solid_of_an_arena_has_its_own_box_and_area() {
+        // A 2 × 2 × 2 block at the origin and a 4 × 4 × 1 one 10 along x, in one arena.
+        let small = extrude(
+            &Profile::rect(Vec2::ZERO, 2.0, 2.0),
+            &Frame::WORLD,
+            2.0,
+            "a",
+        );
+        let far = Frame::WORLD.translated(Vec3::X * 10.0);
+        let wide = extrude(&Profile::rect(Vec2::ZERO, 4.0, 4.0), &far, 1.0, "b").unwrap();
+        let mut both = small.unwrap();
+        both.append(&wide);
+        let solids: Vec<SolidId> = both.solid_ids().collect();
+        assert_eq!(solids.len(), 2);
+        let (first, second) = (solid_bbox(&both, solids[0]), solid_bbox(&both, solids[1]));
+        assert!((first.max.x - 1.0).abs() < 1e-12 && (first.max.z - 2.0).abs() < 1e-12);
+        assert!((second.min.x - 8.0).abs() < 1e-12 && (second.max.z - 1.0).abs() < 1e-12);
+        assert!((solid_area(&both, solids[0]) - 24.0).abs() < 1e-9);
+        assert!((solid_area(&both, solids[1]) - 48.0).abs() < 1e-9);
+    }
+}
+
+/// Moved from measure/tolerant.rs's tests (M3 W5): they build with modules above yack-measure.
+#[cfg(test)]
+mod measure_tolerant_moved {
+    use crate::math::Frame;
+    use crate::math::Vec3;
+    use crate::measure::volume_agrees;
+    use crate::primitive::block;
+
+    #[test]
+    fn a_cube_and_a_thin_slab_agree_with_their_volumes_and_not_with_others() {
+        let at = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
+        let cube = block(&at, Vec3::new(10.0, 10.0, 10.0), "c").unwrap();
+        assert!(volume_agrees(&cube, 1000.0, 1e-5));
+        assert!(!volume_agrees(&cube, 1000.1, 1e-5));
+        // 100 × 100 × 0.001: a volume of 10 in a box 141 across, where a size³-relative
+        // tolerance would be blind to it.
+        let slab = block(&at, Vec3::new(100.0, 100.0, 0.001), "s").unwrap();
+        assert!(volume_agrees(&slab, 10.0, 1e-5));
+        assert!(!volume_agrees(&slab, 10.001, 1e-5));
+        // On the boundary: decided exactly.
+        assert!(volume_agrees(&slab, 10.0 * (1.0 + 0.95e-5), 1e-5));
+        assert!(!volume_agrees(&slab, 10.0 * (1.0 + 1.05e-5), 1e-5));
+        assert!(!volume_agrees(&slab, f64::NAN, 1e-5));
+    }
+}
+
+/// Moved from rays.rs's tests (M3 W5): they build with modules above yack-locate.
+#[cfg(test)]
+mod rays_moved {
+    use crate::boolean;
+    use crate::math::Frame;
+    use crate::math::Point3;
+    use crate::math::Vec2;
+    use crate::math::Vec3;
+    use crate::profile::NamedSegment;
+    use crate::profile::Profile;
+    use crate::profile::ProfileLoop;
+    use crate::profile::Segment;
+    use crate::rays::Side;
+    use crate::sweep::Helix;
+    use crate::sweep::extrude;
+    use crate::sweep::helix;
+    use std::f64::consts::PI;
+    use std::f64::consts::TAU;
+
+    /// A cone under a non-uniform scale and shear (conformance stretches-369ef83ce9d5f331): every
+    /// point of a grid about it is placed as its preimage lies in the cone, worked out exactly.
+    /// Its narrow end passes near its wide rim, where four seeds of the global projection once all
+    /// lay, and a ray's exact crossing of the side there was thrown out as off the face.
+    #[test]
+    fn a_sheared_cone_places_points_as_their_preimages_lie() {
+        let o = Vec3::new(-0.1369187722614813, -0.1927317277546228, 9.496120663976027);
+        let x = Vec3::new(0.9862312463263244, 0.0011868763560915257, 0.16536783270678776);
+        let z = Vec3::new(0.1653720918704991, -0.007078186740360178, -0.9862058459078631);
+        let (r0, r1, h) = (3.753950727109955, 0.9541105874096755, 14.435434108066273);
+        let cone = crate::primitive::cone(&Frame::new(o, z, x).unwrap(), r0, r1, h, "c").unwrap();
+        let m = [
+            [-0.4538971246554957, 0.15252576458329087, 0.9555666727243001, 41.6656262880843],
+            [-0.26697402297825473, -0.5673293657946105, -1.4703977293152846, 16.072466163157856],
+            [0.05877765464764511, -1.3990214079245642, 0.7004527186325231, -15.994874937232893],
+        ];
+        let b = crate::facade::edit::affine(&cone, m).unwrap();
+        let rays = crate::mesh::rays(&b).unwrap();
+        let map = |p: Vec3| {
+            let row = |r: [f64; 4]| r[0] * p.x + r[1] * p.y + r[2] * p.z + r[3];
+            Vec3::new(row(m[0]), row(m[1]), row(m[2]))
+        };
+        let y = z.cross(x);
+        // How far inside the cone a preimage lies: along the axis within [0, h], within the radius.
+        let margin = |p: Vec3| {
+            let q = p - o;
+            let (a, b, c) = (q.dot(x), q.dot(y), q.dot(z));
+            (r0 + (r1 - r0) * c / h - (a * a + b * b).sqrt()).min(c).min(h - c)
+        };
+        // The point that was placed outside, its preimage 0.099 inside.
+        assert_eq!(rays.side(Vec3::new(36.53894920997076, 22.626132672803138, -19.18988598536717)), Side::Inside);
+        let n = 12;
+        let f = |t: usize| (t as f64 + 0.5) / n as f64;
+        let mut wrong = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    let p = o + x * ((f(i) - 0.5) * 2.4 * r0) + y * ((f(j) - 0.5) * 2.4 * r0) + z * ((f(k) * 1.2 - 0.1) * h);
+                    let want = if margin(p) > 0.0 { Side::Inside } else { Side::Outside };
+                    let got = rays.side(map(p));
+                    if got != want && margin(p).abs() > 1e-6 { // tol: a preimage on the surface may go either way
+                        wrong.push((map(p), margin(p), got));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {} placed wrong: {:?}", wrong.len(), n * n * n, &wrong[..wrong.len().min(5)]);
+    }
+
+    #[test]
+    fn a_ray_up_a_threaded_bore_meets_its_wall() {
+        // A hex nut 7.6 tall, bored 4 in radius, a 60° thread ridge of pitch 1.2 joined inside it
+        // for three turns from z = 2: the bore's wall left between the turns is a strip that winds
+        // three times round, and a ray from inside the bore must cross it or a flank to leave.
+        let seg = |segment, name: &str| NamedSegment::new(segment, name);
+        let d: f64 = 6.8;
+        let rc = 2.0 * d / 3f64.sqrt();
+        let hex: Vec<Vec2> = (0..6)
+            .map(|i| {
+                let a = PI / 3.0 * i as f64;
+                Vec2::new(rc * a.cos(), rc * a.sin())
+            })
+            .collect();
+        let mut nut_profile = Profile::polygon(&hex, &["a", "b", "c", "d", "e", "f"]);
+        nut_profile.loops.push(ProfileLoop {
+            segments: vec![seg(
+                Segment::Circle {
+                    center: Vec2::ZERO,
+                    radius: 4.0,
+                    ccw: false,
+                },
+                "bore",
+            )],
+        });
+        let nut = extrude(&nut_profile, &Frame::WORLD, 7.6, "nut").unwrap();
+        let (pitch, major) = (1.2, 4.0);
+        let minor = major - 0.6134 * pitch;
+        let root = major + 0.1 * pitch;
+        let half = |x: f64| (x - minor) * (PI / 6.0).tan();
+        let tri = [
+            Vec2::new(root, 2.0 - half(root)),
+            Vec2::new(root, 2.0 + half(root)),
+            Vec2::new(minor, 2.0),
+        ];
+        let ridge_profile = Profile {
+            loops: vec![ProfileLoop {
+                segments: (0..3)
+                    .map(|i| {
+                        seg(
+                            Segment::Line {
+                                a: tri[i],
+                                b: tri[(i + 1) % 3],
+                            },
+                            "s",
+                        )
+                    })
+                    .collect(),
+            }],
+        };
+        let motion = Helix {
+            origin: Point3::ZERO,
+            axis: Vec3::Z,
+            rise: pitch / TAU,
+            sign: 1.0,
+        };
+        let meridian = Frame::new(Point3::ZERO, -Vec3::Y, Vec3::X).unwrap();
+        let ridge = helix(&ridge_profile, &meridian, &motion, 3.0 * TAU, "hel").unwrap();
+        let threaded = boolean::union(&nut, &ridge).unwrap();
+        let rays = crate::mesh::rays(&threaded).unwrap();
+        let a = 72.7f64.to_radians();
+        let p = Point3::new(2.031 * a.cos(), 2.031 * a.sin(), 4.655);
+        let dir = Vec3::new(0.3713, 0.5347, 0.7591);
+        let hits = rays.cast(p, dir, (0.0, 1e6)).unwrap();
+        let first = hits
+            .first()
+            .expect("the ray leaves the bore through something");
+        assert!(
+            first.normal.dot(dir) < 0.0,
+            "the bore's first crossing enters the nut"
+        );
+    }
+}
+
+/// Moved from codec/tests.rs (M3 W5): they encode built solids (sweep, boolean, blend), above yack-codec; they reach the codec through to_bytes/from_bytes.
+#[cfg(test)]
+mod codec_moved {
+    use crate::blend::fillet;
+    use crate::boolean::difference;
+    use crate::math::Frame;
+    use crate::math::Point3;
+    use crate::math::Vec2;
+    use crate::math::Vec3;
+    use crate::measure;
+    use crate::profile::Profile;
+    use crate::sweep::extrude;
+    use crate::topo::Brep;
+
+    /// The solids' bytes through the codec's public path (yack-codec keeps `Codec` crate-private).
+    fn bytes<T: Solids>(x: &T) -> Vec<u8> {
+        crate::codec::to_bytes(&x.solids())
+    }
+
+    fn back<T: Solids>(b: &[u8]) -> Option<T> {
+        crate::codec::from_bytes(b).and_then(T::from_solids)
+    }
+
+    /// A solid, or a list of solids, as `to_bytes`/`from_bytes` carry them.
+    trait Solids: Sized {
+        fn solids(&self) -> Vec<Brep>;
+        fn from_solids(v: Vec<Brep>) -> Option<Self>;
+    }
+
+    impl Solids for Brep {
+        fn solids(&self) -> Vec<Brep> {
+            vec![self.clone()]
+        }
+        fn from_solids(mut v: Vec<Brep>) -> Option<Brep> {
+            (v.len() == 1).then(|| v.remove(0))
+        }
+    }
+
+    impl Solids for Vec<Brep> {
+        fn solids(&self) -> Vec<Brep> {
+            self.clone()
+        }
+        fn from_solids(v: Vec<Brep>) -> Option<Vec<Brep>> {
+            Some(v)
+        }
+    }
+
+    /// `x` read back from its bytes equals it, and writes the same bytes again: every number kept to
+    /// its last bit, signed zeros included.
+    fn round_trips<T: Solids + PartialEq + std::fmt::Debug>(x: &T) {
+        let b = bytes(x);
+        let y: T = back(&b).expect("reads back");
+        assert_eq!(&y, x);
+        assert_eq!(bytes(&y), b);
+    }
+
+    fn p(x: f64, y: f64, z: f64) -> Point3 {
+        Vec3::new(x, y, z)
+    }
+
+    /// A 20 × 20 × 10 block with a Ø6 hole through it and its top's two edges along y rounded R1.
+    fn drilled_and_rounded() -> Brep {
+        let block = extrude(
+            &Profile::rect(Vec2::ZERO, 20.0, 20.0),
+            &at_z(0.0),
+            10.0,
+            "block",
+        )
+        .unwrap();
+        let hole = extrude(&Profile::circle(Vec2::ZERO, 6.0), &at_z(0.0), 10.0, "hole").unwrap();
+        let drilled = difference(&block, &hole).unwrap();
+        let edges = [("block.end", "block.u_min"), ("block.end", "block.u_max")];
+        fillet(&drilled, &edges, 1.0, "round").unwrap()
+    }
+
+    fn at_z(z: f64) -> Frame {
+        Frame::new(p(0.0, 0.0, z), p(0.0, 0.0, 1.0), p(1.0, 0.0, 0.0)).unwrap()
+    }
+
+    #[test]
+    fn a_built_solid_reads_back_with_its_ids_and_names() {
+        let b = drilled_and_rounded();
+        let volume = measure::volume(&b);
+        let back: Brep = back(&bytes(&b)).unwrap();
+        assert_eq!(back, b);
+        assert_eq!(bytes(&back), bytes(&b));
+        // Measured again from its read-back geometry, it has the same volume to the last bit.
+        assert_eq!(measure::volume(&back).to_bits(), volume.to_bits());
+    }
+
+    #[test]
+    fn the_bytes_do_not_depend_on_what_was_asked_of_the_solid() {
+        // Queries fill a face's memo (its volume share, its box, the trims a boolean reads); none of
+        // that is written, so a solid encodes the same before and after them.
+        let b = drilled_and_rounded();
+        let before = bytes(&b);
+        measure::volume(&b);
+        measure::area(&b);
+        let rays = crate::mesh::rays(&b).unwrap();
+        rays.side(p(5.0, 5.0, 5.0));
+        let square = Profile::rect(Vec2::new(10.0, 10.0), 4.0, 4.0);
+        let post = extrude(&square, &at_z(-5.0), 20.0, "post").unwrap();
+        difference(&b, &post).unwrap();
+        assert_eq!(bytes(&b), before);
+        let pair = vec![b.clone(), b];
+        let back: Vec<Brep> = back(&bytes(&pair)).unwrap();
+        assert_eq!(bytes(&back), bytes(&pair));
+    }
+
+    #[test]
+    fn local_tolerances_read_back() {
+        let mut b = drilled_and_rounded();
+        let v = b.vertex_ids().next().unwrap();
+        let e = b.edge_ids().last().unwrap();
+        b.set_vertex_tolerance(v, 2e-4);
+        b.set_edge_tolerance(e, 1e-4);
+        round_trips(&b);
+    }
+}

@@ -2,7 +2,9 @@
 yack-cadrs 1166
 yack-geom 47
 yack-intersect 50
+yack-locate 11
 yack-math 6
+yack-measure 16
 yack-profile 9
-yack-springrep 223
+yack-springrep 196
 yack-topo 20

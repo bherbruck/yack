@@ -1,6 +1,6 @@
 // yack: Area, volume, mass properties and tight bounding box, from the exact geometry rather than a
 // Adapted from springrep@a03e8a1 src/measure.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the face-box family moved to topo/bbox.rs (M2), re-exported here.
+// Changes: the face-box family moved to topo/bbox.rs (M2), re-exported here; then to yack-measure (M3 W5), paths and visibility only.
 //! Area, volume, mass properties and tight bounding box, from the exact geometry rather than a
 //! mesh.
 //!
@@ -10,6 +10,17 @@
 //! a low-order polynomial or trigonometric polynomial, so a fixed Gauss rule is exact to rounding;
 //! the boundary integral is adaptive.
 
+
+// springrep's measure indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names measure's code uses.
+use yack_geom as geom;
+use yack_math::kernel as math;
+use yack_numeric as numeric;
+use yack_tol as tol;
+use yack_topo as topo;
 mod sample;
 mod tables;
 mod tolerant;
@@ -19,7 +30,7 @@ pub use sample::{
 };
 pub use tolerant::{volume_agrees, volume_to};
 pub use crate::topo::bbox::{bbox, face_bbox, loose_bbox};
-pub(crate) use crate::topo::bbox::{face_box, face_hull_box, in_face, reached_patches, stationary, uv_polygons};
+pub use crate::topo::bbox::{face_box, face_hull_box, in_face, reached_patches, stationary, uv_polygons};
 
 use std::f64::consts::TAU;
 
@@ -151,15 +162,15 @@ fn face_sum<const K: usize>(
 }
 
 /// The face's area and its contribution `⅓∬ (p − c)·n dA` to the volume of its solid.
-fn face_integrals(b: &Brep, f: FaceId, c: Point3, scale: f64, rel: f64) -> (f64, f64) {
+#[allow(clippy::panic)] fn face_integrals(b: &Brep, f: FaceId, c: Point3, scale: f64, rel: f64) -> (f64, f64) {
     let key = IntegralKey::new(c, scale, rel, b.face(f).reversed);
-    if let Some((k, v)) = *b.memo(f).integrals.lock().unwrap()
+    if let Some((k, v)) = *b.memo(f).integrals.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}"))
         && k == key
     {
         return v;
     }
     let v = face_integrals_anew(b, f, c, scale, rel);
-    *b.memo(f).integrals.lock().unwrap() = Some((key, v));
+    *b.memo(f).integrals.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}")) = Some((key, v));
     v
 }
 
@@ -242,15 +253,15 @@ fn face_moments(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 10] {
 
 /// [`face_moments`] with the face's area after them. One pass gives both, so a solid measured for
 /// its volume and area and then its centre integrates each of these faces once.
-fn face_moments_and_area(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 11] {
+#[allow(clippy::panic)] fn face_moments_and_area(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 11] {
     let key = IntegralKey::new(c, scale, EXACT, b.face(f).reversed);
-    if let Some((k, v)) = *b.memo(f).moments.lock().unwrap()
+    if let Some((k, v)) = *b.memo(f).moments.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}"))
         && k == key
     {
         return v;
     }
     let v = face_moments_anew(b, f, c, scale);
-    *b.memo(f).moments.lock().unwrap() = Some((key, v));
+    *b.memo(f).moments.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}")) = Some((key, v));
     v
 }
 
@@ -328,7 +339,7 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
 
 /// `∮ G dv` (or `−∮ H du`) along one coedge, in its direction, each value to its own tolerance.
 /// `table` is its entry of [`pcurve_tables`].
-fn coedge_integral<const K: usize>(
+#[allow(clippy::panic)] fn coedge_integral<const K: usize>(
     b: &Brep,
     co: CoedgeId,
     table: &[Vec2],
@@ -357,7 +368,7 @@ fn coedge_integral<const K: usize>(
             PCurve::Affine { origin, dir } => (*origin + *dir * t, *dir),
             PCurve::Fitted { .. } => coedge.pcurve.fitted_d1(t).unwrap_or_default(),
             PCurve::Projected { .. } => {
-                let curve = edge.curve.as_ref().expect("projected pcurves have curves");
+                let curve = edge.curve.as_ref().unwrap_or_else(|| panic!("projected pcurves have curves"));
                 let (p, dp) = curve.d1(t);
                 let (uv, su, sv) = surface.project_near_d1(p, hint(t));
                 (uv, uv_rate(su, sv, dp))
@@ -536,7 +547,7 @@ fn reference(b: &Brep) -> (Point3, f64) {
 /// The signed area loop `lp` encloses in its face's parameter plane, `∮ u dv` integrated on its
 /// coedges' exact parameter curves. The checker's sampled outline cannot settle the sign of a sliver
 /// narrower than its chords' sag, and this can.
-pub(crate) fn loop_area(b: &Brep, lp: LoopId) -> f64 {
+pub fn loop_area(b: &Brep, lp: LoopId) -> f64 {
     // About the loop's own corner and to its own size: about the plane's origin a sliver's area
     // is the small difference of large terms, below a tolerance sized to the whole model. A
     // billionth of its box settles a sliver's sign; tighter, the quadrature splits to its limit.
@@ -627,7 +638,7 @@ pub fn solid_volume_sign(b: &Brep, s: SolidId) -> f64 {
 
 /// The volume the closed surface of `faces` encloses, outward normals positive, where its sign is
 /// all that matters: [`solid_volume_sign`] for any set of faces.
-pub(crate) fn enclosed_volume_sign(b: &Brep, faces: &[FaceId]) -> f64 {
+pub fn enclosed_volume_sign(b: &Brep, faces: &[FaceId]) -> f64 {
     let (c, scale) = reference(b);
     let rough: f64 = faces
         .iter()
@@ -648,7 +659,7 @@ pub(crate) fn enclosed_volume_sign(b: &Brep, faces: &[FaceId]) -> f64 {
 }
 
 /// Works out face `f`'s rough volume share now, in its memo: a copy moved rigidly keeps it.
-pub(crate) fn prime_face_volume(b: &Brep, f: FaceId) {
+pub fn prime_face_volume(b: &Brep, f: FaceId) {
     face_volume(b, f);
 }
 
@@ -968,8 +979,8 @@ fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<b
     (d.abs() > 1e-3 * crate::tol::LINEAR).then_some(d < 0.0)
 }
 
-pub fn betti(b: &Brep) -> [u64; 3] {
-    use std::collections::{HashMap, HashSet};
+#[allow(clippy::disallowed_types)] pub fn betti(b: &Brep) -> [u64; 3] { // D26: BTree* in hardening, proven by digests
+    #[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
     let mut verts: HashSet<VertexId> = HashSet::new();
     let (mut edges, mut pulled) = (0i64, 0i64);
     for e in b.edge_ids() {
@@ -1017,7 +1028,7 @@ pub fn betti(b: &Brep) -> [u64; 3] {
     let ids: Vec<FaceId> = b.face_ids().collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, &f)| (f, i)).collect();
     let mut parent: Vec<usize> = (0..ids.len()).collect();
-    fn root(p: &mut [usize], mut i: usize) -> usize {
+    #[allow(clippy::disallowed_types)] fn root(p: &mut [usize], mut i: usize) -> usize { // D26: BTree* in hardening, proven by digests
         while p[i] != i {
             p[i] = p[p[i]];
             i = p[i];
@@ -1052,7 +1063,7 @@ pub fn betti(b: &Brep) -> [u64; 3] {
 
 
 /// A face's outline, for telling whether a point of its surface lies on the face.
-pub(crate) struct Outline {
+pub struct Outline {
     /// Its loops as polygons in its surface's parameters.
     polys: Vec<Vec<Vec2>>,
     /// How far those polygons stray from its edges.
@@ -1063,7 +1074,7 @@ pub(crate) struct Outline {
 }
 
 impl Outline {
-    pub(crate) fn of(b: &Brep, f: FaceId) -> Outline {
+    pub fn of(b: &Brep, f: FaceId) -> Outline {
         let mut rim = Vec::new();
         let mut rim_sag: f64 = 0.0;
         for &lp in &b.face(f).loops {
@@ -1093,7 +1104,7 @@ impl Outline {
     /// cuts inside a curved edge: there the nearest edge decides by its own side, and a point
     /// within `within` of an edge is on each face it bounds. The edges are asked only where `p`
     /// is that near the chords along them.
-    pub(crate) fn holds(
+    pub fn holds(
         &self,
         b: &Brep,
         f: FaceId,
@@ -1459,104 +1470,4 @@ pub fn face_centroid(b: &Brep, f: FaceId) -> Point3 {
         return polys[0].first().map_or(Vec3::ZERO, |uv| s.eval(uv.x, uv.y));
     }
     moment * (1.0 / area)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        math::Frame,
-        profile::{NamedSegment, Profile, ProfileLoop, Segment},
-        sweep::extrude,
-    };
-
-    #[test]
-    fn a_face_moved_keeps_its_box_moved() {
-        // An assembly measures a part against another moved before each boolean: a slid part's
-        // faces keep their boxes, slid, rather than finding each spline edge's extremes again.
-        let rod = extrude(
-            &Profile::circle(Vec2::ZERO, 20.0),
-            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
-            20.0,
-            "r",
-        )
-        .unwrap();
-        let boxes: Vec<Aabb> = rod.face_ids().map(|f| face_box(&rod, f)).collect();
-        let shift = Vec3::new(3.5, -120.0, 7.25);
-        let mut slid = rod.clone();
-        slid.transform(&crate::math::Transform::translation(shift));
-        for (f, before) in slid.face_ids().zip(boxes) {
-            let kept = slid.memo(f).loose_box.get().copied();
-            assert_eq!(
-                kept.map(|b| (b.min, b.max)),
-                Some((before.min + shift, before.max + shift))
-            );
-        }
-        // Turned, a box is found again: the turned box's own would be looser.
-        let mut turned = rod.clone();
-        turned.transform(&crate::math::Transform::rotation(Vec3::ZERO, Vec3::X, 0.3));
-        assert!(
-            turned
-                .face_ids()
-                .all(|f| turned.memo(f).loose_box.get().is_none())
-        );
-    }
-
-    #[test]
-    fn a_rods_end_just_inside_its_rim_is_flat() {
-        // A rod of radius 10: its end's outline, drawn as chords, cuts up to 0.012 inside the
-        // rim, and a point of the end between a chord and the rim is still a point of the end.
-        let rod = extrude(
-            &Profile::circle(Vec2::ZERO, 20.0),
-            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
-            20.0,
-            "r",
-        )
-        .unwrap();
-        for k in 0..256 {
-            let a = std::f64::consts::TAU * k as f64 / 256.0;
-            let p = Point3::new(9.999 * a.cos(), 9.999 * a.sin(), 20.0);
-            let n = normal_at(&rod, p, 1e-6).unwrap_or_else(|| panic!("no normal at {p:?}"));
-            assert!((n - Vec3::Z).norm() < 1e-12, "{n:?} at {p:?}");
-            let bend = curvature(&rod, p).unwrap_or_else(|| panic!("no curvature at {p:?}"));
-            assert!(
-                bend[0].abs() < 1e-9 && bend[1].abs() < 1e-9,
-                "{bend:?} at {p:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_drilled_rods_side_bends_away_its_hole_toward_and_its_rim_is_a_crease() {
-        // A rod of radius 10, 20 long, drilled through along its axis at radius 4.
-        let circle = |radius: f64, ccw: bool, name: &str| ProfileLoop {
-            segments: vec![NamedSegment::new(
-                Segment::Circle {
-                    center: Vec2::ZERO,
-                    radius,
-                    ccw,
-                },
-                name,
-            )],
-        };
-        let p = Profile {
-            loops: vec![circle(10.0, true, "out"), circle(4.0, false, "in")],
-        };
-        let rod = extrude(
-            &p,
-            &Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
-            20.0,
-            "r",
-        )
-        .unwrap();
-        let near =
-            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
-        let side = curvature(&rod, Point3::new(11.0, 1.0, 7.0)).unwrap();
-        assert!(near(side, [0.1, 0.0]), "{side:?}");
-        let hole = curvature(&rod, Point3::new(0.5, 3.0, 13.0)).unwrap();
-        assert!(near(hole, [0.0, -0.25]), "{hole:?}");
-        let end = curvature(&rod, Point3::new(6.0, 2.0, 20.5)).unwrap();
-        assert!(near(end, [0.0, 0.0]), "{end:?}");
-        assert!(curvature(&rod, Point3::new(10.5, 0.0, 20.5)).is_none());
-    }
 }

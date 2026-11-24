@@ -38,29 +38,3 @@ pub fn volume_agrees(b: &Brep, expected: f64, rel: f64) -> bool {
         off <= bound
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        math::{Frame, Vec3},
-        primitive::block,
-    };
-
-    #[test]
-    fn a_cube_and_a_thin_slab_agree_with_their_volumes_and_not_with_others() {
-        let at = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
-        let cube = block(&at, Vec3::new(10.0, 10.0, 10.0), "c").unwrap();
-        assert!(volume_agrees(&cube, 1000.0, 1e-5));
-        assert!(!volume_agrees(&cube, 1000.1, 1e-5));
-        // 100 × 100 × 0.001: a volume of 10 in a box 141 across, where a size³-relative
-        // tolerance would be blind to it.
-        let slab = block(&at, Vec3::new(100.0, 100.0, 0.001), "s").unwrap();
-        assert!(volume_agrees(&slab, 10.0, 1e-5));
-        assert!(!volume_agrees(&slab, 10.001, 1e-5));
-        // On the boundary: decided exactly.
-        assert!(volume_agrees(&slab, 10.0 * (1.0 + 0.95e-5), 1e-5));
-        assert!(!volume_agrees(&slab, 10.0 * (1.0 + 1.05e-5), 1e-5));
-        assert!(!volume_agrees(&slab, f64::NAN, 1e-5));
-    }
-}

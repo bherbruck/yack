@@ -1,12 +1,12 @@
 // yack: [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 // Adapted from springrep@a03e8a1 src/topo/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: face memos are no longer encoded (M2.2 T4b); moved from topo/codec.rs to codec/topo.rs
-// (M2.2 T4a), reading the arena through `Brep::parts` and `Brep::from_parts`; the bytes are the same.
+// (M2.2 T4a), reading the arena through `Brep::parts` and `Brep::from_parts`; the bytes are the same; then to yack-codec (M3 W5), paths and visibility only.
 //! [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 //! reference into it holds; one whose ids point outside its own arrays is refused.
 
 use super::{Codec, Reader, Writer};
-use crate::topo::{
+use yack_topo::{
     Brep, Coedge, CoedgeId, Edge, EdgeId, Entities, Face, FaceId, FaceName, Loop, LoopId, PCurve,
     Parts, Shell, ShellId, Solid, SolidId, Tolerances, Vertex, VertexId,
 };

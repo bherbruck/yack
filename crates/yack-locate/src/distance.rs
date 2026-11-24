@@ -1,7 +1,7 @@
 // yack: The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 // Adapted from springrep@a03e8a1 src/distance.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: meshes nothing (M2): sides are made from a tessellation mesh::query makes; `closest`
-// and Nearest's constructors moved there.
+// and Nearest's constructors moved there; then to yack-locate (M3 W5), paths and visibility only.
 //! The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 //!
 //! Both sides are meshed, and the closest pair of mesh pieces gives the distance to within the two
@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    locate::classify,
+    classify,
     topo::{
         domain::{Domain, Where},
         face_domain,
@@ -118,7 +118,7 @@ impl Piece {
 }
 
 /// One side, expanded: its vertices, its mesh pieces, and its solids' meshes.
-pub(crate) struct Side<'a> {
+pub struct Side<'a> {
     b: &'a Brep,
     vertices: Vec<VertexId>,
     pieces: Vec<Piece>,
@@ -130,7 +130,7 @@ pub(crate) struct Side<'a> {
 impl<'a> Side<'a> {
     /// The side `sel` names, from a tessellation of `b` made within `opt`: the triangles
     /// `positions` and `triangles` give, `faces` naming each face's run of them.
-    pub(crate) fn from_tessellation(
+    pub fn from_tessellation(
         b: &'a Brep,
         sel: &Selection,
         positions: &[Point3],
@@ -541,7 +541,7 @@ pub struct Nearest<'a> {
 
 impl<'a> Nearest<'a> {
     /// The nearest-point search over `side`, measuring from points made sides by `point`.
-    pub(crate) fn from_side(side: Side<'a>, point: for<'p> fn(&'p Brep, &Selection) -> Result<Side<'p>>) -> Nearest<'a> {
+    pub fn from_side(side: Side<'a>, point: for<'p> fn(&'p Brep, &Selection) -> Result<Side<'p>>) -> Nearest<'a> {
         Nearest { side, point }
     }
 }
@@ -556,7 +556,7 @@ impl<'a> Nearest<'a> {
 }
 
 /// The closest distance between two sides already expanded.
-pub(crate) fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
+pub fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     let (a, b) = (side_a.b, side_b.b);
     let (pa, pb) = (&side_a.pieces, &side_b.pieces);
     if pa.is_empty() || pb.is_empty() {

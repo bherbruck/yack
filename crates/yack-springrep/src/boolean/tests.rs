@@ -1392,13 +1392,13 @@ fn balls_touching_at_a_point_share_a_vertex_of_two_fans() {
 /// A vertex loop survives the codec: the point is still a vertex both balls' faces share.
 #[test]
 fn a_point_contact_round_trips_through_the_codec() {
-    use crate::codec::{Codec, Reader, Writer};
     let mut b = ball(5.0);
     b.transform(&Transform::translation(Vec3::new(10.0, 0.0, 0.0)));
     let u = union(&ball(5.0), &b).unwrap();
-    let mut w = Writer::default();
-    u.put(&mut w);
-    let back = Brep::get(&mut Reader::new(&w.0)).unwrap();
+    // Through the codec's public path (M3 W5: yack-codec keeps `Codec` crate-private).
+    let back = crate::codec::from_bytes(&crate::codec::to_bytes(std::slice::from_ref(&u)))
+        .and_then(|mut v| v.pop())
+        .unwrap();
     assert!(crate::check::check(&back).is_empty());
     let points = |b: &Brep| b.loop_ids().filter(|&lp| b.is_vertex_loop(lp)).count();
     assert!(points(&u) > 0);

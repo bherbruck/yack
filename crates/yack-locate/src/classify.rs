@@ -1,6 +1,6 @@
 // yack: Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 // Adapted from springrep@a03e8a1 src/boolean/classify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/classify.rs to locate/classify.rs (M2.1, T1); paths only.
+// Changes: moved from boolean/classify.rs to locate/classify.rs (M2.1, T1); paths only; then to yack-locate (M3 W5), paths and visibility only.
 //! Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 //! ray that passes through an edge, grazes a surface or starts on a face is ambiguous and the next
 //! direction is tried. A piece of face whose point lies on the solid's boundary, touching it, is
@@ -98,7 +98,7 @@ fn crossings(faces: &[(&Domain, Aabb)], p: Point3, d: Vec3) -> Option<usize> {
 /// surface bends to (the gap between the two surfaces); on an edge, whether the piece's tangent
 /// plane, which holds the edge, runs into the wedge of material the edge's faces bound. `None` where
 /// `p` touches nothing, or the contact does not decide (a corner, surfaces that osculate or cross).
-pub(crate) fn touching(surface: &Surface, faces: &[(&Domain, Aabb)], p: Point3) -> Option<bool> {
+pub fn touching(surface: &Surface, faces: &[(&Domain, Aabb)], p: Point3) -> Option<bool> {
     let mut on_face = Vec::new();
     let mut on_edge = Vec::new();
     for (dom, bb) in faces {
@@ -195,7 +195,7 @@ fn in_wedge(
 /// Whether `p` is inside the solid bounded by `faces`, or `None` when every ray was ambiguous.
 /// Every unambiguous ray gives the same parity, so the directions are tried cheapest first: by
 /// how far each runs through the boxes of faces whose crossings are found by sampling.
-pub(crate) fn contains(faces: &[(&Domain, Aabb)], p: Point3) -> Option<bool> {
+pub fn contains(faces: &[(&Domain, Aabb)], p: Point3) -> Option<bool> {
     let sampled = |s: &Surface| {
         !matches!(
             s,

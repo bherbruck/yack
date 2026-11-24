@@ -1,18 +1,12 @@
 // yack: springrep module src/codec/tests.rs
 // Adapted from springrep@a03e8a1 src/codec/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: memos are no longer encoded (M2.2 T4b): the two memo tests become one that the bytes do
-// not depend on what was asked of the solid.
+// not depend on what was asked of the solid; then to yack-codec (M3 W5), paths and visibility only.
 use std::collections::BTreeSet;
 use std::f64::consts::FRAC_1_SQRT_2;
-
 use super::*;
-use crate::blend::fillet;
-use crate::boolean::difference;
 use crate::math::Point3;
-use crate::measure;
-use crate::profile::Profile;
-use crate::sweep::extrude;
-use crate::topo::Brep;
+use yack_topo::Brep;
 
 fn bytes<T: Codec>(x: &T) -> Vec<u8> {
     let mut w = Writer::default();
@@ -195,65 +189,6 @@ fn every_curve_and_surface_kind_reads_back_exactly() {
         panic!("a spline")
     };
     assert!(closed.is_periodic());
-}
-
-/// A 20 × 20 × 10 block with a Ø6 hole through it and its top's two edges along y rounded R1.
-fn drilled_and_rounded() -> Brep {
-    let block = extrude(
-        &Profile::rect(Vec2::ZERO, 20.0, 20.0),
-        &at_z(0.0),
-        10.0,
-        "block",
-    )
-    .unwrap();
-    let hole = extrude(&Profile::circle(Vec2::ZERO, 6.0), &at_z(0.0), 10.0, "hole").unwrap();
-    let drilled = difference(&block, &hole).unwrap();
-    let edges = [("block.end", "block.u_min"), ("block.end", "block.u_max")];
-    fillet(&drilled, &edges, 1.0, "round").unwrap()
-}
-
-fn at_z(z: f64) -> Frame {
-    Frame::new(p(0.0, 0.0, z), p(0.0, 0.0, 1.0), p(1.0, 0.0, 0.0)).unwrap()
-}
-
-#[test]
-fn a_built_solid_reads_back_with_its_ids_and_names() {
-    let b = drilled_and_rounded();
-    let volume = measure::volume(&b);
-    let back: Brep = back(&bytes(&b)).unwrap();
-    assert_eq!(back, b);
-    assert_eq!(bytes(&back), bytes(&b));
-    // Measured again from its read-back geometry, it has the same volume to the last bit.
-    assert_eq!(measure::volume(&back).to_bits(), volume.to_bits());
-}
-
-#[test]
-fn the_bytes_do_not_depend_on_what_was_asked_of_the_solid() {
-    // Queries fill a face's memo (its volume share, its box, the trims a boolean reads); none of
-    // that is written, so a solid encodes the same before and after them.
-    let b = drilled_and_rounded();
-    let before = bytes(&b);
-    measure::volume(&b);
-    measure::area(&b);
-    let rays = crate::mesh::rays(&b).unwrap();
-    rays.side(p(5.0, 5.0, 5.0));
-    let square = Profile::rect(Vec2::new(10.0, 10.0), 4.0, 4.0);
-    let post = extrude(&square, &at_z(-5.0), 20.0, "post").unwrap();
-    difference(&b, &post).unwrap();
-    assert_eq!(bytes(&b), before);
-    let pair = vec![b.clone(), b];
-    let back: Vec<Brep> = back(&bytes(&pair)).unwrap();
-    assert_eq!(bytes(&back), bytes(&pair));
-}
-
-#[test]
-fn local_tolerances_read_back() {
-    let mut b = drilled_and_rounded();
-    let v = b.vertex_ids().next().unwrap();
-    let e = b.edge_ids().last().unwrap();
-    b.set_vertex_tolerance(v, 2e-4);
-    b.set_edge_tolerance(e, 1e-4);
-    round_trips(&b);
 }
 
 #[test]

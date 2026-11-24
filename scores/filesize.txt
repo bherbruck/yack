@@ -39,5 +39,5 @@ crates/yack-springrep/src/boolean/mod.rs 2849
 crates/yack-springrep/src/boolean/tests.rs 1771
 crates/yack-geom/src/nurbs.rs 2527
 crates/yack-intersect/src/csi.rs 2540
-crates/yack-springrep/src/measure.rs 1562
+crates/yack-measure/src/lib.rs 1562
 crates/yack-springrep/src/step/tests.rs 1964
