@@ -267,7 +267,8 @@ pub struct Made { pub brep: Brep, pub history: History, pub strategy: &'static s
 pub enum Change { Kept, Modified, Split, Merged, Generated }
 pub enum FaceOrigin { Operand { operand: u8, face: FaceId }, Segment { label: Label, end: Option<CapEnd> },
                       Edge { operand: u8, edge: EdgeId }, Vertex { operand: u8, vertex: VertexId }, Offset { operand: u8, face: FaceId },
-                      Read { face: FaceId } }  // a face of a solid read from a file or decoded
+                      Read { face: FaceId },  // a face of a solid read from a file or decoded
+                      IntermediateEdge { edge: EdgeId }, IntermediateVertex { vertex: VertexId } } // made mid-chain (compose)
 pub struct History { /* faces: (FaceId, Change, Vec<FaceOrigin>) sorted by id; deleted inputs */ }
 impl History { pub fn compose(&self, operand: u8, earlier: &History) -> History; } // `earlier` made this op's operand `operand`
 ```
