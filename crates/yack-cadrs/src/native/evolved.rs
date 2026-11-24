@@ -57,8 +57,6 @@ struct Spine {
     /// The plane's normal: the spine runs counter-clockwise about it when closed.
     up: V3,
     closed: bool,
-    /// The spine's extent (the largest distance from its first point).
-    size: f64,
 }
 
 impl Spine {
@@ -119,7 +117,6 @@ impl Spine {
             edges,
             up,
             closed,
-            size,
         })
     }
 

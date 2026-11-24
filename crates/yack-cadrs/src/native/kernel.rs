@@ -30,8 +30,6 @@ pub struct Entry {
     edges: OnceLock<Vec<EdgeInfo>>,
     /// [`Kernel::edges_light`]'s (without lengths and smoothness), while `edges` isn't made.
     edges_light: OnceLock<Vec<EdgeInfo>>,
-    /// [`Kernel::edges_shown`]'s, with the length below which they are exact.
-    edges_shown: OnceLock<(f64, Vec<EdgeInfo>)>,
     /// [`Kernel::bounding_box`]: extremes over its faces (a rebuild asks for every part's box
     /// near each new body).
     aabb: OnceLock<Aabb>,
@@ -49,7 +47,6 @@ impl Entry {
             faces: OnceLock::new(),
             edges: OnceLock::new(),
             edges_light: OnceLock::new(),
-            edges_shown: OnceLock::new(),
             aabb: OnceLock::new(),
             face_boxes: OnceLock::new(),
             sound: OnceLock::new(),
@@ -89,15 +86,10 @@ pub struct NativeKernel {
     /// (Shared with [`Self::fork`]s: a body never changes.)
     bodies: HashMap<u64, Arc<Entry>>,
     next: u64,
-    /// The first id this session numbered a body with: a fork's range ([`Self::fork`]); 0 for
-    /// a session of its own.
-    first: u64,
     tol: super::tol::Tolerances,
     /// Face colours (sRGB and alpha) by body, in face order: an imported file's, or what the
     /// application set. Operations pass them on through their history ([`Self::carry_colors`]).
     colors: HashMap<u64, Vec<Option<[u8; 4]>>>,
-    /// The DRAW layer's last offset: its input body, result and history (`savehistory`).
-    pub(crate) draw_history: Option<(BodyId, BodyId, crate::History)>,
     /// The last unions [`Kernel::joins`] found one solid, by their inputs (a body's id is never
     /// used again, and a body never changes): a rebuild asks whether a new body joins a part,
     /// then unites them, and the second union of two bodies of many B-spline faces cost as
@@ -635,9 +627,6 @@ enum Detail {
     Full,
     /// Neither: lengths 0, none smooth (naming, tangent chains).
     Light,
-    /// Smoothness; the lengths below this exact, the others their chord (no more than the
-    /// length, and no less than this): a display's test for slivers.
-    Shown(f64),
 }
 
 /// [`edge_infos`] with what `detail` asks for.
@@ -689,14 +678,6 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
                 _ if e.degenerate => 0.0,
                 Detail::Light => 0.0,
                 Detail::Full => e.curve.length(t0, t1),
-                Detail::Shown(short) => {
-                    let chord = (b.verts[e.v[1]].p - b.verts[e.v[0]].p).norm();
-                    if chord < short {
-                        e.curve.length(t0, t1)
-                    } else {
-                        chord
-                    }
-                }
             },
             curve: curve_kind(e),
             start: b.verts[e.v[0]].p,

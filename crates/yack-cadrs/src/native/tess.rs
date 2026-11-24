@@ -32,7 +32,7 @@ use nalgebra::spade;
 use spade::handles::FixedVertexHandle;
 use spade::{
     AngleLimit, ConstrainedDelaunayTriangulation, HasPosition, Point2 as SPoint,
-    PositionInTriangulation, RefinementParameters, Triangulation,
+    PositionInTriangulation, RefinementParameters,
 };
 
 use super::kernel::{NativeKernel, vertex_ids};
