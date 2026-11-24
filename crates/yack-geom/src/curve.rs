@@ -440,7 +440,7 @@ impl Curve {
 /// bisection pins it to the last bit. The other quadrants follow by symmetry. On an axis the
 /// equation loses a term, and the answer is the vertex on that axis, or, on the longer axis
 /// inside the centres of curvature of its vertices, the point whose normal passes through.
-pub fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
+pub(crate) fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
     let (px, py) = (x.abs(), y.abs());
     let (a2, b2) = (a * a, b * b);
     let (u, v) = if px == 0.0 && py == 0.0 {

@@ -79,7 +79,7 @@ pub fn edge_params(curve: &Curve, t0: f64, t1: f64, opt: &MeshOptions) -> Vec<f6
 /// The fewest of the `dense` parameters whose chords stay within the deflection limits, tested
 /// at every dense parameter and the middles between them. A spline has a break at every knot, and
 /// an intersection curve has many knots, so sampling each knot span alone is far too fine.
-pub fn coarsen(curve: &Curve, dense: &[f64], opt: &MeshOptions) -> Vec<f64> {
+pub(crate) fn coarsen(curve: &Curve, dense: &[f64], opt: &MeshOptions) -> Vec<f64> {
     let n = dense.len();
     if n <= 2 {
         return dense.to_vec();

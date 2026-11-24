@@ -262,7 +262,7 @@ fn raised<const N: usize>(u: &[f64], i: usize, t: f64, q: usize, below: &[f64; N
 
 /// The values and first `nd` derivatives at `t` of the degree-`p` B-spline functions of knots `u`
 /// that are nonzero on span `i`: `out[k][j]` is the `k`-th derivative of function `i − p + j`.
-pub fn basis_derivatives<const N: usize>(
+pub(crate) fn basis_derivatives<const N: usize>(
     p: usize,
     u: &[f64],
     i: usize,
@@ -307,7 +307,7 @@ pub fn basis_derivatives<const N: usize>(
 /// coefficient of `sᵏ` in function `i − p + j`. Each is the Taylor series at `e`, from every
 /// derivative there, scaled by the span's width so the coefficients stay of the functions' own
 /// size.
-pub fn span_poly(p: usize, u: &[f64], i: usize, end: bool) -> Vec<Vec<f64>> {
+pub(crate) fn span_poly(p: usize, u: &[f64], i: usize, end: bool) -> Vec<Vec<f64>> {
     let e = if end { u[i + 1] } else { u[i] };
     let width = u[i + 1] - u[i];
     let ders = basis_derivatives::<M>(p, u, i, e, p);
@@ -647,7 +647,7 @@ impl NurbsCurve {
 
     /// The box of the control points that shape the curve at `t`. Its weights being positive, the
     /// curve over the knot span there lies in their convex hull, and so in the box.
-    pub fn span_box(&self, t: f64) -> Aabb {
+    pub(crate) fn span_box(&self, t: f64) -> Aabb {
         let t = self.basis.wrap(t, self.period);
         let (p, i) = (self.basis.degree, self.basis.span(t));
         let mut bb = Aabb::EMPTY;
@@ -1046,7 +1046,7 @@ impl NurbsSurface {
 
     /// [`NurbsSurface::d1`] from the span polynomials where they evaluate the surface: a Horner
     /// pass in place of the basis recurrence, equal to rounding.
-    pub fn d1_by_polys(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+    pub(crate) fn d1_by_polys(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
         if !self.by_polys() {
             return self.d1(u, v);
         }
@@ -1997,7 +1997,7 @@ fn pole_of(at: &[Vec3; 6]) -> Option<usize> {
 }
 
 #[cfg(test)]
-pub mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
@@ -2467,7 +2467,7 @@ pub mod tests {
 
     /// The octant of the sphere of radius `r` about the origin, as the rational biquadratic of
     /// Piegl and Tiller: `u` round the equator from +x to +y, `v` up to the pole at +z, `v = 1`.
-    pub fn octant(r: f64) -> crate::Surface {
+    pub(crate) fn octant(r: f64) -> crate::Surface {
         let w = FRAC_1_SQRT_2;
         let equator = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)];
         let mut ctrl = Vec::new();

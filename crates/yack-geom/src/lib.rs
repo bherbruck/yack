@@ -19,7 +19,7 @@ mod curve;
 mod intersection;
 mod nurbs;
 #[cfg(test)]
-pub use nurbs::tests::octant;
+pub(crate) use nurbs::tests::octant;
 mod surface;
 
 pub use bspline::BSpline;

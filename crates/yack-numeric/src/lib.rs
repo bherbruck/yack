@@ -100,7 +100,7 @@ pub fn solve_dense(
 }
 
 /// One row of a sparse system: its first column and the values of the columns that follow.
-pub type SparseRow = (usize, Vec<f64>);
+pub(crate) type SparseRow = (usize, Vec<f64>);
 
 /// Solves `a x = b` where each row of `a` is a short run of columns, by Gaussian elimination with
 /// partial pivoting among the rows that reach each column. Banded rows (B-spline collocation) cost
