@@ -243,6 +243,86 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
     })
 }
 
+/// The shape of a CNC cutter (see [`cutter`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cutter {
+    /// A flat end mill: a plain cylinder.
+    Flat,
+    /// A ball-end mill: a hemisphere of the cutter's radius at its tip.
+    Ball,
+    /// A bull-nose mill: a flat end whose rim is rounded by `corner_radius` (above 0, below the
+    /// cutter's radius).
+    BullNose {
+        /// The corner round's radius (mm).
+        corner_radius: f64,
+    },
+    /// A drill: a cone of included angle `point_angle` at its tip (118° for a twist drill, 90° for
+    /// a spot drill), above 0° and below 180°.
+    Drill {
+        /// The point's included angle.
+        point_angle: Angle,
+    },
+}
+
+/// A cutter of `radius` and `length` (from its tip), its tip at the frame origin and its axis the
+/// frame's z: the tool solid for [`Solid::cut_swept`](crate::Solid::cut_swept) along a
+/// [`Toolpath`](crate::Toolpath). Its shank runs straight up at full radius to `length`, which must
+/// reach above the tip's round or point.
+///
+/// ```
+/// use yack::prelude::*;
+/// let ball = cutter(&Frame::at([0.0, 0.0, 5.0]), Cutter::Ball, 3.0, 30.0)?;
+/// let pi = std::f64::consts::PI;
+/// assert!((ball.volume() - (2.0 / 3.0 * pi * 27.0 + pi * 9.0 * 27.0)).abs() < 1e-6 * ball.volume());
+/// let bull = cutter(&Frame::WORLD, Cutter::BullNose { corner_radius: 1.5 }, 4.0, 25.0)?;
+/// let drill = cutter(&Frame::WORLD, Cutter::Drill { point_angle: deg(90.0) }, 2.5, 40.0)?;
+/// assert!(bull.volume() < pi * 16.0 * 25.0 && drill.volume() < pi * 6.25 * 40.0);
+/// assert!(cutter(&Frame::WORLD, Cutter::Ball, 3.0, 2.0).is_err()); // shorter than its ball
+/// # Ok::<(), yack::Error>(())
+/// ```
+pub fn cutter(frame: &Frame, kind: Cutter, radius: f64, length: f64) -> Result<Solid> {
+    // adapter: yack's own constructor (not in api.md); a revolve of the cutter's side, or a cylinder
+    let op = "cutter";
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err(Error::invalid(op, "radius", format!("radius {radius} mm is not positive")));
+    }
+    let short = |above: f64| -> Result<()> {
+        if length.is_finite() && length > above {
+            Ok(())
+        } else {
+            Err(Error::invalid(op, "length", format!("length {length} mm does not reach above the tip's {above} mm")))
+        }
+    };
+    let side = match kind {
+        Cutter::Flat => {
+            short(0.0)?;
+            return cylinder(frame, radius, length).map_err(|e| e.in_op(op));
+        }
+        Cutter::Ball => {
+            short(radius)?;
+            crate::Loop::starting_at([0.0, 0.0]).arc_ccw_to([radius, radius], [0.0, radius]).line_to([radius, length]).line_to([0.0, length]).close()?
+        }
+        Cutter::BullNose { corner_radius: corner } => {
+            if !(corner.is_finite() && corner > 0.0 && corner < radius) {
+                return Err(Error::invalid(op, "corner", format!("corner {corner} mm is not above 0 and below the radius {radius} mm")));
+            }
+            short(corner)?;
+            let flat = yack_math::flat_end_radius(radius, corner);
+            let side = crate::Loop::starting_at([0.0, 0.0]).line_to([flat, 0.0]).arc_ccw_to([radius, corner], [flat, corner]);
+            side.line_to([radius, length]).line_to([0.0, length]).close()?
+        }
+        Cutter::Drill { point_angle: point } => {
+            if !(point.is_finite() && point > crate::deg(0.0) && point < crate::deg(180.0)) {
+                return Err(Error::invalid(op, "point", format!("point {}° is not above 0° and below 180°", point.degrees())));
+            }
+            let tip = yack_math::drill_point_height(radius, point);
+            short(tip)?;
+            crate::Loop::polygon(&[[0.0, 0.0], [radius, tip], [radius, length], [0.0, length]])?
+        }
+    };
+    revolve(frame, &Profile::new(side, Vec::new())?, crate::deg(360.0)).map_err(|e| e.in_op(op))
+}
+
 /// `profile` (drawn as for [`revolve`]) screwed about the frame's z axis by `angle` while rising by
 /// `lead` ([`Lead::per_turn`], [`Lead::per_radian`]; a polynomial lead is not built yet).
 ///

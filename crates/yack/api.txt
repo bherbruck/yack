@@ -103,9 +103,15 @@ yack::input: impl Toolpath { pub fn motion(&self) -> Motion }
 yack::input: impl Toolpath { pub fn slide(mut self, by: impl Into<Vec3>) -> Toolpath }
 yack::input: impl Toolpath { pub fn starting_at(p: impl Into<Point3>) -> Toolpath }
 yack::input: impl Toolpath { pub fn turn(mut self, axis_point: impl Into<Point3>, axis: impl Into<Vec3>, by: Angle) -> Result<Toolpath> }
+yack::make: enum Cutter variant Ball
+yack::make: enum Cutter variant BullNose { corner_radius: f64, }
+yack::make: enum Cutter variant Drill { point_angle: Angle, }
+yack::make: enum Cutter variant Flat
 yack::make: impl Spline3 { pub fn conical_helix(axis_point: impl Into<Point3>, axis: impl Into<crate::Vec3>, x: impl Into<crate::Vec3>, r0: f64, r1: f64, height: f64, start: Angle, turns: f64,) -> Result<Spline3> }
+yack::make: pub enum Cutter
 yack::make: pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid>
 yack::make: pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid>
+yack::make: pub fn cutter(frame: &Frame, kind: Cutter, radius: f64, length: f64) -> Result<Solid>
 yack::make: pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid>
 yack::make: pub fn empty() -> Solid
 yack::make: pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid>
@@ -129,7 +135,7 @@ yack::make: pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Po
 yack::make: pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid>
 yack::make: pub fn sweep_scaled(frame: &Frame, profile: &Profile, path: &[PathPiece], twist: Angle, end_scale: f64) -> Result<Solid>
 yack::make: pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid>
-yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus, extrude_drafted, ruled, sweep_helix, sweep_scaled, loft_to_point,}
+yack::prelude: pub use crate::make::{block, cone, cylinder, empty, extrude, loft, loft_guided, loft_through, nurbs_solid, revolve, screw, slab, sewn, sphere, spindle_torus, screw_tapered, sweep, sweep_mitered, sweep_path, torus, extrude_drafted, ruled, sweep_helix, sweep_scaled, loft_to_point, cutter, Cutter,}
 yack::prelude: pub use crate::{Affine, Angle, Dir3, EdgeId, Error, ErrorKind, FaceId, Frame, FrameLaw, Lead, Loop, Motion, Toolpath, PathPiece, Patch, Plane, Point2, Point3, Profile, Ray, Result, Rigid, Role, Segment, Join, Side, Similarity, Solid, Spline3, SurfaceKind, CurveKind, Tag, Vec3, deg, rad, turns,}
 yack::query: impl Solid { pub fn area(&self) -> f64 }
 yack::query: impl Solid { pub fn bbox(&self) -> Option<Aabb> }

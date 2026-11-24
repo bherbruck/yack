@@ -53,3 +53,25 @@ pub fn turned_about(at: Point3, axis_point: Point3, axis: Vec3, by: Angle) -> Re
         coord(at.z, axis_point.z, h.z, u.z, w.z),
     ))
 }
+
+/// The radius at which a bull-nose cutter's flat end meets its corner round: `radius − corner`.
+///
+/// ```
+/// use yack_math::*;
+/// assert_eq!(flat_end_radius(4.0, 1.5), 2.5);
+/// ```
+pub fn flat_end_radius(radius: f64, corner: f64) -> f64 {
+    radius - corner
+}
+
+/// How far a drill's point cone rises from its tip to the drill's full `radius`, for an included
+/// `point` angle: `radius / tan(point / 2)`, and exactly `radius` for a 90° point.
+///
+/// ```
+/// use yack_math::*;
+/// assert_eq!(drill_point_height(2.5, deg(90.0)), 2.5);
+/// assert!((drill_point_height(3.0, deg(120.0)) - 3.0 / 3f64.sqrt()).abs() < 1e-12);
+/// ```
+pub fn drill_point_height(radius: f64, point: Angle) -> f64 {
+    if point == crate::deg(90.0) { radius } else { radius / (point.radians() * 0.5).tan() }
+}
