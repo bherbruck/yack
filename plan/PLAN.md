@@ -740,6 +740,10 @@ Each extraction is `git mv` → make the needed items `pub` → a one-line `pub 
 Waves: W1 `base`, `tol`, `numeric`, `p21` · W2 `math` · W3 `geom` · W4 `intersect`, `profile`,
 `topo` · W5 `locate`, `measure`, `codec` · W6 `check`, `mesh` · W7 `tweak`, `heal`, `build` ·
 W8 `boolean` · W9 `blend`, `edit`, `step`, `view`. Then delete `yack-springrep`.
+W7 note: springrep's `build/heal.rs` and `build/adjust.rs` use `build/raw.rs` and are used by it
+(same layer), so they move into `yack-build` with it and `yack-heal` starts empty; `blend/sew.rs`
+reaches `boolean` and waits for W9. Tests moved out of their crates live in springrep's
+`moved_tests` module until `yack-springrep` is deleted, then move to `crates/yack/tests`.
 
 Each owner hardens its crate after its wave: god-file splits, named epsilons, `Invalid { arg }`,
 `Budget` meters, clippy deny list.
