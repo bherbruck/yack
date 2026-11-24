@@ -120,10 +120,11 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
     }
 }
 
-/// An op only springrep builds, still through the ladder (so `bakeoff::force(Cadrs)` refuses it
-/// rather than letting springrep build behind the switch), behind the panic firewall.
-pub(crate) fn springrep_only(op: &'static str, run: impl Fn() -> Result<Solid>) -> Result<Solid> {
-    crate::firewall::run(op, || ladder(op, &[Rung { name: "springrep", run: &run }]))
+/// An op only springrep builds from `inputs`, still through the ladder (so
+/// `bakeoff::force(Cadrs)` refuses it rather than letting springrep build behind the switch),
+/// behind the panic firewall.
+pub(crate) fn springrep_only(op: &'static str, inputs: &[&Solid], run: impl Fn() -> Result<Solid>) -> Result<Solid> {
+    crate::firewall::op(op, inputs, || ladder(op, &[Rung { name: "springrep", run: &run }]))
 }
 
 /// A rung of [`first`]: the engine's name and its run.

@@ -47,7 +47,7 @@ impl Solid {
         if edges.is_empty() {
             return Err(crate::Error::invalid("fillet", "edges", "no edges to round"));
         }
-        firewall::run("fillet", || {
+        firewall::op("fillet", &[self], || {
             let feature = engine::feature();
             let op = "fillet";
             let ids = self.sr_edges(op, "edges", edges)?;
@@ -75,7 +75,7 @@ impl Solid {
         if !edges.iter().all(|&(_, r)| r.is_finite() && r > 0.0) {
             return Err(crate::Error::invalid("fillet_radii", "edges", "every radius must be positive"));
         }
-        ladder::springrep_only("fillet_radii", || {
+        ladder::springrep_only("fillet_radii", &[self], || {
             let feature = engine::feature();
             let op = "fillet_radii";
             let pairs = edges.iter().map(|&(e, r)| Ok((self.sr_edge(op, "edges", e)?, r))).collect::<Result<Vec<_>>>()?;
@@ -105,7 +105,7 @@ impl Solid {
             return Err(crate::Error::invalid("fillet_variable", "r_to", format!("r_to {r_to} mm is not positive")));
         }
         let from: Point3 = from.into();
-        firewall::run("fillet_variable", || {
+        firewall::op("fillet_variable", &[self], || {
             let feature = engine::feature();
             let op = "fillet_variable";
             let e = self.sr_edge(op, "edge", edge)?;
@@ -138,7 +138,7 @@ impl Solid {
             return Err(crate::Error::invalid("fillet_conic", "rho", format!("rho {rho} is not between 0 and 1")));
         }
         let ix = crate::edit::indices(edges);
-        firewall::run("fillet_conic", || {
+        firewall::op("fillet_conic", &[self], || {
             ladder::two(
                 "fillet_conic",
                 &|| {
@@ -175,7 +175,7 @@ impl Solid {
         if !(center_radius.is_finite() && center_radius > 0.0) {
             return Err(crate::Error::invalid("fillet_g2", "center_radius", format!("center_radius {center_radius} mm is not positive")));
         }
-        ladder::springrep_only("fillet_g2", || {
+        ladder::springrep_only("fillet_g2", &[self], || {
             let feature = engine::feature();
             let op = "fillet_g2";
             let ids = self.sr_edges(op, "edges", edges)?;
@@ -197,7 +197,7 @@ impl Solid {
     pub fn fillet_setback(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
         // api.md:786-789
         setback_ok("fillet_setback", radius, setback)?;
-        ladder::springrep_only("fillet_setback", || {
+        ladder::springrep_only("fillet_setback", &[self], || {
             let feature = engine::feature();
             let op = "fillet_setback";
             let ids = self.sr_edges(op, "edges", edges)?;
@@ -219,7 +219,7 @@ impl Solid {
     pub fn fillet_setback_g2(&self, edges: &[EdgeId], radius: f64, setback: f64) -> Result<Solid> {
         // api.md:813: as fillet_setback requires
         setback_ok("fillet_setback_g2", radius, setback)?;
-        ladder::springrep_only("fillet_setback_g2", || {
+        ladder::springrep_only("fillet_setback_g2", &[self], || {
             let feature = engine::feature();
             let op = "fillet_setback_g2";
             let ids = self.sr_edges(op, "edges", edges)?;
@@ -246,7 +246,7 @@ impl Solid {
         if !(radius.is_finite() && radius > 0.0) {
             return Err(crate::Error::invalid("fillet_faces", "radius", format!("radius {radius} mm is not positive")));
         }
-        ladder::springrep_only("fillet_faces", || {
+        ladder::springrep_only("fillet_faces", &[self], || {
             let feature = engine::feature();
             let op = "fillet_faces";
             let (fa, fb) = (self.sr_face(op, "a", a)?, self.sr_face(op, "b", b)?);
@@ -279,7 +279,7 @@ impl Solid {
         if self.edges_between(side_b, middle)?.is_empty() {
             return Err(crate::Error::invalid(op, "side_b", "the side shares no edge with the middle face"));
         }
-        ladder::springrep_only("full_round", || {
+        ladder::springrep_only("full_round", &[self], || {
             let feature = engine::feature();
             let op = "full_round";
             let a = self.sr_face(op, "side_a", side_a)?;
@@ -308,7 +308,7 @@ impl Solid {
         if edges.is_empty() {
             return Err(crate::Error::invalid("chamfer", "edges", "no edges to bevel"));
         }
-        firewall::run("chamfer", || {
+        firewall::op("chamfer", &[self], || {
             let feature = engine::feature();
             let op = "chamfer";
             let ids = self.sr_edges(op, "edges", edges)?;
@@ -344,7 +344,7 @@ impl Solid {
         if !self.faces_of(edge)?.contains(&face) {
             return Err(crate::Error::invalid("chamfer_two", "face", "the face is not one of the edge's two faces"));
         }
-        firewall::run("chamfer_two", || {
+        firewall::op("chamfer_two", &[self], || {
             let feature = engine::feature();
             let op = "chamfer_two";
             let e = self.sr_edge(op, "edge", edge)?;
@@ -372,7 +372,7 @@ impl Solid {
         if !edges.iter().all(|&(_, d)| d.is_finite() && d > 0.0) {
             return Err(crate::Error::invalid("chamfer_distances", "edges", "every distance must be positive"));
         }
-        ladder::springrep_only("chamfer_distances", || {
+        ladder::springrep_only("chamfer_distances", &[self], || {
             let feature = engine::feature();
             let op = "chamfer_distances";
             let pairs = edges.iter().map(|&(e, d)| Ok((self.sr_edge(op, "edges", e)?, d))).collect::<Result<Vec<_>>>()?;
@@ -403,7 +403,7 @@ impl Solid {
         self.sr_edge(op, "edge", edge)?;
         self.sr_face(op, "face", face)?;
         let (ei, fi, a) = (u64::from(edge), u64::from(face), angle.radians());
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::ladder(
                 op,
                 &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_angle(k, id, ei, fi, distance, a)) }],

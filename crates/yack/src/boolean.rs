@@ -17,7 +17,7 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn union(&self, other: &Solid) -> Result<Solid> {
-        firewall::run("union", || {
+        firewall::op("union", &[self, other], || {
             match (self.is_empty(), other.is_empty()) {
                 (true, _) => Ok(other.clone()),
                 (_, true) => Ok(self.clone()),
@@ -40,7 +40,7 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn intersection(&self, other: &Solid) -> Result<Solid> {
-        firewall::run("intersection", || {
+        firewall::op("intersection", &[self, other], || {
             match (self.is_empty(), other.is_empty()) {
                 (false, false) => ladder::two(
                     "intersection",
@@ -69,7 +69,7 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn difference(&self, tool: &Solid) -> Result<Solid> {
-        firewall::run("difference", || {
+        firewall::op("difference", &[self, tool], || {
             match (self.is_empty(), tool.is_empty()) {
                 (true, _) => Ok(Solid::empty()),
                 (_, true) => Ok(self.clone()),
@@ -91,7 +91,8 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn union_all(solids: &[Solid]) -> Result<Solid> {
-        firewall::run("union_all", || {
+        let inputs: Vec<&Solid> = solids.iter().collect();
+        firewall::op("union_all", &inputs, || {
             let parts: Vec<&Solid> = solids.iter().filter(|s| !s.is_empty()).collect();
             match parts.as_slice() {
                 [] => Ok(Solid::empty()),
@@ -122,7 +123,8 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn difference_all(&self, tools: &[Solid]) -> Result<Solid> {
-        firewall::run("difference_all", || {
+        let inputs: Vec<&Solid> = core::iter::once(self).chain(tools).collect();
+        firewall::op("difference_all", &inputs, || {
             if self.is_empty() {
                 return Ok(Solid::empty());
             }
@@ -160,7 +162,7 @@ impl Solid {
         if self.is_empty() || tool.is_empty() {
             return Ok(self.clone());
         }
-        firewall::run(op, || {
+        firewall::op(op, &[self, tool], || {
             ladder::ladder(
                 op,
                 &[

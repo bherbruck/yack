@@ -59,6 +59,8 @@ struct Inner {
     /// Whether this is only a faceted approximation of the solid (the ladder refuses one as an
     /// op's answer; [`Solid::is_exact`] reports it).
     approximate: bool,
+    /// What the operation that made this solid did to its operands' faces.
+    history: crate::History,
 }
 
 /// What a solid holds. Engines add variants as they are wired in.
@@ -86,6 +88,7 @@ impl Solid {
             cadrs: OnceLock::new(),
             suspect: None,
             approximate: false,
+            history: crate::History::default(),
         }))
     }
 
@@ -282,6 +285,7 @@ impl Solid {
             cadrs: i.cadrs.clone(),
             suspect: i.suspect.clone(),
             approximate: true,
+            history: i.history.clone(),
         }))
     }
 
@@ -292,6 +296,51 @@ impl Solid {
     /// readers do not report meshes yet, so today every solid reports true).
     pub fn is_exact(&self) -> bool {
         !self.0.approximate
+    }
+
+    /// What the operation that made this solid did to its operands' faces: for each face, how it
+    /// came about and from what (see [`History`](crate::History)). A solid an operation passed
+    /// through unchanged (a union with the empty solid) keeps its own.
+    ///
+    /// (Its example is on [`History`](crate::History).)
+    pub fn history(&self) -> &crate::History {
+        &self.0.history
+    }
+
+    /// The same solid with the history of the operation that made it from `inputs` (`self` first
+    /// where the operation is a method), read off its faces by the engine. A solid shared with
+    /// another (an input passed through) is left as it is.
+    pub(crate) fn with_history(self, inputs: &[&Solid]) -> Solid {
+        let forms: Option<Vec<&Brep>> = inputs.iter().map(|s| match s.body() {
+            Body::Springrep(b) => Some(b.as_ref()),
+            Body::Empty => None,
+            Body::Cadrs(_) => None,
+        }).collect();
+        let empty = Brep::new();
+        let result = match self.body() {
+            Body::Springrep(b) => Some(b.as_ref()),
+            Body::Empty => Some(&empty),
+            Body::Cadrs(_) => None,
+        };
+        match (forms, result) {
+            (Some(forms), Some(result)) => {
+                let h = yack_springrep::topo::history::derive(&forms, result, self.0.feature.as_deref().unwrap_or(""));
+                let h = crate::history::carried(&h, &self, inputs);
+                self.with_carried(h)
+            }
+            _ => self,
+        }
+    }
+
+    /// The same solid holding history `h` (a shared one left as it is).
+    fn with_carried(self, h: crate::History) -> Solid {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.history = h;
+                Solid(Arc::new(inner))
+            }
+            Err(shared) => Solid(shared),
+        }
     }
 
     /// The same solid flagged as doubted by a guard, for `why`.
@@ -391,7 +440,7 @@ impl Solid {
             }
             (body, _) => body.clone(),
         };
-        Solid(Arc::new(Inner {
+        let named = Solid(Arc::new(Inner {
             stamp: fresh_stamp(),
             body,
             tag: Some(tag),
@@ -400,7 +449,15 @@ impl Solid {
             cadrs: self.0.cadrs.clone(),
             suspect: None,
             approximate: self.0.approximate,
-        }))
+            history: crate::History::default(),
+        }));
+        match self.brep() {
+            Some(b) => {
+                let h = crate::history::carried(&yack_springrep::topo::history::identity(b), &named, &[self]);
+                named.with_carried(h)
+            }
+            None => named,
+        }
     }
 
     /// The feature name given with [`named`](Solid::named), if any.

@@ -28,7 +28,7 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
     if !size.iter().all(|s| s.is_finite() && *s > 0.0) {
         return Err(Error::invalid("block", "size", format!("size {size:?} mm is not positive on every side")));
     }
-    firewall::run("block", || {
+    firewall::op("block", &[], || {
         ladder::two("block", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
@@ -52,7 +52,7 @@ pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid> {
     if !(height.is_finite() && height > 0.0) {
         return Err(Error::invalid("cylinder", "height", format!("height {height} mm is not positive")));
     }
-    firewall::run("cylinder", || {
+    firewall::op("cylinder", &[], || {
         ladder::two("cylinder", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "cylinder", &[("side", "seg:side")], primitive::cylinder(&engine::frame(frame), radius, height, &feature))
@@ -73,7 +73,7 @@ pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid> {
     if !(radius.is_finite() && radius > 0.0) {
         return Err(Error::invalid("sphere", "radius", format!("radius {radius} mm is not positive")));
     }
-    firewall::run("sphere", || {
+    firewall::op("sphere", &[], || {
         ladder::two("sphere", &|| {
         let feature = engine::feature();
         engine::made(&feature, "sphere", primitive::sphere(&engine::frame(frame), radius, &feature))
@@ -107,7 +107,7 @@ pub fn torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
             format!("tube radius {minor} reaches the axis (major {major}); for the solid such a tube sweeps use make::spindle_torus"),
         ));
     }
-    firewall::run("torus", || {
+    firewall::op("torus", &[], || {
         let feature = engine::feature();
         let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
         ladder::two(
@@ -139,7 +139,7 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
         return Err(Error::invalid(op, "minor", format!("tube radius {minor} clears the axis (major {major}): that is make::torus")));
     }
     let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
-    firewall::run(op, || {
+    firewall::op(op, &[], || {
         ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::make(op, |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor)) }])
     })
 }
@@ -166,7 +166,7 @@ pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64) -> Result<Solid> 
     if bottom <= 0.0 && top <= 0.0 {
         return Err(Error::invalid("cone", "bottom", "the cone has no radius at either end"));
     }
-    firewall::run("cone", || {
+    firewall::op("cone", &[], || {
         ladder::two("cone", &|| {
         let feature = engine::feature();
         engine::made_as(&feature, "cone", &[("bottom", "start"), ("top", "end"), ("side", "seg:side")], primitive::cone(&engine::frame(frame), bottom, top, height, &feature))
@@ -198,7 +198,7 @@ pub fn extrude(frame: &Frame, profile: &Profile, height: f64) -> Result<Solid> {
     if height < 0.0 {
         return reversed("extrude", frame, extrude(frame, profile, height.abs()));
     }
-    firewall::run("extrude", || {
+    firewall::op("extrude", &[], || {
         ladder::two(
             "extrude",
             &|| {
@@ -225,7 +225,7 @@ pub fn revolve(frame: &Frame, profile: &Profile, angle: Angle) -> Result<Solid> 
     if !(angle.radians() > 0.0 && angle.radians() <= core::f64::consts::TAU) {
         return Err(Error::invalid("revolve", "angle", format!("{}° is not above 0° and at most a full turn", angle.degrees())));
     }
-    firewall::run("revolve", || {
+    firewall::op("revolve", &[], || {
         ladder::two(
             "revolve",
             &|| {
@@ -343,7 +343,7 @@ pub fn screw(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle) -> Resu
         LeadKind::PerTurn(p) => yack_math::per_radian_of(*p),
         LeadKind::Polynomial(_) => return Err(Error::new(crate::ErrorKind::Unsupported, "screw", "a screw of growing lead is not built yet")),
     };
-    ladder::springrep_only("screw", || {
+    ladder::springrep_only("screw", &[], || {
         let feature = engine::feature();
         let op = "screw";
         let sketch = engine::profile(op, profile, None)?;
@@ -376,7 +376,7 @@ pub fn screw_tapered(frame: &Frame, profile: &Profile, lead: Lead, angle: Angle,
         return Err(Error::invalid(op, "taper", "not finite"));
     }
     let a = angle.radians();
-    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::screw_tapered(op, frame, profile, rise, a, taper) }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::screw_tapered(op, frame, profile, rise, a, taper) }]))
 }
 
 /// `profile`, drawn in the frame's xy plane, carried along the polyline through `corners` (with
@@ -404,7 +404,7 @@ pub fn sweep_mitered(frame: &Frame, profile: &Profile, corners: &[Point3], close
     if !frame.starts_run(a, b) {
         return Err(Error::invalid(op, "frame", "frame must sit on corners[0] with z along the first run"));
     }
-    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sweep_mitered(op, frame, profile, corners, closed) }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sweep_mitered(op, frame, profile, corners, closed) }]))
 }
 
 /// The solid(s) the `patches` bound once sewn edge to edge: every patch's face built, their
@@ -426,7 +426,7 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
     if patches.is_empty() {
         return Err(Error::invalid(op, "patches", "no patches"));
     }
-    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sewn(op, patches) }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sewn(op, patches) }]))
 }
 
 /// A tapered post: `profile` at z = 0 joined by straight lines to its copy scaled by `scale`
@@ -449,7 +449,7 @@ pub fn loft(frame: &Frame, profile: &Profile, scale: f64, height: f64) -> Result
         return Err(Error::invalid("loft", "scale", format!("scale {scale} is not positive")));
     }
     let top = &profile.scaled("loft", scale)?;
-    firewall::run("loft", || {
+    firewall::op("loft", &[], || {
         ladder::two("loft", &|| {
         let feature = engine::feature();
         let op = "loft";
@@ -480,7 +480,7 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
     if sections.windows(2).any(|w| matches!(w, [(a, _), (b, _)] if b.partial_cmp(a) != Some(core::cmp::Ordering::Greater))) {
         return Err(Error::invalid("loft_through", "sections", "the sections' heights must rise"));
     }
-    ladder::springrep_only("loft_through", || {
+    ladder::springrep_only("loft_through", &[], || {
         let feature = engine::feature();
         let op = "loft_through";
         let counts: BTreeSet<usize> = sections.iter().map(|(_, p)| p.outer().segments().len()).collect();
@@ -519,7 +519,7 @@ pub fn loft_through(frame: &Frame, sections: &[(f64, Profile)]) -> Result<Solid>
 /// ```
 pub fn loft_guided(sections: &[(Frame, Profile)], guides: &[Spline3]) -> Result<Solid> {
     let op = "loft_guided";
-    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::loft_guided(op, sections, guides) }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::loft_guided(op, sections, guides) }]))
 }
 
 /// `profile` swept along a path of lines and arcs starting along the frame's z. A positive arc
@@ -545,7 +545,7 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
             return Err(Error::invalid("sweep", "path", format!("path piece {i} needs a positive length or radius and a nonzero angle")));
         }
     }
-    firewall::run("sweep", || {
+    firewall::op("sweep", &[], || {
         ladder::two("sweep", &|| {
         let feature = engine::feature();
         let op = "sweep";
@@ -574,7 +574,7 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
 /// # Ok::<(), yack::Error>(())
 /// ```
 pub fn sweep_path(frame: &Frame, profile: &Profile, path: &Spline3, twist: Angle) -> Result<Solid> {
-    firewall::run("sweep_path", || {
+    firewall::op("sweep_path", &[], || {
         ladder::two("sweep_path", &|| {
         let feature = engine::feature();
         let op = "sweep_path";
@@ -600,7 +600,7 @@ pub fn slab(frame: &Frame, size: [f64; 2], knots_u: &[f64], knots_v: &[f64], hei
     if !heights.iter().flatten().all(|h| h.is_finite() && *h > 0.0) {
         return Err(Error::invalid("slab", "heights", "every height must be positive"));
     }
-    firewall::run("slab", || {
+    firewall::op("slab", &[], || {
         ladder::two("slab", &|| {
         let feature = engine::feature();
         engine::made(&feature, "slab", primitive::slab(&engine::frame(frame), size, (knots_u, knots_v), heights, &feature))
@@ -630,7 +630,7 @@ pub fn nurbs_solid(
     weights: Option<&[Vec<f64>]>,
 ) -> Result<Solid> {
     let op = "nurbs_solid";
-    firewall::run(op, || {
+    firewall::op(op, &[], || {
         ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::nurbs_solid(op, frame, degree, knots, ctrl, weights) }])
     })
 }
@@ -655,7 +655,7 @@ fn reversed(op: &'static str, frame: &Frame, positive: Result<Solid>) -> Result<
 
 /// One cadrs rung behind the firewall: the constructors only cadrs builds.
 fn cadrs_only(op: &'static str, run: &dyn Fn() -> Result<Solid>) -> Result<Solid> {
-    firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run }]))
 }
 
 /// `profile` extruded `height` along the frame's z with its sides drafted by `draft`: positive

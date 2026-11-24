@@ -40,6 +40,7 @@ mod edit;
 mod engine;
 mod engine_cadrs;
 mod firewall;
+mod history;
 mod input;
 mod ladder;
 pub mod make;
@@ -50,6 +51,7 @@ pub mod step;
 mod values;
 
 pub use input::{FrameLaw, Lead, Loop, Motion, PathPiece, Patch, Pen, Profile, Segment, Spline3, Toolpath};
+pub use history::{CapEnd, Change, FaceOrigin, History};
 pub use solid::Solid;
 pub use values::{
     Closest, CurveKind, Display, DisplayFace, Drawing, EdgeId, EdgeRef, FaceId, FaceRef, Interference, Issue, Mesh, NearestFace,

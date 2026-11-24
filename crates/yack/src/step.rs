@@ -81,7 +81,7 @@ fn written(op: &'static str, volume: f64, area: f64, writers: &[Writer]) -> Resu
 /// ```
 pub fn read(text: &str) -> Result<Solid> {
     let op = "step::read";
-    crate::ladder::springrep_only(op, || engine::solid(op, sr::read_step(text)))
+    crate::ladder::springrep_only(op, &[], || engine::solid(op, sr::read_step(text)))
 }
 /// The solid sewn from the faces in a STEP file, closing gaps up to `tolerance` mm.
 ///
@@ -97,7 +97,7 @@ pub fn sew(text: &str, tolerance: f64) -> Result<Solid> {
     if !tolerance.is_finite() || tolerance < 0.0 {
         return Err(Error::invalid(op, "tolerance", format!("{tolerance} mm is not a finite length ≥ 0")));
     }
-    crate::ladder::springrep_only(op, || engine::solid(op, sr::sew_step(text, tolerance)))
+    crate::ladder::springrep_only(op, &[], || engine::solid(op, sr::sew_step(text, tolerance)))
 }
 
 #[cfg(test)]

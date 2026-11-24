@@ -16,3 +16,9 @@ pub(crate) fn run<T>(op: &'static str, f: impl FnOnce() -> Result<T>) -> Result<
         }
     }
 }
+
+/// [`run`] for an operation that makes a solid from `inputs` (`self` first for a method; none
+/// for one that makes a solid from nothing): its answer carries the operation's history.
+pub(crate) fn op(op: &'static str, inputs: &[&crate::Solid], f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
+    run(op, f).map(|s| s.with_history(inputs))
+}

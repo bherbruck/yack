@@ -7,6 +7,7 @@
 pub(crate) mod bbox;
 mod facts;
 pub(crate) mod domain;
+pub mod history;
 mod memo;
 mod parts;
 pub(crate) mod pcurve;

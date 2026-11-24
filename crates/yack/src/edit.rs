@@ -53,7 +53,7 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -87,7 +87,7 @@ impl Solid {
         }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -124,14 +124,14 @@ impl Solid {
         }
         if let crate::Patch::Fill { boundary } = patch {
             let i = u64::from(face.index());
-            return firewall::run(op, || {
+            return firewall::op(op, &[self], || {
                 ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::replace_face_fill(op, self, i, boundary) }])
             });
         }
         let (degree, [ku, kv], poles, weights) = crate::input::patch_net(op, patch)?;
         let d = degree.map(|x| usize::try_from(x).unwrap_or(usize::MAX));
         let i = u64::from(face.index());
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::ladder(
                 op,
                 &[ladder::Rung {
@@ -156,7 +156,7 @@ impl Solid {
         let op = "delete_faces";
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -195,7 +195,7 @@ impl Solid {
         }
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| engine::made(engine::PROVISIONAL, op, sr::move_faces_named(self.need(op)?, &f, by.rows(), engine::PROVISIONAL)),
@@ -228,9 +228,9 @@ impl Solid {
         let cadrs = || engine_cadrs::op(op, self, |k, id| glue::thicken_joined(k, id, &ix, thickness, sharp));
         if sharp {
             // springrep cannot be told how to join a crease: only cadrs mitres on request
-            return firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }]));
+            return firewall::op(op, &[self], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }]));
         }
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -263,7 +263,7 @@ impl Solid {
         }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -303,7 +303,7 @@ impl Solid {
         }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| {
@@ -337,7 +337,7 @@ impl Solid {
         }
         self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, false, true) }])
         })
     }
@@ -360,7 +360,7 @@ impl Solid {
         }
         self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, true, true) }])
         })
     }
@@ -394,7 +394,7 @@ impl Solid {
         let f = self.sr_faces(op, "faces", faces)?;
         let ix = indices(faces);
         let (o, p, a) = (origin.to_array(), pull.to_array(), angle.radians());
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(
                 op,
                 &|| engine::made(engine::PROVISIONAL, op, sr::draft_named(self.need(op)?, &f, o, p, a, engine::PROVISIONAL)),
@@ -427,7 +427,7 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        firewall::run(op, || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }]))
+        firewall::op(op, &[self], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }]))
     }
 
     /// The image under a similarity (rigid, uniform scale, mirror): a [`Similarity`], or a
@@ -449,7 +449,7 @@ impl Solid {
         }
         let m: Similarity = m.into();
         let rows = m.rows();
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(op, &|| engine::solid(op, sr::transform(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
         })
     }
@@ -469,7 +469,7 @@ impl Solid {
             return Ok(Solid::empty());
         }
         let rows = m.rows();
-        firewall::run(op, || {
+        firewall::op(op, &[self], || {
             ladder::two(op, &|| engine::solid(op, sr::affine(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
         })
     }
