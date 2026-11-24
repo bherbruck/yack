@@ -311,21 +311,48 @@ impl Solid {
     /// where the operation is a method), read off its faces by the engine. A solid shared with
     /// another (an input passed through) is left as it is.
     pub(crate) fn with_history(self, inputs: &[&Solid]) -> Solid {
+        self.with_blend_history(inputs, &[])
+    }
+
+    /// [`with_history`](Solid::with_history) for a blend of `edges` of `inputs[0]`, in the order
+    /// the blend took them (its faces' names count them).
+    pub(crate) fn with_blend_history(self, inputs: &[&Solid], edges: &[EdgeId]) -> Solid {
+        let empty = Brep::new();
+        // the empty solid is an operand with no faces; a cadrs-held one has no springrep form yet
         let forms: Option<Vec<&Brep>> = inputs.iter().map(|s| match s.body() {
             Body::Springrep(b) => Some(b.as_ref()),
-            Body::Empty => None,
+            Body::Empty => Some(&empty),
             Body::Cadrs(_) => None,
         }).collect();
-        let empty = Brep::new();
         let result = match self.body() {
             Body::Springrep(b) => Some(b.as_ref()),
             Body::Empty => Some(&empty),
             Body::Cadrs(_) => None,
         };
-        match (forms, result) {
-            (Some(forms), Some(result)) => {
-                let h = yack_springrep::topo::history::derive(&forms, result, self.0.feature.as_deref().unwrap_or(""));
-                let h = crate::history::carried(&h, &self, inputs);
+        let edges: Vec<engine_ids::Edge> = match inputs.first() {
+            Some(first) => edges.iter().filter_map(|&e| first.sr_edge("history", "edges", e).ok()).collect(),
+            None => Vec::new(),
+        };
+        let feature = self.0.feature.as_deref().unwrap_or("");
+        let h = match (forms, result) {
+            (Some(forms), Some(result)) => yack_springrep::topo::history::derive(&forms, result, feature, &edges),
+            // a cadrs-held solid among them: from the face names alone
+            _ => {
+                let names: Vec<Vec<std::collections::BTreeSet<FaceName>>> = inputs.iter().map(|s| s.face_names()).collect();
+                let refs: Vec<&[std::collections::BTreeSet<FaceName>]> = names.iter().map(Vec::as_slice).collect();
+                yack_springrep::topo::history::derive_names(&refs, &self.face_names(), feature, &edges)
+            }
+        };
+        let h = crate::history::carried(&h, &self, inputs);
+        self.with_carried(h)
+    }
+
+    /// The same solid with the history of a read (a file's or an encoding's): every face new, the
+    /// `n`-th face read.
+    pub(crate) fn with_read_history(self) -> Solid {
+        match self.body() {
+            Body::Springrep(b) => {
+                let h = crate::history::carried(&yack_springrep::topo::history::read(b), &self, &[]);
                 self.with_carried(h)
             }
             _ => self,

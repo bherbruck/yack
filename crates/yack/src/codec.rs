@@ -29,7 +29,7 @@ pub fn encode(s: &Solid) -> Result<Vec<u8>> {
 /// ```
 pub fn decode(b: &[u8]) -> Result<Solid> {
     let op = "codec::decode";
-    firewall::op(op, &[], || {
+    firewall::read(op, || {
         let parts = yack_springrep::codec::from_bytes(b).ok_or_else(|| Error::invalid(op, "b", "not a yack codec stream"))?;
         let mut parts = parts.into_iter();
         match (parts.next(), parts.next()) {

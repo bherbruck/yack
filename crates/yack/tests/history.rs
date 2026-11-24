@@ -90,7 +90,8 @@ fn every_op_has_a_history_and_its_findings_are_reported() -> Result<()> {
         for f in &found {
             eprintln!("invariant 3 (warning): {f}");
         }
-        if ["union", "intersection", "difference", "difference_all", "transform", "named"].contains(&op) {
+        // shell's cavity and offset's rounds do not yet say what they offset (step 2's rest)
+        if !["shell", "offset"].contains(&op) {
             assert!(found.is_empty(), "{op}: {found:?}");
         }
         total += found.len();
@@ -133,5 +134,31 @@ fn a_decoded_solid_takes_part_in_an_operation_with_a_history() -> Result<()> {
     let decoded = yack::codec::decode(&yack::codec::encode(&plate)?)?;
     let drilled = decoded.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 4.0)?)?;
     assert_eq!(drilled.history().rows().count(), drilled.faces().len());
+    Ok(())
+}
+
+#[test]
+fn a_round_comes_from_the_edge_it_rounds_and_a_corner_from_the_vertex() -> Result<()> {
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let edges = [b.edge_at([5.0, 0.0, 10.0])?, b.edge_at([0.0, 5.0, 10.0])?, b.edge_at([0.0, 0.0, 5.0])?];
+    let r = b.fillet(&edges, 1.0)?;
+    let h = r.history();
+    for (k, e) in edges.iter().enumerate() {
+        let from: Vec<FaceId> = h.rows().filter(|(_, _, o)| o.contains(&FaceOrigin::Edge { operand: 0, edge: *e })).map(|(f, _, _)| f).collect();
+        assert_eq!(from.len(), 1, "edge {k}");
+    }
+    let corner = b.vertices().into_iter().find(|&v| b.vertex(v).is_ok_and(|x| x.point().to_array() == [0.0, 0.0, 10.0]));
+    let at_corner = h.rows().filter(|(_, _, o)| o.iter().any(|x| matches!(x, FaceOrigin::Vertex { vertex, .. } if Some(*vertex) == corner))).count();
+    assert_eq!(at_corner, 1);
+    Ok(())
+}
+
+#[test]
+fn a_step_file_read_back_numbers_its_faces() -> Result<()> {
+    let b = block(&Frame::WORLD, [1.0, 2.0, 3.0])?;
+    let read = yack::step::read(&yack::step::write(&b)?)?;
+    let h = read.history();
+    let n: Vec<u32> = h.rows().filter_map(|(_, _, o)| match o { [FaceOrigin::Read { face }] => Some(*face), _ => None }).collect();
+    assert_eq!(n, (0..6).collect::<Vec<u32>>());
     Ok(())
 }

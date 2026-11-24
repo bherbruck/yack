@@ -66,17 +66,22 @@ pub struct History {
 /// A result face, the origins its new names give it, and the operand faces it continues.
 type Row = (FaceId, Vec<FaceOrigin>, BTreeSet<(u8, FaceId)>);
 
-/// The origin a name of the operation's own `feature` gives a new face, if the name says one.
-fn generated(name: &FaceName) -> Option<FaceOrigin> {
+/// The origin a name of the operation's own `feature` gives a new face, if the name says one: a
+/// blend's `round_<k>` / `bevel_<k>` is the operation's `k`-th edge of operand 0 (`edges`).
+fn generated(name: &FaceName, edges: &[EdgeId]) -> Option<FaceOrigin> {
     let part = name.face.as_str();
+    let blend = part.strip_prefix("round_").or_else(|| part.strip_prefix("bevel_"));
+    if let Some(k) = blend.and_then(|k| k.parse::<usize>().ok()) {
+        return edges.get(k).map(|&edge| FaceOrigin::Edge { operand: 0, edge });
+    }
     match part {
         "" => None,
         FaceName::START => Some(FaceOrigin::Segment { label: part.to_string(), end: Some(CapEnd::Start) }),
         FaceName::END => Some(FaceOrigin::Segment { label: part.to_string(), end: Some(CapEnd::End) }),
-        // blends' and shells' faces: their origins (edges, vertices, offset faces) come with the
-        // per-operation origins (M4.11 step 2)
+        // a blend corner's vertex comes from its neighbours' edges (`corners`); a shell's cavity
+        // and an offset's rounds do not yet say what they offset
         FaceName::INNER | "corner" => None,
-        _ if part.starts_with("round_") || part.starts_with("bevel_") => None,
+        _ if blend.is_some() => None,
         _ => match part.strip_prefix("face_").and_then(|n| n.parse::<u32>().ok()) {
             Some(face) => Some(FaceOrigin::Read { face }),
             None => Some(FaceOrigin::Segment { label: part.strip_prefix("seg:").unwrap_or(part).to_string(), end: None }),
@@ -92,6 +97,65 @@ fn face(b: &Brep, f: FaceId) -> Option<&Face> {
 /// How many coedges loop `l` of `b` has, if `b` has it.
 fn loop_len(b: &Brep, l: super::LoopId) -> Option<usize> {
     b.loops.get(l.index()).map(|lp| lp.coedges.len())
+}
+
+/// The faces across an edge from face `f` of `b` (ids that name nothing skipped).
+fn neighbours(b: &Brep, f: FaceId) -> BTreeSet<FaceId> {
+    let mut out = BTreeSet::new();
+    let coedges = face(b, f).into_iter().flat_map(|x| &x.loops).filter_map(|l| b.loops.get(l.index())).flat_map(|lp| &lp.coedges);
+    for c in coedges {
+        let Some(edge) = b.coedges.get(c.index()).map(|x| x.edge) else { continue };
+        for u in b.uses.get(edge.index()).into_iter().flatten() {
+            let g = b.coedges.get(u.index()).and_then(|x| b.loops.get(x.lp.index())).map(|lp| lp.face);
+            out.extend(g.filter(|&g| g != f));
+        }
+    }
+    out
+}
+
+/// Each blend corner patch of `result` (a new face named `corner` with no origin yet), given the
+/// one vertex of `operand` that the edges its neighbouring blend faces come from all end at.
+fn corners(rows: &mut [Row], result: &Brep, feature: &str, operand: Option<&Brep>) {
+    let Some(operand) = operand else { return };
+    let edge_of: BTreeMap<FaceId, EdgeId> = rows
+        .iter()
+        .filter_map(|(f, made, _)| {
+            made.iter().find_map(|o| match o {
+                FaceOrigin::Edge { operand: 0, edge } => Some((*f, *edge)),
+                _ => None,
+            })
+        })
+        .collect();
+    for (f, made, from) in rows.iter_mut() {
+        let is_corner = face(result, *f).is_some_and(|x| x.names.iter().any(|n| n.feature == feature && n.face == "corner"));
+        if !is_corner || !made.is_empty() || !from.is_empty() {
+            continue;
+        }
+        let mut common: Option<BTreeSet<VertexId>> = None;
+        for g in neighbours(result, *f) {
+            let Some(e) = edge_of.get(&g).and_then(|e| operand.edges.get(e.index())) else { continue };
+            let ends: BTreeSet<VertexId> = [e.start, e.end].into_iter().collect();
+            common = Some(match common {
+                None => ends,
+                Some(c) => c.intersection(&ends).copied().collect(),
+            });
+        }
+        if let Some(c) = common
+            && let [vertex] = c.into_iter().collect::<Vec<_>>().as_slice()
+        {
+            made.push(FaceOrigin::Vertex { operand: 0, vertex: *vertex });
+        }
+    }
+}
+
+/// The history of a solid read from a file or an encoding: every face new, the `n`-th face read.
+pub fn read(result: &Brep) -> History {
+    let faces = result
+        .face_ids()
+        .enumerate()
+        .map(|(n, f)| (f, Change::Generated, u32::try_from(n).ok().map(|face| FaceOrigin::Read { face }).into_iter().collect()))
+        .collect();
+    History { operands: 0, faces, deleted: Vec::new() }
 }
 
 /// Each operand with its index, up to `u8::MAX` operands.
@@ -110,8 +174,9 @@ fn unchanged(result: &Brep, r: FaceId, operand: &Brep, o: FaceId) -> bool {
 }
 
 /// The history of an operation that made `result` from `inputs`, whose new faces carry the names of
-/// its own `feature`.
-pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
+/// its own `feature`; a blend's `edges` are its edges of operand 0 in the order it took them (its
+/// faces' names count them).
+pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str, edges: &[EdgeId]) -> History {
     // more operands than an origin can number: every face without an origin (the audit reports
     // it), nothing guessed
     if inputs.len() > usize::from(u8::MAX) {
@@ -134,7 +199,7 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
         let mut made: Vec<FaceOrigin> = Vec::new();
         for n in &this.names {
             if n.feature == feature {
-                made.extend(generated(n));
+                made.extend(generated(n, edges));
                 continue;
             }
             let Some(cands) = carriers.get(n) else { continue };
@@ -155,6 +220,7 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
         made.dedup();
         rows.push((r, made, from));
     }
+    corners(&mut rows, result, feature, inputs.first().copied());
     // how many result faces each operand face reaches
     let mut reach: BTreeMap<(u8, FaceId), usize> = BTreeMap::new();
     for (_, _, from) in &rows {
@@ -191,6 +257,68 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
     History { operands: u8::try_from(inputs.len()).unwrap_or(u8::MAX), faces, deleted }
 }
 
+/// [`derive`] from the face names alone, for solids that have no springrep form here (a cadrs-held
+/// one): each solid as its faces' names by face index. Without surfaces a name several operand
+/// faces carry gives no origin, and a face is never called kept, only modified.
+pub fn derive_names(inputs: &[&[BTreeSet<FaceName>]], result: &[BTreeSet<FaceName>], feature: &str, edges: &[EdgeId]) -> History {
+    let id = |i: usize| u32::try_from(i).ok().map(FaceId::from_raw);
+    if inputs.len() > usize::from(u8::MAX) {
+        let faces = (0..result.len()).filter_map(id).map(|f| (f, Change::Generated, Vec::new())).collect();
+        return History { operands: u8::MAX, faces, deleted: Vec::new() };
+    }
+    let numbered = || inputs.iter().enumerate().filter_map(|(k, b)| Some((u8::try_from(k).ok()?, *b)));
+    let mut carriers: BTreeMap<&FaceName, Vec<(u8, FaceId)>> = BTreeMap::new();
+    for (k, faces) in numbered() {
+        for (i, names) in faces.iter().enumerate() {
+            let Some(f) = id(i) else { continue };
+            for n in names {
+                carriers.entry(n).or_default().push((k, f));
+            }
+        }
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for (i, names) in result.iter().enumerate() {
+        let Some(r) = id(i) else { continue };
+        let mut from: BTreeSet<(u8, FaceId)> = BTreeSet::new();
+        let mut made: Vec<FaceOrigin> = Vec::new();
+        for n in names {
+            if n.feature == feature {
+                made.extend(generated(n, edges));
+            } else if let Some([one]) = carriers.get(n).map(Vec::as_slice) {
+                from.insert(*one);
+            }
+        }
+        made.sort();
+        made.dedup();
+        rows.push((r, made, from));
+    }
+    let mut reach: BTreeMap<(u8, FaceId), usize> = BTreeMap::new();
+    for (_, _, from) in &rows {
+        for &o in from {
+            *reach.entry(o).or_default() += 1;
+        }
+    }
+    let faces = rows
+        .into_iter()
+        .map(|(r, made, from)| {
+            let change = match (from.len(), made.is_empty()) {
+                (0, _) => Change::Generated,
+                (1, true) if from.iter().any(|o| reach.get(o).copied().unwrap_or(0) > 1) => Change::Split,
+                (1, true) => Change::Modified,
+                _ => Change::Merged,
+            };
+            let mut origins: Vec<FaceOrigin> = from.into_iter().map(|(operand, face)| FaceOrigin::Operand { operand, face }).collect();
+            origins.extend(made);
+            (r, change, origins)
+        })
+        .collect();
+    let deleted = numbered()
+        .flat_map(|(k, faces)| (0..faces.len()).filter_map(id).map(move |f| (k, f)))
+        .filter(|o| !reach.contains_key(o))
+        .collect();
+    History { operands: u8::try_from(inputs.len()).unwrap_or(u8::MAX), faces, deleted }
+}
+
 /// The history of an operation that changed nothing about its one operand's faces but their
 /// names (a renaming): every face kept, from the face of the same id.
 pub fn identity(b: &Brep) -> History {
@@ -201,18 +329,35 @@ pub fn identity(b: &Brep) -> History {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geom::{Plane, Surface};
     use crate::math::{Frame, Vec3};
-    use crate::primitive::block;
     use crate::topo::LoopId;
 
+    /// A cube's six planes, each one face of one (empty) loop, named `feature.<side>`: enough
+    /// topology for names and loops, built with topo's own builder.
     fn cube(feature: &str) -> Brep {
-        block(&Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(1.0, 1.0, 1.0), feature).unwrap()
+        let mut b = Brep::new();
+        let sides = [
+            ("bottom", Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0)),
+            ("top", Vec3::new(0.0, 0.0, 1.0), Vec3::Z),
+            ("front", Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)),
+            ("back", Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+            ("left", Vec3::new(0.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0)),
+            ("right", Vec3::new(1.0, 0.0, 0.0), Vec3::X),
+        ];
+        for (name, at, normal) in sides {
+            let x = if normal.z == 0.0 { Vec3::Z } else { Vec3::X };
+            let frame = Frame::new(at, normal, x).unwrap();
+            let f = b.add_face(Surface::Plane(Plane { frame }), false, [FaceName::new(feature, name)]);
+            b.add_loop(f, Vec::new());
+        }
+        b
     }
 
     #[test]
     fn a_renamed_block_is_kept_face_for_face() {
         let b = cube("a");
-        let h = derive(&[&b], &b, "new");
+        let h = derive(&[&b], &b, "new", &[]);
         assert_eq!(h.operands, 1);
         assert!(h.faces.iter().all(|(_, c, o)| *c == Change::Kept && o.len() == 1));
         assert!(h.deleted.is_empty());
@@ -223,11 +368,11 @@ mod tests {
         let b = cube("a");
         let mut odd = b.clone();
         odd.faces[0].loops.push(LoopId::from_raw(9999));
-        let h = derive(&[&b], &odd, "new");
+        let h = derive(&[&b], &odd, "new", &[]);
         assert_eq!(h.faces.len(), 6);
         // the face with the stray loop is no longer the operand's face unchanged
         assert!(h.faces.iter().any(|(_, c, _)| *c == Change::Modified));
-        let h = derive(&[&odd], &b, "new");
+        let h = derive(&[&odd], &b, "new", &[]);
         assert_eq!(h.faces.len(), 6);
     }
 
@@ -235,10 +380,24 @@ mod tests {
     fn more_operands_than_an_origin_can_number_give_faces_without_origins() {
         let b = cube("a");
         let many: Vec<&Brep> = std::iter::repeat_n(&b, 300).collect();
-        let h = derive(&many, &b, "new");
+        let h = derive(&many, &b, "new", &[]);
         assert_eq!(h.operands, u8::MAX);
         assert!(h.faces.iter().all(|(_, c, o)| *c == Change::Generated && o.is_empty()));
-        let h = derive(&many[..255], &b, "new");
+        let h = derive(&many[..255], &b, "new", &[]);
         assert_eq!(h.operands, 255);
+    }
+
+    #[test]
+    fn names_alone_say_where_a_held_solid_s_faces_came_from() {
+        let b = cube("a");
+        let names: Vec<BTreeSet<FaceName>> = b.face_ids().map(|f| b.face(f).names.clone()).collect();
+        let mut out = names.clone();
+        out.push([FaceName::new("new", "round_0")].into_iter().collect());
+        let edge = EdgeId::from_raw(3);
+        let h = derive_names(&[&names], &out, "new", &[edge]);
+        assert_eq!(h.faces.len(), 7);
+        assert!(h.faces[..6].iter().all(|(_, c, o)| *c == Change::Modified && o.len() == 1));
+        assert_eq!(h.faces[6].2, vec![FaceOrigin::Edge { operand: 0, edge }]);
+        assert!(h.deleted.is_empty());
     }
 }

@@ -23,3 +23,14 @@ pub(crate) fn run<T>(op: &'static str, f: impl FnOnce() -> Result<T>) -> Result<
 pub(crate) fn op(op: &'static str, inputs: &[&crate::Solid], f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
     run(op, || f().map(|s| s.with_history(inputs)))
 }
+
+/// [`op`] for a blend of `edges` of `input` (in the order it takes them): its history says which
+/// edge each new face rounds or bevels.
+pub(crate) fn blend(op: &'static str, input: &crate::Solid, edges: &[crate::EdgeId], f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
+    run(op, || f().map(|s| s.with_blend_history(&[input], edges)))
+}
+
+/// [`run`] for a read (a file's, an encoding's): every face of its answer is new, in the order read.
+pub(crate) fn read(op: &'static str, f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
+    run(op, || f().map(crate::Solid::with_read_history))
+}

@@ -161,6 +161,11 @@ pub(crate) fn allowed(op: &'static str, name: &'static str) -> Result<()> {
     Ok(())
 }
 
+/// [`springrep_only`] for a blend of `edges` of `input` (see [`crate::firewall::blend`]).
+pub(crate) fn springrep_blend(op: &'static str, input: &Solid, edges: &[crate::EdgeId], run: impl Fn() -> Result<Solid>) -> Result<Solid> {
+    crate::firewall::blend(op, input, edges, || ladder(op, &[Rung { name: "springrep", run: &run }]))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
