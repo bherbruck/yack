@@ -1,6 +1,6 @@
 // yack: Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 // Adapted from springrep@a03e8a1 src/boolean/ssi.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/ssi.rs to intersect/ssi.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/ssi.rs to intersect/ssi.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only; `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 //! revolution, parallel cylinders and equal crossing cylinders have closed forms; every other pair
 //! is traced by [`super::march`].
@@ -11,7 +11,7 @@
 
 use std::f64::consts::TAU;
 
-use super::march;
+use super::march::{self, SsiCurve};
 
 mod conic;
 mod sweep;
@@ -22,16 +22,9 @@ use crate::{
     tol,
 };
 
-#[derive(Clone, Debug)]
-pub(crate) struct SsiCurve {
-    pub curve: Curve,
-    pub range: (f64, f64),
-    pub closed: bool,
-    pub tangent: bool,
-}
 
 #[derive(Clone, Debug)]
-pub(crate) enum Ssi {
+pub enum Ssi {
     /// The surfaces are the same point set.
     Coincident,
     Curves {
@@ -83,7 +76,7 @@ fn same_axis(a: Axis, b: Axis) -> bool {
 }
 
 /// Whether two surfaces are the same point set.
-pub(crate) fn same_domain(a: &Surface, b: &Surface) -> bool {
+#[allow(clippy::panic)] pub fn same_domain(a: &Surface, b: &Surface) -> bool {
     let close = |x: f64, y: f64| (x - y).abs() <= tol::LINEAR;
     match (a, b) {
         (Surface::Plane(p), Surface::Plane(q)) => {
@@ -91,7 +84,7 @@ pub(crate) fn same_domain(a: &Surface, b: &Surface) -> bool {
                 && (q.frame.origin - p.frame.origin).dot(p.frame.z).abs() <= tol::LINEAR
         }
         (Surface::Cylinder(p), Surface::Cylinder(q)) => {
-            close(p.radius, q.radius) && same_axis(axis_of(a).unwrap(), axis_of(b).unwrap())
+            close(p.radius, q.radius) && same_axis(axis_of(a).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")), axis_of(b).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")))
         }
         (Surface::Sphere(p), Surface::Sphere(q)) => {
             close(p.radius, q.radius) && p.frame.origin.dist(q.frame.origin) <= tol::LINEAR
@@ -103,7 +96,7 @@ pub(crate) fn same_domain(a: &Surface, b: &Surface) -> bool {
                 && parallel(p.frame.z, q.frame.z)
         }
         (Surface::Cone(p), Surface::Cone(q)) => {
-            if !same_axis(axis_of(a).unwrap(), axis_of(b).unwrap()) {
+            if !same_axis(axis_of(a).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")), axis_of(b).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value"))) {
                 return false;
             }
             let apex = |c: &crate::geom::Cone| {
@@ -177,7 +170,7 @@ fn within(a: &Surface, b: &Surface) -> bool {
 }
 
 /// The part of the line `o + t·d` inside `region`, as a parameter range.
-pub(crate) fn clip_line(o: Point3, d: Vec3, region: &Aabb) -> Option<(f64, f64)> {
+pub fn clip_line(o: Point3, d: Vec3, region: &Aabb) -> Option<(f64, f64)> {
     let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
     for k in 0..3 {
         let (ok, dk) = (o[k], d[k]);
@@ -214,13 +207,13 @@ fn circle_curve(frame: Frame, radius: f64, tangent: bool) -> SsiCurve {
     }
 }
 
-fn frame_at(origin: Point3, z: Vec3, x_hint: Vec3) -> Frame {
+#[allow(clippy::panic)] fn frame_at(origin: Point3, z: Vec3, x_hint: Vec3) -> Frame {
     Frame::new(origin, z, x_hint)
         .or_else(|_| Frame::from_axis(origin, z))
-        .expect("axis is a unit vector")
+        .unwrap_or_else(|e| panic!("axis is a unit vector: {e:?}"))
 }
 
-fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Ssi {
+#[allow(clippy::panic)] fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Ssi {
     let (n1, n2) = (a.z, b.z);
     let d = n1.cross(n2);
     if d.norm() <= tol::ANGULAR {
@@ -231,14 +224,14 @@ fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Ssi {
     // not take the difference of two large numbers: at an angle θ, 1 − c² is θ², and that form's
     // rounding put the point θ⁻² · 1e-16 off both planes, 1e-5 mm at θ = 1.5e-5.
     let p0 = (n2 * h1 - n1 * h2).cross(d) * (1.0 / d.dot(d));
-    let dir = d.unit().expect("planes are not parallel");
+    let dir = d.unit().unwrap_or_else(|| panic!("planes are not parallel"));
     Ssi::Curves {
         curves: line_curve(p0, dir, region, false).into_iter().collect(),
         points: Vec::new(),
     }
 }
 
-fn plane_cylinder(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Ssi {
+#[allow(clippy::panic)] fn plane_cylinder(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Ssi {
     let (n, a, r) = (p.z, c.frame.z, c.radius);
     let an = a.dot(n);
     if parallel(a, n) {
@@ -264,7 +257,7 @@ fn plane_cylinder(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Ssi {
             let mid = c.frame.origin - n * (0.5 * (delta + delta.signum() * r));
             line_curve(mid, a, region, true).into_iter().collect()
         } else {
-            let w = a.cross(n).unit().expect("axis lies along the plane");
+            let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis lies along the plane"));
             let s = ((r - delta.abs()) * (r + delta.abs())).sqrt();
             [foot + w * s, foot - w * s]
                 .into_iter()
@@ -286,7 +279,7 @@ fn plane_cylinder(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Ssi {
     }
     let t = (p.origin - c.frame.origin).dot(n) / an;
     let centre = c.frame.origin + a * t;
-    let w = a.cross(n).unit().expect("axis is oblique to the plane");
+    let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis is oblique to the plane"));
     let m = n.cross(w);
     let frame = Frame {
         origin: centre,
@@ -561,11 +554,11 @@ fn circles_about(axis: Axis, x_hint: Vec3, pts: Vec<([f64; 2], bool)>) -> Ssi {
 
 /// Two cylinders of one radius whose axes cross meet in two ellipses, in the planes bisecting
 /// the axes, which touch where the common perpendicular meets the cylinders.
-fn equal_crossing_cylinders(o: Point3, a1: Vec3, a2: Vec3, r: f64) -> Ssi {
-    let nhat = a1.cross(a2).unit().expect("axes are not parallel");
+#[allow(clippy::panic)] fn equal_crossing_cylinders(o: Point3, a1: Vec3, a2: Vec3, r: f64) -> Ssi {
+    let nhat = a1.cross(a2).unit().unwrap_or_else(|| panic!("axes are not parallel"));
     let mut curves = Vec::new();
     for m in [a1 - a2, a1 + a2] {
-        let m = m.unit().expect("axes are not parallel");
+        let m = m.unit().unwrap_or_else(|| panic!("axes are not parallel"));
         let e = m.cross(nhat);
         let frame = Frame {
             origin: o,
@@ -655,7 +648,7 @@ fn cylinder_cylinder(
 
 /// The intersection of `a` and `b` within `region`. `seeds` gives points on both surfaces where
 /// tracing may start, for the pairs with no closed form.
-pub(crate) fn intersect(
+pub fn intersect(
     a: &Surface,
     b: &Surface,
     region: &Aabb,

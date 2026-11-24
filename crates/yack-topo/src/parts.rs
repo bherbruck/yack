@@ -1,7 +1,7 @@
 // yack: the arena's own entities, lent to the encoder and taken back from it.
 // Adapted from springrep@a03e8a1 src/topo/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: the id check and the arena's assembly split from the encoding (M2.2 T4a), which moved to
-// codec/topo.rs; `Parts` / `Entities` added so the encoder need not see inside `Brep`.
+// codec/topo.rs; `Parts` / `Entities` added so the encoder need not see inside `Brep`; then to yack-topo (M3 W4), paths and visibility only.
 //! The arena's own entities, as the encoder writes them: everything but the memos, which are what
 //! a process has worked out about the faces, and each edge's uses, which follow from the coedges.
 
@@ -12,7 +12,7 @@ use super::memo::Memos;
 use super::*;
 
 /// The arena's entities, borrowed.
-pub(crate) struct Parts<'a> {
+pub struct Parts<'a> {
     pub vertices: &'a Vec<Vertex>,
     pub edges: &'a Vec<Edge>,
     pub coedges: &'a Vec<Coedge>,
@@ -26,7 +26,7 @@ pub(crate) struct Parts<'a> {
 }
 
 /// The arena's entities, owned: what [`Brep::from_parts`] assembles an arena from.
-pub(crate) struct Entities {
+pub struct Entities {
     pub vertices: Vec<Vertex>,
     pub edges: Vec<Edge>,
     pub coedges: Vec<Coedge>,
@@ -41,7 +41,7 @@ pub(crate) struct Entities {
 
 impl Brep {
     /// The arena's entities, for the encoder.
-    pub(crate) fn parts(&self) -> Parts<'_> {
+    pub fn parts(&self) -> Parts<'_> {
         Parts {
             vertices: &self.vertices,
             edges: &self.edges,
@@ -58,7 +58,7 @@ impl Brep {
 
     /// The arena of these entities, with fresh memos and its edges' uses worked out; `None` when an
     /// id points outside its own arrays.
-    pub(crate) fn from_parts(e: Entities) -> Option<Brep> {
+    pub fn from_parts(e: Entities) -> Option<Brep> {
         // Memos are what a process has worked out about the faces: they start empty.
         let memos = (0..e.faces.len()).map(|_| Arc::default()).collect();
         let mut b = Brep {

@@ -1,6 +1,6 @@
 // yack: A solid moved by a similarity: a uniform scale times a rotation or a reflection, then a
 // Adapted from springrep@a03e8a1 src/topo/similar.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/topo/similar.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! A solid moved by a similarity: a uniform scale times a rotation or a reflection, then a
 //! translation. Frames stay right-handed, which the analytic surfaces' normals rely on, so where a
 //! reflection or a scale changes a surface's or curve's parameters, the parameter curves on it
@@ -315,7 +315,7 @@ impl Brep {
     /// Reflects the arena by the orthogonal `r` of determinant −1. Every loop turns round, as a
     /// reflection reverses its sense about the face; a face's natural normal follows its new
     /// surface, so it is turned over where that surface keeps its parameters.
-    fn mirror(&mut self, r: &[[f64; 3]; 3]) {
+    #[allow(clippy::panic)] fn mirror(&mut self, r: &[[f64; 3]; 3]) {
         // Where a loop turns round, each coedge starts at its old end.
         let ends: Vec<Vec2> = (0..self.coedges.len())
             .map(|i| {
@@ -329,7 +329,7 @@ impl Brep {
                     e.range
                 };
                 let ts: Vec<f64> = (0..=32).map(|k| t0 + (t1 - t0) * k as f64 / 32.0).collect();
-                *self.coedge_uvs(c, &ts).last().expect("samples")
+                *self.coedge_uvs(c, &ts).last().unwrap_or_else(|| panic!("samples"))
             })
             .collect();
         for v in &mut self.vertices {

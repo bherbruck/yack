@@ -1,6 +1,6 @@
 // yack: Boxes that hold a spline curve piece by piece, from each knot span's control points, and a tree
 // Adapted from springrep@a03e8a1 src/boolean/hulls.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/hulls.rs to intersect/hulls.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/hulls.rs to intersect/hulls.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
 //! Boxes that hold a spline curve piece by piece, from each knot span's control points, and a tree
 //! of them for finding which pieces of one curve come near another.
 //!
@@ -58,7 +58,7 @@ pub(crate) fn pieces(c: &Curve, range: (f64, f64)) -> Option<Vec<(f64, f64, Aabb
 /// The parameter intervals of `c1`'s pieces over `r1`, in order, whose boxes come within `reach`
 /// of a box of `c2`'s over `r2`: away from them `c1` is farther than `reach` from `c2`. `None`
 /// where either curve has no hulls.
-pub(crate) fn near(
+pub fn near(
     c1: &Curve,
     r1: (f64, f64),
     c2: &Curve,
@@ -86,7 +86,7 @@ pub(crate) fn gap(a: &Aabb, b: &Aabb) -> f64 {
 }
 
 /// A binary tree over a curve's consecutive pieces, each node boxing the pieces under it.
-pub(crate) struct Tree {
+pub struct Tree {
     boxes: Vec<Aabb>,
     nodes: Vec<Node>,
 }
@@ -101,7 +101,7 @@ struct Node {
 const LEAF: usize = 4;
 
 impl Tree {
-    pub(crate) fn new(boxes: Vec<Aabb>) -> Tree {
+    pub fn new(boxes: Vec<Aabb>) -> Tree {
         let mut t = Tree {
             boxes,
             nodes: Vec::new(),
@@ -137,7 +137,7 @@ impl Tree {
     }
 
     /// For each of this tree's boxes, whether some box of `other` comes within `reach` of it.
-    pub(crate) fn near(&self, other: &Tree, reach: f64) -> Vec<bool> {
+    pub fn near(&self, other: &Tree, reach: f64) -> Vec<bool> {
         let mut out = vec![false; self.boxes.len()];
         if !self.nodes.is_empty() && !other.nodes.is_empty() {
             self.near_from(0, other, 0, reach, &mut out);

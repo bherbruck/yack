@@ -1,6 +1,6 @@
 // yack: springrep module src/topo/pcurve.rs
 // Adapted from springrep@a03e8a1 src/topo/pcurve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the Fitted pcurve (M1.15: a face's own parameters, for surfaces that fold).
+// Changes: the Fitted pcurve (M1.15: a face's own parameters, for surfaces that fold); then to yack-topo (M3 W4), paths and visibility only.
 use crate::{
     geom::{Curve, NurbsCurve, Surface},
     math::{Point3, Vec2, Vec3},
@@ -26,7 +26,7 @@ pub enum PCurve {
 impl PCurve {
     /// The parameters at `t` of a pcurve that says them itself (affine or fitted); `None` for a
     /// projected one, whose parameters are found by projecting the edge.
-    pub(crate) fn uv_at(&self, t: f64) -> Option<Vec2> {
+    pub fn uv_at(&self, t: f64) -> Option<Vec2> {
         match self {
             PCurve::Affine { origin, dir } => Some(*origin + *dir * t),
             PCurve::Fitted { curve } => {
@@ -38,7 +38,7 @@ impl PCurve {
     }
 
     /// A fitted pcurve's parameters at `t` and how fast they move with `t`; `None` for the others.
-    pub(crate) fn fitted_d1(&self, t: f64) -> Option<(Vec2, Vec2)> {
+    pub fn fitted_d1(&self, t: f64) -> Option<(Vec2, Vec2)> {
         let PCurve::Fitted { curve } = self else { return None };
         let (p, d, _) = curve.d2(t);
         Some((Vec2::new(p.x, p.y), Vec2::new(d.x, d.y)))
@@ -73,7 +73,7 @@ pub(crate) fn fitted_mapped(
 /// `curve(t)` projected onto `s` near `hint`. At a pole, where every `u` is the same point, `u` is
 /// the angle the curve leaves the pole at towards `toward`, a parameter beside `t`: the limit of
 /// its neighbours' `u`, which every caller finds alike whatever its sampling.
-pub(crate) fn project_on(s: &Surface, curve: &Curve, t: f64, toward: f64, hint: Vec2) -> Vec2 {
+pub fn project_on(s: &Surface, curve: &Curve, t: f64, toward: f64, hint: Vec2) -> Vec2 {
     let (p, dp, ddp) = curve.d2(t);
     let uv = s.project_near(p, hint);
     let away = dp * (toward - t).signum();
@@ -257,9 +257,7 @@ fn best_of(leaving: &dyn Fn(f64) -> Option<Vec3>, away: Vec3, (lo, hi): (f64, f6
 mod tests {
     use super::*;
     use crate::{
-        edit::{Affine, affine},
         math::{Frame, Transform},
-        primitive::sphere,
     };
 
     // A direction turning once round on [-π, π] and one a hair past its end, as rounding leaves a
@@ -284,17 +282,46 @@ mod tests {
     // keeps the one found where the part was built. At the seam it is the domain's end exactly.
     #[test]
     fn a_direction_leaving_a_pole_names_its_parameter_to_a_hair_wherever_the_surface_is() {
-        let map = Affine {
-            m: [
-                [0.1028, -0.9280, 0.5227],
-                [-0.6650, 0.2041, 0.6977],
-                [1.2920, 0.5654, 0.3662],
-            ],
-            t: Vec3::new(20.147, -35.624, 7.546),
+        // The skin of a ball of radius 1.8 on `f` under the affine map `m`, `t`, as edit::affine
+        // builds it: the rational revolution of a half circle, its control points mapped (M3 W4:
+        // built here, since yack-topo sits below primitive and edit).
+        let m = [
+            [0.1028, -0.9280, 0.5227],
+            [-0.6650, 0.2041, 0.6977],
+            [1.2920, 0.5654, 0.3662],
+        ];
+        let t = Vec3::new(20.147, -35.624, 7.546);
+        let map = |p: Vec3| {
+            let r = m.map(|row| row[0] * p.x + row[1] * p.y + row[2] * p.z);
+            Vec3::new(r[0], r[1], r[2]) + t
         };
         let f = Frame::new(Vec3::new(-2.9, -1.3, -1.2), Vec3::Z, Vec3::X).unwrap();
-        let ball = affine(&sphere(&f, 1.8, "sph").unwrap(), &map).unwrap();
-        let s = &ball.face(ball.face_ids().next().unwrap()).surface;
+        let (r, h) = (1.8, std::f64::consts::FRAC_1_SQRT_2);
+        let half = [[0.0, -r], [r, -r], [r, 0.0], [r, r], [0.0, r]];
+        let half_w = [1.0, h, 1.0, h, 1.0];
+        let ring = [
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, h],
+            [0.0, 1.0, 1.0],
+            [-1.0, 1.0, h],
+            [-1.0, 0.0, 1.0],
+            [-1.0, -1.0, h],
+            [0.0, -1.0, 1.0],
+            [1.0, -1.0, h],
+            [1.0, 0.0, 1.0],
+        ];
+        let (mut ctrl, mut weights) = (Vec::new(), Vec::new());
+        for c in ring {
+            for (p, w) in half.iter().zip(&half_w) {
+                let local = f.x * (p[0] * c[0]) + f.y * (p[0] * c[1]) + f.z * p[1];
+                ctrl.push(map(f.origin + local));
+                weights.push(c[2] * w);
+            }
+        }
+        let u_knots = vec![0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0];
+        let v_knots = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0];
+        let skin = crate::geom::NurbsSurface::new((2, 2), (u_knots, v_knots), (9, 5), ctrl, Some(weights)).unwrap();
+        let s = &Surface::Nurbs(Box::new(skin));
         let Surface::Nurbs(n) = s else {
             panic!("a stretched ball's skin is a spline")
         };

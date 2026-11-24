@@ -1,7 +1,7 @@
 // yack: the names features give faces, and the face-name pairs that pick edges: plain data.
 // Adapted from springrep@a03e8a1 src/topo/names.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from topo/names.rs to names.rs (M2), being plain data topo and profile both use;
-// EdgeName joined it from blend.rs (M2.5, T8).
+// EdgeName joined it from blend.rs (M2.5, T8); then to yack-topo (M3 W4), paths and visibility only.
 use std::fmt;
 
 /// The name a feature gave a face: `feature.face`. A face can
@@ -20,7 +20,7 @@ impl FaceName {
     /// A circle's one edge, and every side face of a loft.
     pub const SIDE: &'static str = "side";
     /// `feature`'s face for each of `names`.
-    pub(crate) fn all<'a>(
+    pub fn all<'a>(
         feature: &str,
         names: impl IntoIterator<Item = &'a String>,
     ) -> Vec<FaceName> {

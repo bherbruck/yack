@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-pub(crate) use yack_numeric::{KRONROD_15, KRONROD_7, bisect, solve2, solve_dense};
+pub(crate) use yack_numeric::{KRONROD_15, KRONROD_7, solve2, solve_dense};
 
 /// Gauss–Legendre nodes and weights of order `N` on [-1, 1].
 fn legendre_rule(n: usize) -> Vec<(f64, f64)> {

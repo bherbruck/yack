@@ -1,6 +1,6 @@
 // yack: A plane against a cone whose axis is not square to it: the lines through the apex each meet the
 // Adapted from springrep@a03e8a1 src/boolean/ssi/conic.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/ssi/conic.rs to intersect/ssi/conic.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/ssi/conic.rs to intersect/ssi/conic.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
 //! A plane against a cone whose axis is not square to it: the lines through the apex each meet the
 //! plane once, at `s = h / (n·g(θ))` along the generator `g(θ)`, `h` the plane's distance from the
 //! apex. Where `n·g` keeps its sign the section is an ellipse, built exactly from its vertices;
@@ -185,7 +185,7 @@ pub(crate) fn plane_cone(p: &Plane, c: &Cone, region: &Aabb) -> Option<Ssi> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{intersect::csi::signed_distance, math::Point3};
+    use crate::{csi::signed_distance, math::Point3};
 
     /// A cone about z with its apex at the origin, opening upward at 45°.
     fn cone() -> Cone {
@@ -253,7 +253,7 @@ mod tests {
         let (cs, pts) = meet(&plane([0.0, 2.0, 0.0], [0.0, 1.0, 0.0]), &c);
         assert!(pts.is_empty() && cs.len() == 1);
         let at = Vec3::new(0.0, 2.0, 2.0);
-        let (d, _) = crate::intersect::csi::curve_distance(&cs[0].curve, cs[0].range, at);
+        let (d, _) = crate::csi::curve_distance(&cs[0].curve, cs[0].range, at);
         assert!(d < 1e-9, "{d}");
     }
 

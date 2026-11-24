@@ -1,6 +1,6 @@
 // yack: Curve–surface and curve–curve intersection, signed distance to a surface, and ray hits.
 // Adapted from springrep@a03e8a1 src/boolean/csi.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/csi.rs to intersect/csi.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/csi.rs to intersect/csi.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only; `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! Curve–surface and curve–curve intersection, signed distance to a surface, and ray hits.
 //!
 //! Two crossings closer than the linear tolerance are one touching point: a curve whose excursion
@@ -20,7 +20,7 @@ use crate::{
 
 /// The signed distance from `p` to `s`, positive on the side of the natural normal: exact near the
 /// analytic surfaces, and along the projection's normal for the others.
-pub(crate) fn signed_distance(s: &Surface, p: Point3) -> f64 {
+pub fn signed_distance(s: &Surface, p: Point3) -> f64 {
     match s {
         Surface::Plane(pl) => (p - pl.frame.origin).dot(pl.frame.z),
         Surface::Cylinder(c) => {
@@ -47,17 +47,17 @@ pub(crate) fn signed_distance(s: &Surface, p: Point3) -> f64 {
 /// The signed distance to `s` along a path of points: each projection onto a B-spline surface
 /// continues from the last point's where the last point lay near enough the surface, and the
 /// step from it is short enough, for that to find the nearest point.
-pub(crate) struct Tracker<'a> {
+pub struct Tracker<'a> {
     s: &'a Surface,
     last: Option<(Point3, Vec2, f64)>,
 }
 
 impl<'a> Tracker<'a> {
-    pub(crate) fn new(s: &'a Surface) -> Tracker<'a> {
+    pub fn new(s: &'a Surface) -> Tracker<'a> {
         Tracker { s, last: None }
     }
 
-    pub(crate) fn at(&mut self, p: Point3) -> f64 {
+    pub fn at(&mut self, p: Point3) -> f64 {
         let Surface::Nurbs(n) = self.s else {
             return signed_distance(self.s, p);
         };
@@ -74,7 +74,7 @@ impl<'a> Tracker<'a> {
 /// Where a curve meets a surface: the parameters of its crossing and touching points in its range,
 /// or `on_surface` when the whole curve lies in the surface.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Hits {
+pub struct Hits {
     pub ts: Vec<f64>,
     pub on_surface: bool,
 }
@@ -376,7 +376,7 @@ fn numeric_hits(c: &Curve, range: (f64, f64), s: &Surface) -> Hits {
 }
 
 /// Where the curve, over `range`, meets the surface.
-pub(crate) fn curve_surface(c: &Curve, range: (f64, f64), s: &Surface) -> Hits {
+pub fn curve_surface(c: &Curve, range: (f64, f64), s: &Surface) -> Hits {
     let raw = match (c, s) {
         (Curve::Line(l), Surface::Plane(p)) => {
             let dn = l.dir.dot(p.frame.z);
@@ -1224,14 +1224,14 @@ fn conic_plane(c: &Curve) -> Option<crate::math::Frame> {
 }
 
 /// The distance from `p` to the curve over `range`, and the parameter of the nearest point.
-pub(crate) fn curve_distance(c: &Curve, range: (f64, f64), p: Point3) -> (f64, f64) {
+pub fn curve_distance(c: &Curve, range: (f64, f64), p: Point3) -> (f64, f64) {
     let t = c.project(p, range.0, range.1);
     (c.eval(t).dist(p), t)
 }
 
 /// Whether `p` lies within `reach` of the curve over `range`, as [`curve_distance`] measures it:
 /// a point farther than that from every piece's hull box is farther from the curve, unprojected.
-pub(crate) fn within(c: &Curve, range: (f64, f64), p: Point3, reach: f64) -> bool {
+pub fn within(c: &Curve, range: (f64, f64), p: Point3, reach: f64) -> bool {
     if let Some(pieces) = hulls::pieces(c, range) {
         let mut bb = Aabb::EMPTY;
         bb.add(p);
@@ -1243,13 +1243,13 @@ pub(crate) fn within(c: &Curve, range: (f64, f64), p: Point3, reach: f64) -> boo
 }
 
 /// Two vertices closer than this, mm, along curves running nearly together are one meeting.
-pub(crate) const GRAZE_GAP: f64 = 1e-5;
+pub const GRAZE_GAP: f64 = 1e-5;
 
 /// Where `c1` crosses `c2` while the two run within [`GRAZE_GAP`] of each other: a local least of
 /// the gap over 64 samples, settled by golden-section search, where the offset from one to the
 /// other turns round. Two splines a hair apart cross at angles of 1e-7 rad, where a general step
 /// loses them; a touch without a crossing is left alone.
-pub(crate) fn grazing(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) -> Vec<Point3> {
+pub fn grazing(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) -> Vec<Point3> {
     const SAMPLES: usize = 64;
     let gap = |t: f64| curve_distance(c2, r2, c1.eval(t)).0;
     let ts: Vec<f64> = (0..=SAMPLES)
@@ -1301,7 +1301,7 @@ pub(crate) fn grazing(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) ->
 
 /// The points where two curves meet, transversally or touching; nothing where they overlap, since
 /// an overlap's ends are vertices of one curve or the other.
-pub(crate) fn curve_curve(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) -> Vec<Point3> {
+pub fn curve_curve(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) -> Vec<Point3> {
     let on2 = |p: Point3| within(c2, r2, p, tol::LINEAR);
     let on1 = |p: Point3| within(c1, r1, p, tol::LINEAR);
     match (c1, c2) {
@@ -1390,7 +1390,7 @@ pub(crate) fn curve_curve(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)
 /// both parameters from there: the point between them, `e`'s parameter, and the sine of the angle
 /// they cross at, where they pass within the tolerance of each other; the point is moved along `c`
 /// onto `through` where `c` crosses it there. `None` where the curves run together.
-pub(crate) fn curve_curve_near(
+pub fn curve_curve_near(
     c: &Curve,
     rc: (f64, f64),
     e: &Curve,
@@ -1436,7 +1436,7 @@ pub(crate) fn curve_curve_near(
 
 /// The point near `p` on all three surfaces, by Newton steps on their tangent planes; `None` where
 /// two of them run together there, so the point is not fixed by them.
-pub(crate) fn on_three(surfs: [&Surface; 3], p: Point3) -> Option<Point3> {
+pub fn on_three(surfs: [&Surface; 3], p: Point3) -> Option<Point3> {
     let planes = |p: Point3| {
         surfs.map(|s| {
             let uv = s.project(p);
@@ -1484,11 +1484,11 @@ fn onto_surface(c: &Curve, rc: (f64, f64), s0: f64, surf: &Surface) -> Option<f6
     (signed_distance(surf, c.eval(s)).abs() <= 1e-3 * tol::LINEAR).then_some(s)
 }
 
-fn line_conic(line: &Curve, rl: (f64, f64), conic: &Curve, rc: (f64, f64)) -> Vec<Point3> {
+#[allow(clippy::panic)] fn line_conic(line: &Curve, rl: (f64, f64), conic: &Curve, rc: (f64, f64)) -> Vec<Point3> {
     let Curve::Line(l) = line else {
         return Vec::new();
     };
-    let frame = conic_plane(conic).expect("conic has a plane");
+    let frame = conic_plane(conic).unwrap_or_else(|| panic!("conic has a plane"));
     let in_plane = l.dir.dot(frame.z).abs() <= tol::ANGULAR
         && (l.origin - frame.origin).dot(frame.z).abs() <= tol::LINEAR;
     let on_conic = |p: Point3| curve_distance(conic, rc, p).0 <= tol::LINEAR;
@@ -1586,7 +1586,7 @@ impl<'a> CurveIndex<'a> {
     }
 
     /// As [`curve_distance`].
-    fn distance(&self, p: Point3) -> (f64, f64) {
+    #[allow(clippy::panic)] fn distance(&self, p: Point3) -> (f64, f64) {
         let gap = |bb: &crate::math::Aabb| {
             let d = Vec3::new(
                 (bb.min.x - p.x).max(p.x - bb.max.x).max(0.0),
@@ -1600,7 +1600,7 @@ impl<'a> CurveIndex<'a> {
         // least gap comes first, so no span whose gap passes that span's distance is reached.
         let first = (0..gaps.len())
             .min_by(|&a, &b| gaps[a].total_cmp(&gaps[b]))
-            .expect("an index has spans");
+            .unwrap_or_else(|| panic!("an index has spans"));
         let (a, b, _) = self.spans[first];
         let bound = curve_distance(self.curve, (a, b), p).0;
         let mut order: Vec<(f64, usize)> = gaps
@@ -1633,7 +1633,7 @@ fn generic_curve_curve(c1: &Curve, r1: (f64, f64), c2: &Curve, r2: (f64, f64)) -
 /// least settled by golden-section search. With `prune`, the distance is only sampled about the
 /// pieces of `c1` whose hull boxes come within the tolerance of a hull box of `c2`'s: a least
 /// anywhere else is farther than the tolerance and found nothing, so the answer is the same.
-fn sampled_curve_curve(
+#[allow(clippy::panic)] fn sampled_curve_curve(
     c1: &Curve,
     r1: (f64, f64),
     c2: &Curve,
@@ -1688,7 +1688,7 @@ fn sampled_curve_curve(
     let value = |k: usize| {
         (
             ts[k],
-            samples[k].expect("a wanted sample's neighbours are sampled"),
+            samples[k].unwrap_or_else(|| panic!("a wanted sample's neighbours are sampled")),
         )
     };
     let mut out: Vec<Point3> = Vec::new();
@@ -1717,7 +1717,7 @@ fn sampled_curve_curve(
 }
 
 /// The parameters `t > 0` where the ray `p + t·d` (`d` unit) crosses the surface, up to `t_max`.
-pub(crate) fn ray_surface(s: &Surface, p: Point3, d: Vec3, t_max: f64) -> Vec<f64> {
+pub fn ray_surface(s: &Surface, p: Point3, d: Vec3, t_max: f64) -> Vec<f64> {
     let quad = |a: f64, b: f64, c: f64| -> Vec<f64> {
         let disc = b * b - 4.0 * a * c;
         if a.abs() < 1e-300 || disc < 0.0 {

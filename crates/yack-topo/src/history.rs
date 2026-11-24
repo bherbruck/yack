@@ -331,7 +331,7 @@ mod tests {
     use super::*;
     use crate::geom::{Plane, Surface};
     use crate::math::{Frame, Vec3};
-    use crate::topo::LoopId;
+    use crate::LoopId;
 
     /// A cube's six planes, each one face of one (empty) loop, named `feature.<side>`: enough
     /// topology for names and loops, built with topo's own builder.

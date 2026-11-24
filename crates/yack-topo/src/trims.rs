@@ -1,7 +1,7 @@
 // yack: a face's trimmed domain outside any boolean, and the trims of its coedges.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved to locate/mod.rs (M2.1, T1), then to topo/trims.rs (M2, measure and locate both use
-// it); paths only.
+// it); paths only; then to yack-topo (M3 W4), paths and visibility only.
 //! A face's trimmed domain outside any boolean, its trims numbered by the arena's vertices, and the
 //! trim of one coedge.
 
@@ -13,7 +13,7 @@ use crate::{geom::Curve, math::Vec2};
 
 /// A coedge's parameter-plane points at edge parameters `ts`, given in its direction; points in
 /// between are sampled so periodic parameters continue across wide gaps.
-pub(crate) fn coedge_uv_at(b: &Brep, c: CoedgeId, ts: &[f64]) -> Vec<Vec2> {
+pub fn coedge_uv_at(b: &Brep, c: CoedgeId, ts: &[f64]) -> Vec<Vec2> {
     if let PCurve::Affine { origin, dir } = &b.coedge(c).pcurve {
         return ts.iter().map(|&t| *origin + *dir * t).collect();
     }
@@ -35,7 +35,7 @@ pub(crate) fn coedge_uv_at(b: &Brep, c: CoedgeId, ts: &[f64]) -> Vec<Vec2> {
 }
 
 /// A trim for coedge `c` over curve parameters `t0 → t1`, at `uv0 → uv1`, between vertices `v`.
-pub(crate) fn coedge_trim_with(
+pub fn coedge_trim_with(
     b: &Brep,
     c: CoedgeId,
     piece: usize,
@@ -80,7 +80,7 @@ pub(crate) fn coedge_trim_with(
 }
 
 /// Face `f`'s trimmed domain outside any boolean: its trims numbered by the arena's vertices.
-pub(crate) fn face_domain(b: &Brep, f: FaceId) -> Domain {
+pub fn face_domain(b: &Brep, f: FaceId) -> Domain {
     let face = b.face(f);
     let loops = face
         .loops

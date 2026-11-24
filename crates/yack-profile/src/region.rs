@@ -1,6 +1,6 @@
 // yack: Planar regions bounded by lines and circular arcs, in sketch millimetres: outlines combined,
 // Adapted from springrep@a03e8a1 src/profile/region.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/profile/region.rs to yack-profile (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! Planar regions bounded by lines and circular arcs, in sketch millimetres: outlines combined,
 //! their corners rounded and the whole offset in the sketch plane, before one sweep makes the
 //! solid. Every boundary piece carries the names of the outline edges it lies on, so a piece where
@@ -675,7 +675,7 @@ fn polygon(l: &Loop) -> Vec<Vec2> {
 
 /// Kept boundary pieces joined end to end into loops. Where several pieces leave one point, the
 /// one turning most to the left from the way in is taken, so each loop bounds one face.
-fn link(mut pieces: Vec<Seg>) -> Result<Vec<Loop>> {
+#[allow(clippy::panic)] fn link(mut pieces: Vec<Seg>) -> Result<Vec<Loop>> {
     pieces.retain(|s| s.geom.len() > tol::LINEAR || s.geom.is_full());
     let mut used = vec![false; pieces.len()];
     let mut loops = Vec::new();
@@ -687,8 +687,8 @@ fn link(mut pieces: Vec<Seg>) -> Result<Vec<Loop>> {
         let mut lp = vec![pieces[first].clone()];
         let start = pieces[first].geom.start();
         let mut guard = 0;
-        while lp.last().unwrap().geom.end().dist(start) > tol::LINEAR {
-            let last = &lp.last().unwrap().geom;
+        while lp.last().unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")).geom.end().dist(start) > tol::LINEAR {
+            let last = &lp.last().unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")).geom;
             let (end, back) = (last.end(), -last.tangent(1.0));
             let mut best: Option<(usize, f64)> = None;
             for (k, p) in pieces.iter().enumerate() {

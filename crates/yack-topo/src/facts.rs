@@ -1,6 +1,6 @@
 // yack: What an operation knows by construction about how the two arenas it hands a boolean meet, so
 // Adapted from springrep@a03e8a1 src/topo/facts.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/topo/facts.rs to yack-topo (M3 W4); paths and visibility only.
 //! What an operation knows by construction about how the two arenas it hands a boolean meet, so
 //! the boolean takes it instead of computing it. The boolean checks every fact and refuses one that
 //! does not hold.

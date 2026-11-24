@@ -1,11 +1,10 @@
 // yack: The general surface–surface intersector: from each seed point on both surfaces, march along
 // Adapted from springrep@a03e8a1 src/boolean/march.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/march.rs to intersect/march.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/march.rs to intersect/march.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
 //! The general surface–surface intersector: from each seed point on both surfaces, march along
 //! `n_a × n_b` with Newton refinement onto both, until the branch closes, leaves the region, or
 //! reaches a point where the surfaces are tangent; then fit an intersection curve to the points.
 
-use super::ssi::SsiCurve;
 use crate::{
     Error, Result,
     geom::{Curve, IntersectionCurve, Surface, UvPair, distance_to, refine_across},
@@ -14,6 +13,14 @@ use crate::{
     numeric::solve2,
     tol,
 };
+
+#[derive(Clone, Debug)]
+pub struct SsiCurve {
+    pub curve: Curve,
+    pub range: (f64, f64),
+    pub closed: bool,
+    pub tangent: bool,
+}
 
 /// The largest turn of the curve's tangent across one step, in radians.
 const MAX_TURN: f64 = 0.1;
@@ -688,201 +695,10 @@ fn fit_branches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        intersect::csi::signed_distance,
-        geom::{Cylinder, Plane, Torus},
-        loft::{Section, loft},
-        math::{Frame, Vec2},
-        profile::{PointsInterp, Profile},
-    };
-
-    /// A gear's tooth space: two flanks from r 21.5 down to a round root at r 17.
-    fn tooth_space() -> Vec<Vec2> {
-        let flank = |i: usize, s: f64| {
-            let t = i as f64 / 12.0;
-            let (r, a) = (21.5 - 4.5 * t, s * (0.09 - 0.05 * t * t));
-            Vec2::new(r * a.cos(), r * a.sin())
-        };
-        let mut pts: Vec<Vec2> = (0..=12).map(|i| flank(i, -1.0)).collect();
-        pts.extend((1..12).map(|i| {
-            let a = -0.04 + 0.08 * i as f64 / 12.0;
-            let r = 17.0 - 0.3 * (std::f64::consts::PI * i as f64 / 12.0).sin();
-            Vec2::new(r * a.cos(), r * a.sin())
-        }));
-        pts.extend((0..=12).rev().map(|i| flank(i, 1.0)));
-        pts
-    }
-
-    // The side of a circle-to-square loft and its copy moved 1e-5 mm along x meet down the side's
-    // middle and along its straight top edge. Those cross where the sides coincide within the
-    // tolerance for 2e-7 mm, and each walk used to end anywhere in that band: the line down the
-    // side missed the crossing the top edge was cut at, and never split its face.
-    #[test]
-    fn branches_that_stall_in_one_shared_band_end_on_one_crossing() {
-        let at_z = |z: f64| Frame::WORLD.translated(Vec3::Z * z);
-        let lofted = loft(
-            &[
-                Section {
-                    profile: Profile::circle(Vec2::ZERO, 20.0),
-                    frame: at_z(0.0),
-                },
-                Section {
-                    profile: Profile::rect(Vec2::ZERO, 20.0, 20.0),
-                    frame: at_z(30.0),
-                },
-            ],
-            false,
-            "lf",
-        )
-        .unwrap();
-        let side = lofted
-            .face_ids()
-            .map(|f| &lofted.face(f).surface)
-            .filter(|s| !matches!(s, Surface::Plane(_)))
-            .min_by(|s, t| {
-                let p = Vec3::new(0.0, -10.0, 15.0);
-                distance_to(s, p).total_cmp(&distance_to(t, p))
-            })
-            .unwrap();
-        let moved = side.transformed(&crate::math::Transform::translation(Vec3::X * 1e-5));
-        let region = Aabb {
-            min: Vec3::new(-12.0, -11.0, -3.0),
-            max: Vec3::new(12.0, -5.0, 33.0),
-        };
-        let seeds = [
-            Vec3::new(0.0, -10.0, 15.0),
-            Vec3::new(-5.0, -10.0, 30.0),
-            Vec3::new(5.0, -10.0, 30.0),
-        ];
-        let (curves, crossings) = trace(side, &moved, &region, &seeds).unwrap();
-        assert_eq!(crossings.len(), 1, "{crossings:?}");
-        let ends: Vec<Point3> = curves
-            .iter()
-            .flat_map(|c| [c.curve.eval(c.range.0), c.curve.eval(c.range.1)])
-            .filter(|p| p.z > 29.0 && p.x.abs() < 1e-3)
-            .collect();
-        assert_eq!(ends.len(), 3, "{ends:?}");
-        for p in ends {
-            assert!(p.dist(crossings[0]) <= tol::LINEAR, "{p:?} {crossings:?}");
-        }
-    }
-
-    // Two lofted cylinders r 5 whose axes lie 10 − 3e-4 apart overlap in a sliver: their sides
-    // cross along two lines at y = ±√(r² − (d/2)²) ≈ ±0.0387, nearer each other than a quarter
-    // step. The seed on the second line is still on a branch of its own.
-    #[test]
-    fn two_crossings_nearer_than_a_step_are_both_traced() {
-        let (r, d) = (5.0, 10.0 - 3e-4);
-        let sections: Vec<Section> = [0.0, 5.0, 10.0, 15.0]
-            .iter()
-            .map(|&z| Section {
-                profile: Profile::circle(Vec2::ZERO, 2.0 * r),
-                frame: Frame::WORLD.translated(Vec3::Z * z),
-            })
-            .collect();
-        let can = loft(&sections, false, "can").unwrap();
-        let side = can
-            .face_ids()
-            .map(|f| &can.face(f).surface)
-            .find(|s| matches!(s, Surface::Nurbs(_)))
-            .unwrap();
-        let moved = side.transformed(&crate::math::Transform::translation(Vec3::X * d));
-        let y = (r * r - 0.25 * d * d).sqrt();
-        let region = Aabb {
-            min: Vec3::new(3.0, -2.0, 1.0),
-            max: Vec3::new(7.0, 2.0, 14.0),
-        };
-        let seeds = [Vec3::new(0.5 * d, y, 7.5), Vec3::new(0.5 * d, -y, 7.5)];
-        let (curves, _) = trace(side, &moved, &region, &seeds).unwrap();
-        assert_eq!(curves.len(), 2);
-        for c in &curves {
-            for k in 0..=4 {
-                let p = c
-                    .curve
-                    .eval(c.range.0 + (c.range.1 - c.range.0) * k as f64 / 4.0);
-                assert!((p.x - 0.5 * d).abs() <= 1e-6, "{p:?}");
-                assert!((p.y.abs() - y).abs() <= 1e-6, "{p:?}");
-            }
-        }
-        let ys: Vec<f64> = curves.iter().map(|c| c.curve.eval(c.range.0).y).collect();
-        assert!(ys[0] * ys[1] < 0.0, "{ys:?}");
-    }
-
-    #[test]
-    fn a_plane_across_a_steeply_twisted_loft_never_shuttles_between_points() {
-        let twist = 0.3;
-        let outline = Profile::points(
-            &tooth_space(),
-            PointsInterp::Smooth {
-                corner: 30f64.to_radians(),
-            },
-            "space",
-        )
-        .unwrap();
-        let sections: Vec<Section> = (0..=8)
-            .map(|i| {
-                let z = -0.5 + 11.0 * i as f64 / 8.0;
-                let x = Vec3::X * (twist * z).cos() + Vec3::Y * (twist * z).sin();
-                Section {
-                    profile: outline.clone(),
-                    frame: Frame::new(Vec3::Z * z, Vec3::Z, x).unwrap(),
-                }
-            })
-            .collect();
-        let tool = loft(&sections, false, "g").unwrap();
-        let plane = Surface::Plane(Plane {
-            frame: Frame::WORLD,
-        });
-        let region = Aabb {
-            min: Vec3::new(-19.16, -5.37, -0.107),
-            max: Vec3::new(19.16, 19.16, 0.107),
-        };
-        let seeds = [Vec3::new(16.98647297164612, -0.6798377134004823, 0.0)];
-        // From this seed on the second side face, refinement used to land each step behind the
-        // last, and the walk went back and forth between two points to its 20 000-step cap.
-        let side = &tool.face(tool.face_ids().nth(1).unwrap()).surface;
-        for c in trace(&plane, side, &region, &seeds).unwrap().0 {
-            let Curve::Intersection(fit) = &c.curve else {
-                continue;
-            };
-            let n = fit.approx.control_points().len();
-            assert!(n < 2000, "a branch of {n} points");
-        }
-    }
-
-    #[test]
-    fn a_crossing_no_curve_reaches_is_dropped_rather_than_failing_the_fit() {
-        let at_z = |z: f64| Frame::WORLD.translated(Vec3::Z * z);
-        let section = |profile, z| Section {
-            profile,
-            frame: at_z(z),
-        };
-        let a = loft(
-            &[
-                section(Profile::circle(Vec2::ZERO, 20.0), 0.0),
-                section(Profile::rect(Vec2::ZERO, 20.0, 20.0), 30.0),
-            ],
-            false,
-            "lf",
-        )
-        .unwrap();
-        let mut b = a.clone();
-        b.transform(&crate::math::Transform::translation(Vec3::new(
-            3e-9, 0.0, 0.0,
-        )));
-        // The sides either side of the ruling through (10, 0, z) touch along it. Traced from the
-        // loft's corners, the walk stalls 0.4 mm up and 0.045 mm across from a touching point.
-        let side =
-            |x: &crate::topo::Brep, i: usize| x.face(x.face_ids().nth(i).unwrap()).surface.clone();
-        let (sa, sb) = (side(&a, 0), side(&b, 4));
-        let region = Aabb {
-            min: Vec3::new(-11.0, -11.0, -1.0),
-            max: Vec3::new(11.0, 11.0, 31.0),
-        };
-        let seeds: Vec<Point3> = a.vertex_ids().map(|v| a.vertex(v).point).collect();
-        let (curves, _) = trace(&sa, &sb, &region, &seeds).unwrap();
-        assert!(!curves.is_empty());
-    }
+    use crate::geom::Cylinder;
+    use crate::math::Frame;
+    use crate::geom::Torus;
+    use crate::csi::signed_distance;
 
     #[test]
     fn crossing_cylinders_trace_two_closed_loops() {
@@ -1011,5 +827,92 @@ mod tests {
         let (curves, _) = trace(&a, &b, &region, &seeds).unwrap();
         assert!(!curves.is_empty());
         assert_on_both(&a, &b, &curves);
+    }
+
+    #[test]
+    fn a_branch_is_traced_both_ways_from_a_seed_in_its_middle() {
+        let cyl = |axis: Vec3, radius: f64| {
+            Surface::Cylinder(Cylinder {
+                frame: Frame::from_axis(Vec3::ZERO, axis).unwrap(),
+                radius,
+            })
+        };
+        let (a, b) = (cyl(Vec3::X, 5.0), cyl(Vec3::Z, 6.0));
+        // The half of the loop x = √(11 + z²) where y > 1: an open arc, seeded at its middle.
+        let region = Aabb {
+            min: Vec3::new(0.0, 1.0, -6.0),
+            max: Vec3::new(7.0, 6.0, 6.0),
+        };
+        let seed = Vec3::new(11f64.sqrt(), 5.0, 0.0);
+        let curves = trace(&a, &b, &region, &[seed]).unwrap().0;
+        assert_eq!(curves.len(), 1);
+        let c = &curves[0];
+        let (p, q) = (c.curve.eval(c.range.0), c.curve.eval(c.range.1));
+        assert!(p.y < 1.0 + 0.5 && q.y < 1.0 + 0.5, "{p:?} {q:?}");
+        assert!(p.z * q.z < 0.0);
+    }
+
+    /// The plane `z = 0` and the surface `z = y·(x² − a²)` over `[-1, 1]²`: both hold the x axis, and
+    /// they touch only at `x = ±a`, crossing along the axis in between.
+    fn saddle_pair(a: f64) -> (Surface, Surface) {
+        let plane = Surface::Plane(crate::geom::Plane {
+            frame: Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
+        });
+        // x² − a² on [-1, 1] as a quadratic Bézier in s = (x + 1)/2: values 1 − a², −1 − a², 1 − a².
+        let c = [1.0 - a * a, -1.0 - a * a, 1.0 - a * a];
+        let mut ctrl = Vec::new();
+        for (i, ci) in c.iter().enumerate() {
+            for y in [-1.0, 1.0] {
+                ctrl.push(Vec3::new(i as f64 - 1.0, y, y * ci));
+            }
+        }
+        let knots = (vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]);
+        let saddle = crate::geom::NurbsSurface::new((2, 1), knots, (3, 2), ctrl, None).unwrap();
+        (plane, Surface::Nurbs(Box::new(saddle)))
+    }
+
+    #[test]
+    fn two_touching_points_on_a_shared_line_are_two_crossings() {
+        let (plane, saddle) = saddle_pair(0.05);
+        let (p, q) = (Vec3::new(-0.05, 0.0, 0.0), Vec3::new(0.05, 0.0, 0.0));
+        // Every point between them lies on both surfaces, but across the axis at x = 0 the saddle is
+        // ±0.1·0.0025 mm from the plane, on opposite sides.
+        assert!(!same_crossing(&plane, &saddle, p, q, 1.0));
+        // A cylinder resting on the plane along the axis touches it all the way: one band.
+        let resting = Surface::Cylinder(Cylinder {
+            frame: Frame::new(Vec3::new(0.0, 0.0, 5.0), Vec3::X, Vec3::Y).unwrap(),
+            radius: 5.0,
+        });
+        assert!(same_crossing(&plane, &resting, p, q, 1.0));
+    }
+
+    #[test]
+    fn branches_through_two_touching_points_a_step_apart_reach_both() {
+        // The crossings at x = ±0.02 are 0.04 mm apart, within a step (0.078 mm here): merged into one,
+        // the branches along x = ±0.02 fitted through a point off them and were lost.
+        let (plane, saddle) = saddle_pair(0.02);
+        let region = Aabb {
+            min: Vec3::new(-0.9, -0.9, -1.0),
+            max: Vec3::new(0.9, 0.9, 1.0),
+        };
+        let seeds = [
+            Vec3::new(0.5, 0.0, 0.0),
+            Vec3::new(0.05, 0.5, 0.0),
+            Vec3::new(-0.05, -0.5, 0.0),
+        ];
+        let (curves, crossings) = trace(&plane, &saddle, &region, &seeds).unwrap();
+        assert_eq!(crossings.len(), 2);
+        for x in [-0.02, 0.02] {
+            let c = Vec3::new(x, 0.0, 0.0);
+            assert!(crossings.iter().any(|p| p.dist(c) <= tol::LINEAR));
+            // The line x = ±0.02 runs both ways out of its crossing.
+            let ends: Vec<f64> = curves
+                .iter()
+                .flat_map(|k| [k.curve.eval(k.range.0), k.curve.eval(k.range.1)])
+                .filter(|p| (p.x - x).abs() <= tol::LINEAR && p.y.abs() > 0.5)
+                .map(|p| p.y)
+                .collect();
+            assert!(ends.iter().any(|&y| y > 0.0) && ends.iter().any(|&y| y < 0.0));
+        }
     }
 }

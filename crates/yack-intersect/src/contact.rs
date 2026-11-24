@@ -1,6 +1,6 @@
 // yack: How two surfaces meet at a point already known to lie on both: whether they touch there only.
 // Adapted from springrep@a03e8a1 src/boolean/contact.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/contact.rs to intersect/contact.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/contact.rs to intersect/contact.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
 //! How two surfaces meet at a point already known to lie on both: whether they touch there only.
 //!
 //! Where the surfaces are tangent at the point, the gap between them is, to second order, the
@@ -18,7 +18,7 @@ use crate::{
 
 /// A point where two surfaces touch and share nothing else nearby.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Touch {
+pub struct Touch {
     pub p: Point3,
     /// How far from `p` the surfaces stay within the tolerance of each other.
     pub reach: f64,
@@ -181,7 +181,7 @@ fn gap_form(a: &Surface, b: &Surface, p: Point3) -> Option<((f64, f64), Vec3, Ve
 /// How far either side of `q`, a point of both surfaces on a curve along `dir` where they are
 /// tangent, they stay within the tolerance of each other: `√(2·tol/κ)` for the curvature `κ` of
 /// the gap across the curve, measured a step off it each way; zero where they are not tangent.
-pub(crate) fn band(a: &Surface, b: &Surface, q: Point3, dir: Vec3) -> f64 {
+pub fn band(a: &Surface, b: &Surface, q: Point3, dir: Vec3) -> f64 {
     let (ua, ub) = (a.project(q), b.project(q));
     let (na, nb) = (a.normal(ua.x, ua.y), b.normal(ub.x, ub.y));
     if na.cross(nb).norm() > tol::TANGENT {
@@ -212,7 +212,7 @@ const ROUNDING: f64 = 1e-6;
 /// Which side of `b` the surface `a` lies on near `p`, a point of both where they touch without
 /// crossing: `Some(true)` where `a` bends away along `b`'s normal. `None` where the gap form
 /// changes sign (they cross) or vanishes (they osculate, or coincide).
-pub(crate) fn side_of(a: &Surface, b: &Surface, p: Point3) -> Option<bool> {
+pub fn side_of(a: &Surface, b: &Surface, p: Point3) -> Option<bool> {
     let ((l1, l2), na, nb) = gap_form(a, b, p)?;
     let big = l1.abs().max(l2.abs());
     if big == 0.0 || !big.is_finite() {
@@ -233,7 +233,7 @@ pub(crate) fn side_of(a: &Surface, b: &Surface, p: Point3) -> Option<bool> {
 
 /// The touch at `p`, which lies on both surfaces: `Some` where their normals are parallel within
 /// [`tol::TANGENT`] and their gap is a definite quadratic form.
-pub(crate) fn touch_at(a: &Surface, b: &Surface, p: Point3) -> Option<Touch> {
+pub fn touch_at(a: &Surface, b: &Surface, p: Point3) -> Option<Touch> {
     for (s, other) in [(a, b), (b, a)] {
         if let Some(lines) = pole_lines(s, p) {
             return pole_touch(s, other, p, &lines);

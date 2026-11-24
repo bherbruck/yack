@@ -95,10 +95,10 @@ deps = ["yack-geom", "yack-ssi", "yack-math", "yack-numeric", "yack-tol", "yack-
 license = "MIT OR Apache-2.0"
 
 [crate.yack-profile]
-layer = 4
+layer = 5
 kind = "kernel"
 owner = "lead"
-deps = ["yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+deps = ["yack-topo", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-topo]
@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom"]
+deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 
@@ -320,6 +320,13 @@ nurbs = []
 surface = []
 bspline = ["nurbs"]
 intersection = ["nurbs", "bspline"]
+
+[modules.yack-intersect]
+hulls = []
+csi = ["hulls"]
+contact = ["hulls", "csi"]
+march = ["hulls", "csi"]
+ssi = ["hulls", "csi", "march"]
 
 [modules.yack-springrep]
 error = []

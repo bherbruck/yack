@@ -1,7 +1,7 @@
 // yack: A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 // Adapted from springrep@a03e8a1 src/boolean/domain.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from boolean/domain.rs to locate/domain.rs (M2.1, T1), then to topo/domain.rs
-// (M2, measure and locate both use it); paths only.
+// (M2, measure and locate both use it); paths only; then to yack-topo (M3 W4), paths and visibility only.
 //! A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 //! images), point-in-face classification by an exact winding number, and interior points.
 
@@ -13,12 +13,12 @@ use crate::{
     math::{Aabb, Point3, Vec2, Vec3},
     numeric::solve2,
     tol,
-    topo::project_on,
+    project_on,
 };
 
 /// How a trim's parameter-plane point follows from its curve parameter.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum UvMap {
+pub enum UvMap {
     /// `origin + t·dir`, exactly.
     Affine { origin: Vec2, dir: Vec2 },
     /// The curve point projected onto the surface, periodic parameters continued from a hint.
@@ -29,7 +29,7 @@ pub(crate) enum UvMap {
 
 /// One directed piece of a face's boundary or of a cut across it.
 #[derive(Clone, Debug)]
-pub(crate) struct Trim {
+pub struct Trim {
     /// The piece of edge it runs along, and whether it runs along that piece's parameter.
     pub piece: usize,
     pub forward: bool,
@@ -48,18 +48,18 @@ pub(crate) struct Trim {
 }
 
 impl Trim {
-    pub(crate) fn point(&self, t: f64) -> Point3 {
+    pub fn point(&self, t: f64) -> Point3 {
         match &self.curve {
             Some(c) => c.eval(t),
             None => self.pole,
         }
     }
 
-    pub(crate) fn param(&self, f: f64) -> f64 {
+    pub fn param(&self, f: f64) -> f64 {
         self.t0 + (self.t1 - self.t0) * f
     }
 
-    pub(crate) fn uv(&self, s: &Surface, t: f64, hint: Vec2) -> Vec2 {
+    pub fn uv(&self, s: &Surface, t: f64, hint: Vec2) -> Vec2 {
         match &self.map {
             UvMap::Affine { origin, dir } => *origin + *dir * t,
             UvMap::Fitted(fit) => {
@@ -82,7 +82,7 @@ impl Trim {
     }
 
     /// `n + 1` parameter-plane points from start to end, each continued from the last.
-    pub(crate) fn polyline(&self, s: &Surface, n: usize) -> Vec<Vec2> {
+    pub fn polyline(&self, s: &Surface, n: usize) -> Vec<Vec2> {
         // A trim winding round its surface several times (a thread's helix) turns more than a
         // period between `n` points, and continuation reads a turn as none: each gap is stepped
         // through more finely until the walk arrives at the trim's own end.
@@ -114,7 +114,7 @@ impl Trim {
     /// piece of its curve where that is more. A chord across several pieces (a trim round a whole
     /// cycloid, lobe after lobe) can sit near the curve at its middle while the lobes either side
     /// swing past a point, and the winding about the point read from the chord is then wrong.
-    pub(crate) fn steps(&self) -> usize {
+    pub fn steps(&self) -> usize {
         let (lo, hi) = (self.t0.min(self.t1), self.t0.max(self.t1));
         let pieces = match (&self.map, &self.curve) {
             (UvMap::Projected, Some(c)) => c.breakpoints(lo, hi).len() + 1,
@@ -126,11 +126,11 @@ impl Trim {
 
     /// The parameter-plane point halfway along, reached in small steps so a periodic parameter
     /// cannot jump half a period.
-    pub(crate) fn mid_uv(&self, s: &Surface) -> Vec2 {
+    pub fn mid_uv(&self, s: &Surface) -> Vec2 {
         self.polyline(s, 16)[8]
     }
 
-    pub(crate) fn reversed(&self) -> Trim {
+    pub fn reversed(&self) -> Trim {
         Trim {
             forward: !self.forward,
             t0: self.t1,
@@ -144,13 +144,13 @@ impl Trim {
     }
 
     /// The parameter-plane direction it leaves its start in.
-    pub(crate) fn start_tangent(&self, s: &Surface) -> Vec2 {
+    pub fn start_tangent(&self, s: &Surface) -> Vec2 {
         let sign = if self.t1 >= self.t0 { 1.0 } else { -1.0 };
         self.rate(s, self.uv0, self.t0) * sign
     }
 
     /// How fast its parameter-plane point moves with its curve parameter at `t`, where it is `uv`.
-    pub(crate) fn rate(&self, s: &Surface, uv: Vec2, t: f64) -> Vec2 {
+    pub fn rate(&self, s: &Surface, uv: Vec2, t: f64) -> Vec2 {
         match &self.map {
             UvMap::Affine { dir, .. } => *dir,
             UvMap::Fitted(fit) => {
@@ -164,7 +164,7 @@ impl Trim {
         }
     }
 
-    pub(crate) fn bbox(&self) -> Aabb {
+    pub fn bbox(&self) -> Aabb {
         let mut bb = Aabb::EMPTY;
         let (lo, hi) = (self.t0.min(self.t1), self.t0.max(self.t1));
         match &self.curve {
@@ -175,7 +175,7 @@ impl Trim {
     }
 
     /// The distance from `p` to the trim's curve.
-    pub(crate) fn distance(&self, p: Point3) -> f64 {
+    pub fn distance(&self, p: Point3) -> f64 {
         match &self.curve {
             Some(c) => {
                 let (lo, hi) = (self.t0.min(self.t1), self.t0.max(self.t1));
@@ -363,7 +363,7 @@ fn trim_angle(s: &Surface, tr: &Trim, samples: &[Vec2], mids: &[Vec2], q: Vec2) 
 
 /// What part of a face's boundary a point lies on.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum OnBoundary {
+pub enum OnBoundary {
     /// An edge, running in this unit direction with the face's loops.
     Edge(Vec3),
     /// A seam: the face lies on both sides.
@@ -374,7 +374,7 @@ pub(crate) enum OnBoundary {
 
 /// Where a point lies relative to a face.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Where {
+pub enum Where {
     Outside,
     Boundary,
     Inside(Vec2),
@@ -382,7 +382,7 @@ pub(crate) enum Where {
 
 /// A face's trimmed domain on its surface.
 #[derive(Clone, Debug)]
-pub(crate) struct Domain {
+pub struct Domain {
     pub surface: Surface,
     pub reversed: bool,
     pub loops: Vec<Vec<Trim>>,
@@ -402,7 +402,7 @@ pub(crate) struct Domain {
 pub(crate) const SAMPLES: usize = 8;
 
 impl Domain {
-    pub(crate) fn new(surface: Surface, reversed: bool, loops: Vec<Vec<Trim>>) -> Domain {
+    pub fn new(surface: Surface, reversed: bool, loops: Vec<Vec<Trim>>) -> Domain {
         let samples = loops
             .iter()
             .map(|l| {
@@ -419,7 +419,7 @@ impl Domain {
     }
 
     /// A domain from its trims' polylines and boxes, worked out before.
-    pub(crate) fn from_samples(
+    pub fn from_samples(
         surface: Surface,
         reversed: bool,
         loops: Vec<Vec<Trim>>,
@@ -448,7 +448,7 @@ impl Domain {
     }
 
     /// Gives each trim its edge's local tolerance, loop by loop.
-    pub(crate) fn set_tolerances(&mut self, tols: Vec<Vec<f64>>) {
+    pub fn set_tolerances(&mut self, tols: Vec<Vec<f64>>) {
         self.tols = tols
             .iter()
             .flatten()
@@ -457,7 +457,7 @@ impl Domain {
     }
 
     /// The widest tolerance of any trim.
-    pub(crate) fn widest(&self) -> f64 {
+    pub fn widest(&self) -> f64 {
         self.tols
             .iter()
             .flatten()
@@ -469,20 +469,20 @@ impl Domain {
         self.tols.as_ref().map_or(tol::LINEAR, |t| t[l][k])
     }
 
-    pub(crate) fn samples(&self) -> &[Vec<Vec<Vec2>>] {
+    pub fn samples(&self) -> &[Vec<Vec<Vec2>>] {
         &self.samples
     }
 
-    pub(crate) fn boxes(&self) -> &[Vec<Aabb>] {
+    pub fn boxes(&self) -> &[Vec<Aabb>] {
         &self.boxes
     }
 
-    pub(crate) fn trims(&self) -> impl Iterator<Item = &Trim> {
+    pub fn trims(&self) -> impl Iterator<Item = &Trim> {
         self.loops.iter().flatten()
     }
 
     /// `uv` moved by whole periods to lie in the domain's parameter window, or nearest its middle.
-    pub(crate) fn shift_into(&self, uv: Vec2) -> Vec2 {
+    pub fn shift_into(&self, uv: Vec2) -> Vec2 {
         let fit = |x: f64, lo: f64, hi: f64, period: Option<f64>| -> f64 {
             let Some(p) = period else { return x };
             let mid = 0.5 * (lo + hi);
@@ -519,7 +519,7 @@ impl Domain {
     }
 
     /// The winding number of the loops about `uv`.
-    pub(crate) fn winding(&self, uv: Vec2) -> i64 {
+    pub fn winding(&self, uv: Vec2) -> i64 {
         let total: f64 = self
             .trims()
             .zip(self.samples.iter().flatten())
@@ -531,7 +531,7 @@ impl Domain {
 
     /// Whether `p` lies in the face: off its surface or outside its loops, on a boundary curve
     /// (within the linear tolerance), or inside at parameters `uv`.
-    pub(crate) fn locate(&self, p: Point3) -> Where {
+    pub fn locate(&self, p: Point3) -> Where {
         let uv = self.surface.project_onto(p);
         let off = self.surface.eval(uv.x, uv.y).dist(p);
         if off > self.widest() {
@@ -549,7 +549,7 @@ impl Domain {
     /// The image of `uv`, moved by whole periods, that the loops enclose. A face that winds along
     /// a helix spans more than a period, so a point can have two images in its window, and only one
     /// of them need be inside.
-    pub(crate) fn inside_image(&self, uv: Vec2) -> Option<Vec2> {
+    pub fn inside_image(&self, uv: Vec2) -> Option<Vec2> {
         self.images(uv).into_iter().find(|&c| self.winding(c) != 0)
     }
 
@@ -557,7 +557,7 @@ impl Domain {
     /// periods away: for a point on loop `skip`, whether that loop lies inside the face the others
     /// bound. A loop whose sampled box, widened by its own size, misses the point cannot wind
     /// round it.
-    pub(crate) fn inside_without(&self, uv: Vec2, skip: usize) -> bool {
+    pub fn inside_without(&self, uv: Vec2, skip: usize) -> bool {
         let reach: Vec<(Vec2, Vec2)> = self
             .samples
             .iter()
@@ -623,14 +623,14 @@ impl Domain {
     /// Whether `p`, which lies within the tolerance of a boundary curve, is inside the loops by the
     /// exact winding number, and at which parameters. Only a piece that was cut along the boundary
     /// may rely on this: it tells which side of the curve the point is on, however close.
-    pub(crate) fn exact_side(&self, p: Point3) -> Option<Vec2> {
+    pub fn exact_side(&self, p: Point3) -> Option<Vec2> {
         self.inside_image(self.surface.project_onto(p))
     }
 
     /// Whether the points all lie within the tolerance of one trim: a piece of curve through them
     /// runs along the boundary there, where one whose ends lie on two different trims cuts across a
     /// corner however short it is.
-    pub(crate) fn along_one_trim(&self, pts: &[Point3]) -> bool {
+    pub fn along_one_trim(&self, pts: &[Point3]) -> bool {
         self.loops
             .iter()
             .zip(&self.boxes)
@@ -646,7 +646,7 @@ impl Domain {
             })
     }
 
-    pub(crate) fn on_boundary(&self, p: Point3) -> bool {
+    pub fn on_boundary(&self, p: Point3) -> bool {
         for (li, (l, boxes)) in self.loops.iter().zip(&self.boxes).enumerate() {
             for (k, (tr, bb)) in l.iter().zip(boxes).enumerate() {
                 let t = self.trim_tol(li, k);
@@ -660,7 +660,7 @@ impl Domain {
     }
 
     /// What of the boundary `p` lies on, within the tolerance; `None` where it lies on none.
-    pub(crate) fn boundary_at(&self, p: Point3) -> Option<OnBoundary> {
+    pub fn boundary_at(&self, p: Point3) -> Option<OnBoundary> {
         let mut found: Option<(Vec3, usize)> = None;
         let mut seam = false;
         for (li, (l, boxes)) in self.loops.iter().zip(&self.boxes).enumerate() {
@@ -700,13 +700,13 @@ impl Domain {
     }
 
     /// The surface's outward normal at `uv`.
-    pub(crate) fn outward(&self, uv: Vec2) -> Vec3 {
+    pub fn outward(&self, uv: Vec2) -> Vec3 {
         let n = self.surface.normal(uv.x, uv.y);
         if self.reversed { -n } else { n }
     }
 
     /// Parameter-plane scale: lengths along `u` and `v` per unit parameter near the middle.
-    pub(crate) fn scale(&self) -> Vec2 {
+    pub fn scale(&self) -> Vec2 {
         let mid = (self.lo + self.hi) * 0.5;
         let (_, su, sv) = self.surface.d1(mid.x, mid.y);
         Vec2::new(su.norm().max(1e-12), sv.norm().max(1e-12))
@@ -733,7 +733,7 @@ impl Domain {
 
     /// A point well inside the domain: the candidate on a grid of scan lines farthest from the
     /// boundary that the exact winding number confirms is inside.
-    pub(crate) fn interior_point(&self) -> Option<Vec2> {
+    pub fn interior_point(&self) -> Option<Vec2> {
         self.interior_points()
             .first()
             .copied()
@@ -742,7 +742,7 @@ impl Domain {
 
     /// Points inside the domain, farthest from the boundary first: the candidates of
     /// [`Domain::interior_point`] that the exact winding number confirms.
-    pub(crate) fn interior_points(&self) -> Vec<Vec2> {
+    pub fn interior_points(&self) -> Vec<Vec2> {
         let polys = self.polygons(48);
         let sc = self.scale();
         let scaled = |p: Vec2| Vec2::new(p.x * sc.x, p.y * sc.y);
@@ -856,7 +856,7 @@ impl Domain {
 }
 
 /// The signed area of a closed polygon, positive counter-clockwise.
-pub(crate) fn polygon_area(p: &[Vec2]) -> f64 {
+pub fn polygon_area(p: &[Vec2]) -> f64 {
     (0..p.len())
         .map(|i| p[i].cross(p[(i + 1) % p.len()]))
         .sum::<f64>()
@@ -864,13 +864,13 @@ pub(crate) fn polygon_area(p: &[Vec2]) -> f64 {
 }
 
 /// An angle wrapped into [0, 2π).
-pub(crate) fn wrap_angle(a: f64) -> f64 {
+pub fn wrap_angle(a: f64) -> f64 {
     let w = a.rem_euclid(TAU);
     if w >= TAU { 0.0 } else { w }
 }
 
 /// The direction `d` as an angle in [0, 2π), or `None` for a zero vector.
-pub(crate) fn direction_angle(d: Vec2) -> Option<f64> {
+pub fn direction_angle(d: Vec2) -> Option<f64> {
     (d.norm() > 0.0).then(|| wrap_angle(d.y.atan2(d.x)))
 }
 

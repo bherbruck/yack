@@ -1,20 +1,31 @@
 // yack: Planar profiles in sketch coordinates: closed loops of named segments, the first loop the
 // Adapted from springrep@a03e8a1 src/profile.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/profile.rs to yack-profile (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! Planar profiles in sketch coordinates: closed loops of named segments, the first loop the
 //! outer boundary and the rest holes. A sweep names each face it makes after its segment.
 
+
+// springrep's profile indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names profile's code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel::Result;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_math::kernel as math;
+use yack_topo::names;
+use yack_tol as tol;
 pub mod region;
 
 use std::collections::BTreeSet;
 use std::f64::consts::TAU;
 
 use crate::{
-    Error, Result,
     error::invalid,
     geom::{BSpline, Circle, Curve, Ellipse, Line},
     math::{Frame, Vec2, Vec3},
-    tol,
 };
 
 /// A turn between consecutive points smaller than this, in radians, leaves them on one straight
@@ -258,7 +269,7 @@ impl Segment {
     }
 
     /// The segment as a curve on `frame`'s plane, sketch `(x, y)` at `frame.at(x, y)`.
-    pub fn place(&self, frame: &Frame) -> PlacedSegment {
+    #[allow(clippy::panic)] pub fn place(&self, frame: &Frame) -> PlacedSegment {
         let at = |p: Vec2| frame.at(p.x, p.y);
         let dir = |a: f64| frame.radial(a);
         let circle_frame = |c: Vec2, a: f64| Frame {
@@ -341,7 +352,7 @@ impl Segment {
                 knots.extend(vec![1.0; d + 1]);
                 let pts = ctrl.iter().map(|&p| at(p)).collect();
                 let c = crate::geom::NurbsCurve::new(d, knots, pts, Some(weights.clone()))
-                    .expect("a Bézier's knots and weights fit its points");
+                    .unwrap_or_else(|e| panic!("a Bézier's knots and weights fit its points: {e:?}"));
                 PlacedSegment {
                     curve: Curve::Nurbs(Box::new(c)),
                     range: (0.0, 1.0),

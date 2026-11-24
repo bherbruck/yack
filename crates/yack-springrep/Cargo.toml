@@ -14,6 +14,9 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+yack-intersect = { path = "../yack-intersect" }
+yack-profile = { path = "../yack-profile" }
+yack-topo = { path = "../yack-topo" }
 yack-geom = { path = "../yack-geom" }
 yack-math = { path = "../yack-math" }
 yack-base = { path = "../yack-base" }

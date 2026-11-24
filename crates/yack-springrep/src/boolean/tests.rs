@@ -5,7 +5,6 @@ use std::f64::consts::{PI, TAU};
 
 use super::*;
 use crate::{
-    intersect::march,
     locate::classify, topo::face_domain,
 };
 use crate::{
@@ -201,29 +200,6 @@ fn a_cut_through_a_pole_splits_the_pole() {
     // half of the ball, which sewing joins across the seam.
     let sphere = face_named(&w, 0, "s");
     assert_eq!(frags[sphere].len(), 3);
-}
-
-#[test]
-fn a_branch_is_traced_both_ways_from_a_seed_in_its_middle() {
-    let cyl = |axis: Vec3, radius: f64| {
-        Surface::Cylinder(Cylinder {
-            frame: Frame::from_axis(Vec3::ZERO, axis).unwrap(),
-            radius,
-        })
-    };
-    let (a, b) = (cyl(Vec3::X, 5.0), cyl(Vec3::Z, 6.0));
-    // The half of the loop x = √(11 + z²) where y > 1: an open arc, seeded at its middle.
-    let region = Aabb {
-        min: Vec3::new(0.0, 1.0, -6.0),
-        max: Vec3::new(7.0, 6.0, 6.0),
-    };
-    let seed = Vec3::new(11f64.sqrt(), 5.0, 0.0);
-    let curves = march::trace(&a, &b, &region, &[seed]).unwrap().0;
-    assert_eq!(curves.len(), 1);
-    let c = &curves[0];
-    let (p, q) = (c.curve.eval(c.range.0), c.curve.eval(c.range.1));
-    assert!(p.y < 1.0 + 0.5 && q.y < 1.0 + 0.5, "{p:?} {q:?}");
-    assert!(p.z * q.z < 0.0);
 }
 
 #[test]
@@ -431,70 +407,6 @@ fn a_piece_read_at_its_cut_lies_where_a_ray_puts_it() {
         }
     }
     assert!(local >= 6, "{local}");
-}
-
-/// The plane `z = 0` and the surface `z = y·(x² − a²)` over `[-1, 1]²`: both hold the x axis, and
-/// they touch only at `x = ±a`, crossing along the axis in between.
-fn saddle_pair(a: f64) -> (Surface, Surface) {
-    let plane = Surface::Plane(crate::geom::Plane {
-        frame: Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(),
-    });
-    // x² − a² on [-1, 1] as a quadratic Bézier in s = (x + 1)/2: values 1 − a², −1 − a², 1 − a².
-    let c = [1.0 - a * a, -1.0 - a * a, 1.0 - a * a];
-    let mut ctrl = Vec::new();
-    for (i, ci) in c.iter().enumerate() {
-        for y in [-1.0, 1.0] {
-            ctrl.push(Vec3::new(i as f64 - 1.0, y, y * ci));
-        }
-    }
-    let knots = (vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]);
-    let saddle = crate::geom::NurbsSurface::new((2, 1), knots, (3, 2), ctrl, None).unwrap();
-    (plane, Surface::Nurbs(Box::new(saddle)))
-}
-
-#[test]
-fn two_touching_points_on_a_shared_line_are_two_crossings() {
-    let (plane, saddle) = saddle_pair(0.05);
-    let (p, q) = (Vec3::new(-0.05, 0.0, 0.0), Vec3::new(0.05, 0.0, 0.0));
-    // Every point between them lies on both surfaces, but across the axis at x = 0 the saddle is
-    // ±0.1·0.0025 mm from the plane, on opposite sides.
-    assert!(!march::same_crossing(&plane, &saddle, p, q, 1.0));
-    // A cylinder resting on the plane along the axis touches it all the way: one band.
-    let resting = Surface::Cylinder(Cylinder {
-        frame: Frame::new(Vec3::new(0.0, 0.0, 5.0), Vec3::X, Vec3::Y).unwrap(),
-        radius: 5.0,
-    });
-    assert!(march::same_crossing(&plane, &resting, p, q, 1.0));
-}
-
-#[test]
-fn branches_through_two_touching_points_a_step_apart_reach_both() {
-    // The crossings at x = ±0.02 are 0.04 mm apart, within a step (0.078 mm here): merged into one,
-    // the branches along x = ±0.02 fitted through a point off them and were lost.
-    let (plane, saddle) = saddle_pair(0.02);
-    let region = Aabb {
-        min: Vec3::new(-0.9, -0.9, -1.0),
-        max: Vec3::new(0.9, 0.9, 1.0),
-    };
-    let seeds = [
-        Vec3::new(0.5, 0.0, 0.0),
-        Vec3::new(0.05, 0.5, 0.0),
-        Vec3::new(-0.05, -0.5, 0.0),
-    ];
-    let (curves, crossings) = march::trace(&plane, &saddle, &region, &seeds).unwrap();
-    assert_eq!(crossings.len(), 2);
-    for x in [-0.02, 0.02] {
-        let c = Vec3::new(x, 0.0, 0.0);
-        assert!(crossings.iter().any(|p| p.dist(c) <= tol::LINEAR));
-        // The line x = ±0.02 runs both ways out of its crossing.
-        let ends: Vec<f64> = curves
-            .iter()
-            .flat_map(|k| [k.curve.eval(k.range.0), k.curve.eval(k.range.1)])
-            .filter(|p| (p.x - x).abs() <= tol::LINEAR && p.y.abs() > 0.5)
-            .map(|p| p.y)
-            .collect();
-        assert!(ends.iter().any(|&y| y > 0.0) && ends.iter().any(|&y| y < 0.0));
-    }
 }
 
 // Solids of one arena are one shape to `check`: one passing through another, or lying wholly inside

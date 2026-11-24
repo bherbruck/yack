@@ -1,6 +1,6 @@
 // yack: The faces round an edge more than two of them use, where pieces of a solid touch: which pairs
 // Adapted from springrep@a03e8a1 src/topo/radial.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/topo/radial.rs to yack-topo (M3 W4); paths and visibility only.
 //! The faces round an edge more than two of them use, where pieces of a solid touch: which pairs
 //! bound a wedge of material between them, partners, and which an empty wedge, beside each other.
 
@@ -9,11 +9,11 @@ use crate::math::{Point3, Vec3};
 use crate::tol;
 
 /// Pairs of indices into the sides round an edge.
-pub(crate) type Pairs = Vec<(usize, usize)>;
+pub type Pairs = Vec<(usize, usize)>;
 
 /// One face's use of an edge: its surface, whether the face is the surface turned inside out, and
 /// the way its loop runs along the edge.
-pub(crate) struct Side<'a> {
+pub struct Side<'a> {
     pub surface: &'a Surface,
     pub reversed: bool,
     pub travel: Vec3,
@@ -21,7 +21,7 @@ pub(crate) struct Side<'a> {
 
 /// An edge's length over `range`, near enough to size a step by: a closed edge's ends meet, so its
 /// chord says nothing.
-pub(crate) fn length(c: &Curve, range: (f64, f64)) -> f64 {
+pub fn length(c: &Curve, range: (f64, f64)) -> f64 {
     let n = 16;
     (0..n)
         .map(|k| {
@@ -43,7 +43,7 @@ fn outward(s: &Side, p: Point3) -> Vec3 {
 /// into its face, where faces that leave the edge tangent to each other, as a cylinder lying on a
 /// plane does, have parted. Sides still level there, as the walls of a sliver where they cross,
 /// take the order material and space alternate in. `None` where the sides do not alternate.
-pub(crate) fn round(m: Point3, t: Vec3, len: f64, sides: &[Side]) -> Option<(Pairs, Pairs)> {
+pub fn round(m: Point3, t: Vec3, len: f64, sides: &[Side]) -> Option<(Pairs, Pairs)> {
     // A step within the tolerance reads only rounding, however short the edge.
     let step = 1e-3 * len.clamp(1e3 * tol::LINEAR, 1.0);
     let mut around: Vec<(f64, bool, usize)> = Vec::with_capacity(sides.len());

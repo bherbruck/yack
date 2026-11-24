@@ -1,6 +1,6 @@
 // yack: Analytic pairs where one surface is swept by a family of lines or circles, each meeting the
 // Adapted from springrep@a03e8a1 src/boolean/ssi/sweep.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/ssi/sweep.rs to intersect/ssi/sweep.rs (M2.1, T2); paths only.
+// Changes: moved from boolean/ssi/sweep.rs to intersect/ssi/sweep.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
 //! Analytic pairs where one surface is swept by a family of lines or circles, each meeting the
 //! other surface in at most two points: a cylinder's generators against another cylinder or a
 //! sphere, and a torus's meridian circles against a plane or a sphere.
@@ -520,7 +520,7 @@ fn generators_cylinder(b: &Cylinder, other: &Cylinder) -> Option<GeneratorsCylin
 /// The intersection of `a` and `b` by a family sweeping one of them, for the pairs that have one:
 /// cylinders whose axes are not parallel, a cylinder and a sphere off its axis, and a torus against
 /// a plane or a sphere off its axis. `None` for any other pair, or one these do not decide.
-pub(crate) fn intersect(a: &Surface, b: &Surface) -> Option<Ssi> {
+pub fn intersect(a: &Surface, b: &Surface) -> Option<Ssi> {
     let run = |f: &dyn Family, other: &Surface| solve(f, other, a, b).ok();
     match (a, b) {
         (Surface::Cylinder(x), Surface::Cylinder(y)) => {
@@ -641,7 +641,7 @@ pub(crate) fn plane_through_axis(t: &Torus, p: &Plane) -> Option<Ssi> {
 mod tests {
     use super::*;
     use crate::{
-        intersect::csi::{curve_distance, signed_distance},
+        csi::{curve_distance, signed_distance},
         geom::{Plane, Sphere},
         math::Frame,
     };

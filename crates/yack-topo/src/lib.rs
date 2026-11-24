@@ -1,17 +1,31 @@
 // yack: The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 // Adapted from springrep@a03e8a1 src/topo/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/topo/mod.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
 //! The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 //! edge by one face. Every entity lives in one [`Brep`] and is referred to by a typed id.
 
-pub(crate) mod bbox;
+
+// springrep's topo indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names topo's code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel::Result;
+use yack_geom as geom;
+use yack_math::kernel as math;
+use yack_numeric as numeric;
+use yack_tol as tol;
+
+pub mod names;
+pub mod bbox;
 mod facts;
-pub(crate) mod domain;
+pub mod domain;
 pub mod history;
 mod memo;
 mod parts;
-pub(crate) mod pcurve;
-pub(crate) mod radial;
+pub mod pcurve;
+pub mod radial;
 mod similar;
 mod trims;
 mod walks;
@@ -21,18 +35,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub use facts::{Facts, OnFace};
-pub(crate) use memo::{FaceMemo, FaceVolume, IntegralKey, MemoSlot};
+pub use memo::{FaceMemo, FaceVolume, IntegralKey, MemoSlot};
 pub use crate::names::{EdgeName, FaceName};
-pub(crate) use parts::{Entities, Parts};
+pub use parts::{Entities, Parts};
 pub use pcurve::PCurve;
-pub(crate) use trims::{coedge_trim_with, coedge_uv_at, face_domain};
-pub(crate) use walks::{coedge_params, fans_at_vertices};
-pub(crate) use pcurve::project_on;
+pub use trims::{coedge_trim_with, coedge_uv_at, face_domain};
+pub use walks::{coedge_params, fans_at_vertices};
+pub use pcurve::project_on;
 
 use crate::{
     geom::{Curve, Surface},
     math::{Point3, Transform, Vec2},
-    tol,
 };
 
 macro_rules! id {
@@ -46,17 +59,17 @@ macro_rules! id {
                 self.0 as usize
             }
 
-            fn at(i: usize) -> $name {
-                $name(u32::try_from(i).expect("arena index fits in u32"))
+            #[allow(clippy::panic)] fn at(i: usize) -> $name {
+                $name(u32::try_from(i).unwrap_or_else(|e| panic!("arena index fits in u32: {e:?}")))
             }
 
             /// The id as the encoder writes it.
-            pub(crate) fn raw(self) -> u32 {
+            pub fn raw(self) -> u32 {
                 self.0
             }
 
             /// The id the encoder wrote as `raw`; the arena checks it names one of its entities.
-            pub(crate) fn from_raw(raw: u32) -> $name {
+            pub fn from_raw(raw: u32) -> $name {
                 $name(raw)
             }
         }
@@ -174,9 +187,9 @@ pub type Tolerant = (Vec<(VertexId, f64)>, Vec<(EdgeId, f64)>);
 /// (doc/design.md, "Tolerance policy"). A vertex's sphere holds the tube of every edge ending at
 /// it, and two entities coincide within the sum of their tolerances.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Tolerances {
-    pub(crate) vertices: BTreeMap<VertexId, f64>,
-    pub(crate) edges: BTreeMap<EdgeId, f64>,
+pub struct Tolerances {
+    pub vertices: BTreeMap<VertexId, f64>,
+    pub edges: BTreeMap<EdgeId, f64>,
 }
 
 impl Brep {
@@ -184,12 +197,12 @@ impl Brep {
         Brep::default()
     }
 
-    pub(crate) fn add_vertex(&mut self, point: Point3) -> VertexId {
+    pub fn add_vertex(&mut self, point: Point3) -> VertexId {
         self.vertices.push(Vertex { point });
         VertexId::at(self.vertices.len() - 1)
     }
 
-    pub(crate) fn add_edge(
+    pub fn add_edge(
         &mut self,
         curve: Curve,
         range: (f64, f64),
@@ -206,7 +219,7 @@ impl Brep {
         EdgeId::at(self.edges.len() - 1)
     }
 
-    pub(crate) fn add_degenerate_edge(&mut self, vertex: VertexId, range: (f64, f64)) -> EdgeId {
+    pub fn add_degenerate_edge(&mut self, vertex: VertexId, range: (f64, f64)) -> EdgeId {
         self.edges.push(Edge {
             curve: None,
             range,
@@ -217,7 +230,7 @@ impl Brep {
         EdgeId::at(self.edges.len() - 1)
     }
 
-    pub(crate) fn add_face(
+    pub fn add_face(
         &mut self,
         surface: Surface,
         reversed: bool,
@@ -234,7 +247,7 @@ impl Brep {
         FaceId::at(self.faces.len() - 1)
     }
 
-    pub(crate) fn add_loop(&mut self, face: FaceId, coedges: Vec<CoedgeSpec>) -> LoopId {
+    pub fn add_loop(&mut self, face: FaceId, coedges: Vec<CoedgeSpec>) -> LoopId {
         let lp = LoopId::at(self.loops.len());
         let mut ids = Vec::with_capacity(coedges.len());
         for c in coedges {
@@ -255,7 +268,7 @@ impl Brep {
         lp
     }
 
-    pub(crate) fn add_shell(&mut self, faces: Vec<FaceId>) -> ShellId {
+    pub fn add_shell(&mut self, faces: Vec<FaceId>) -> ShellId {
         let id = ShellId::at(self.shells.len());
         for &f in &faces {
             self.faces[f.index()].shell = Some(id);
@@ -265,12 +278,12 @@ impl Brep {
     }
 
     /// A solid of one outer shell, the first, and voids.
-    pub(crate) fn add_solid(&mut self, shells: Vec<ShellId>) -> SolidId {
+    pub fn add_solid(&mut self, shells: Vec<ShellId>) -> SolidId {
         self.add_solid_of(shells, 1)
     }
 
     /// A solid whose first `outer` shells bound it from outside and the rest voids.
-    pub(crate) fn add_solid_of(&mut self, shells: Vec<ShellId>, outer: usize) -> SolidId {
+    pub fn add_solid_of(&mut self, shells: Vec<ShellId>, outer: usize) -> SolidId {
         let id = SolidId::at(self.solids.len());
         for &s in &shells {
             self.shells[s.index()].solid = Some(id);
@@ -288,7 +301,7 @@ impl Brep {
 
     /// Sets coedges `a` and `b` of one edge either side of an empty wedge between their faces: for
     /// an edge more than two faces use.
-    pub(crate) fn set_beside(&mut self, a: CoedgeId, b: CoedgeId) {
+    pub fn set_beside(&mut self, a: CoedgeId, b: CoedgeId) {
         self.beside.insert(a, b);
         self.beside.insert(b, a);
     }
@@ -329,7 +342,7 @@ impl Brep {
 
     /// Pairs the coedges of every edge more than two faces use that are not paired yet, from the
     /// faces' geometry round it: for an arena built from another one's faces.
-    pub(crate) fn pair_radial(&mut self) {
+    pub fn pair_radial(&mut self) {
         let edges: Vec<EdgeId> = self.radial_edges().collect();
         for e in edges {
             let us = self.uses[e.index()].clone();
@@ -340,7 +353,7 @@ impl Brep {
             let Some(curve) = &edge.curve else { continue };
             let (m, d) = curve.d1(0.5 * (edge.range.0 + edge.range.1));
             let Some(t) = d.unit() else { continue };
-            let len = crate::topo::radial::length(curve, edge.range);
+            let len = crate::radial::length(curve, edge.range);
             let sides: Vec<radial::Side> = us
                 .iter()
                 .map(|&c| {
@@ -403,7 +416,7 @@ impl Brep {
         &self.faces[id.index()]
     }
 
-    pub(crate) fn face_mut(&mut self, id: FaceId) -> &mut Face {
+    pub fn face_mut(&mut self, id: FaceId) -> &mut Face {
         self.memos.0[id.index()] = Arc::default();
         &mut self.faces[id.index()]
     }
@@ -420,15 +433,15 @@ impl Brep {
     }
 
     /// Renames a face, keeping what has been worked out about its geometry.
-    pub(crate) fn set_face_names(&mut self, id: FaceId, names: BTreeSet<FaceName>) {
+    pub fn set_face_names(&mut self, id: FaceId, names: BTreeSet<FaceName>) {
         self.faces[id.index()].names = names;
     }
 
-    pub(crate) fn memo(&self, id: FaceId) -> &FaceMemo {
+    pub fn memo(&self, id: FaceId) -> &FaceMemo {
         &self.memos.0[id.index()]
     }
 
-    pub(crate) fn shared_memo(&self, id: FaceId) -> Arc<FaceMemo> {
+    pub fn shared_memo(&self, id: FaceId) -> Arc<FaceMemo> {
         #[cfg(debug_assertions)]
         self.memo(id).layout.get_or_init(|| self.layout(id));
         self.memos.0[id.index()].clone()
@@ -437,7 +450,7 @@ impl Brep {
     /// Gives face `id` the memo of a face with exactly its geometry, its loops and coedges in the
     /// same order on edges of the same ranges: the memo keeps some of what it holds by a
     /// coedge's place, and an edge's parameters with it.
-    pub(crate) fn share_memo(&mut self, id: FaceId, memo: Arc<FaceMemo>) {
+    pub fn share_memo(&mut self, id: FaceId, memo: Arc<FaceMemo>) {
         self.memos.0[id.index()] = memo;
         #[cfg(debug_assertions)]
         if let Some(was) = self.memo(id).layout.get() {
@@ -516,7 +529,7 @@ impl Brep {
     }
 
     /// Gives an imported vertex a tolerance; a value at or below [`tol::LINEAR`] clears it.
-    pub(crate) fn set_vertex_tolerance(&mut self, v: VertexId, t: f64) {
+    pub fn set_vertex_tolerance(&mut self, v: VertexId, t: f64) {
         let old = self.vertex_tolerance(v);
         if t > tol::LINEAR {
             self.tolerances.vertices.insert(v, t);
@@ -529,7 +542,7 @@ impl Brep {
     }
 
     /// Gives an imported edge a tolerance; a value at or below [`tol::LINEAR`] clears it.
-    pub(crate) fn set_edge_tolerance(&mut self, e: EdgeId, t: f64) {
+    pub fn set_edge_tolerance(&mut self, e: EdgeId, t: f64) {
         let old = self.edge_tolerance(e);
         if t > tol::LINEAR {
             self.tolerances.edges.insert(e, t);

@@ -1,7 +1,7 @@
 // yack: boxes round a face and an arena, and the parameter-plane outlines and stationary points they use.
 // Adapted from springrep@a03e8a1 src/measure.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from measure.rs to topo/bbox.rs (M2), so distance and mesh reach a face's box below
-// them; private helpers made pub(crate) where measure still calls them. Paths only.
+// them; private helpers made pub(crate) where measure still calls them. Paths only; then to yack-topo (M3 W4), paths and visibility only.
 //! Boxes round a face (its loose box, kept on its memo, and its hull box) and round an arena, with the
 //! parameter-plane outlines, winding test and stationary-point search they are found by.
 
@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// The face's loops as parameter-plane polygons, for point classification.
-pub(crate) fn uv_polygons(b: &Brep, f: FaceId) -> Vec<Vec<Vec2>> {
+pub fn uv_polygons(b: &Brep, f: FaceId) -> Vec<Vec<Vec2>> {
     uv_polygons_at(b, f, 64)
 }
 
@@ -35,7 +35,7 @@ pub(crate) fn uv_polygons_at(b: &Brep, f: FaceId, n: usize) -> Vec<Vec<Vec2>> {
 /// How many times the loops turn round `p`: the edges that cross `p`'s level to its right,
 /// counted up for one rising and down for one falling. An edge owns its lower end and not its
 /// upper, so a vertex on the level is counted once.
-pub(crate) fn winding(polys: &[Vec<Vec2>], p: Vec2) -> i32 {
+pub fn winding(polys: &[Vec<Vec2>], p: Vec2) -> i32 {
     let mut turns = 0;
     for poly in polys {
         for (k, &from) in poly.iter().enumerate() {
@@ -55,7 +55,7 @@ pub(crate) fn winding(polys: &[Vec<Vec2>], p: Vec2) -> i32 {
     turns
 }
 
-pub(crate) fn in_face(s: &Surface, polys: &[Vec<Vec2>], uv: Vec2) -> Option<Vec2> {
+pub fn in_face(s: &Surface, polys: &[Vec<Vec2>], uv: Vec2) -> Option<Vec2> {
     // Every whole-period shift that lands within the outline's own extent: a face can wind round
     // its surface several times (a bore's wall left between a thread's turns), its outline
     // running on across the parameter plane.
@@ -90,7 +90,7 @@ pub(crate) fn in_face(s: &Surface, polys: &[Vec<Vec2>], uv: Vec2) -> Option<Vec2
 /// Points of the face where its coordinate along `e` is stationary and that a boundary need not
 /// reach: the critical sets of planes, cylinders, cones and extrusions are lines that always meet
 /// the boundary or a seam, so only the remaining surfaces have candidates.
-pub(crate) fn stationary(s: &Surface, polys: &[Vec<Vec2>], e: Vec3, starts: Option<Vec<Vec2>>) -> Vec<Vec2> {
+pub fn stationary(s: &Surface, polys: &[Vec<Vec2>], e: Vec3, starts: Option<Vec<Vec2>>) -> Vec<Vec2> {
     let mut cands = Vec::new();
     match s {
         Surface::Sphere(sp) => {
@@ -206,7 +206,7 @@ pub(crate) fn uv_bounds(polys: &[Vec<Vec2>]) -> (Vec2, Vec2) {
 
 /// The patches of `n` that the parameter box of a face's loops `polys` reaches. A periodic
 /// parameter's face may sit a period away from the knot domain; every patch along it counts.
-pub(crate) fn reached_patches<'a>(
+pub fn reached_patches<'a>(
     n: &'a NurbsSurface,
     polys: &[Vec<Vec2>],
 ) -> impl Iterator<Item = &'a Patch> + 'a {
@@ -235,7 +235,7 @@ pub fn face_bbox(b: &Brep, f: FaceId) -> Aabb {
 }
 
 /// One face's share of [`loose_bbox`], from its memo.
-pub(crate) fn face_box(b: &Brep, f: FaceId) -> Aabb {
+pub fn face_box(b: &Brep, f: FaceId) -> Aabb {
     *b.memo(f).loose_box.get_or_init(|| face_loose_box(b, f))
 }
 
@@ -286,7 +286,7 @@ pub(crate) fn face_loose_box(b: &Brep, f: FaceId) -> Aabb {
 /// face counts with its control points' box, a sphere or torus with its whole extent. It costs a
 /// pass over the face's edges, where [`face_box`] finds extremes, so it rules out faces far from
 /// something before their [`face_box`] is worked out.
-pub(crate) fn face_hull_box(b: &Brep, f: FaceId) -> Aabb {
+pub fn face_hull_box(b: &Brep, f: FaceId) -> Aabb {
     if let Some(bb) = b.memo(f).loose_box.get() {
         return *bb;
     }
