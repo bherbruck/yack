@@ -12,8 +12,9 @@
 //!    turned by `same_sense`). The loop integrals fix it up to whole copies of the surface: a loop
 //!    that winds may be read a period on, a pole line may be run either way round. So the face is
 //!    `raw + k·W`, `W` the whole surface's integral, with the one `k` that makes the area positive
-//!    and no more than the whole surface's. A surface with no finite whole (a plane, a cylinder)
-//!    has `k = 0`, and a face whose area comes out negative there is refused.
+//!    and no more than the whole surface's. A surface with no closed direction, or with no finite
+//!    whole (a plane, a cylinder), has `k = 0`, and a face whose area comes out negative there is
+//!    refused.
 //!
 //! Volumes add over every face of every solid; a void's faces count reversed.
 
@@ -175,7 +176,13 @@ impl Measurer {
             }
         }
         let sense = if f.same_sense { 1.0 } else { -1.0 };
-        let (area, vol, k) = match self.whole(s)? {
+        // Only a closed direction lets a loop be read a whole surface on: on a surface with none, the
+        // loop integrals are the region's, exactly, and a face that covers the whole of a bounded
+        // patch is that patch, not nothing (bench nurbs/bspline-dome: raw a hair over the patch's
+        // whole, by quadrature, was read as the whole taken away).
+        let closed = s.periods().iter().any(Option::is_some);
+        let whole = if closed { self.whole(s)? } else { None };
+        let (area, vol, k) = match whole {
             Some(w) if w[0] > 0.0 => {
                 // The one k with the area in (0, W]: sense·(raw + k·W) > EMPTY·W.
                 let k = if sense > 0.0 { ((EMPTY * w[0] - raw[0]) / w[0]).floor() + 1.0 } else { ((-EMPTY * w[0] - raw[0]) / w[0]).ceil() - 1.0 };

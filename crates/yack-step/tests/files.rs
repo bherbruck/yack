@@ -25,6 +25,9 @@ fn sound_files_measure_as_the_grader_reads_them() {
         // One face on a closed rational spline, bounded by a seam alone from pole to pole (bench
         // geometry/ellipsoid; grader's values from ladder33).
         ("ellipsoid.step", 301.59289474462025, 231.2482150159732),
+        // A face that covers the whole of a bounded, unclosed spline patch (bench nurbs/bspline-dome;
+        // grader's values from ladder33).
+        ("bspline-dome.step", 3081.0055555555546, 1285.3684049053318),
     ];
     let mut report = Vec::new();
     for (name, v, a) in cases {
