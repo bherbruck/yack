@@ -16,6 +16,18 @@
 //! assert!(grooved.volume() < 42.0 * 32.0 * 8.0);
 //! # Ok::<(), yack::Error>(())
 //! ```
+//!
+//! A plate with a hole through it and one top edge rounded (the README's example, kept here so
+//! that it compiles and runs):
+//!
+//! ```
+//! use yack::prelude::*;
+//! let plate = block(&Frame::WORLD, [40.0, 30.0, 8.0])?;
+//! let cut = plate.difference(&cylinder(&Frame::at([20.0, 15.0, -1.0]), 5.0, 10.0)?)?;
+//! let part = cut.fillet(&[cut.edge_at([20.0, 0.0, 8.0])?], 1.0)?;
+//! # assert!(part.check().is_empty() && part.volume() < 40.0 * 30.0 * 8.0 - 3.0 * 25.0 * 8.0);
+//! # Ok::<(), yack::Error>(())
+//! ```
 #![deny(missing_docs)]
 #![deny(clippy::float_arithmetic)]
 
