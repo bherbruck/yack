@@ -18,6 +18,7 @@ use yack_tol as tol;
 /// `d <= t`, read with a few ulps of the coordinates' size at `at` to spare, so that what lies at
 /// exactly a tolerance counts as within it however its coordinates round: a copy moved by exactly
 /// [`tol::LINEAR`] lies 1e-7 mm plus a few ulps away.
+#[inline]
 pub fn within(d: f64, t: f64, at: Point3) -> bool {
     d <= t + 16.0 * f64::EPSILON * (1.0 + at.x.abs().max(at.y.abs()).max(at.z.abs()))
 }
@@ -37,22 +38,27 @@ impl Vec3 {
     pub const Y: Vec3 = Vec3::new(0.0, 1.0, 0.0);
     pub const Z: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 
+    #[inline]
     pub const fn new(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3 { x, y, z }
     }
 
+    #[inline]
     pub fn from_array(a: [f64; 3]) -> Vec3 {
         Vec3::new(a[0], a[1], a[2])
     }
 
+    #[inline]
     pub fn to_array(self) -> [f64; 3] {
         [self.x, self.y, self.z]
     }
 
+    #[inline]
     pub fn dot(self, o: Vec3) -> f64 {
         self.x * o.x + self.y * o.y + self.z * o.z
     }
 
+    #[inline]
     pub fn cross(self, o: Vec3) -> Vec3 {
         Vec3::new(
             self.y * o.z - self.z * o.y,
@@ -61,15 +67,18 @@ impl Vec3 {
         )
     }
 
+    #[inline]
     pub fn norm2(self) -> f64 {
         self.dot(self)
     }
 
+    #[inline]
     pub fn norm(self) -> f64 {
         self.norm2().sqrt()
     }
 
     /// The unit vector along `self`, or `None` when it is too short to have a direction.
+    #[inline]
     pub fn unit(self) -> Option<Vec3> {
         let n = self.norm();
         if n <= 1e-300 || !n.is_finite() {
@@ -80,33 +89,40 @@ impl Vec3 {
     }
 
     /// The unit vector along `self`, or the zero vector.
+    #[inline]
     pub fn unit_or_zero(self) -> Vec3 {
         self.unit().unwrap_or(Vec3::ZERO)
     }
 
+    #[inline]
     pub fn lerp(self, o: Vec3, t: f64) -> Vec3 {
         self + (o - self) * t
     }
 
+    #[inline]
     pub fn dist(self, o: Vec3) -> f64 {
         (self - o).norm()
     }
 
     /// The angle between two nonzero vectors, in [0, π].
+    #[inline]
     pub fn angle(self, o: Vec3) -> f64 {
         self.cross(o).norm().atan2(self.dot(o))
     }
 
     /// Some unit vector perpendicular to `self`.
+    #[inline]
     pub fn any_perpendicular(self) -> Vec3 {
         let a = if self.x.abs() < 0.6 { Vec3::X } else { Vec3::Y };
         self.cross(a).unit_or_zero()
     }
 
+    #[inline]
     pub fn max_abs(self) -> f64 {
         self.x.abs().max(self.y.abs()).max(self.z.abs())
     }
 
+    #[inline]
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
@@ -114,6 +130,7 @@ impl Vec3 {
 
 impl Index<usize> for Vec3 {
     type Output = f64;
+    #[inline]
     fn index(&self, i: usize) -> &f64 {
         match i {
             0 => &self.x,
@@ -125,12 +142,14 @@ impl Index<usize> for Vec3 {
 
 impl Add for Vec3 {
     type Output = Vec3;
+    #[inline]
     fn add(self, o: Vec3) -> Vec3 {
         Vec3::new(self.x + o.x, self.y + o.y, self.z + o.z)
     }
 }
 
 impl AddAssign for Vec3 {
+    #[inline]
     fn add_assign(&mut self, o: Vec3) {
         *self = *self + o;
     }
@@ -138,12 +157,14 @@ impl AddAssign for Vec3 {
 
 impl Sub for Vec3 {
     type Output = Vec3;
+    #[inline]
     fn sub(self, o: Vec3) -> Vec3 {
         Vec3::new(self.x - o.x, self.y - o.y, self.z - o.z)
     }
 }
 
 impl SubAssign for Vec3 {
+    #[inline]
     fn sub_assign(&mut self, o: Vec3) {
         *self = *self - o;
     }
@@ -151,6 +172,7 @@ impl SubAssign for Vec3 {
 
 impl Mul<f64> for Vec3 {
     type Output = Vec3;
+    #[inline]
     fn mul(self, s: f64) -> Vec3 {
         Vec3::new(self.x * s, self.y * s, self.z * s)
     }
@@ -158,6 +180,7 @@ impl Mul<f64> for Vec3 {
 
 impl Mul<Vec3> for f64 {
     type Output = Vec3;
+    #[inline]
     fn mul(self, v: Vec3) -> Vec3 {
         v * self
     }
@@ -165,6 +188,7 @@ impl Mul<Vec3> for f64 {
 
 impl Div<f64> for Vec3 {
     type Output = Vec3;
+    #[inline]
     fn div(self, s: f64) -> Vec3 {
         Vec3::new(self.x / s, self.y / s, self.z / s)
     }
@@ -172,6 +196,7 @@ impl Div<f64> for Vec3 {
 
 impl Neg for Vec3 {
     type Output = Vec3;
+    #[inline]
     fn neg(self) -> Vec3 {
         Vec3::new(-self.x, -self.y, -self.z)
     }
@@ -187,31 +212,38 @@ pub struct Vec2 {
 impl Vec2 {
     pub const ZERO: Vec2 = Vec2::new(0.0, 0.0);
 
+    #[inline]
     pub const fn new(x: f64, y: f64) -> Vec2 {
         Vec2 { x, y }
     }
 
+    #[inline]
     pub fn dot(self, o: Vec2) -> f64 {
         self.x * o.x + self.y * o.y
     }
 
     /// The z component of the 3-D cross product.
+    #[inline]
     pub fn cross(self, o: Vec2) -> f64 {
         self.x * o.y - self.y * o.x
     }
 
+    #[inline]
     pub fn norm(self) -> f64 {
         self.dot(self).sqrt()
     }
 
+    #[inline]
     pub fn dist(self, o: Vec2) -> f64 {
         (self - o).norm()
     }
 
+    #[inline]
     pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {
         self + (o - self) * t
     }
 
+    #[inline]
     pub fn perp(self) -> Vec2 {
         Vec2::new(-self.y, self.x)
     }
@@ -219,6 +251,7 @@ impl Vec2 {
 
 impl Add for Vec2 {
     type Output = Vec2;
+    #[inline]
     fn add(self, o: Vec2) -> Vec2 {
         Vec2::new(self.x + o.x, self.y + o.y)
     }
@@ -226,6 +259,7 @@ impl Add for Vec2 {
 
 impl Sub for Vec2 {
     type Output = Vec2;
+    #[inline]
     fn sub(self, o: Vec2) -> Vec2 {
         Vec2::new(self.x - o.x, self.y - o.y)
     }
@@ -233,6 +267,7 @@ impl Sub for Vec2 {
 
 impl Mul<f64> for Vec2 {
     type Output = Vec2;
+    #[inline]
     fn mul(self, s: f64) -> Vec2 {
         Vec2::new(self.x * s, self.y * s)
     }
@@ -240,6 +275,7 @@ impl Mul<f64> for Vec2 {
 
 impl Div<f64> for Vec2 {
     type Output = Vec2;
+    #[inline]
     fn div(self, s: f64) -> Vec2 {
         Vec2::new(self.x / s, self.y / s)
     }
@@ -247,6 +283,7 @@ impl Div<f64> for Vec2 {
 
 impl Neg for Vec2 {
     type Output = Vec2;
+    #[inline]
     fn neg(self) -> Vec2 {
         Vec2::new(-self.x, -self.y)
     }
@@ -292,29 +329,35 @@ impl Frame {
         Frame::new(origin, z, z.any_perpendicular())
     }
 
+    #[inline]
     pub fn to_local(&self, p: Point3) -> Vec3 {
         let d = p - self.origin;
         Vec3::new(d.dot(self.x), d.dot(self.y), d.dot(self.z))
     }
 
+    #[inline]
     pub fn to_world(&self, l: Vec3) -> Point3 {
         self.origin + self.x * l.x + self.y * l.y + self.z * l.z
     }
 
+    #[inline]
     pub fn dir_to_world(&self, l: Vec3) -> Vec3 {
         self.x * l.x + self.y * l.y + self.z * l.z
     }
 
+    #[inline]
     pub fn dir_to_local(&self, d: Vec3) -> Vec3 {
         Vec3::new(d.dot(self.x), d.dot(self.y), d.dot(self.z))
     }
 
     /// The point at `(u, v)` in the frame's xy plane.
+    #[inline]
     pub fn at(&self, u: f64, v: f64) -> Point3 {
         self.origin + self.x * u + self.y * v
     }
 
     /// The radial direction at angle `a` in the xy plane.
+    #[inline]
     pub fn radial(&self, a: f64) -> Vec3 {
         self.x * a.cos() + self.y * a.sin()
     }
@@ -450,6 +493,7 @@ impl Transform {
         }
     }
 
+    #[inline]
     pub fn vector(&self, v: Vec3) -> Vec3 {
         let r = &self.r;
         Vec3::new(
@@ -459,6 +503,7 @@ impl Transform {
         )
     }
 
+    #[inline]
     pub fn point(&self, p: Point3) -> Point3 {
         self.vector(p) + self.t
     }
@@ -511,10 +556,12 @@ impl Aabb {
         max: Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
     };
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.min.x > self.max.x
     }
 
+    #[inline]
     pub fn add(&mut self, p: Point3) {
         self.min = Vec3::new(
             self.min.x.min(p.x),
@@ -528,6 +575,7 @@ impl Aabb {
         );
     }
 
+    #[inline]
     pub fn union(&mut self, o: &Aabb) {
         if !o.is_empty() {
             self.add(o.min);
@@ -535,6 +583,7 @@ impl Aabb {
         }
     }
 
+    #[inline]
     pub fn diagonal(&self) -> f64 {
         if self.is_empty() {
             0.0
@@ -543,6 +592,7 @@ impl Aabb {
         }
     }
 
+    #[inline]
     pub fn center(&self) -> Point3 {
         (self.min + self.max) * 0.5
     }
