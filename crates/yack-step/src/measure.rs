@@ -82,8 +82,9 @@ const PIECES: usize = 2;
 const PIECES_ON_SPLINE: usize = 4;
 const PIECES_ON_LINE: usize = 4;
 
-/// Edge ends whose surface points are farther apart than this, relative to the solid's size, do
-/// not meet.
+/// How far apart, relative to the solid's size, two points of a face may lie and still be one
+/// point: edge ends that meet at a vertex, and the surface point found for an edge's point (a foot
+/// farther off is sought again from the surface's grid, then refused).
 const GAP: f64 = 1e-5; // tol: edges of one loop meet at their shared vertex
 
 /// A partial derivative this small against the other is zero: the point is on a pole line.
@@ -474,7 +475,7 @@ impl Measurer {
         for b in cuts.into_iter().chain(std::iter::once(e.t1)) {
             for k in 0..sub {
                 let (pa, pb) = (a + (b - a) * k as f64 / sub as f64, a + (b - a) * (k + 1) as f64 / sub as f64);
-                self.piece(s, e, (pa, pb), &mut h, &mut nodes, 0);
+                self.piece(s, e, (pa, pb), &mut h, &mut nodes, 0)?;
             }
             a = b;
         }
@@ -490,7 +491,9 @@ impl Measurer {
     /// between nodes turns more than [`MAX_TURN`] of a period: where an edge passes close by a pole
     /// its u turns fast, and a coarser walk takes the wrong turn there (bench scale/balls-united:
     /// a circle 3° from a sphere's pole lost the winding and 15% of the face).
-    fn piece(&self, s: &Surface, e: &Use, (pa, pb): (f64, f64), h: &mut Option<Uv>, nodes: &mut Vec<Node>, depth: usize) {
+    /// Refuses where the surface point found for an edge's point lies off it: the walk would
+    /// integrate a run the edge does not take.
+    fn piece(&self, s: &Surface, e: &Use, (pa, pb): (f64, f64), h: &mut Option<Uv>, nodes: &mut Vec<Node>, depth: usize) -> Result<()> {
         let (mid, half) = ((pa + pb) / 2.0, (pb - pa) / 2.0);
         let periods = s.periods();
         let mut here = Vec::with_capacity(self.gauss.len());
@@ -498,30 +501,34 @@ impl Measurer {
         for &(x, w) in &self.gauss {
             let t = mid + half * x;
             let (p, dp) = e.curve.d1(t);
-            let (u, v) = s.invert(p, last);
+            let (u, v) = s.invert(p, last, GAP * self.size);
+            let (foot, su, sv) = s.d1(u, v);
+            let off = foot.distance(p);
+            if off.is_nan() || off > GAP * self.size {
+                return Err(bad(format!("an edge's point at {t} is {off} off its face")));
+            }
             if depth < MAX_SPLITS
                 && let Some((lu, lv)) = last
             {
                 let turned = |d: f64, p: Option<f64>| p.is_some_and(|p| d.abs() > MAX_TURN * p);
                 if turned(u - lu, periods[0]) || turned(v - lv, periods[1]) {
-                    self.piece(s, e, (pa, mid), h, nodes, depth + 1);
-                    self.piece(s, e, (mid, pb), h, nodes, depth + 1);
-                    return;
+                    self.piece(s, e, (pa, mid), h, nodes, depth + 1)?;
+                    return self.piece(s, e, (mid, pb), h, nodes, depth + 1);
                 }
             }
             last = Some((u, v));
-            let (_, su, sv) = s.d1(u, v);
             let (du, dv) = solve(su, sv, dp);
             here.push(Node { u, v, du: du * w * half, dv: dv * w * half, t });
         }
         *h = last;
         nodes.extend(here);
+        Ok(())
     }
 
     /// The uv of an edge's end at curve parameter `t`, next to node `near`. At a pole the
     /// vanishing direction's parameter is the one the edge arrives with (from just inside, `t_in`).
     fn end(&self, s: &Surface, e: &Use, t: f64, t_in: f64, near: (f64, f64)) -> (f64, f64) {
-        let (u, v) = s.invert(e.curve.d1(t).0, Some(near));
+        let (u, v) = s.invert(e.curve.d1(t).0, Some(near), GAP * self.size);
         let (_, su, sv) = s.d1(u, v);
         let (lu, lv) = (su.length(), sv.length());
         let pole_u = lu <= SINGULAR * lv.max(self.size);
@@ -529,7 +536,7 @@ impl Measurer {
         if !(pole_u || pole_v) {
             return (u, v);
         }
-        let (iu, iv) = s.invert(e.curve.d1(t_in).0, Some(near));
+        let (iu, iv) = s.invert(e.curve.d1(t_in).0, Some(near), GAP * self.size);
         (if pole_u { iu } else { u }, if pole_v { iv } else { v })
     }
 

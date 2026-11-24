@@ -28,8 +28,8 @@ fn sound_files_measure_as_the_grader_reads_them() {
         // A face that covers the whole of a bounded, unclosed spline patch (bench nurbs/bspline-dome;
         // grader's values from ladder33).
         ("bspline-dome.step", 3081.0055555555546, 1285.3684049053318),
-        // A spindle torus's face, whose area integrand kinks where the tube's radius passes through
-        // the axis (bench geometry/lemon; grader's values from ladder33).
+        // A spindle torus's inner sheet, past the axis, where a foot on the tube of the point's own
+        // side lies off the face (bench geometry/lemon; grader's values from ladder33).
         ("lemon.step", 57.29966747737253, 76.53638161221483),
         // Spheres' faces whose runs go down a meridian (bench boolean/unequal-lens-aslant; grader's
         // values from ladder33).

@@ -140,6 +140,10 @@ impl Curve {
 /// When a Newton step is this small, relative to the parameter range, it has converged.
 const NEWTON_STEP: f64 = 1e-14; // tol: round-off in a parameter
 
+/// How many times a Newton step that does not bring the point nearer is halved before the descent
+/// stops.
+const HALVINGS: usize = 6;
+
 /// `atan2(y, x)` in `[0, 2π)` (0 at the origin).
 fn angle(y: f64, x: f64) -> f64 {
     if x == 0.0 && y == 0.0 { 0.0 } else { y.atan2(x).rem_euclid(TAU) }
@@ -282,8 +286,9 @@ impl Surface {
     }
 
     /// `(u, v)` of the surface's point nearest `q`, near `hint` where given (whole periods chosen
-    /// to lie nearest it).
-    pub(crate) fn invert(&self, q: Point3, hint: Option<(f64, f64)>) -> (f64, f64) {
+    /// to lie nearest it). A foot found by descent from `hint` that lies more than `miss` off `q`
+    /// is sought again from the surface's coarse grid.
+    pub(crate) fn invert(&self, q: Point3, hint: Option<(f64, f64)>, miss: f64) -> (f64, f64) {
         let hu = hint.map(|h| h.0);
         let hv = hint.map(|h| h.1);
         match self {
@@ -306,22 +311,98 @@ impl Surface {
                 let rho = (lx * lx + ly * ly).sqrt();
                 (near_period(angle(ly, lx), hu), lz.atan2(rho))
             }
-            Surface::Torus { f, rmaj, .. } => {
+            Surface::Torus { f, rmaj, rmin } => {
                 let (lx, ly, lz) = f.local(q);
-                let rho = (lx * lx + ly * ly).sqrt() - rmaj;
+                let s = (lx * lx + ly * ly).sqrt();
+                let a = angle(ly, lx);
+                // The tube circle on q's side of the axis, or on a spindle torus the one across it
+                // where that is nearer: its inner sheet (the lemon) reaches past the axis, and a
+                // point there has no foot on its own side (bench singular/lemon: 4.0 off).
+                let off = |rho: f64| ((rho * rho + lz * lz).sqrt() - rmin).abs();
+                let (u, rho) = if rmaj < rmin && off(-s - rmaj) < off(s - rmaj) {
+                    ((a + PI).rem_euclid(TAU), -s - rmaj)
+                } else {
+                    (a, s - rmaj)
+                };
                 let v = lz.atan2(rho);
-                (near_period(angle(ly, lx), hu), near_period(v.rem_euclid(TAU), hv))
+                (near_period(u, hu), near_period(v.rem_euclid(TAU), hv))
             }
-            _ => self.newton(q, hint),
+            _ => self.newton(q, hint, miss),
         }
     }
 
     /// Newton's method on the closest-point conditions, from `hint` or a coarse grid's best point.
-    fn newton(&self, q: Point3, hint: Option<(f64, f64)>) -> (f64, f64) {
+    /// A descent from the hint that ends off `q` (stuck on a pole, where a partial vanishes, or
+    /// pinned on a narrow patch's edge) is tried again from the grid, which is taken only where it
+    /// lands on `q`; otherwise the hint's foot stands, and the walk refuses it (`piece`; bench
+    /// integration/utah-teapot: a walk from a collapsed side's corner never left it;
+    /// swept/tumbling-cube: one pinned to a strip's edge).
+    fn newton(&self, q: Point3, hint: Option<(f64, f64)>, miss: f64) -> (f64, f64) {
+        let local = self.descend(q, hint.unwrap_or_else(|| self.start(q)));
+        let off = |(u, v): (f64, f64)| self.d1(u, v).0.distance(q);
+        let (mut u, mut v) = match hint {
+            Some(_) if off(local) > miss => {
+                let global = self.descend(q, self.start(q));
+                if off(global) <= miss { global } else { local }
+            }
+            _ => local,
+        };
+        // Whole periods chosen to lie nearest the hint, as the analytic inversions do.
+        if let Some((hu, hv)) = hint {
+            let near = |x: f64, h: f64, p: Option<f64>| match p {
+                Some(p) if p > 0.0 => x + ((h - x) / p).round() * p,
+                _ => x,
+            };
+            let periods = self.periods();
+            u = near(u, hu, periods[0]);
+            v = near(v, hv, periods[1]);
+        }
+        (u, v)
+    }
+
+    /// Newton's descent toward the point of the surface nearest `q`, from `(u, v)`. Each
+    /// Gauss–Newton step is taken only where it brings the point nearer `q`, halved up to
+    /// [`HALVINGS`] times until it does; where none does, the descent stops. Gauss–Newton leaves out
+    /// the surface's curvature, and where a point lies a little off a surface with one partial
+    /// nearly vanishing, full steps circle the foot without settling and the last lands anywhere on
+    /// the circuit (bench swept/hypoid-gear-cut-by-its-pinion: an edge 2.8e-6 off its face,
+    /// inverted to a foot 1.3e-4 off it). The point kept is so always the nearest seen.
+    fn descend(&self, q: Point3, start: (f64, f64)) -> (f64, f64) {
         let ((u0, u1), (v0, v1)) = self.domain();
-        let (mut u, mut v) = hint.unwrap_or_else(|| self.start(q));
+        let periods = self.periods();
+        let scale = (u1 - u0).abs().max(v1 - v0).max(1.0);
+        let settled = NEWTON_STEP * if scale.is_finite() { scale } else { 1.0 };
+        // An open direction's parameter is kept in its domain. A closed direction's is kept within
+        // one period of its start: at a pole, where the other partial vanishes, a step can throw it
+        // billions of periods off, and its digits with it (bench geometry/ellipsoid: a whole
+        // surface read as nearly none). The point is the same a whole number of periods on, and
+        // the hint's period is chosen by the caller.
+        let place = |mut u: f64, mut v: f64| {
+            if periods[0].is_none() && u0.is_finite() {
+                u = u.clamp(u0, u1);
+            }
+            if periods[1].is_none() && v0.is_finite() {
+                v = v.clamp(v0, v1);
+            }
+            if let Some(p) = periods[0].filter(|p| *p > 0.0)
+                && u0.is_finite()
+            {
+                u = u0 + (u - u0).rem_euclid(p);
+            }
+            if let Some(p) = periods[1].filter(|p| *p > 0.0)
+                && v0.is_finite()
+            {
+                v = v0 + (v - v0).rem_euclid(p);
+            }
+            (u, v)
+        };
+        let (mut u, mut v) = start;
+        let (mut p, mut su, mut sv) = self.d1(u, v);
+        let mut off = p.distance(q);
+        if !off.is_finite() {
+            return start;
+        }
         for _ in 0..60 {
-            let (p, su, sv) = self.d1(u, v);
             let r = q - p;
             // Gauss–Newton: [su·su su·sv; su·sv sv·sv] [du dv] = [r·su r·sv].
             let (a, b, c) = (su.dot(su), su.dot(sv), sv.dot(sv));
@@ -334,46 +415,25 @@ impl Surface {
             } else {
                 (0.0, if c > 0.0 { g / c } else { 0.0 })
             };
-            let periods = self.periods();
-            u += du;
-            v += dv;
-            if !(u.is_finite() && v.is_finite()) {
-                return hint.unwrap_or_else(|| self.start(q));
+            let mut step = 1.0;
+            let mut taken = None;
+            for _ in 0..=HALVINGS {
+                let (nu, nv) = place(u + du * step, v + dv * step);
+                if nu.is_finite() && nv.is_finite() {
+                    let (np, nsu, nsv) = self.d1(nu, nv);
+                    let noff = np.distance(q);
+                    if noff < off {
+                        taken = Some((nu, nv, np, nsu, nsv, noff));
+                        break;
+                    }
+                }
+                step *= 0.5;
             }
-            if periods[0].is_none() && u0.is_finite() {
-                u = u.clamp(u0, u1);
-            }
-            if periods[1].is_none() && v0.is_finite() {
-                v = v.clamp(v0, v1);
-            }
-            // A closed direction's parameter is kept within one period of its start: at a pole, where
-            // the other partial vanishes, a step can throw it billions of periods off, and its digits
-            // with it (bench geometry/ellipsoid: a whole surface read as nearly none). The point is
-            // the same a whole number of periods on, and the hint's period is chosen below.
-            if let Some(p) = periods[0].filter(|p| *p > 0.0)
-                && u0.is_finite()
-            {
-                u = u0 + (u - u0).rem_euclid(p);
-            }
-            if let Some(p) = periods[1].filter(|p| *p > 0.0)
-                && v0.is_finite()
-            {
-                v = v0 + (v - v0).rem_euclid(p);
-            }
-            let scale = (u1 - u0).abs().max(v1 - v0).max(1.0);
-            if du.abs().max(dv.abs()) <= NEWTON_STEP * if scale.is_finite() { scale } else { 1.0 } {
+            let Some(next) = taken else { break };
+            (u, v, p, su, sv, off) = next;
+            if du.abs().max(dv.abs()) <= settled {
                 break;
             }
-        }
-        // Whole periods chosen to lie nearest the hint, as the analytic inversions do.
-        if let Some((hu, hv)) = hint {
-            let near = |x: f64, h: f64, p: Option<f64>| match p {
-                Some(p) if p > 0.0 => x + ((h - x) / p).round() * p,
-                _ => x,
-            };
-            let periods = self.periods();
-            u = near(u, hu, periods[0]);
-            v = near(v, hv, periods[1]);
         }
         (u, v)
     }
@@ -439,34 +499,6 @@ impl Surface {
     pub(crate) fn breaks(&self, axis: usize, lo: f64, hi: f64) -> Result<Vec<f64>> {
         match (self, axis) {
             (Surface::Plane { .. }, _) | (Surface::Cylinder { .. } | Surface::Cone { .. }, 1) => Ok(Vec::new()),
-            // A spindle torus's area integrand has a kink where its tube's radius passes through
-            // the axis (R + r·cos v = 0), which the rule must not straddle.
-            (Surface::Torus { rmaj, rmin, .. }, 1) if rmaj < rmin && *rmin > 0.0 => {
-                let apex = (-rmaj / rmin).acos();
-                let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) };
-                let mut out = angular(lo, hi)?;
-                if !(a.is_finite() && b.is_finite()) {
-                    return Ok(out);
-                }
-                // The crossings a whole number of turns from each apex angle strictly inside the
-                // run, in closed form: a step of a turn adds nothing to a parameter past about 1e16.
-                for base in [apex, TAU - apex] {
-                    let (k0, k1) = (((a - base) / TAU).ceil(), ((b - base) / TAU).floor());
-                    let count = k1 - k0 + 1.0;
-                    if count > MAX_PIECES {
-                        return Err(too_many(count));
-                    }
-                    // Counted, not stepped: past 2^53 turns, k + 1 is k.
-                    for i in 0..(count.max(0.0) as usize) {
-                        let x = base + (k0 + i as f64) * TAU;
-                        if x > a && x < b {
-                            out.push(x);
-                        }
-                    }
-                }
-                out.sort_by(f64::total_cmp);
-                Ok(out)
-            }
             (Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Sphere { .. } | Surface::Torus { .. }, _) => angular(lo, hi),
             (Surface::Revolution { .. }, 0) => angular(lo, hi),
             (Surface::Revolution { c, .. }, _) => c.breaks(lo, hi),
@@ -505,12 +537,8 @@ mod tests {
     }
 
     #[test]
-    fn a_spindle_torus_cuts_at_its_apex_and_ends_on_hostile_spans() {
+    fn a_spindle_torus_breaks_on_hostile_spans() {
         let t = Surface::Torus { f: world(), rmaj: 1.0, rmin: 2.0 };
-        let apex = (-0.5f64).acos();
-        let cuts = t.breaks(1, 0.0, TAU).unwrap();
-        assert!(cuts.iter().any(|&x| (x - apex).abs() < 1e-15) && cuts.iter().any(|&x| (x - (TAU - apex)).abs() < 1e-15));
-        assert!(cuts.windows(2).all(|w| w[0] <= w[1]));
         // Infinite and not-a-number ends, and ends so large a turn adds nothing: an answer, not a hang.
         for (lo, hi) in [(0.0, f64::INFINITY), (f64::NEG_INFINITY, 0.0), (f64::NAN, 1.0), (1e17, 1e17 + 4.0), (-1e300, 1e300)] {
             let _ = t.breaks(1, lo, hi);
@@ -525,11 +553,13 @@ mod tests {
             Surface::Cone { f, r: 2.0, tan: 0.3 },
             Surface::Sphere { f, r: 2.0 },
             Surface::Torus { f, rmaj: 3.0, rmin: 1.0 },
+            // A spindle torus, whose last two points lie on its inner sheet, past the axis.
+            Surface::Torus { f, rmaj: 1.0, rmin: 2.0 },
         ];
         for s in &surfaces {
-            for (u, v) in [(0.3, 0.2), (2.5, -0.7), (5.9, 0.9)] {
+            for (u, v) in [(0.3, 0.2), (2.5, -0.7), (5.9, 0.9), (1.0, 2.5), (4.0, -2.2)] {
                 let (p, _, _) = s.d1(u, v);
-                let (iu, iv) = s.invert(p, Some((u, v)));
+                let (iu, iv) = s.invert(p, Some((u, v)), 1e-12);
                 let q = s.d1(iu, iv).0;
                 assert!(q.distance(p) < 1e-12, "{s:?} at {u},{v}: {iu},{iv}");
             }
