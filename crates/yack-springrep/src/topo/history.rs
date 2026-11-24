@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Brep, EdgeId, FaceId, FaceName, VertexId};
+use super::{Brep, EdgeId, Face, FaceId, FaceName, VertexId};
 
 /// How a result face came about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -84,34 +84,55 @@ fn generated(name: &FaceName) -> Option<FaceOrigin> {
     }
 }
 
+/// Face `f` of `b`, if `b` has it (an id that names nothing gives no origin, never a panic).
+fn face(b: &Brep, f: FaceId) -> Option<&Face> {
+    b.faces.get(f.index())
+}
+
+/// How many coedges loop `l` of `b` has, if `b` has it.
+fn loop_len(b: &Brep, l: super::LoopId) -> Option<usize> {
+    b.loops.get(l.index()).map(|lp| lp.coedges.len())
+}
+
+/// Each operand with its index, up to `u8::MAX` operands.
+fn numbered<'a>(inputs: &'a [&'a Brep]) -> impl Iterator<Item = (u8, &'a Brep)> + 'a {
+    inputs.iter().enumerate().filter_map(|(k, b)| Some((u8::try_from(k).ok()?, *b)))
+}
+
 /// Whether result face `r` of `result` is operand face `o` of `operand` unchanged: the same surface
 /// the same way round, bounded by as many loops of as many edges each.
 fn unchanged(result: &Brep, r: FaceId, operand: &Brep, o: FaceId) -> bool {
-    let (a, b) = (result.face(r), operand.face(o));
+    let (Some(a), Some(b)) = (face(result, r), face(operand, o)) else { return false };
     a.surface == b.surface
         && a.reversed == b.reversed
         && a.loops.len() == b.loops.len()
-        && a.loops.iter().zip(&b.loops).all(|(&x, &y)| result.lp(x).coedges.len() == operand.lp(y).coedges.len())
+        && a.loops.iter().zip(&b.loops).all(|(&x, &y)| loop_len(result, x).is_some_and(|n| Some(n) == loop_len(operand, y)))
 }
 
 /// The history of an operation that made `result` from `inputs`, whose new faces carry the names of
 /// its own `feature`.
 pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
+    // more operands than an origin can number: every face without an origin (the audit reports
+    // it), nothing guessed
+    if inputs.len() > usize::from(u8::MAX) {
+        let faces = result.face_ids().map(|f| (f, Change::Generated, Vec::new())).collect();
+        return History { operands: u8::MAX, faces, deleted: Vec::new() };
+    }
     // every operand face carrying each name
     let mut carriers: BTreeMap<&FaceName, Vec<(u8, FaceId)>> = BTreeMap::new();
-    for (k, b) in (0u8..).zip(inputs) {
+    for (k, b) in numbered(inputs) {
         for f in b.face_ids() {
-            for n in &b.face(f).names {
+            for n in face(b, f).map(|x| &x.names).into_iter().flatten() {
                 carriers.entry(n).or_default().push((k, f));
             }
         }
     }
     let mut rows: Vec<Row> = Vec::new();
     for r in result.face_ids() {
-        let face = result.face(r);
+        let Some(this) = face(result, r) else { continue };
         let mut from: BTreeSet<(u8, FaceId)> = BTreeSet::new();
         let mut made: Vec<FaceOrigin> = Vec::new();
-        for n in &face.names {
+        for n in &this.names {
             if n.feature == feature {
                 made.extend(generated(n));
                 continue;
@@ -120,7 +141,11 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
             let pick: Vec<(u8, FaceId)> = if cands.len() == 1 {
                 cands.clone()
             } else {
-                cands.iter().copied().filter(|&(k, f)| inputs.get(usize::from(k)).is_some_and(|b| b.face(f).surface == face.surface)).collect()
+                cands
+                    .iter()
+                    .copied()
+                    .filter(|&(k, f)| inputs.get(usize::from(k)).and_then(|b| face(b, f)).is_some_and(|x| x.surface == this.surface))
+                    .collect()
             };
             if let [one] = pick.as_slice() {
                 from.insert(*one);
@@ -159,8 +184,7 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
             (r, change, origins)
         })
         .collect();
-    let deleted = (0u8..)
-        .zip(inputs)
+    let deleted = numbered(inputs)
         .flat_map(|(k, b)| b.face_ids().map(move |f| (k, f)))
         .filter(|o| !reach.contains_key(o))
         .collect();
@@ -172,4 +196,49 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str) -> History {
 pub fn identity(b: &Brep) -> History {
     let faces = b.face_ids().map(|f| (f, Change::Kept, vec![FaceOrigin::Operand { operand: 0, face: f }])).collect();
     History { operands: 1, faces, deleted: Vec::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::{Frame, Vec3};
+    use crate::primitive::block;
+    use crate::topo::LoopId;
+
+    fn cube(feature: &str) -> Brep {
+        block(&Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(1.0, 1.0, 1.0), feature).unwrap()
+    }
+
+    #[test]
+    fn a_renamed_block_is_kept_face_for_face() {
+        let b = cube("a");
+        let h = derive(&[&b], &b, "new");
+        assert_eq!(h.operands, 1);
+        assert!(h.faces.iter().all(|(_, c, o)| *c == Change::Kept && o.len() == 1));
+        assert!(h.deleted.is_empty());
+    }
+
+    #[test]
+    fn ids_that_name_nothing_give_no_origin_and_no_panic() {
+        let b = cube("a");
+        let mut odd = b.clone();
+        odd.faces[0].loops.push(LoopId::from_raw(9999));
+        let h = derive(&[&b], &odd, "new");
+        assert_eq!(h.faces.len(), 6);
+        // the face with the stray loop is no longer the operand's face unchanged
+        assert!(h.faces.iter().any(|(_, c, _)| *c == Change::Modified));
+        let h = derive(&[&odd], &b, "new");
+        assert_eq!(h.faces.len(), 6);
+    }
+
+    #[test]
+    fn more_operands_than_an_origin_can_number_give_faces_without_origins() {
+        let b = cube("a");
+        let many: Vec<&Brep> = std::iter::repeat_n(&b, 300).collect();
+        let h = derive(&many, &b, "new");
+        assert_eq!(h.operands, u8::MAX);
+        assert!(h.faces.iter().all(|(_, c, o)| *c == Change::Generated && o.is_empty()));
+        let h = derive(&many[..255], &b, "new");
+        assert_eq!(h.operands, 255);
+    }
 }

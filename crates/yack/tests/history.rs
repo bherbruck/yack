@@ -114,3 +114,24 @@ fn a_drilled_plate_says_where_each_face_came_from() -> Result<()> {
     assert_eq!(kept, 4);
     Ok(())
 }
+
+#[test]
+fn three_hundred_tools_cut_in_one_operation_still_give_a_history() -> Result<()> {
+    let plate = block(&Frame::WORLD, [10.0, 10.0, 1.0])?;
+    // 300 tools, all clear of the plate: the plate comes back whole, its history says nothing it cannot number
+    let tools: Vec<Solid> = (0..300).map(|i| block(&Frame::at([20.0 + 2.0 * f64::from(i), 0.0, 0.0]), [1.0, 1.0, 1.0])).collect::<Result<_>>()?;
+    let cut = plate.difference_all(&tools)?;
+    assert!((cut.volume() - 100.0).abs() < 1e-9);
+    let h = cut.history();
+    assert_eq!(h.rows().count(), cut.faces().len());
+    Ok(())
+}
+
+#[test]
+fn a_decoded_solid_takes_part_in_an_operation_with_a_history() -> Result<()> {
+    let plate = block(&Frame::WORLD, [10.0, 10.0, 2.0])?;
+    let decoded = yack::codec::decode(&yack::codec::encode(&plate)?)?;
+    let drilled = decoded.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 4.0)?)?;
+    assert_eq!(drilled.history().rows().count(), drilled.faces().len());
+    Ok(())
+}
