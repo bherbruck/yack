@@ -4,6 +4,10 @@
 // quadrature stay in springrep until hardening; paths and visibility only.
 //! Linear solves, root finding and Kronrod rules shared by the geometry and measurement code.
 
+// springrep's solvers index by position; D26's hardening pass moves them onto checked access, as
+// for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
 use yack_base::kernel::{Error, Result};
 
 /// The 15-point Kronrod rule on [−1, 1] as `(x, weight, 7-point Gauss weight)` for `x ≥ 0`, each

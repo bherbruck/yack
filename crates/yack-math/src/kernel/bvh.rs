@@ -1,15 +1,15 @@
 // yack: A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 // Adapted from springrep@a03e8a1 src/mesh/bvh.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from mesh/bvh.rs to math/bvh.rs (M2); `Bvh::new` takes the triangles' positions and
-// indices rather than a mesh.
+// indices rather than a mesh; moved to yack_math::kernel::bvh (M3 W2', D26); paths and visibility only.
 //! A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 //! segments and triangles: the search structures the thin-place probe, distances and rays share.
 
-use crate::math::{Aabb, Point3, Transform, Vec3};
+use super::{Aabb, Point3, Transform, Vec3};
 
 
 /// A bounding volume hierarchy over boxes: a mesh's triangles, or any primitives' boxes.
-pub(crate) struct Bvh {
+pub struct Bvh {
     boxes: Vec<Aabb>,
     /// Node: its box, and either two children or a run of `order`.
     nodes: Vec<(Aabb, Node)>,
@@ -22,7 +22,7 @@ enum Node {
 }
 
 impl Bvh {
-    pub(crate) fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Bvh {
+    pub fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Bvh {
         let boxes: Vec<Aabb> = triangles
             .iter()
             .map(|t| {
@@ -37,7 +37,7 @@ impl Bvh {
     }
 
     /// The hierarchy over `boxes`, whose indices a query returns.
-    pub(crate) fn of_boxes(boxes: Vec<Aabb>) -> Bvh {
+    pub fn of_boxes(boxes: Vec<Aabb>) -> Bvh {
         let mut bvh = Bvh {
             order: (0..boxes.len()).collect(),
             boxes,
@@ -83,7 +83,7 @@ impl Bvh {
 
     /// Every box that, slid any distance either way along `d`, meets `q`: every triangle a line
     /// along `d` through `q` can cross, so a ray's crossings keep their parity.
-    pub(crate) fn along_line(&self, q: &Aabb, d: Vec3, out: &mut Vec<usize>) {
+    pub fn along_line(&self, q: &Aabb, d: Vec3, out: &mut Vec<usize>) {
         out.clear();
         if self.nodes.is_empty() {
             return;
@@ -110,7 +110,7 @@ impl Bvh {
     }
 
     /// Every box within straight-line distance `d` of `q`.
-    pub(crate) fn within(&self, q: &Aabb, d: f64, out: &mut Vec<usize>) {
+    pub fn within(&self, q: &Aabb, d: f64, out: &mut Vec<usize>) {
         out.clear();
         if self.nodes.is_empty() {
             return;
@@ -138,7 +138,7 @@ impl Bvh {
 
     /// Every box, widened by `pad` on each side, that the segment `o + t·d` for `t` in `[t0, t1]`
     /// passes through.
-    pub(crate) fn along(
+    pub fn along(
         &self,
         o: Point3,
         d: Vec3,
@@ -196,7 +196,7 @@ impl Bvh {
     /// Whether `near` holds for some box of `self` and some box of `other` moved by `t` that lie
     /// within `d` of each other, trying pairs nearest first. Neither hierarchy is rebuilt: `other`'s
     /// boxes are moved whole, which keeps them around what they held.
-    pub(crate) fn any_within(
+    pub fn any_within(
         &self,
         other: &Bvh,
         t: &Transform,
@@ -251,7 +251,7 @@ impl Bvh {
     }
 
     /// Every box that meets `q`.
-    pub(crate) fn query(&self, q: &Aabb, out: &mut Vec<usize>) {
+    pub fn query(&self, q: &Aabb, out: &mut Vec<usize>) {
         out.clear();
         if self.nodes.is_empty() {
             return;
@@ -306,7 +306,7 @@ fn line_meets(b: &Aabb, q: &Aabb, d: Vec3) -> bool {
     t0 <= t1
 }
 
-pub(crate) fn box_gap(a: &Aabb, b: &Aabb) -> f64 {
+pub fn box_gap(a: &Aabb, b: &Aabb) -> f64 {
     let gap = |lo1: f64, hi1: f64, lo2: f64, hi2: f64| (lo2 - hi1).max(lo1 - hi2).max(0.0);
     let (x, y, z) = (
         gap(a.min.x, a.max.x, b.min.x, b.max.x),
@@ -317,7 +317,7 @@ pub(crate) fn box_gap(a: &Aabb, b: &Aabb) -> f64 {
 }
 
 /// The box round `b`'s corners moved by `t`.
-pub(crate) fn moved_box(b: &Aabb, t: &Transform) -> Aabb {
+pub fn moved_box(b: &Aabb, t: &Transform) -> Aabb {
     let mut out = Aabb::EMPTY;
     for &x in &[b.min.x, b.max.x] {
         for &y in &[b.min.y, b.max.y] {
@@ -331,7 +331,7 @@ pub(crate) fn moved_box(b: &Aabb, t: &Transform) -> Aabb {
 
 /// The distance between two triangles: zero where they cross, else the nearest of each one's
 /// sides to the other.
-pub(crate) fn triangles(a: &[Point3; 3], b: &[Point3; 3]) -> f64 {
+pub fn triangles(a: &[Point3; 3], b: &[Point3; 3]) -> f64 {
     let mut best = f64::INFINITY;
     for (s, t) in [(a, b), (b, a)] {
         for k in 0..3 {
@@ -346,7 +346,7 @@ pub(crate) fn triangles(a: &[Point3; 3], b: &[Point3; 3]) -> f64 {
 
 /// Where the line `p + t·d` crosses the triangle, as `t`: where it meets the triangle's plane,
 /// if that point lies within the three sides.
-pub(crate) fn ray_triangle(p: Point3, d: Vec3, a: Point3, b: Point3, c: Point3) -> Option<f64> {
+pub fn ray_triangle(p: Point3, d: Vec3, a: Point3, b: Point3, c: Point3) -> Option<f64> {
     let (side_b, side_c) = (b - a, c - a);
     let normal = side_b.cross(side_c);
     let approach = d.dot(normal);
@@ -366,7 +366,7 @@ pub(crate) fn ray_triangle(p: Point3, d: Vec3, a: Point3, b: Point3, c: Point3) 
     (u >= 0.0 && v >= 0.0 && u + v <= 1.0).then_some(t)
 }
 
-pub(crate) fn on_segment(p: Point3, a: Point3, b: Point3) -> Point3 {
+pub fn on_segment(p: Point3, a: Point3, b: Point3) -> Point3 {
     let d = b - a;
     let l = d.dot(d);
     if l <= 0.0 {
@@ -379,7 +379,7 @@ pub(crate) fn on_segment(p: Point3, a: Point3, b: Point3) -> Point3 {
 /// quadratic over the square of the two parameters, so its least value is where its gradient
 /// vanishes, if that lies in the square, and otherwise on the square's rim: an end of one segment
 /// against the other.
-pub(crate) fn segments(p1: Point3, q1: Point3, p2: Point3, q2: Point3) -> (f64, Point3, Point3) {
+pub fn segments(p1: Point3, q1: Point3, p2: Point3, q2: Point3) -> (f64, Point3, Point3) {
     let (d1, d2, apart) = (q1 - p1, q2 - p2, p1 - p2);
     let (l1, l2, lean) = (d1.dot(d1), d2.dot(d2), d1.dot(d2));
     let mut best = (f64::INFINITY, p1, p2);
@@ -408,7 +408,7 @@ pub(crate) fn segments(p1: Point3, q1: Point3, p2: Point3, q2: Point3) -> (f64, 
 
 /// The point of triangle `t` nearest `p`: the foot of `p` on the triangle's plane where that
 /// lies within the triangle, and otherwise the nearest point of its three sides.
-pub(crate) fn on_triangle(p: Point3, t: &[Point3; 3]) -> Point3 {
+pub fn on_triangle(p: Point3, t: &[Point3; 3]) -> Point3 {
     let [a, b, c] = *t;
     let (side_b, side_c, from_a) = (b - a, c - a, p - a);
     // The foot as `a + u·side_b + v·side_c`, from the two conditions that `p − foot` is square
@@ -435,7 +435,7 @@ pub(crate) fn on_triangle(p: Point3, t: &[Point3; 3]) -> Point3 {
 
 /// The closest points of a segment and a triangle: where the segment crosses the triangle, or the
 /// nearest of its ends to the triangle and its sides to the segment.
-pub(crate) fn segment_triangle(p: Point3, q: Point3, t: &[Point3; 3]) -> (f64, Point3, Point3) {
+pub fn segment_triangle(p: Point3, q: Point3, t: &[Point3; 3]) -> (f64, Point3, Point3) {
     if let Some(x) = crossing(p, q, t) {
         return (0.0, x, x);
     }
@@ -457,7 +457,7 @@ pub(crate) fn segment_triangle(p: Point3, q: Point3, t: &[Point3; 3]) -> (f64, P
 }
 
 /// Where segment `pq` crosses triangle `t`, if it does.
-pub(crate) fn crossing(p: Point3, q: Point3, t: &[Point3; 3]) -> Option<Point3> {
+pub fn crossing(p: Point3, q: Point3, t: &[Point3; 3]) -> Option<Point3> {
     let d = q - p;
     let s = ray_triangle(p, d, t[0], t[1], t[2])?;
     (0.0..=1.0).contains(&s).then(|| p + d * s)

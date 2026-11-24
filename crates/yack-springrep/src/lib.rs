@@ -24,7 +24,7 @@ pub mod geom;
 pub(crate) mod intersect;
 pub(crate) mod locate;
 pub mod loft;
-pub mod math;
+pub use yack_math::kernel as math;
 pub mod measure;
 pub mod mesh;
 pub mod names;

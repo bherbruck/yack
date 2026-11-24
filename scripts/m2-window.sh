@@ -70,8 +70,9 @@ for pkg in $(for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crat
   # (a workspace file such as layers.toml has no crate: the gate checks it)
   cargo test -p $pkg --no-run || { echo "$TAG $pkg does not compile"; restore; exit 1; }
 done
-for pkg in $(for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
-  cargo clippy -p $pkg --all-targets >/dev/null 2>&1 || { echo "$TAG clippy denies something in $pkg"; cargo clippy -p $pkg --all-targets 2>&1 | grep -A5 '^error' | head -40; restore; exit 1; }
+for pkg in $(for f in "${EXT[@]}"; do case $f in crates/yack-springrep/*) ;; crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
+  # a shipping crate must be clippy-clean under -D warnings (the springrep ratchet above stays a count)
+  cargo clippy -p $pkg --all-targets -- -D warnings >/dev/null 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg"; cargo clippy -p $pkg --all-targets -- -D warnings 2>&1 | grep -A5 '^error' | head -40; restore; exit 1; }
 done
 L2=$(lints); echo "$TAG clippy warnings after: $L2"
 [ "$L2" -le "$L1" ] || { echo "$TAG clippy warnings rose $L1 -> $L2"; restore; exit 1; }

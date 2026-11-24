@@ -6,6 +6,12 @@
 #![deny(missing_docs)]
 
 mod aabb;
+// springrep's own maths, beside this crate's checked types until each crate converts (D26).
+#[allow(missing_docs)]
+// springrep indexes by position; D26's hardening pass moves it onto checked access, as for
+// yack-linalg until M5.
+#[allow(clippy::indexing_slicing)]
+pub mod kernel;
 mod angle;
 mod frame;
 pub mod planar;

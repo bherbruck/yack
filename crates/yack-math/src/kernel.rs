@@ -1,14 +1,19 @@
 // yack: Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 // Adapted from springrep@a03e8a1 src/math.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: `within` moved in from tol.rs (M2), being the one tolerance compare that takes a point.
+// Changes: `within` moved in from tol.rs (M2), being the one tolerance compare that takes a point;
+// moved to yack_math::kernel (M3 W2', D26); paths and visibility only.
 //! Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 //! name at each use says which it is.
+//!
+//! springrep's own maths, beside yack-math's checked types. Temporary (D26): each crate's M3
+//! hardening moves onto those types, and this module goes when the last user has.
 
-pub(crate) mod bvh;
+pub mod bvh;
 
 use std::ops::{Add, AddAssign, Div, Index, Mul, Neg, Sub, SubAssign};
 
-use crate::{Result, error::invalid, tol};
+use yack_base::kernel::{Result, invalid};
+use yack_tol as tol;
 
 /// `d <= t`, read with a few ulps of the coordinates' size at `at` to spare, so that what lies at
 /// exactly a tolerance counts as within it however its coordinates round: a copy moved by exactly
@@ -362,7 +367,7 @@ fn det3(m: &[[f64; 3]; 3]) -> f64 {
 /// is not one to within [`ORTHOGONAL`]. A matrix written to nine digits is 1e-9 from orthogonal,
 /// and a frame moved by it has axes that far from unit and from square, more than the kernel's
 /// angular tolerance.
-pub(crate) fn nearest_orthogonal(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+pub fn nearest_orthogonal(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     for i in 0..3 {
         for j in 0..3 {
             let dot: f64 = (0..3).map(|k| m[i][k] * m[j][k]).sum();

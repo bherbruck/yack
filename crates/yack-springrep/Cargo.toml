@@ -14,6 +14,7 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+yack-math = { path = "../yack-math" }
 yack-base = { path = "../yack-base" }
 yack-numeric = { path = "../yack-numeric" }
 yack-tol = { path = "../yack-tol" }
