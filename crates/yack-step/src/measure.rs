@@ -95,9 +95,11 @@ type Uv = (f64, f64);
 const PLACEMENT_CHECK: bool = false;
 
 /// The most of a period one step between an edge's quadrature nodes may turn (see `piece`), and how
-/// many times a run may be halved to keep to it.
-const MAX_TURN: f64 = 0.125;
-const MAX_SPLITS: usize = 12;
+/// many times a run may be halved to keep to it. An eighth of a turn left a circle passing near a
+/// sphere's pole under-resolved (bench boolean/golf-ball: three dimples 0.3% short; singular/napkin-
+/// ring-poles-near-its-rims); a thirty-second resolves them at the same cost over the bench's files.
+const MAX_TURN: f64 = 0.03125;
+const MAX_SPLITS: usize = 16;
 
 /// Points sampled along an edge to compare its pcurves with it (less one).
 const PCURVE_SAMPLES: usize = 8;

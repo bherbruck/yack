@@ -34,6 +34,9 @@ fn sound_files_measure_as_the_grader_reads_them() {
         // Spheres' faces whose runs go down a meridian (bench boolean/unequal-lens-aslant; grader's
         // values from ladder33).
         ("unequal-lens-aslant.step", 42.2450113481878, 69.39098850747226),
+        // Circles passing near a sphere's poles (bench singular/napkin-ring-poles-near-its-rims;
+        // grader's values from ladder33).
+        ("napkin-ring-poles-near-its-rims.step", 268.08257310632916, 402.12385965949363),
     ];
     let mut report = Vec::new();
     for (name, v, a) in cases {
