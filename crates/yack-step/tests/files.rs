@@ -22,6 +22,9 @@ fn sound_files_measure_as_the_grader_reads_them() {
         ("ring-pushed-good.step", 1907.0021200819538, 1164.5686671333683),
         ("nurbs-lens.step", 108.90854524627824, 125.66370606435706),
         ("spline-prism.step", 3149.171928239837, 1307.5077317745977),
+        // One face on a closed rational spline, bounded by a seam alone from pole to pole (bench
+        // geometry/ellipsoid; grader's values from ladder33).
+        ("ellipsoid.step", 301.59289474462025, 231.2482150159732),
     ];
     let mut report = Vec::new();
     for (name, v, a) in cases {

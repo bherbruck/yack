@@ -342,6 +342,20 @@ impl Surface {
             if periods[1].is_none() && v0.is_finite() {
                 v = v.clamp(v0, v1);
             }
+            // A closed direction's parameter is kept within one period of its start: at a pole, where
+            // the other partial vanishes, a step can throw it billions of periods off, and its digits
+            // with it (bench geometry/ellipsoid: a whole surface read as nearly none). The point is
+            // the same a whole number of periods on, and the hint's period is chosen below.
+            if let Some(p) = periods[0].filter(|p| *p > 0.0)
+                && u0.is_finite()
+            {
+                u = u0 + (u - u0).rem_euclid(p);
+            }
+            if let Some(p) = periods[1].filter(|p| *p > 0.0)
+                && v0.is_finite()
+            {
+                v = v0 + (v - v0).rem_euclid(p);
+            }
             let scale = (u1 - u0).abs().max(v1 - v0).max(1.0);
             if du.abs().max(dv.abs()) <= NEWTON_STEP * if scale.is_finite() { scale } else { 1.0 } {
                 break;
