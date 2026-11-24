@@ -233,6 +233,9 @@ fn make(root: &Path, tree: &Tree, out: &Path) -> Result<Report, String> {
             if let Some(m) = &f.module {
                 body = fence_docs(&body);
                 body = folded_root_fixes(&body, rel, m, root, dir)?;
+                if rel == "lib.rs" {
+                    body = lint_allowances(&body, tree, &f.pkg)?;
+                }
             } else if rel == "lib.rs" {
                 body.push_str("\n// The internal crates, folded in by `cargo xtask bundle` (not part of the API).\nmod internal;\n");
             }
@@ -522,6 +525,44 @@ fn folded_root_fixes(text: &str, rel: &str, module: &str, root: &Path, dir: &str
     Ok(t)
 }
 
+/// A folded crate's root carries the lint allowances its own crate has in the workspace: those its
+/// Cargo.toml sets to `allow`, and for a temporary crate (layers.toml), which the workspace never
+/// lints with `-D warnings`, all of clippy's. So the bundle is linted as the workspace is.
+fn lint_allowances(text: &str, tree: &Tree, pkg: &Package) -> Result<String, String> {
+    let m = toml::parse(tree.file(&format!("{}/Cargo.toml", pkg.dir)).unwrap_or_default())?;
+    let mut allow: Vec<String> = Vec::new();
+    for (table, prefix) in [("rust", ""), ("clippy", "clippy::")] {
+        for (k, v) in m.path(&["lints", table]).and_then(Toml::as_table).into_iter().flatten() {
+            let level = v.as_str().or_else(|| v.get("level").and_then(Toml::as_str));
+            if level == Some("allow") {
+                allow.push(format!("{prefix}{k}"));
+            }
+        }
+    }
+    let layers = crate::gate::parse_layers(tree.file("layers.toml").unwrap_or_default())?;
+    if layers.crates.get(&pkg.name).is_some_and(|s| s.is_temporary()) {
+        allow.extend(["clippy::all", "clippy::pedantic", "clippy::restriction"].map(str::to_string));
+    }
+    if allow.is_empty() {
+        return Ok(text.to_string());
+    }
+    // after the leading `//` comment lines (the provenance header stays first)
+    let attr = format!("#![allow({})]\n", allow.join(", "));
+    let mut out = String::with_capacity(text.len() + attr.len());
+    let mut placed = false;
+    for line in text.split_inclusive('\n') {
+        if !placed && !(line.starts_with("//") && !line.starts_with("//!")) {
+            out.push_str(&attr);
+            placed = true;
+        }
+        out.push_str(line);
+    }
+    if !placed {
+        out.push_str(&attr);
+    }
+    Ok(out)
+}
+
 /// springrep's build.rs, run here: FNV-1a over `src/**.rs` (but `tests.rs`), sorted by path.
 fn springrep_source(crate_dir: &Path) -> Result<String, String> {
     fn sources(base: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -570,7 +611,11 @@ fn internal_mod(folded: &[Folded]) -> String {
     let mut s = String::from(
         "// yack: the internal crates of `yack`, folded in by `cargo xtask bundle`; not part of the API.\n\
          //! Each module is one workspace crate (crates/yack-<name>), its paths rewritten.\n\
-         #![allow(dead_code, unreachable_pub, unused_imports, unused_macros, clippy::float_arithmetic)]\n\n",
+         #![allow(dead_code, unreachable_pub, unused_imports, unused_macros, clippy::float_arithmetic)]\n\
+         // Lints clippy skips on a crate's exported API (avoid-breaking-exported-api): each folded\n\
+         // crate's API was exported in the workspace and is crate-internal here.\n\
+         #![allow(clippy::upper_case_acronyms, clippy::wrong_self_convention, clippy::enum_variant_names)]\n\
+         #![allow(clippy::box_collection, clippy::redundant_allocation, clippy::vec_box)]\n\n",
     );
     for m in folded.iter().filter_map(|f| f.module.as_deref()) {
         // `pub` inside the private `internal`: unreachable from outside, and one folded crate may
