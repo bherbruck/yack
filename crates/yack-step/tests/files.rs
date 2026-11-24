@@ -28,6 +28,12 @@ fn sound_files_measure_as_the_grader_reads_them() {
         // A face that covers the whole of a bounded, unclosed spline patch (bench nurbs/bspline-dome;
         // grader's values from ladder33).
         ("bspline-dome.step", 3081.0055555555546, 1285.3684049053318),
+        // A spindle torus's face, whose area integrand kinks where the tube's radius passes through
+        // the axis (bench geometry/lemon; grader's values from ladder33).
+        ("lemon.step", 57.29966747737253, 76.53638161221483),
+        // Spheres' faces whose runs go down a meridian (bench boolean/unequal-lens-aslant; grader's
+        // values from ladder33).
+        ("unequal-lens-aslant.step", 42.2450113481878, 69.39098850747226),
     ];
     let mut report = Vec::new();
     for (name, v, a) in cases {

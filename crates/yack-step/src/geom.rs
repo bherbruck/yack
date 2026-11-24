@@ -158,7 +158,11 @@ fn too_many(n: f64) -> yack_base::Error {
 
 /// Equal steps strictly between `lo` and `hi`, none longer than [`ANGULAR_PIECE`].
 fn angular(lo: f64, hi: f64) -> Result<Vec<f64>> {
-    let span = (hi - lo).abs();
+    // Ascending whichever way the run goes, as every `breaks` is: a caller running down reverses
+    // them (a run down a circle or a sphere's meridian once took its pieces in the wrong order, so
+    // each spanned nearly the whole run and the quadrature lost digits).
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    let span = hi - lo;
     if !span.is_finite() {
         return Ok(Vec::new());
     }
@@ -435,6 +439,24 @@ impl Surface {
     pub(crate) fn breaks(&self, axis: usize, lo: f64, hi: f64) -> Result<Vec<f64>> {
         match (self, axis) {
             (Surface::Plane { .. }, _) | (Surface::Cylinder { .. } | Surface::Cone { .. }, 1) => Ok(Vec::new()),
+            // A spindle torus's area integrand has a kink where its tube's radius passes through
+            // the axis (R + r·cos v = 0), which the rule must not straddle.
+            (Surface::Torus { rmaj, rmin, .. }, 1) if rmaj < rmin && *rmin > 0.0 => {
+                let apex = (-rmaj / rmin).acos();
+                let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+                let mut out = angular(lo, hi)?;
+                for base in [apex, TAU - apex] {
+                    let mut x = base + ((a - base) / TAU).ceil() * TAU;
+                    while x < b {
+                        if x > a {
+                            out.push(x);
+                        }
+                        x += TAU;
+                    }
+                }
+                out.sort_by(f64::total_cmp);
+                Ok(out)
+            }
             (Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Sphere { .. } | Surface::Torus { .. }, _) => angular(lo, hi),
             (Surface::Revolution { .. }, 0) => angular(lo, hi),
             (Surface::Revolution { c, .. }, _) => c.breaks(lo, hi),
