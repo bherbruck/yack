@@ -43,7 +43,7 @@ fn a_bend_turns_about_the_axis_it_is_given() {
             axis: Vec3::X,
         },
     ];
-    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp").unwrap();
+    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp", boolean::union).unwrap();
     valid(&b);
     let want = 4.0 * (5.0 + 4.0 * FRAC_PI_2);
     assert!((measure::volume(&b) - want).abs() < 1e-9 * want);
@@ -55,7 +55,7 @@ fn a_bend_turns_about_the_axis_it_is_given() {
         angle: FRAC_PI_2,
         axis: Vec3::Z,
     }];
-    assert!(sweep::along(&p, &Frame::WORLD, &askew, "swp").is_err());
+    assert!(sweep::along(&p, &Frame::WORLD, &askew, "swp", boolean::union).is_err());
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn a_sharp_turn_is_filled_by_the_outside_of_the_profile_turned_about_the_corner(
         },
         Leg::Line { length: 5.0 },
     ];
-    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp").unwrap();
+    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp", boolean::union).unwrap();
     valid(&b);
     let want = 20.0 + 20.0 - 2.0 + FRAC_PI_2;
     assert!((measure::volume(&b) - want).abs() < 1e-9 * want);
@@ -96,7 +96,7 @@ fn a_sweep_along_lines_and_an_arc_has_its_profile_s_area_times_the_path() {
         },
         Leg::Line { length: 3.0 },
     ];
-    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp").unwrap();
+    let b = sweep::along(&p, &Frame::WORLD, &legs, "swp", boolean::union).unwrap();
     valid(&b);
     let length = 5.0 + 4.0 * FRAC_PI_2 + 3.0;
     let v = measure::volume(&b);
@@ -113,7 +113,7 @@ fn a_sweep_along_lines_and_an_arc_has_its_profile_s_area_times_the_path() {
 fn a_sweep_along_no_legs_is_invalid() {
     let p = Profile::rect(Vec2::ZERO, 2.0, 1.0);
     assert!(matches!(
-        sweep::along(&p, &Frame::WORLD, &[], "swp"),
+        sweep::along(&p, &Frame::WORLD, &[], "swp", boolean::union),
         Err(Error::InvalidInput(_))
     ));
 }

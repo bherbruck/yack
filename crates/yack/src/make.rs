@@ -5,7 +5,7 @@
 //! Each constructor places its shape in an explicit [`Frame`]; a profile is drawn in the frame's
 //! xy plane unless the function says otherwise.
 
-use yack_springrep::{loft as sr_loft, primitive, sweep};
+use yack_springrep::{boolean as sr_boolean, loft as sr_loft, primitive, sweep};
 
 use std::collections::BTreeSet;
 
@@ -477,7 +477,7 @@ pub fn sweep(frame: &Frame, profile: &Profile, path: &[PathPiece]) -> Result<Sol
                 PathPiece::Arc { radius, angle } => sweep::Leg::Arc { radius, angle: angle.radians(), axis },
             })
             .collect();
-        engine::made(&feature, op, sweep::along(&engine::profile(op, profile, None)?, &engine::frame(frame), &legs, &feature))
+        engine::made(&feature, op, sweep::along(&engine::profile(op, profile, None)?, &engine::frame(frame), &legs, &feature, sr_boolean::union))
     }, &|| engine_cadrs::sweep("sweep", frame, profile, path))
     })
 }

@@ -1,6 +1,6 @@
 // yack: Sweeps of planar profiles into solids: straight, turned about an axis, along a path of legs
 // Adapted from springrep@a03e8a1 src/sweep.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: `along` takes the join of its pieces from the caller (M2 T7), so sweep names no boolean.
 //! Sweeps of planar profiles into solids: straight, turned about an axis, along a path of legs
 //! and bends, along a helix, and along a space curve. Every side face takes the names of the
 //! profile segment that sweeps it; caps are `start` (on the sketch plane) and `end`.
@@ -14,7 +14,7 @@ pub use helix::{Helix, helix};
 use std::f64::consts::TAU;
 
 use crate::{
-    Error, Result, boolean, check,
+    Error, Result, check,
     error::invalid,
     geom::{Cone, Curve, Cylinder, Extrusion, Line, Plane, Revolution, Sphere, Surface, Torus},
     math::{Frame, Point3, Transform, Vec2, Vec3},
@@ -87,8 +87,15 @@ fn sharp_turn(
 
 /// `profile`, drawn on `frame`'s xy plane, carried along `legs` from the frame's origin, starting
 /// along its z and staying square to the path: an extrusion for each straight leg, a revolution
-/// for each bend and the fill of each sharp turn, joined into one solid.
-pub fn along(profile: &Profile, frame: &Frame, legs: &[Leg], feature: &str) -> Result<Brep> {
+/// for each bend and the fill of each sharp turn, joined into one solid by `join` (a union, which
+/// the caller supplies so that sweeps stay below the booleans), each piece onto the pieces before.
+pub fn along(
+    profile: &Profile,
+    frame: &Frame,
+    legs: &[Leg],
+    feature: &str,
+    join: impl Fn(&Brep, &Brep) -> Result<Brep>,
+) -> Result<Brep> {
     let mut fr = *frame;
     let mut whole: Option<Brep> = None;
     for leg in legs {
@@ -119,7 +126,7 @@ pub fn along(profile: &Profile, frame: &Frame, legs: &[Leg], feature: &str) -> R
         for piece in pieces {
             whole = Some(match whole {
                 None => piece,
-                Some(w) => boolean::union(&w, &piece)?,
+                Some(w) => join(&w, &piece)?,
             });
         }
     }

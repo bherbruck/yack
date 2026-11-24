@@ -13,6 +13,11 @@ if [ "${1:-}" = "--touches" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--ex
 if [ "${1:-}" = "--external" ]; then shift; EXT=("$@"); APPLY_ARGS=(--with-external "$@"); fi
 Y=/home/brenn/github/yack; R=/home/brenn/github/yack-ref/bin; SR=$Y/crates/yack-springrep
 cd $Y
+# swarm/FREEZE: every worker checks it before each save (BRIEF), for as long as the window runs; it
+# goes on every exit path. Another window's freeze is left alone and this one refuses to start.
+if [ -e swarm/FREEZE ]; then echo "$TAG ABORT: swarm/FREEZE is held: $(cat swarm/FREEZE)"; exit 1; fi
+echo "$TAG m2-window since $(date '+%F %T')" > swarm/FREEZE
+trap 'rm -f $Y/swarm/FREEZE' EXIT; trap 'exit 130' INT TERM HUP
 fp() { echo "$(git rev-parse --short HEAD)+$( { git diff; git status --short --untracked-files=all; } | md5sum | cut -c1-8)"; }
 FC="crates/yack crates/yack-springrep crates/yack-cadrs crates/yack-bridge crates/yack-shim crates/yack-math crates/yack-bench"
 EXCL=(":!crates/yack-springrep"); for f in "${EXT[@]}"; do EXCL+=(":!$f"); done
