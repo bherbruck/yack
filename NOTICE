@@ -44,3 +44,12 @@ Donor projects planned (PLAN.md §9), with the notices to copy when their first 
   Copyright (c) 2026 Springcraft, Inc.
 - brep-bench @ d522d62 (case texts used as test oracles), MIT OR Apache-2.0,
   Copyright (c) 2026 the brep-bench contributors
+
+Test data used but not shipped
+- SMLib test files from NVIDIA usd-brep (https://github.com/NVIDIA-Omniverse/usd-brep,
+  TestFiles/pt_TestFiles), Apache-2.0, Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES.
+  Fetched by `cargo xtask corpus smlib` into bin/corpus/smlib (never committed), unmodified, each
+  folder with its README stating the source and licence.
+- corpus/smlib-cases.json: case definitions and SMLib's recorded results, extracted from cadrs
+  @ eb5899ef generated tests (crates/cadrs_kernel/tests/smlib_*.rs), MIT OR Apache-2.0,
+  Copyright (c) 2026 Rouan van der Ende.

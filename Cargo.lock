@@ -172,6 +172,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-corpus"
+version = "0.0.0"
+dependencies = [
+ "yack",
+]
+
+[[package]]
+name = "yack-corpus-fetch"
+version = "0.0.0"
+dependencies = [
+ "yack-cadrs",
+]
+
+[[package]]
 name = "yack-linalg"
 version = "0.0.0"
 
@@ -209,6 +223,7 @@ name = "yack-springrep"
 version = "1.0.1"
 dependencies = [
  "yack-base",
+ "yack-math",
  "yack-numeric",
  "yack-p21",
  "yack-tol",

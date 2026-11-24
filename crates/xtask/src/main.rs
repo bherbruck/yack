@@ -2,6 +2,7 @@
 mod bench;
 mod bundle;
 mod conformance;
+mod corpus;
 mod digest;
 mod gate;
 mod json;
@@ -127,6 +128,7 @@ fn run(cmd: &str, args: &[String]) -> ExitCode {
         "ci" => ci(args),
         "digest-proxy" => digest::proxy(args),
         "bundle" => bundle::run(args),
+        "corpus" => corpus::run(args),
         "step-gap" => step_gap::run(args),
         other => {
             eprintln!("xtask: `{other}` is not implemented yet\n\n{HELP}");

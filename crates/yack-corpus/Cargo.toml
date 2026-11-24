@@ -1,0 +1,16 @@
+# yack: the SMLib corpus runner (yack's public API only); not shipped.
+[package]
+name = "yack-corpus"
+description = "Runs one SMLib corpus case through yack for `cargo xtask corpus smlib` (tool)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack = { path = "../yack" }
+
+[lints]
+workspace = true

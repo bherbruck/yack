@@ -1,0 +1,16 @@
+# yack: the SMLib corpus's fetch tool (models to STEP, SMLib's picks to points); not shipped.
+[package]
+name = "yack-corpus-fetch"
+description = "Converts SMLib's corpus models to STEP for `cargo xtask corpus smlib` (tool; goes with yack-cadrs in M4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack-cadrs = { path = "../yack-cadrs" }
+
+[lints]
+workspace = true
