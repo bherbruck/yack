@@ -302,9 +302,10 @@ license = "MIT OR Apache-2.0"
 # reader. It goes with yack-cadrs in M4 unless the reader is ported into it first (lead's call).
 [crate.yack-corpus-fetch]
 layer = 12
-kind = "tool"
+kind = "temporary"
 owner = "api-owner"
 deps = ["yack-cadrs"]
+delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
 # ---- module maps (PLAN §6.6 gate 5; `cargo xtask modgraph --crate <c>`) ----
@@ -372,3 +373,4 @@ digest = ["json", "meta"]
 gate = ["json", "toml", "meta"]
 bundle = ["toml", "meta", "gate"]
 step_gap = ["json"]
+corpus = ["json", "meta"]
