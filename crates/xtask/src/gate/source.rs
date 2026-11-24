@@ -141,10 +141,19 @@ fn hidden_sites(ctx: &Ctx) -> (Vec<Hidden>, Vec<String>) {
     (sites, unwind)
 }
 
-/// Whether a site is ratcheted (temporary crates) rather than fatal. yack-cadrs's env reads are
-/// always fatal: its `CADRS_*` switches are fixed at their defaults (PLAN §3.2).
+/// Whether a site is ratcheted rather than fatal: every temporary crate, and a kernel crate that
+/// carries moved springrep code (D26) and has a scores/hidden.txt row until its hardening pass.
+/// Env reads stay fatal in kernel crates, and in yack-cadrs, whose `CADRS_*` switches are fixed at
+/// their defaults (PLAN §3.2).
 fn ratcheted(ctx: &Ctx, h: &Hidden) -> bool {
-    ctx.spec(&h.krate).is_some_and(|s| s.is_temporary()) && !(h.env && h.krate == "yack-cadrs")
+    if h.env && h.krate == "yack-cadrs" {
+        return false;
+    }
+    match ctx.spec(&h.krate) {
+        Some(s) if s.is_temporary() => true,
+        Some(_) => !h.env && ctx.ratchet("hidden.txt").contains_key(&h.krate),
+        None => false,
+    }
 }
 
 /// Ratcheted hidden-state counts per temporary crate (scores/hidden.txt).
@@ -171,12 +180,12 @@ pub fn hidden_state(ctx: &Ctx, out: &mut Out) {
     for (krate, n) in hidden_counts(ctx) {
         let max = allowed.get(&krate).copied().unwrap_or(0);
         if n > max {
-            out.fail(format!("temporary `{krate}` has {n} hidden-state sites (scores/hidden.txt allows {max})"));
+            out.fail(format!("`{krate}` has {n} hidden-state sites (scores/hidden.txt allows {max})"));
             for h in sites.iter().filter(|h| h.krate == krate).take(10) {
                 out.fail(format!("  {}", h.msg));
             }
         } else {
-            out.note(format!("temporary `{krate}`: {n} hidden-state sites (ratchet {max})"));
+            out.note(format!("`{krate}`: {n} hidden-state sites (ratchet {max})"));
         }
     }
 }
