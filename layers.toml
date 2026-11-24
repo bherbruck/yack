@@ -290,6 +290,23 @@ owner = "api-owner"
 deps = ["yack"]
 license = "MIT OR Apache-2.0"
 
+# The SMLib corpus (M6): the runner grades through yack's public API only.
+[crate.yack-corpus]
+layer = 12
+kind = "tool"
+owner = "api-owner"
+deps = ["yack"]
+license = "MIT OR Apache-2.0"
+
+# Run once by `xtask corpus smlib --fetch`: converts SMLib's models to STEP with yack-cadrs's smb
+# reader. It goes with yack-cadrs in M4 unless the reader is ported into it first (lead's call).
+[crate.yack-corpus-fetch]
+layer = 12
+kind = "tool"
+owner = "api-owner"
+deps = ["yack-cadrs"]
+license = "MIT OR Apache-2.0"
+
 # ---- module maps (PLAN §6.6 gate 5; `cargo xtask modgraph --crate <c>`) ----
 # [modules.<crate>]: top-level module = [top-level modules it may name]. yack-springrep's map is
 # the M2 target (PLAN §3.4, T1-T12): each module maps to the crate it becomes (§3.1) and may name
