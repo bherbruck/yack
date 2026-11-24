@@ -125,9 +125,42 @@ pub fn edges(srcs: &[Src], root: &[String]) -> BTreeMap<String, BTreeSet<String>
     out
 }
 
-/// Edges that break `[modules.<crate>]`.
+/// The first cycle in a module map, as `a → b → … → a`: a map must be a DAG, or two modules that
+/// name each other would pass by listing each other.
+fn cycle(map: &BTreeMap<String, Vec<String>>) -> Option<String> {
+    // 0 unvisited, 1 on the current path, 2 done
+    fn visit(m: &str, map: &BTreeMap<String, Vec<String>>, state: &mut BTreeMap<String, u8>, path: &mut Vec<String>) -> Option<String> {
+        match state.get(m).copied().unwrap_or(0) {
+            2 => return None,
+            1 => {
+                let from = path.iter().position(|p| p == m).unwrap_or(0);
+                let mut c: Vec<String> = path.get(from..).unwrap_or_default().to_vec();
+                c.push(m.to_string());
+                return Some(c.join(" → "));
+            }
+            _ => {}
+        }
+        state.insert(m.to_string(), 1);
+        path.push(m.to_string());
+        for t in map.get(m).into_iter().flatten() {
+            if let Some(c) = visit(t, map, state, path) {
+                return Some(c);
+            }
+        }
+        path.pop();
+        state.insert(m.to_string(), 2);
+        None
+    }
+    let mut state = BTreeMap::new();
+    map.keys().find_map(|m| visit(m, map, &mut state, &mut Vec::new()))
+}
+
+/// Edges that break `[modules.<crate>]`, and a cycle in the map itself.
 fn violations(map: &BTreeMap<String, Vec<String>>, edges: &BTreeMap<String, BTreeSet<String>>) -> Vec<String> {
     let mut out = Vec::new();
+    if let Some(c) = cycle(map) {
+        out.push(format!("the module map has a cycle: {c}"));
+    }
     for (m, targets) in edges {
         let Some(allowed) = map.get(m) else {
             out.push(format!("module `{m}` is not in the module map"));
@@ -200,4 +233,23 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         }
     }
     Ok(v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(rows: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        rows.iter().map(|(m, ts)| (m.to_string(), ts.iter().map(|t| t.to_string()).collect())).collect()
+    }
+
+    #[test]
+    fn a_map_that_names_itself_round_is_a_violation() {
+        assert_eq!(cycle(&map(&[("march", &[]), ("ssi", &["march"])])), None);
+        let c = cycle(&map(&[("march", &["ssi"]), ("ssi", &["march"])]));
+        assert_eq!(c.as_deref(), Some("march → ssi → march"));
+        assert!(violations(&map(&[("a", &["b"]), ("b", &["c"]), ("c", &["a"])]), &BTreeMap::new())
+            .iter()
+            .any(|v| v.contains("cycle")));
+    }
 }
