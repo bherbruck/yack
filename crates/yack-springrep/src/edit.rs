@@ -118,8 +118,15 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
         Wall::Inward => {
             // The cavity runs out through the open faces, so the cut leaves no skin there.
             let mut cavity = moved(-thickness, thickness)?;
+            // Each cavity face also names the face of `s` it offsets, where the move kept the
+            // solid's topology and so its face ids.
+            let kept = same_topology(s, &cavity);
             for f in cavity.face_ids().collect::<Vec<_>>() {
-                cavity.set_face_names(f, std::iter::once(inner.clone()).collect());
+                let mut names: std::collections::BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
+                if kept {
+                    names.insert(FaceName::new(feature, format!("inner_f{}", f.index())));
+                }
+                cavity.set_face_names(f, names);
             }
             boolean::difference(s, &cavity)
         }
@@ -154,11 +161,35 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
     let by: HashMap<FaceId, f64> = s.face_ids().map(|f| (f, distance)).collect();
     let moved = offset_faces(s, &by)?;
     let edges = convex_edges(&moved)?;
+    let kept = same_topology(s, &moved);
     let mut out = if edges.is_empty() {
         moved
     } else {
         blend::fillet_edges_mitred(&moved, &edges, distance, feature)?
     };
+    // Each round also names the edge of `s` it rounds (`round_<k>` is the k-th of `edges`, whose
+    // ids are `s`'s where the move kept its topology), and each corner patch the vertex of `s` at
+    // its ball's centre.
+    for f in out.face_ids().collect::<Vec<_>>() {
+        let mut names = out.face(f).names.clone();
+        let mut extra = Vec::new();
+        for n in names.iter().filter(|n| n.feature == feature) {
+            if let Some(e) = n.face.strip_prefix("round_").and_then(|k| k.parse::<usize>().ok()).and_then(|k| edges.get(k)) {
+                if kept {
+                    extra.push(FaceName::new(feature, format!("round_e{}", e.index())));
+                }
+            } else if n.face == "corner"
+                && let Surface::Sphere(ball) = &out.face(f).surface
+                && let Some(v) = s.vertex_ids().find(|&v| s.vertex(v).point.dist(ball.frame.origin) <= tol::LINEAR)
+            {
+                extra.push(FaceName::new(feature, format!("corner_v{}", v.index())));
+            }
+        }
+        if !extra.is_empty() {
+            names.extend(extra);
+            out.set_face_names(f, names);
+        }
+    }
     for f in s.face_ids() {
         let face = s.face(f);
         let Surface::Cylinder(c) = &face.surface else {
@@ -190,6 +221,14 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
         }
     }
     Ok(out)
+}
+
+/// Whether `b` has `a`'s faces, edges and vertices by count: a move that kept the solid's
+/// topology, and with it the ids.
+fn same_topology(a: &Brep, b: &Brep) -> bool {
+    a.face_ids().count() == b.face_ids().count()
+        && a.edge_ids().count() == b.edge_ids().count()
+        && a.vertex_ids().count() == b.vertex_ids().count()
 }
 
 /// What the offset by `d` leaves open over a hole's rim of radius `r` about `o`, opening along
@@ -341,6 +380,28 @@ fn edge_bounds(s: &Brep, e: EdgeId, axes: &Frame, b: &mut Aabb) {
 mod tests {
     use super::*;
     use crate::topo::FaceName;
+
+    #[test]
+    fn shell_cavities_and_offset_rounds_name_their_sources() {
+        // A block's inward shell names each cavity face by the face it offsets; its offset names
+        // each round by the edge it rounds (all 12) and each corner patch by its vertex (all 8).
+        let block = crate::primitive::block(&Frame::WORLD, Vec3::new(4.0, 3.0, 2.0), "block").unwrap();
+        let top = block.face_ids().find(|&f| crate::measure::face_bbox(&block, f).min.z > 1.9).unwrap();
+        let b = shell(&block, &[top], 0.5, Wall::Inward, "skin").unwrap();
+        let named = |b: &Brep, prefix: &str| {
+            let mut ks: Vec<String> = b.face_ids().flat_map(|f| b.face(f).names.clone()).filter(|n| n.face.starts_with(prefix)).map(|n| n.face).collect();
+            ks.sort();
+            ks.dedup();
+            ks
+        };
+        let inner = named(&b, "inner_f");
+        assert!(inner.len() >= 5, "{inner:?}");
+        let o = offset(&block, 0.5, "o").unwrap();
+        let (rounds, corners) = (named(&o, "round_e"), named(&o, "corner_v"));
+        assert_eq!((rounds.len(), corners.len()), (12, 8), "{rounds:?} {corners:?}");
+        let edges: Vec<String> = block.edge_ids().map(|e| format!("round_e{}", e.index())).collect();
+        assert!(rounds.iter().all(|r| edges.contains(r)), "{rounds:?}");
+    }
 
     #[test]
     fn a_shells_rim_keeps_the_open_faces_name_both_ways() {
