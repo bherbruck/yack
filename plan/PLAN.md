@@ -266,9 +266,10 @@ impl Brep { pub fn memo<T: MemoSlot>(&self, f: FaceId) -> Option<Arc<T>>; pub fn
 pub struct Made { pub brep: Brep, pub history: History, pub strategy: &'static str }
 pub enum Change { Kept, Modified, Split, Merged, Generated }
 pub enum FaceOrigin { Operand { operand: u8, face: FaceId }, Segment { label: Label, end: Option<CapEnd> },
-                      Edge { operand: u8, edge: EdgeId }, Vertex { operand: u8, vertex: VertexId }, Offset { operand: u8, face: FaceId } }
+                      Edge { operand: u8, edge: EdgeId }, Vertex { operand: u8, vertex: VertexId }, Offset { operand: u8, face: FaceId },
+                      Read { face: FaceId } }  // a face of a solid read from a file or decoded
 pub struct History { /* faces: (FaceId, Change, Vec<FaceOrigin>) sorted by id; deleted inputs */ }
-impl History { pub fn compose(&self, earlier: &History) -> History; }
+impl History { pub fn compose(&self, operand: u8, earlier: &History) -> History; } // `earlier` made this op's operand `operand`
 ```
 
 ### 4.2 Public API principles
