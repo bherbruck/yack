@@ -445,13 +445,23 @@ impl Surface {
                 let apex = (-rmaj / rmin).acos();
                 let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) };
                 let mut out = angular(lo, hi)?;
+                if !(a.is_finite() && b.is_finite()) {
+                    return Ok(out);
+                }
+                // The crossings a whole number of turns from each apex angle strictly inside the
+                // run, in closed form: a step of a turn adds nothing to a parameter past about 1e16.
                 for base in [apex, TAU - apex] {
-                    let mut x = base + ((a - base) / TAU).ceil() * TAU;
-                    while x < b {
-                        if x > a {
+                    let (k0, k1) = (((a - base) / TAU).ceil(), ((b - base) / TAU).floor());
+                    let count = k1 - k0 + 1.0;
+                    if count > MAX_PIECES {
+                        return Err(too_many(count));
+                    }
+                    // Counted, not stepped: past 2^53 turns, k + 1 is k.
+                    for i in 0..(count.max(0.0) as usize) {
+                        let x = base + (k0 + i as f64) * TAU;
+                        if x > a && x < b {
                             out.push(x);
                         }
-                        x += TAU;
                     }
                 }
                 out.sort_by(f64::total_cmp);
@@ -492,6 +502,19 @@ mod tests {
 
     fn world() -> Frame {
         Frame { o: Point3::new(1.0, 2.0, 3.0), x: Vec3::new(1.0, 0.0, 0.0), y: Vec3::new(0.0, 1.0, 0.0), z: Vec3::new(0.0, 0.0, 1.0) }
+    }
+
+    #[test]
+    fn a_spindle_torus_cuts_at_its_apex_and_ends_on_hostile_spans() {
+        let t = Surface::Torus { f: world(), rmaj: 1.0, rmin: 2.0 };
+        let apex = (-0.5f64).acos();
+        let cuts = t.breaks(1, 0.0, TAU).unwrap();
+        assert!(cuts.iter().any(|&x| (x - apex).abs() < 1e-15) && cuts.iter().any(|&x| (x - (TAU - apex)).abs() < 1e-15));
+        assert!(cuts.windows(2).all(|w| w[0] <= w[1]));
+        // Infinite and not-a-number ends, and ends so large a turn adds nothing: an answer, not a hang.
+        for (lo, hi) in [(0.0, f64::INFINITY), (f64::NEG_INFINITY, 0.0), (f64::NAN, 1.0), (1e17, 1e17 + 4.0), (-1e300, 1e300)] {
+            let _ = t.breaks(1, lo, hi);
+        }
     }
 
     #[test]
