@@ -204,13 +204,35 @@ def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, p
 
 
 def allow_panic_at(lines, k):
-    """`#[allow(clippy::panic)]` on the fn enclosing line k, on the fn's own line (no file grows)."""
-    ind = len(lines[k]) - len(lines[k].lstrip())
+    """`#[allow(clippy::panic)]` on the fn whose body encloses line k, on the fn's own line (no file
+    grows). A nested helper fn defined earlier in the same body closes before k, so it is passed over
+    (w-h4, W8: boolean's `dedup` with its inner `find`)."""
+    text = "\n".join(lines)
+    starts = [0]
+    for l in lines:
+        starts.append(starts[-1] + len(l) + 1)
+    site = starts[k]
+    tok = re.compile(r'//[^\n]*|/\*.*?\*/|r(#*)".*?"\1|b?"(?:\\.|[^"\\])*"|b?\'(?:\\.|[^\'\\])\'|[{}]', re.S)
     for j in range(k, -1, -1):
         l = lines[j]
-        li = len(l) - len(l.lstrip())
-        if li < ind and re.match(r"\s*(#\[allow\(clippy::panic\)\]\s*)?(pub(\([^)]*\))?\s+)?(const\s+)?fn\s", l):
+        m = re.match(r"(\s*)(#\[allow\(clippy::panic\)\]\s*)?(pub(\([^)]*\))?\s+)?((const|unsafe|async)\s+)*fn\s", l)
+        if not m:
+            continue
+        # the fn's body: from the first `{` after its header to the matching `}`
+        depth, opened, end = 0, False, None
+        for t in tok.finditer(text, starts[j]):
+            g = t.group(0)
+            if g == "{":
+                depth += 1
+                opened = True
+            elif g == "}":
+                depth -= 1
+                if opened and depth == 0:
+                    end = t.end()
+                    break
+        if end is not None and end > site:
             if "#[allow(clippy::panic)]" not in l:
+                li = len(l) - len(l.lstrip())
                 lines[j] = " " * li + "#[allow(clippy::panic)] " + l.lstrip()
             return
     raise SystemExit(f"no enclosing fn for line {k}")
@@ -327,6 +349,40 @@ def live_text(t):
         i = k + 1
 
 
+def path_heads(t, at):
+    """The first segments a path names from `at` on: `x::..` gives x; a group `{a, b::{..}, c}` gives a,
+    b and c, its nested groups matched brace for brace (w-h1, W9a: a lazy match stopped at the first
+    inner `}` and lost every entry after it)."""
+    if t[at:at + 1] != "{":
+        m = re.match(r"\w+", t[at:])
+        return [m.group(0)] if m else []
+    depth, cur, heads, k = 0, "", [], at
+    while k < len(t):
+        c = t[k]
+        if c == "{":
+            depth += 1
+            if depth == 1:
+                k += 1
+                continue
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if c == "," and depth == 1:
+            heads.append(cur)
+            cur = ""
+        elif depth >= 1:
+            cur += c
+        k += 1
+    heads.append(cur)
+    out = []
+    for h in heads:
+        m = re.match(r"\s*(\w+)", h)
+        if m and m.group(1) not in ("self", "super", "crate"):
+            out.append(m.group(1))
+    return out
+
+
 def unit_edges(src):
     """A crate's top-level modules and their non-test edges, as xtask's modgraph reads them:
     `crate::unit` paths (and `use crate::{unit..}` groups) from anywhere in a unit, and `super::unit`
@@ -342,13 +398,12 @@ def unit_edges(src):
             if not os.path.exists(p):
                 continue
             t = live_text(rd(p))
-            for m in re.finditer(r"\b(crate|super(?:::super)*)::(\{[^;]*?\}|\w+)", t):
-                head, rest = m.group(1), m.group(2)
+            for m in re.finditer(r"\b(crate|super(?:::super)*)::(?=\{|\w)", t):
+                head = m.group(1)
                 ok = head == "crate" or (head == "super" and depth == 0) or (head == "super::super" and depth == 1)
                 if not ok:
                     continue
-                names = re.findall(r"(?:^\{|,)\s*(\w+)", rest) if rest.startswith("{") else [rest]
-                edges[u] |= {n for n in names if n in units and n != u}
+                edges[u] |= {n for n in path_heads(t, m.end()) if n in units and n != u}
     # transitively closed, lowest first
     closed = {u: set(edges[u]) for u in units}
     changed = True
@@ -647,3 +702,31 @@ def deps_guard(ws, krate, deps):
     extra = sorted(set(deps) - row)
     if extra:
         raise SystemExit(f"{krate}: Cargo deps {extra} are not in its layers.toml row {sorted(row)}")
+
+
+def _selftest():
+    """`python3 m3_move.py --selftest`: the helpers' known traps, each a case a window once hit."""
+    import tempfile
+    # a grouped `use super::{..}` with a nested group before the edge (W9a: saddle -> saddle_patch)
+    d = tempfile.mkdtemp()
+    wr(os.path.join(d, "lib.rs"), "mod saddle;\nmod saddle_patch;\nmod corner;\nmod lone;\n")
+    wr(os.path.join(d, "saddle.rs"), "use super::{\n    Picked,\n    corner::{ToolFace, assemble},\n    glue,\n"
+       "    saddle_patch::{self, Cylinder},\n    shared_edges,\n};\nfn f() {}\n")
+    wr(os.path.join(d, "saddle_patch.rs"), "use crate::corner::X;\n")
+    wr(os.path.join(d, "corner.rs"), "fn g() {}\n")
+    wr(os.path.join(d, "lone.rs"), "#[cfg(test)]\nmod tests {\n    use crate::saddle::f;\n}\n")
+    got = dict(unit_edges(d))
+    assert got["saddle"] == ["corner", "saddle_patch"], got
+    assert got["saddle_patch"] == ["corner"], got
+    assert got["lone"] == [], got  # test-only edges do not count
+    # the allow goes on the fn whose body holds the site, past a nested helper that closes before it
+    lines = ["fn dedup(xs: &[u32]) -> u32 {", "    fn find(a: u32) -> u32 {", "        a + 1", "    }",
+             '    let s = "a } string {";', '    xs.first().unwrap_or_else(|| panic!("x")) + find(1)', "}"]
+    allow_panic_at(lines, 5)
+    assert lines[0].startswith("#[allow(clippy::panic)] fn dedup"), lines
+    assert "allow" not in lines[1], lines
+    print("m3_move selftest: ok")
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--selftest"]:
+    _selftest()

@@ -2,9 +2,22 @@
 # M2 pure-move window, run by the builder as one request: pre build + copy, apply the move, post build,
 # tests compile, clippy, copy. On any failure after the apply it restores exactly the files the apply
 # touched (in yack-springrep's src/ and tests/, and any --external file), never anything else.
-# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--touches FILE...] [--dirty-ok FILE...] [--external FILE...]
+# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--no-pre] [--touches FILE...] [--dirty-ok FILE...] [--external FILE...] [--extra "CMD"]...
+# --extra "CMD" (lead, W9c+W9d; repeatable, anywhere after TEST_FILTER): each CMD runs (bash -c) after the
+# window's own gate and tests, before the post snapshot, inside the same backup: a failing one restores
+# everything like any other step.
+# --no-pre (lead, for pure moves the lead's whole-tree digest check proves): no pre build and no pre
+# binaries; the apply, the post build and copy, clippy, tests, the gate (before and after) and the
+# restore on failure all stay. Without it the window is as before.
 set -u
 TAG=$1; APPLY=$2; FILTER=$3; shift 3; tag=$(echo $TAG | tr A-Z a-z)
+EXTRA=(); REST=()
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--extra" ]; then [ $# -ge 2 ] || { echo "$TAG ABORT: --extra needs a command"; exit 1; }; EXTRA+=("$2"); shift 2
+  else REST+=("$1"); shift; fi
+done
+set -- "${REST[@]}"
+NOPRE=0; if [ "${1:-}" = "--no-pre" ]; then NOPRE=1; shift; fi
 # --touches FILE...: the springrep files the move edits, when other springrep files hold another
 # worker's uncommitted work (lead's ruling for T7); only these must be clean, and the guard over the
 # untouched springrep files still catches any save into the others mid-window
@@ -43,14 +56,23 @@ O1=$(others); PFP=$(fp)
 # warn-level ones, indexing_slicing until M5, would otherwise count against it; its denies are
 # checked below by clippy's exit status)
 lints() { cargo clippy -p yack-springrep --all-targets 2>&1 | grep -c -- '--> crates/yack-springrep/' ; }
-build || { echo "$TAG pre build failed"; exit 1; }
+if [ $NOPRE -eq 0 ]; then build || { echo "$TAG pre build failed"; exit 1; }; fi
 L1=$(lints); echo "$TAG clippy warnings before: $L1"
 cargo xtask gate >/dev/null 2>&1; G1=$?; echo "$TAG gate before: rc=$G1"
-snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"
+if [ $NOPRE -eq 0 ]; then snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"; else echo "$TAG --no-pre: no pre build (tree $PFP) others=$O1"; fi
 
 BK=$(mktemp -d); cp -a $SR/src $BK/src; cp -a $SR/tests $BK/tests
-# an external file the move creates (a new crate's) has no backup: restore deletes it, and its empty dirs
-for f in "${EXT[@]}"; do mkdir -p "$BK/ext/$(dirname $f)"; [ -e "$f" ] && cp -a "$f" "$BK/ext/$f"; done
+# an external file the move creates (a new crate's) has no backup: restore deletes it, and its empty dirs.
+# springrep's Cargo.toml and the workspace's Cargo.lock are always backed up (w-h4, W8): an apply adds the
+# new crate's dependency there, and a failed window must not leave the workspace pointing at it
+# (lead, W9) likewise every --touches path outside springrep's src/ and tests/, which the src/tests
+# backup below does not cover
+BACKED=("${EXT[@]}")
+for f in crates/yack-springrep/Cargo.toml Cargo.lock "${ONLY[@]}"; do
+  case $f in crates/yack-springrep/src/*|crates/yack-springrep/tests/*) continue;; esac
+  case " ${BACKED[*]} " in *" $f "*) ;; *) BACKED+=("$f");; esac
+done
+for f in "${BACKED[@]}"; do mkdir -p "$BK/ext/$(dirname $f)"; [ -e "$f" ] && cp -a "$f" "$BK/ext/$f"; done
 touched() {
   for d in src tests; do
     ( cd $SR/$d && find . -type f; cd $BK/$d && find . -type f ) | sort -u | while read -r f; do cmp -s "$SR/$d/$f" "$BK/$d/$f" || echo "$d/$f"; done
@@ -60,7 +82,7 @@ restore() {
   # plain cp + touch: a restored file must look newer than what the build made from the moved one,
   # or cargo keeps the stale artifacts (cp -a would restore the old mtime)
   for f in $TOUCHED; do if [ -f "$BK/$f" ]; then mkdir -p "$(dirname "$SR/$f")" && cp "$BK/$f" "$SR/$f" && touch "$SR/$f"; else rm -f "$SR/$f"; fi; done
-  for f in "${EXT[@]}"; do
+  for f in "${BACKED[@]}"; do
     if [ -e "$BK/ext/$f" ]; then cp "$BK/ext/$f" "$f" && touch "$f"; else rm -f "$f"; rmdir -p --ignore-fail-on-non-empty "$(dirname $f)" 2>/dev/null; fi
   done
   # a removed file's module may be the only change: touch the crate root so cargo rebuilds
@@ -91,6 +113,10 @@ cargo test -p yack-springrep --lib $FILTER || { echo "$TAG tests fail"; restore;
 # a crate the move fills (M3 waves) runs its own unit tests whole; the facade's are too long for a window
 for pkg in $(for f in "${EXT[@]}"; do case $f in crates/yack/*|crates/yack-springrep/*) ;; crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
   cargo test -p $pkg --lib || { echo "$TAG $pkg tests fail"; restore; exit 1; }
+done
+for cmd in "${EXTRA[@]}"; do
+  echo "$TAG extra: $cmd"
+  bash -c "$cmd" || { echo "$TAG extra fails: $cmd"; restore; exit 1; }
 done
 snap $tag-post-$QFP; O2=$(others)
 # untouched springrep files: compare their start hashes with now
