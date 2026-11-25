@@ -49,45 +49,73 @@ impl Seeds {
     /// point is any within a millionth of the seeds' spacing.
     pub(super) fn nearest<const N: usize>(&self, p: Point3) -> [(f64, Vec2); N] {
         let same = (1e-6 * self.spacing).powi(2);
-        let mut near = [(f64::INFINITY, Vec2::ZERO); N];
-        let mut at = [Point3::ZERO; N];
-        let Some(last) = N.checked_sub(1) else {
-            return near;
+        // The runs nearest first find `N` distinct seeds within some distance at once; the scan in
+        // layout order, which chooses, then passes over every run whose box lies farther than
+        // that by more than a few times the distance two seeds count as one (a seed held there
+        // could only stand in for one as far, never for one it chooses). A scan in layout order
+        // alone holds nothing to pass runs over by until it has met `N` seeds (bench
+        // swept/ring-carried-along-a-spline: a fifth of its time here).
+        let gaps: Vec<f64> = self.boxes.iter().map(|&(lo, hi)| gap2(p, lo, hi)).collect();
+        let mut order: Vec<usize> = (0..gaps.len()).collect();
+        order.sort_by(|&i, &j| gaps[i].total_cmp(&gaps[j]));
+        let runs: Vec<&[(Vec2, Point3)]> = self.pts.chunks(RUN).collect();
+        let first = scan::<N>(p, same, order.iter().map(|&i| (gaps[i], runs[i])), true);
+        let within = match first.last() {
+            Some(&(d2, _)) if d2.is_finite() => (d2.sqrt() + 4.0 * same.sqrt()).powi(2) * (1.0 + 1e-12), // tol: rounding of the bound's root and square
+            _ => f64::INFINITY,
         };
-        for (run, &(lo, hi)) in self.pts.chunks(RUN).zip(&self.boxes) {
-            // Each coordinate gap to the box is no larger than the seed's own in floating point,
-            // as subtraction, squaring and addition round monotonically: the box's squared
-            // distance, summed in the order `norm2` sums, bounds every seed's from below.
-            let gap = |x: f64, l: f64, h: f64| {
-                if x < l {
-                    l - x
-                } else if x > h {
-                    x - h
-                } else {
-                    0.0
-                }
-            };
-            let g = Vec3::new(gap(p.x, lo.x, hi.x), gap(p.y, lo.y, hi.y), gap(p.z, lo.z, hi.z));
-            if g.norm2() >= near[last].0 {
-                continue;
+        scan::<N>(p, same, gaps.iter().copied().zip(runs.iter().copied()).filter(|&(g, _)| g <= within), false)
+    }
+}
+
+/// The squared distance from `p` to the box `(lo, hi)`: each coordinate gap to the box is no
+/// larger than a seed's own in floating point, as subtraction, squaring and addition round
+/// monotonically, so summed in the order `norm2` sums it bounds every seed's from below.
+fn gap2(p: Point3, lo: Point3, hi: Point3) -> f64 {
+    let gap = |x: f64, l: f64, h: f64| {
+        if x < l {
+            l - x
+        } else if x > h {
+            x - h
+        } else {
+            0.0
+        }
+    };
+    Vec3::new(gap(p.x, lo.x, hi.x), gap(p.y, lo.y, hi.y), gap(p.z, lo.z, hi.z)).norm2()
+}
+
+/// The `N` nearest of the seeds of `runs` (each with its box's squared distance) at distinct
+/// points, taken in the order given: a run whose box lies no nearer than the `N`th held is passed
+/// over, and with `sorted` (the runs nearest first) so is every one after it.
+fn scan<'a, const N: usize>(p: Point3, same: f64, runs: impl Iterator<Item = (f64, &'a [(Vec2, Point3)])>, sorted: bool) -> [(f64, Vec2); N] {
+    let mut near = [(f64::INFINITY, Vec2::ZERO); N];
+    let mut at = [Point3::ZERO; N];
+    let Some(last) = N.checked_sub(1) else {
+        return near;
+    };
+    for (g, run) in runs {
+        if g >= near[last].0 {
+            if sorted {
+                break;
             }
-            for &(uv, q) in run {
-                let d2 = (q - p).norm2();
-                let taken = |i: usize| near[i].0.is_finite() && (at[i] - q).norm2() <= same;
-                if d2 < near[last].0 && !(0..N).any(taken) {
-                    let mut i = last;
-                    while i > 0 && near[i - 1].0 > d2 {
-                        near[i] = near[i - 1];
-                        at[i] = at[i - 1];
-                        i -= 1;
-                    }
-                    near[i] = (d2, uv);
-                    at[i] = q;
+            continue;
+        }
+        for &(uv, q) in run {
+            let d2 = (q - p).norm2();
+            let taken = |i: usize| near[i].0.is_finite() && (at[i] - q).norm2() <= same;
+            if d2 < near[last].0 && !(0..N).any(taken) {
+                let mut i = last;
+                while i > 0 && near[i - 1].0 > d2 {
+                    near[i] = near[i - 1];
+                    at[i] = at[i - 1];
+                    i -= 1;
                 }
+                near[i] = (d2, uv);
+                at[i] = q;
             }
         }
-        near
     }
+    near
 }
 
 impl super::NurbsSurface {
