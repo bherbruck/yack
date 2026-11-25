@@ -1,6 +1,8 @@
 // yack: A planar profile swept along a space curve, kept square to it: its axes turn with the curve's
 // Adapted from springrep@a03e8a1 src/sweep/curve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/sweep/curve.rs to yack-build (M3 W7); paths and visibility only.
+// Changes: moved from springrep's src/sweep/curve.rs to yack-build (M3 W7); paths and visibility only;
+// M3 hardening (w-h3): stations are read by first/last and stride, not index; a sweep without
+// stations is an error, not a panic.
 //! A planar profile swept along a space curve, kept square to it: its axes turn with the curve's
 //! rotation-minimizing frame (`N′ = −(T′·N) T`, no turn about `T`) and a twist that grows evenly
 //! with arc length.
@@ -10,6 +12,7 @@
 //! steps fine enough to be exact to rounding. Each side face is a rational B-spline whose columns are
 //! cubics through each profile control point's track at stations along the path; the stations
 //! double until every column stays within a tenth of the tolerance of its track between them.
+#![warn(clippy::indexing_slicing)]
 
 use super::helix::{Helix, Motion, Seg, assemble, helix};
 use crate::{
@@ -21,6 +24,7 @@ use crate::{
     profile::Profile,
     sweep::extrude,
     tol,
+    topo::Brep,
 };
 
 /// How far a column may stray from its track, a tenth of the linear tolerance.
@@ -88,12 +92,13 @@ fn arc(c: &Curve, a: f64, b: f64) -> f64 {
 /// The frames at `us`, carried from `r0` at the path's start, the twist reaching `twist` at the
 /// path's `length`.
 fn stations(path: &Curve, us: &[f64], r0: Vec3, twist: f64, length: f64) -> Vec<Station> {
+    let Some(&first) = us.first() else { return Vec::new() };
     let tangent = |u: f64| path.d1(u).1.unit().unwrap_or(Vec3::Z);
-    let (mut x, mut t) = (path.eval(us[0]), tangent(us[0]));
+    let (mut x, mut t) = (path.eval(first), tangent(first));
     let mut r = (r0 - t * r0.dot(t)).unit().unwrap_or(r0);
     let mut s = 0.0;
     let mut out = Vec::with_capacity(us.len());
-    let mut last = us[0];
+    let mut last = first;
     for &u in us {
         for k in 1..=STEPS {
             let a = last + (u - last) * (k - 1) as f64 / STEPS as f64;
@@ -143,7 +148,7 @@ fn straight(path: &Curve, u0: f64, u1: f64) -> Option<f64> {
 
 /// Sweeps `profile`, drawn on `sketch`'s xy plane, along `path` over `range`, turning it through
 /// `twist` radians by the end. The sketch lies at the path's start square to it.
-#[allow(clippy::panic)] pub fn along_curve(
+pub fn along_curve(
     profile: &Profile,
     sketch: &Frame,
     path: &Curve,
@@ -215,7 +220,8 @@ fn straight(path: &Curve, u0: f64, u1: f64) -> Option<f64> {
         .collect::<Result<_>>()?;
     // Each world point of the profile as its place in the start frame's axes, which the frame at
     // any station carries along.
-    let first = stations(path, &[u0], sketch.x, twist, length)[0];
+    let first = stations(path, &[u0], sketch.x, twist, length);
+    let first = first.first().copied().ok_or_else(no_stations)?;
     let local = |p: Point3| ((p - first.at).dot(first.e1), (p - first.at).dot(first.e2));
     let controls: Vec<(f64, f64)> = loops
         .iter()
@@ -225,7 +231,7 @@ fn straight(path: &Curve, u0: f64, u1: f64) -> Option<f64> {
     // Stations double until every control point's column follows its track between them.
     let spans = path.breakpoints(u0, u1).len() + 1;
     let mut n = 8 * spans;
-    let (us, frames, across) = loop {
+    let (frames, across) = loop {
         let fine: Vec<f64> = (0..=2 * n)
             .map(|k| u0 + (u1 - u0) * k as f64 / (2 * n) as f64)
             .collect();
@@ -238,21 +244,19 @@ fn straight(path: &Curve, u0: f64, u1: f64) -> Option<f64> {
             .map(|&xy| {
                 let data: Vec<_> = frames.iter().map(|f| hom(f.place(xy), 1.0)).collect();
                 let ctrl = across.apply(&data);
-                (0..n)
-                    .map(|k| {
-                        let got = point(across.eval(&ctrl, fine[2 * k + 1]));
-                        got.dist(all[2 * k + 1].place(xy))
-                    })
+                // The odd stations, halfway between the ones the columns pass through.
+                let between = fine.iter().zip(&all).skip(1).step_by(2);
+                between
+                    .map(|(&u, station)| point(across.eval(&ctrl, u)).dist(station.place(xy)))
                     .fold(0.0, f64::max)
             })
             .fold(0.0, f64::max);
         if worst <= FIT || n >= 512 {
-            break (us, frames, across);
+            break (frames, across);
         }
         n *= 2;
     };
-    let _ = us;
-    let last = *frames.last().unwrap_or_else(|| panic!("a sweep has stations"));
+    let last = *frames.last().ok_or_else(no_stations)?;
     let column = |p: Point3| -> Vec<Point3> {
         let xy = local(p);
         let data: Vec<_> = frames.iter().map(|f| hom(f.place(xy), 1.0)).collect();
@@ -271,6 +275,11 @@ fn straight(path: &Curve, u0: f64, u1: f64) -> Option<f64> {
     assemble(&loops, frame, &motion, feature)
 }
 
+/// The error of a sweep whose path gave no stations, which `n` stations at least 8 rule out.
+fn no_stations() -> Error {
+    Error::Numerical("a sweep has stations".into())
+}
+
 /// The path's arc length from `a` to `b`.
 fn arc_length(path: &Curve, a: f64, b: f64) -> f64 {
     let n = 256 * (path.breakpoints(a, b).len() + 1);
@@ -284,8 +293,6 @@ fn arc_length(path: &Curve, a: f64, b: f64) -> f64 {
         })
         .sum()
 }
-
-use crate::topo::Brep;
 
 #[cfg(test)]
 mod tests {

@@ -1,10 +1,13 @@
 // yack: A solid from a closed triangle mesh: each triangle a plane face, so the kernel's booleans,
 // Adapted from springrep@a03e8a1 src/mesh/solid.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from mesh/solid.rs to build/mesh_solid.rs (M2 T5; mesh no longer calls the checker); paths and visibility only; then to yack-build (M3 W7), paths and visibility only.
+// Changes: moved from mesh/solid.rs to build/mesh_solid.rs (M2 T5; mesh no longer calls the checker); paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
+// M3 hardening (w-h3): the look-up maps are BTreeMaps (D26; only looked up, never iterated); a
+// triangle's corners and edges by array patterns, a point's neighbours by checked access.
 //! A solid from a closed triangle mesh: each triangle a plane face, so the kernel's booleans,
 //! distances and measures take a mesh another tool wrote as they take any solid.
+#![warn(clippy::indexing_slicing)]
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use crate::{
     check,
@@ -18,27 +21,28 @@ use crate::{
 /// The solid that the triangles bound, their corners the `points` they index: triangles sharing
 /// two corners share the edge between them. They run counter-clockwise seen from outside. A
 /// triangle with no area is left out. An error where the triangles do not close a solid.
-#[allow(clippy::disallowed_types)] pub fn from_indexed(points: &[Point3], triangles: &[[usize; 3]]) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub fn from_indexed(points: &[Point3], triangles: &[[usize; 3]]) -> Result<Brep> {
     let mut b = Brep::new();
     let mut faces = Vec::new();
-    let mut vertices: HashMap<usize, VertexId> = HashMap::new();
-    let mut lines: HashMap<(VertexId, VertexId), EdgeId> = HashMap::new();
-    for tri in triangles {
-        if tri.iter().any(|&i| i >= points.len()) {
+    let mut vertices: BTreeMap<usize, VertexId> = BTreeMap::new();
+    let mut lines: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
+    for &[i0, i1, i2] in triangles {
+        let (Some(&p0), Some(&p1), Some(&p2)) = (points.get(i0), points.get(i1), points.get(i2))
+        else {
             return Err(Error::InvalidInput(
                 "a triangle names a point the mesh does not have".into(),
             ));
-        }
-        let p = tri.map(|i| points[i]);
-        let normal = (p[1] - p[0]).cross(p[2] - p[0]);
-        let Ok(frame) = Frame::new(p[0], normal, p[1] - p[0]) else {
+        };
+        let normal = (p1 - p0).cross(p2 - p0);
+        let Ok(frame) = Frame::new(p0, normal, p1 - p0) else {
             continue;
         };
-        let vs = tri.map(|i| *vertices.entry(i).or_insert_with(|| b.add_vertex(points[i])));
+        let mut vertex =
+            |i: usize, p: Point3| *vertices.entry(i).or_insert_with(|| b.add_vertex(p));
+        let [v0, v1, v2] = [vertex(i0, p0), vertex(i1, p1), vertex(i2, p2)];
         let face = b.add_face(Surface::Plane(Plane { frame }), false, std::iter::empty());
         let mut coedges = Vec::with_capacity(3);
-        for k in 0..3 {
-            let (from, to) = (vs[k], vs[(k + 1) % 3]);
+        for (from, to) in [(v0, v1), (v1, v2), (v2, v0)] {
             let key = if from <= to { (from, to) } else { (to, from) };
             let edge = match lines.get(&key) {
                 Some(&e) => e,
@@ -84,26 +88,28 @@ use crate::{
 /// The solid a closed triangle mesh bounds: each triangle a plane face. `triangles` index
 /// `positions`, counter-clockwise seen from outside. Corners at one place are one vertex whether
 /// or not they share an index, as in a mesh that lists every triangle's corners on their own.
-#[allow(clippy::disallowed_types)] pub fn solid(positions: &[Point3], triangles: &[[u32; 3]]) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub fn solid(positions: &[Point3], triangles: &[[u32; 3]]) -> Result<Brep> {
     // Corners within the tolerance of each other fall in one cell or in neighbouring ones.
     let cell = |p: Point3| {
         let at = |x: f64| (x / tol::LINEAR).round() as i64;
         [at(p.x), at(p.y), at(p.z)]
     };
-    let mut cells: HashMap<[i64; 3], usize> = HashMap::new();
+    let mut cells: BTreeMap<[i64; 3], usize> = BTreeMap::new();
     let mut welded: Vec<usize> = Vec::with_capacity(positions.len());
     let mut points: Vec<Point3> = Vec::new();
     for &p in positions {
         if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
             return Err(Error::InvalidInput("a mesh point is not finite".into()));
         }
-        let c = cell(p);
+        let c @ [x, y, z] = cell(p);
+        let within = |i: usize| points.get(i).is_some_and(|q: &Point3| q.dist(p) <= tol::LINEAR);
+        // The last neighbour within the tolerance, in the order the cells are searched.
         let mut found = None;
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    let near = cells.get(&[c[0] + dx, c[1] + dy, c[2] + dz]);
-                    if let Some(&i) = near.filter(|&&i| points[i].dist(p) <= tol::LINEAR) {
+                    let near = cells.get(&[x + dx, y + dy, z + dz]);
+                    if let Some(&i) = near.filter(|&&i| within(i)) {
                         found = Some(i);
                     }
                 }

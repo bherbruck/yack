@@ -1,6 +1,7 @@
 // yack: a STEP solid's arena built, turned the way its volume says, and checked (from topology.rs).
 //! The last step of reading a solid: build its arena, turn any shell that reads inside out, and
 //! check it.
+#![warn(clippy::indexing_slicing)]
 
 use super::heal;
 use super::raw::{Raw, build};
@@ -37,12 +38,14 @@ pub fn assemble(
     Ok(b)
 }
 
-/// `raw` with the faces of each of `turned`'s shells facing the other way.
+/// `raw` with the faces of each of `turned`'s shells facing the other way. The shells are the
+/// arena's built from `raw`, so they are `raw`'s too.
 fn turned_round(raw: &Raw, turned: &[(SolidId, ShellId, bool)]) -> Raw {
     let mut raw = raw.clone();
-    for &(_, sh, _) in turned {
-        for &f in &raw.shells[sh.index()].clone() {
-            let face = &mut raw.faces[f];
+    for &(_, shell, _) in turned {
+        let faces = raw.shells.get(shell.index()).cloned().unwrap_or_default();
+        for f in faces {
+            let Some(face) = raw.faces.get_mut(f) else { continue };
             face.reversed = !face.reversed;
             for (_, uses) in &mut face.bounds {
                 uses.reverse();

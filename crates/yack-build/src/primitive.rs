@@ -1,8 +1,10 @@
 // yack: The five primitive solids, each placed by a frame: a block and a cylinder extruded along the
 // Adapted from springrep@a03e8a1 src/primitive.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/primitive.rs to yack-build (M3 W7); paths and visibility only.
+// Changes: moved from springrep's src/primitive.rs to yack-build (M3 W7); paths and visibility only;
+// M3 hardening (w-h3): the cone's meridian pairs each corner with the next by iterators.
 //! The five primitive solids, each placed by a frame: a block and a cylinder extruded along the
 //! frame's z, a sphere, a torus and a cone revolved about it.
+#![warn(clippy::indexing_slicing)]
 
 mod slab;
 
@@ -114,13 +116,13 @@ pub fn cone(frame: &Frame, bottom: f64, top: f64, height: f64, feature: &str) ->
         Vec2::new(0.0, height),
     ];
     let names = ["bottom", "side", "top", "axis"];
+    let next = pts.iter().cycle().skip(1);
     // A radius of zero is an apex: one point of the meridian, with no edge.
-    let sides = (0..4).filter(|&i| pts[i] != pts[(i + 1) % 4]).map(|i| {
-        let line = Segment::Line {
-            a: pts[i],
-            b: pts[(i + 1) % 4],
-        };
-        named(line, names[i])
-    });
+    let sides = pts
+        .iter()
+        .zip(next)
+        .zip(names)
+        .filter(|((a, b), _)| a != b)
+        .map(|((&a, &b), name)| named(Segment::Line { a, b }, name));
     turned(&one(sides.collect()), frame, feature)
 }
