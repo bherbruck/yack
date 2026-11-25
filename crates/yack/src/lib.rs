@@ -40,6 +40,7 @@ mod edit;
 mod engine;
 mod engine_cadrs;
 mod engine_swept;
+mod engine_blend;
 mod firewall;
 mod history;
 mod input;

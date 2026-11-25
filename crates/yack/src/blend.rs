@@ -383,7 +383,7 @@ impl Solid {
     }
 
     /// Bevels `edge` with setback `distance` along `face` (one of its two faces), the bevel at
-    /// `angle` to that face (cadrs only).
+    /// `angle` to that face (cadrs, then yack's own rung for a rim between faces of revolution).
     ///
     /// ```
     /// use yack::prelude::*;
@@ -408,7 +408,11 @@ impl Solid {
         firewall::blend(op, self, &[edge], || {
             ladder::ladder(
                 op,
-                &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_angle(k, id, ei, fi, distance, a)) }],
+                &[
+                    ladder::Rung { name: "cadrs", run: &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_angle(k, id, ei, fi, distance, a)) },
+                    // yack-blend's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it
+                    ladder::Rung { name: "native", run: &|| crate::engine_blend::chamfer_angle(self, edge, face, distance, angle) },
+                ],
             )
         })
     }

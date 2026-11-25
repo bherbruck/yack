@@ -10,6 +10,7 @@ publish = true
 
 [dependencies]
 yack-base = { path = "../yack-base" }
+yack-blend = { path = "../yack-blend" }
 yack-bridge = { path = "../yack-bridge" }
 yack-cadrs = { path = "../yack-cadrs" }
 yack-math = { path = "../yack-math" }

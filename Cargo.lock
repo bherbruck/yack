@@ -122,6 +122,7 @@ name = "yack"
 version = "0.0.0"
 dependencies = [
  "yack-base",
+ "yack-blend",
  "yack-bridge",
  "yack-cadrs",
  "yack-math",
