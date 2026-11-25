@@ -1,6 +1,9 @@
 // yack: Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 // Adapted from springrep@a03e8a1 src/boolean/ssi.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from boolean/ssi.rs to intersect/ssi.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only; `.expect`/`.unwrap` as counted `panic!`s (gate 9).
+// M3 hardening: split into submodules by pair (plane, coaxial, cylinders), a closed form that
+// cannot build its frame declining to the tracer instead of panicking, the region's corners and
+// axes shared, checked access instead of indexing; the same arithmetic in the same order.
 //! Surface–surface intersection. Planes against the analytic surfaces, coaxial surfaces of
 //! revolution, parallel cylinders and equal crossing cylinders have closed forms; every other pair
 //! is traced by [`super::march`].
@@ -9,19 +12,24 @@
 //! faces' boundaries. A curve along which the surfaces are tangent is marked, and isolated points
 //! where they are tangent (where two branches cross) come back as `points`.
 
+mod coaxial;
+mod conic;
+mod cylinders;
+mod plane;
+mod sweep;
+#[cfg(test)]
+mod tests;
+
 use std::f64::consts::TAU;
 
+use self::coaxial::{Meridian, circles_about, coaxial, meridian, meridian_points};
 use super::march::{self, SsiCurve};
-
-mod conic;
-mod sweep;
 use crate::{
     Result,
-    geom::{Circle, Curve, Ellipse, Line, Surface},
+    geom::{Circle, Cone, Curve, Line, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
     tol,
 };
-
 
 #[derive(Clone, Debug)]
 pub enum Ssi {
@@ -33,13 +41,28 @@ pub enum Ssi {
     },
 }
 
-fn none() -> Ssi {
-    Ssi::Curves {
-        curves: Vec::new(),
-        points: Vec::new(),
+impl Ssi {
+    /// No meeting at all.
+    fn none() -> Ssi {
+        Ssi::Curves { curves: Vec::new(), points: Vec::new() }
+    }
+
+    /// The meeting along `curves` alone.
+    fn curves(curves: Vec<SsiCurve>) -> Ssi {
+        Ssi::Curves { curves, points: Vec::new() }
     }
 }
 
+/// A cone whose half angle's sine is no more than this is a cylinder, with no apex.
+const NO_APEX: f64 = 1e-12; // tol: a sine that vanishes
+
+/// Below this a direction's part along an axis is zero.
+const UNDERFLOW: f64 = 1e-300; // tol: an underflow guard
+
+/// The samples along each parameter of the window [`within`] tests a surface over.
+const WINDOW_SAMPLES: usize = 6;
+
+/// Whether two directions are parallel within the angular tolerance.
 fn parallel(a: Vec3, b: Vec3) -> bool {
     a.cross(b).norm() <= tol::ANGULAR
 }
@@ -57,26 +80,43 @@ struct Axis {
     dir: Vec3,
 }
 
+impl Axis {
+    /// A frame's `z` axis.
+    fn of(frame: &Frame) -> Axis {
+        Axis { origin: frame.origin, dir: frame.z }
+    }
+}
+
+/// The axis of a cylinder, cone, torus or sphere.
 fn axis_of(s: &Surface) -> Option<Axis> {
-    let f = |fr: &Frame| Axis {
-        origin: fr.origin,
-        dir: fr.z,
-    };
     match s {
-        Surface::Cylinder(c) => Some(f(&c.frame)),
-        Surface::Cone(c) => Some(f(&c.frame)),
-        Surface::Torus(t) => Some(f(&t.frame)),
-        Surface::Sphere(sp) => Some(f(&sp.frame)),
+        Surface::Cylinder(c) => Some(Axis::of(&c.frame)),
+        Surface::Cone(c) => Some(Axis::of(&c.frame)),
+        Surface::Torus(t) => Some(Axis::of(&t.frame)),
+        Surface::Sphere(sp) => Some(Axis::of(&sp.frame)),
         _ => None,
     }
 }
 
+/// Whether two axes are one line, within the tolerances.
 fn same_axis(a: Axis, b: Axis) -> bool {
     parallel(a.dir, b.dir) && line_distance(b.origin, a.origin, a.dir) <= tol::LINEAR
 }
 
+/// The eight corners of a box.
+fn corners(region: &Aabb) -> impl Iterator<Item = Point3> + '_ {
+    (0..8).map(|k| {
+        let pick = |bit: i32, lo: f64, hi: f64| if k & bit == 0 { lo } else { hi };
+        Point3::new(
+            pick(1, region.min.x, region.max.x),
+            pick(2, region.min.y, region.max.y),
+            pick(4, region.min.z, region.max.z),
+        )
+    })
+}
+
 /// Whether two surfaces are the same point set.
-#[allow(clippy::panic)] pub fn same_domain(a: &Surface, b: &Surface) -> bool {
+pub fn same_domain(a: &Surface, b: &Surface) -> bool {
     let close = |x: f64, y: f64| (x - y).abs() <= tol::LINEAR;
     match (a, b) {
         (Surface::Plane(p), Surface::Plane(q)) => {
@@ -84,7 +124,7 @@ fn same_axis(a: Axis, b: Axis) -> bool {
                 && (q.frame.origin - p.frame.origin).dot(p.frame.z).abs() <= tol::LINEAR
         }
         (Surface::Cylinder(p), Surface::Cylinder(q)) => {
-            close(p.radius, q.radius) && same_axis(axis_of(a).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")), axis_of(b).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")))
+            close(p.radius, q.radius) && same_axis(Axis::of(&p.frame), Axis::of(&q.frame))
         }
         (Surface::Sphere(p), Surface::Sphere(q)) => {
             close(p.radius, q.radius) && p.frame.origin.dist(q.frame.origin) <= tol::LINEAR
@@ -95,28 +135,30 @@ fn same_axis(a: Axis, b: Axis) -> bool {
                 && p.frame.origin.dist(q.frame.origin) <= tol::LINEAR
                 && parallel(p.frame.z, q.frame.z)
         }
-        (Surface::Cone(p), Surface::Cone(q)) => {
-            if !same_axis(axis_of(a).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")), axis_of(b).unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value"))) {
-                return false;
-            }
-            let apex = |c: &crate::geom::Cone| {
-                let (sa, ca) = c.half_angle.sin_cos();
-                (sa.abs() > 1e-12).then(|| c.frame.origin + c.frame.z * (-c.radius / sa * ca))
-            };
-            let slope = |c: &crate::geom::Cone, z: Vec3| {
-                let t = c.half_angle.tan();
-                if c.frame.z.dot(z) > 0.0 { t } else { -t }
-            };
-            match (apex(p), apex(q)) {
-                (Some(x), Some(y)) => {
-                    x.dist(y) <= tol::LINEAR
-                        && (slope(p, p.frame.z).abs() - slope(q, p.frame.z).abs()).abs()
-                            <= tol::ANGULAR
-                }
-                _ => false,
-            }
-        }
+        (Surface::Cone(p), Surface::Cone(q)) => same_cone(p, q),
         _ => a == b || (within(a, b) && within(b, a)),
+    }
+}
+
+/// Whether two cones are one point set: one axis, one apex and one slope.
+fn same_cone(p: &Cone, q: &Cone) -> bool {
+    if !same_axis(Axis::of(&p.frame), Axis::of(&q.frame)) {
+        return false;
+    }
+    let apex = |c: &Cone| {
+        let (sa, ca) = c.half_angle.sin_cos();
+        (sa.abs() > NO_APEX).then(|| c.frame.origin + c.frame.z * (-c.radius / sa * ca))
+    };
+    let slope = |c: &Cone, z: Vec3| {
+        let t = c.half_angle.tan();
+        if c.frame.z.dot(z) > 0.0 { t } else { -t }
+    };
+    match (apex(p), apex(q)) {
+        (Some(x), Some(y)) => {
+            x.dist(y) <= tol::LINEAR
+                && (slope(p, p.frame.z).abs() - slope(q, p.frame.z).abs()).abs() <= tol::ANGULAR
+        }
+        _ => false,
     }
 }
 
@@ -156,7 +198,7 @@ fn within(a: &Surface, b: &Surface) -> bool {
     let Some((lo, hi)) = sample_window(a) else {
         return false;
     };
-    let n = 6;
+    let n = WINDOW_SAMPLES;
     (0..=n).all(|i| {
         (0..=n).all(|j| {
             let u = lo.x + (hi.x - lo.x) * i as f64 / n as f64;
@@ -172,10 +214,9 @@ fn within(a: &Surface, b: &Surface) -> bool {
 /// The part of the line `o + t·d` inside `region`, as a parameter range.
 pub fn clip_line(o: Point3, d: Vec3, region: &Aabb) -> Option<(f64, f64)> {
     let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
-    for k in 0..3 {
-        let (ok, dk) = (o[k], d[k]);
-        let (mn, mx) = (region.min[k], region.max[k]);
-        if dk.abs() < 1e-300 {
+    let (min, max) = (region.min.to_array(), region.max.to_array());
+    for (((ok, dk), mn), mx) in o.to_array().into_iter().zip(d.to_array()).zip(min).zip(max) {
+        if dk.abs() < UNDERFLOW {
             if ok < mn || ok > mx {
                 return None;
             }
@@ -188,16 +229,13 @@ pub fn clip_line(o: Point3, d: Vec3, region: &Aabb) -> Option<(f64, f64)> {
     (hi > lo).then_some((lo, hi))
 }
 
+/// The line through `o` along `d`, over its part inside `region`.
 fn line_curve(o: Point3, d: Vec3, region: &Aabb, tangent: bool) -> Option<SsiCurve> {
-    let (t0, t1) = clip_line(o, d, region)?;
-    Some(SsiCurve {
-        curve: Curve::Line(Line { origin: o, dir: d }),
-        range: (t0, t1),
-        closed: false,
-        tangent,
-    })
+    let range = clip_line(o, d, region)?;
+    Some(SsiCurve { curve: Curve::Line(Line { origin: o, dir: d }), range, closed: false, tangent })
 }
 
+/// The whole circle of `radius` in `frame`.
 fn circle_curve(frame: Frame, radius: f64, tangent: bool) -> SsiCurve {
     SsiCurve {
         curve: Curve::Circle(Circle { frame, radius }),
@@ -207,443 +245,15 @@ fn circle_curve(frame: Frame, radius: f64, tangent: bool) -> SsiCurve {
     }
 }
 
-#[allow(clippy::panic)] fn frame_at(origin: Point3, z: Vec3, x_hint: Vec3) -> Frame {
-    Frame::new(origin, z, x_hint)
-        .or_else(|_| Frame::from_axis(origin, z))
-        .unwrap_or_else(|e| panic!("axis is a unit vector: {e:?}"))
-}
-
-#[allow(clippy::panic)] fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Ssi {
-    let (n1, n2) = (a.z, b.z);
-    let d = n1.cross(n2);
-    if d.norm() <= tol::ANGULAR {
-        return none();
-    }
-    let (h1, h2) = (n1.dot(a.origin), n2.dot(b.origin));
-    // n1·(h1 − h2·c)/(1 − c²) + n2·(h2 − h1·c)/(1 − c²), arranged so planes a hair off parallel do
-    // not take the difference of two large numbers: at an angle θ, 1 − c² is θ², and that form's
-    // rounding put the point θ⁻² · 1e-16 off both planes, 1e-5 mm at θ = 1.5e-5.
-    let p0 = (n2 * h1 - n1 * h2).cross(d) * (1.0 / d.dot(d));
-    let dir = d.unit().unwrap_or_else(|| panic!("planes are not parallel"));
-    Ssi::Curves {
-        curves: line_curve(p0, dir, region, false).into_iter().collect(),
-        points: Vec::new(),
-    }
-}
-
-#[allow(clippy::panic)] fn plane_cylinder(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Ssi {
-    let (n, a, r) = (p.z, c.frame.z, c.radius);
-    let an = a.dot(n);
-    if parallel(a, n) {
-        let h = (p.origin - c.frame.origin).dot(a);
-        let fr = Frame {
-            origin: c.frame.origin + a * h,
-            ..c.frame
-        };
-        return Ssi::Curves {
-            curves: vec![circle_curve(fr, r, false)],
-            points: Vec::new(),
-        };
-    }
-    if an.abs() <= tol::ANGULAR {
-        let delta = (c.frame.origin - p.origin).dot(n);
-        let foot = c.frame.origin - n * delta;
-        if delta.abs() > r + tol::LINEAR {
-            return none();
-        }
-        let curves = if delta.abs() >= r - tol::LINEAR {
-            // Midway between the plane and the cylinder's nearest line, so within the tolerance
-            // of both however the gap falls in the band.
-            let mid = c.frame.origin - n * (0.5 * (delta + delta.signum() * r));
-            line_curve(mid, a, region, true).into_iter().collect()
-        } else {
-            let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis lies along the plane"));
-            let s = ((r - delta.abs()) * (r + delta.abs())).sqrt();
-            [foot + w * s, foot - w * s]
-                .into_iter()
-                .filter_map(|q| line_curve(q, a, region, false))
-                .collect()
-        };
-        return Ssi::Curves {
-            curves,
-            points: Vec::new(),
-        };
-    }
-    if an.abs() <= NEARLY_ALONG
-        && let Some(curves) = nearly_lines(p, c, region)
-    {
-        return Ssi::Curves {
-            curves,
-            points: Vec::new(),
-        };
-    }
-    let t = (p.origin - c.frame.origin).dot(n) / an;
-    let centre = c.frame.origin + a * t;
-    let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis is oblique to the plane"));
-    let m = n.cross(w);
-    let frame = Frame {
-        origin: centre,
-        x: m,
-        y: n.cross(m),
-        z: n,
-    };
-    Ssi::Curves {
-        curves: vec![SsiCurve {
-            curve: Curve::Ellipse(Ellipse {
-                frame,
-                major: r / an.abs(),
-                minor: r,
-            }),
-            range: (0.0, TAU),
-            closed: true,
-            tangent: false,
-        }],
-        points: Vec::new(),
-    }
-}
-
-/// How far off lying along a plane, in radians, a cylinder's axis may be for [`nearly_lines`] to
-/// try lines for their crossing.
-const NEARLY_ALONG: f64 = 1e-6;
-
-/// The plane `p` across the cylinder `c` whose axis lies a hair off along it, as two lines through
-/// `region`, where those lines lie within a tenth of the tolerance of the crossing: an axis turned
-/// 6e-10 off by a rounded pose makes it an ellipse 2.8e9 mm long for a radius of 1.6, whose centre,
-/// 1e9 mm away, rounds its points by the tolerance. `None` where they do not, or where the plane
-/// touches the cylinder or misses it somewhere across the region.
-fn nearly_lines(p: &Frame, c: &crate::geom::Cylinder, region: &Aabb) -> Option<Vec<SsiCurve>> {
-    let (n, a, r) = (p.z, c.frame.z, c.radius);
-    let o = c.frame.origin;
-    let (ax, ay) = (c.frame.x.dot(n), c.frame.y.dot(n));
-    let rho = ax.hypot(ay);
-    let phase = ay.atan2(ax);
-    let lift = (o - p.origin).dot(n);
-    let corners = (0..8).map(|k| {
-        Point3::new(
-            if k & 1 == 0 {
-                region.min.x
-            } else {
-                region.max.x
-            },
-            if k & 2 == 0 {
-                region.min.y
-            } else {
-                region.max.y
-            },
-            if k & 4 == 0 {
-                region.min.z
-            } else {
-                region.max.z
-            },
-        )
-    });
-    let (lo, hi) = corners.fold((f64::MAX, f64::MIN), |(lo, hi), q| {
-        let t = (q - o).dot(a);
-        (lo.min(t), hi.max(t))
-    });
-    if lo >= hi {
-        return None;
-    }
-    // Where along the axis at `t` the cylinder's two points on the plane are: the angle round it
-    // whose cosine against the plane's normal makes up the rest of the plane's equation.
-    let at = |t: f64, side: f64| -> Option<Point3> {
-        let k = -(lift + a.dot(n) * t) / (r * rho);
-        if k.abs() >= 1.0 - 1e-9 {
-            return None;
-        }
-        let theta = phase + side * k.acos();
-        Some(o + a * t + (c.frame.x * theta.cos() + c.frame.y * theta.sin()) * r)
-    };
-    let mut out = Vec::new();
-    for side in [1.0, -1.0] {
-        let (q0, q1, qm) = (at(lo, side)?, at(hi, side)?, at(0.5 * (lo + hi), side)?);
-        let dir = (q1 - q0).unit()?;
-        let off = (qm - q0) - dir * (qm - q0).dot(dir);
-        if off.norm() > 0.1 * tol::LINEAR {
-            return None;
-        }
-        out.extend(line_curve(q0, dir, region, false));
-    }
-    Some(out)
-}
-
-fn plane_sphere(p: &Frame, s: &crate::geom::Sphere) -> Ssi {
-    let n = p.z;
-    let delta = (s.frame.origin - p.origin).dot(n);
-    let r = s.radius;
-    let foot = s.frame.origin - n * delta;
-    if delta.abs() > r + tol::LINEAR {
-        none()
-    } else if delta.abs() >= r - tol::LINEAR {
-        Ssi::Curves {
-            curves: Vec::new(),
-            points: vec![s.frame.origin - n * (0.5 * (delta + delta.signum() * r))],
-        }
-    } else {
-        let rho = ((r - delta.abs()) * (r + delta.abs())).sqrt();
-        Ssi::Curves {
-            curves: vec![circle_curve(frame_at(foot, n, s.frame.x), rho, false)],
-            points: Vec::new(),
-        }
-    }
-}
-
-/// A meridian of a surface of revolution, in the half plane `(ρ, z)` about an axis.
-#[derive(Clone, Copy, Debug)]
-enum Meridian {
-    /// Through `p` along the unit `d`.
-    Line {
-        p: [f64; 2],
-        d: [f64; 2],
-    },
-    Circle {
-        c: [f64; 2],
-        r: f64,
-    },
-}
-
-fn meridian(s: &Surface, axis: Axis) -> Option<Meridian> {
-    let z_of = |p: Point3| (p - axis.origin).dot(axis.dir);
-    match s {
-        Surface::Cylinder(c) => Some(Meridian::Line {
-            p: [c.radius, z_of(c.frame.origin)],
-            d: [0.0, 1.0],
-        }),
-        Surface::Cone(c) => {
-            let (sa, ca) = c.half_angle.sin_cos();
-            let flip = if c.frame.z.dot(axis.dir) > 0.0 {
-                1.0
-            } else {
-                -1.0
-            };
-            Some(Meridian::Line {
-                p: [c.radius, z_of(c.frame.origin)],
-                d: [sa, ca * flip],
-            })
-        }
-        Surface::Sphere(sp) => Some(Meridian::Circle {
-            c: [0.0, z_of(sp.frame.origin)],
-            r: sp.radius,
-        }),
-        Surface::Torus(t) => Some(Meridian::Circle {
-            c: [t.major, z_of(t.frame.origin)],
-            r: t.minor,
-        }),
-        _ => None,
-    }
-}
-
-/// The meridians' common points, each with whether they touch there; `None` when they coincide.
-fn meridian_points(a: Meridian, b: Meridian) -> Option<Vec<([f64; 2], bool)>> {
-    let cross = |u: [f64; 2], v: [f64; 2]| u[0] * v[1] - u[1] * v[0];
-    let sub = |u: [f64; 2], v: [f64; 2]| [u[0] - v[0], u[1] - v[1]];
-    let line_circle = |p: [f64; 2], d: [f64; 2], c: [f64; 2], r: f64| {
-        let w = sub(p, c);
-        let t_near = -(w[0] * d[0] + w[1] * d[1]);
-        let q = [p[0] + d[0] * t_near, p[1] + d[1] * t_near];
-        let m = sub(q, c);
-        let m = m[0].hypot(m[1]);
-        if m > r + tol::LINEAR {
-            Vec::new()
-        } else if m >= r - tol::LINEAR {
-            vec![(q, true)]
-        } else {
-            let h = ((r - m) * (r + m)).sqrt();
-            vec![
-                ([q[0] + d[0] * h, q[1] + d[1] * h], false),
-                ([q[0] - d[0] * h, q[1] - d[1] * h], false),
-            ]
-        }
-    };
-    match (a, b) {
-        (Meridian::Line { p: p1, d: d1 }, Meridian::Line { p: p2, d: d2 }) => {
-            let den = cross(d1, d2);
-            let w = sub(p2, p1);
-            if den.abs() <= tol::ANGULAR {
-                return if cross(w, d1).abs() <= tol::LINEAR {
-                    None
-                } else {
-                    Some(Vec::new())
-                };
-            }
-            let t = cross(w, d2) / den;
-            Some(vec![([p1[0] + d1[0] * t, p1[1] + d1[1] * t], false)])
-        }
-        (Meridian::Line { p, d }, Meridian::Circle { c, r })
-        | (Meridian::Circle { c, r }, Meridian::Line { p, d }) => Some(line_circle(p, d, c, r)),
-        (Meridian::Circle { c: c1, r: r1 }, Meridian::Circle { c: c2, r: r2 }) => {
-            let w = sub(c2, c1);
-            let d = w[0].hypot(w[1]);
-            if d <= tol::LINEAR {
-                return if (r1 - r2).abs() <= tol::LINEAR {
-                    None
-                } else {
-                    Some(Vec::new())
-                };
-            }
-            if d > r1 + r2 + tol::LINEAR || d < (r1 - r2).abs() - tol::LINEAR {
-                return Some(Vec::new());
-            }
-            let ex = [w[0] / d, w[1] / d];
-            let ey = [-ex[1], ex[0]];
-            let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
-            let touching =
-                (d - (r1 + r2)).abs() <= tol::LINEAR || (d - (r1 - r2).abs()).abs() <= tol::LINEAR;
-            if touching {
-                return Some(vec![([c1[0] + ex[0] * x, c1[1] + ex[1] * x], true)]);
-            }
-            let y = (r1 * r1 - x * x).max(0.0).sqrt();
-            Some(vec![
-                (
-                    [c1[0] + ex[0] * x + ey[0] * y, c1[1] + ex[1] * x + ey[1] * y],
-                    false,
-                ),
-                (
-                    [c1[0] + ex[0] * x - ey[0] * y, c1[1] + ex[1] * x - ey[1] * y],
-                    false,
-                ),
-            ])
-        }
-    }
-}
-
-/// Two surfaces of revolution about one axis meet in circles about it.
-fn coaxial(a: &Surface, b: &Surface, axis: Axis) -> Option<Ssi> {
-    let (ma, mb) = (meridian(a, axis)?, meridian(b, axis)?);
-    let Some(pts) = meridian_points(ma, mb) else {
-        return Some(Ssi::Coincident);
-    };
-    let x_hint = match a {
-        Surface::Cylinder(c) => c.frame.x,
-        Surface::Cone(c) => c.frame.x,
-        Surface::Torus(t) => t.frame.x,
-        Surface::Sphere(s) => s.frame.x,
-        _ => axis.dir.any_perpendicular(),
-    };
-    Some(circles_about(axis, x_hint, pts))
-}
-
-/// The circles about `axis` through meridian points; a point on the axis is a single point, and a
-/// point at negative `ρ` (a cone's other nappe) is the circle of its distance.
-fn circles_about(axis: Axis, x_hint: Vec3, pts: Vec<([f64; 2], bool)>) -> Ssi {
-    let mut curves: Vec<SsiCurve> = Vec::new();
-    let mut points = Vec::new();
-    let mut seen: Vec<(f64, f64)> = Vec::new();
-    for ([rho, z], touching) in pts {
-        let rho = rho.abs();
-        if seen
-            .iter()
-            .any(|&(r, h)| (r - rho).abs() <= tol::LINEAR && (h - z).abs() <= tol::LINEAR)
-        {
-            continue;
-        }
-        seen.push((rho, z));
-        let centre = axis.origin + axis.dir * z;
-        if rho <= tol::LINEAR {
-            points.push(centre);
-        } else {
-            curves.push(circle_curve(
-                frame_at(centre, axis.dir, x_hint),
-                rho,
-                touching,
-            ));
-        }
-    }
-    Ssi::Curves { curves, points }
-}
-
-/// Two cylinders of one radius whose axes cross meet in two ellipses, in the planes bisecting
-/// the axes, which touch where the common perpendicular meets the cylinders.
-#[allow(clippy::panic)] fn equal_crossing_cylinders(o: Point3, a1: Vec3, a2: Vec3, r: f64) -> Ssi {
-    let nhat = a1.cross(a2).unit().unwrap_or_else(|| panic!("axes are not parallel"));
-    let mut curves = Vec::new();
-    for m in [a1 - a2, a1 + a2] {
-        let m = m.unit().unwrap_or_else(|| panic!("axes are not parallel"));
-        let e = m.cross(nhat);
-        let frame = Frame {
-            origin: o,
-            x: e,
-            y: m.cross(e),
-            z: m,
-        };
-        curves.push(SsiCurve {
-            curve: Curve::Ellipse(Ellipse {
-                frame,
-                major: r / e.cross(a1).norm(),
-                minor: r,
-            }),
-            range: (0.0, TAU),
-            closed: true,
-            tangent: false,
-        });
-    }
-    Ssi::Curves {
-        curves,
-        points: vec![o + nhat * r, o - nhat * r],
-    }
-}
-
-/// The closest points of two lines, as parameters along each; `None` when they are parallel.
-fn closest(o1: Point3, d1: Vec3, o2: Point3, d2: Vec3) -> Option<(f64, f64)> {
-    let w = o1 - o2;
-    let c = d1.dot(d2);
-    let den = 1.0 - c * c;
-    if den.sqrt() <= tol::ANGULAR {
-        return None;
-    }
-    let (d, e) = (d1.dot(w), d2.dot(w));
-    Some(((c * e - d) / den, (e - c * d) / den))
-}
-
-fn cylinder_cylinder(
-    a: &crate::geom::Cylinder,
-    b: &crate::geom::Cylinder,
-    region: &Aabb,
-) -> Option<Ssi> {
-    let (a1, a2) = (a.frame.z, b.frame.z);
-    if parallel(a1, a2) {
-        // Parallel axes: the circles of a cross-section meet at points along the axis.
-        let w = b.frame.origin - a.frame.origin;
-        let off = w - a1 * w.dot(a1);
-        let d = off.norm();
-        let (ra, rb) = (a.radius, b.radius);
-        if d > ra + rb + tol::LINEAR || d < (ra - rb).abs() - tol::LINEAR {
-            return Some(none());
-        }
-        let ex = off / d;
-        let ey = a1.cross(ex);
-        let x = (d * d + ra * ra - rb * rb) / (2.0 * d);
-        let touching =
-            (d - (ra + rb)).abs() <= tol::LINEAR || (d - (ra - rb).abs()).abs() <= tol::LINEAR;
-        let feet: Vec<Point3> = if touching {
-            vec![a.frame.origin + ex * x]
-        } else {
-            let y = (ra * ra - x * x).max(0.0).sqrt();
-            vec![
-                a.frame.origin + ex * x + ey * y,
-                a.frame.origin + ex * x - ey * y,
-            ]
-        };
-        return Some(Ssi::Curves {
-            curves: feet
-                .into_iter()
-                .filter_map(|q| line_curve(q, a1, region, touching))
-                .collect(),
-            points: Vec::new(),
-        });
-    }
-    if (a.radius - b.radius).abs() <= tol::LINEAR {
-        let (s, t) = closest(a.frame.origin, a1, b.frame.origin, a2)?;
-        let (p, q) = (a.frame.origin + a1 * s, b.frame.origin + a2 * t);
-        // About the axes' midpoint with the mean radius, the ellipses lie within half the radii's
-        // and the axes' gaps of each surface: within half the tolerance, which their meetings with
-        // other curves need on top of it. Past that the generators sweep (`sweep.rs`).
-        if p.dist(q) + (a.radius - b.radius).abs() <= tol::LINEAR {
-            let r = 0.5 * (a.radius + b.radius);
-            return Some(equal_crossing_cylinders(p.lerp(q, 0.5), a1, a2, r));
-        }
-    }
-    None
+/// The frame at `origin` about the unit `z`, its `x` toward `x_hint` where that has a part square
+/// to `z`; `None` only for a `z` of no length.
+#[allow(clippy::panic)]
+fn frame_at(origin: Point3, z: Vec3, x_hint: Vec3) -> Option<Frame> {
+    Some(
+        Frame::new(origin, z, x_hint)
+            .or_else(|_| Frame::from_axis(origin, z))
+            .unwrap_or_else(|e| panic!("axis is a unit vector: {e:?}")),
+    )
 }
 
 /// The intersection of `a` and `b` within `region`. `seeds` gives points on both surfaces where
@@ -685,17 +295,12 @@ fn rotation_invariant(s: &Surface, axis: Axis) -> bool {
         Surface::Cylinder(_) | Surface::Cone(_) | Surface::Torus(_) => {
             axis_of(s).is_some_and(|x| same_axis(x, axis))
         }
-        Surface::Revolution(r) => same_axis(
-            Axis {
-                origin: r.origin,
-                dir: r.axis,
-            },
-            axis,
-        ),
+        Surface::Revolution(r) => same_axis(Axis { origin: r.origin, dir: r.axis }, axis),
         _ => false,
     }
 }
 
+/// Whether the surfaces are tangent at `p`, a point of both.
 fn tangent_at(a: &Surface, b: &Surface, p: Point3) -> bool {
     let (ua, ub) = (a.project(p), b.project(p));
     a.normal(ua.x, ua.y).cross(b.normal(ub.x, ub.y)).norm() <= tol::TANGENT
@@ -714,20 +319,10 @@ fn swept(a: &Surface, b: &Surface, region: &Aabb) -> Option<Ssi> {
                 let on = e.curve.eval(d0);
                 let n = p.frame.z;
                 let shift = e.dir * ((p.frame.origin - on).dot(n) / e.dir.dot(n));
-                let curve = e
-                    .curve
-                    .transformed(&crate::math::Transform::translation(shift));
+                let curve = e.curve.transformed(&crate::math::Transform::translation(shift));
                 let range = curve.domain();
                 let closed = curve.period().is_some();
-                return Some(Ssi::Curves {
-                    curves: vec![SsiCurve {
-                        curve,
-                        range,
-                        closed,
-                        tangent: false,
-                    }],
-                    points: Vec::new(),
-                });
+                return Some(Ssi::curves(vec![SsiCurve { curve, range, closed, tangent: false }]));
             }
             if !translation_invariant(b, e.dir) {
                 return None;
@@ -742,16 +337,10 @@ fn swept(a: &Surface, b: &Surface, region: &Aabb) -> Option<Ssi> {
                 .map(|t| e.curve.eval(t))
                 .filter_map(|q| line_curve(q, e.dir, region, tangent_at(a, b, q)))
                 .collect();
-            Some(Ssi::Curves {
-                curves,
-                points: Vec::new(),
-            })
+            Some(Ssi::curves(curves))
         }
         Surface::Revolution(r) => {
-            let axis = Axis {
-                origin: r.origin,
-                dir: r.axis,
-            };
+            let axis = Axis { origin: r.origin, dir: r.axis };
             if !rotation_invariant(b, axis) {
                 return None;
             }
@@ -765,401 +354,76 @@ fn swept(a: &Surface, b: &Surface, region: &Aabb) -> Option<Ssi> {
                 .map(|t| {
                     let q = r.curve.eval(t);
                     let z = (q - axis.origin).dot(axis.dir);
-                    (
-                        [line_distance(q, axis.origin, axis.dir), z],
-                        tangent_at(a, b, q),
-                    )
+                    (Vec2::new(line_distance(q, axis.origin, axis.dir), z), tangent_at(a, b, q))
                 })
                 .collect();
-            Some(circles_about(axis, axis.dir.any_perpendicular(), pts))
+            circles_about(axis, axis.dir.any_perpendicular(), pts)
         }
         _ => None,
     }
 }
 
+/// A plane square to `axis` against a surface of revolution `s` about it, as a degenerate surface
+/// of revolution: their meridians' meetings, as circles about the axis.
+fn plane_across_axis(plane: &Frame, s: &Surface, axis: Axis) -> Option<Ssi> {
+    let h = (plane.origin - axis.origin).dot(axis.dir);
+    let plane_meridian = Meridian::Line { p: Vec2::new(0.0, h), d: Vec2::new(1.0, 0.0) };
+    let pts = meridian_points(plane_meridian, meridian(s, axis)?)?;
+    circles_about(axis, axis.dir.any_perpendicular(), pts)
+}
+
+/// The closed form for `a` against `b`, taken that way round, where one applies.
 fn closed_form(a: &Surface, b: &Surface, region: &Aabb) -> Option<Ssi> {
     if let Some(r) = swept(a, b, region) {
         return Some(r);
     }
     match (a, b) {
         (Surface::Plane(p), Surface::Plane(q)) => {
-            return Some(plane_plane(&p.frame, &q.frame, region));
+            return plane::plane_plane(&p.frame, &q.frame, region);
         }
         (Surface::Plane(p), Surface::Cylinder(c)) => {
-            return Some(plane_cylinder(&p.frame, c, region));
+            return plane::plane_cylinder(&p.frame, c, region);
         }
-        (Surface::Plane(p), Surface::Sphere(s)) => return Some(plane_sphere(&p.frame, s)),
+        (Surface::Plane(p), Surface::Sphere(s)) => return plane::plane_sphere(&p.frame, s),
         (Surface::Plane(p), Surface::Torus(t)) => {
             if let Some(r) = sweep::plane_through_axis(t, p) {
                 return Some(r);
             }
             let axis = axis_of(b)?;
             if parallel(p.frame.z, axis.dir) {
-                let h = (p.frame.origin - axis.origin).dot(axis.dir);
-                let plane_meridian = Meridian::Line {
-                    p: [0.0, h],
-                    d: [1.0, 0.0],
-                };
-                let pts = meridian_points(plane_meridian, meridian(b, axis)?)?;
-                return Some(circles_about(axis, axis.dir.any_perpendicular(), pts));
+                return plane_across_axis(&p.frame, b, axis);
             }
             return sweep::intersect(a, b);
         }
         (Surface::Plane(p), Surface::Cone(c)) => {
             let axis = axis_of(b)?;
             if parallel(p.frame.z, axis.dir) {
-                // A plane across the axis is a degenerate surface of revolution about it.
-                let h = (p.frame.origin - axis.origin).dot(axis.dir);
-                let plane_meridian = Meridian::Line {
-                    p: [0.0, h],
-                    d: [1.0, 0.0],
-                };
-                let pts = meridian_points(plane_meridian, meridian(b, axis)?)?;
-                return Some(circles_about(axis, axis.dir.any_perpendicular(), pts));
+                return plane_across_axis(&p.frame, b, axis);
             }
             return conic::plane_cone(p, c, region);
         }
         (Surface::Cylinder(x), Surface::Cylinder(y)) => {
-            return cylinder_cylinder(x, y, region).or_else(|| sweep::intersect(a, b));
+            return cylinders::cylinder_cylinder(x, y, region).or_else(|| sweep::intersect(a, b));
         }
         _ => {}
     }
     let (xa, xb) = (axis_of(a)?, axis_of(b)?);
+    let on_axis = |sp_origin: Point3, axis: Axis| {
+        line_distance(sp_origin, axis.origin, axis.dir) <= tol::LINEAR
+    };
     let symmetric = match (a, b) {
         (Surface::Sphere(sa), Surface::Sphere(sb)) => {
             let d = sb.frame.origin - sa.frame.origin;
             let dir = d.unit()?;
-            coaxial(
-                a,
-                b,
-                Axis {
-                    origin: sa.frame.origin,
-                    dir,
-                },
-            )
+            coaxial(a, b, Axis { origin: sa.frame.origin, dir })
         }
-        (Surface::Sphere(sp), _) => (line_distance(sp.frame.origin, xb.origin, xb.dir)
-            <= tol::LINEAR)
-            .then(|| coaxial(a, b, xb))
-            .flatten(),
-        (_, Surface::Sphere(sp)) => (line_distance(sp.frame.origin, xa.origin, xa.dir)
-            <= tol::LINEAR)
-            .then(|| coaxial(a, b, xa))
-            .flatten(),
+        (Surface::Sphere(sp), _) => {
+            on_axis(sp.frame.origin, xb).then(|| coaxial(a, b, xb)).flatten()
+        }
+        (_, Surface::Sphere(sp)) => {
+            on_axis(sp.frame.origin, xa).then(|| coaxial(a, b, xa)).flatten()
+        }
         _ => same_axis(xa, xb).then(|| coaxial(a, b, xa)).flatten(),
     };
     symmetric.or_else(|| sweep::intersect(a, b))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::geom::{Cone, Cylinder, Plane, Sphere, Torus};
-
-    /// A closed cubic in the plane z = 0, as a profile for swept surfaces.
-    fn wavy() -> Curve {
-        let n = 8;
-        let mut ctrl: Vec<Vec3> = (0..n)
-            .map(|k| {
-                let a = TAU * k as f64 / n as f64;
-                let r = if k % 2 == 0 { 4.0 } else { 6.0 };
-                Vec3::new(10.0 + r * a.cos(), r * a.sin(), 0.0)
-            })
-            .collect();
-        ctrl.extend_from_within(..3);
-        let knots = (0..n + 7).map(|i| i as f64 - 3.0).collect();
-        Curve::BSpline(crate::geom::BSpline::periodic_cubic(knots, ctrl).unwrap())
-    }
-
-    #[test]
-    fn swept_surfaces_drawn_from_other_starts_are_the_same_surface() {
-        use crate::geom::{Extrusion, Revolution};
-        use crate::math::Transform;
-        let profile = wavy();
-        let extruded =
-            |curve: Curve, dir: Vec3| Surface::Extrusion(Box::new(Extrusion { curve, dir }));
-        let along = Transform::translation(Vec3::new(0.0, 0.0, 3.0));
-        let aside = Transform::translation(Vec3::new(0.01, 0.0, 0.0));
-        let a = extruded(profile.clone(), Vec3::Z);
-        // The profile slid along the extrusion, and the extrusion run the other way: one surface.
-        assert!(same_domain(
-            &a,
-            &extruded(profile.transformed(&along), Vec3::Z)
-        ));
-        assert!(same_domain(&a, &extruded(profile.clone(), -Vec3::Z)));
-        assert!(!same_domain(
-            &a,
-            &extruded(profile.transformed(&aside), Vec3::Z)
-        ));
-
-        // The profile in the plane y = 0, turned about z: turned a way round first, one surface.
-        let upright = profile.transformed(&Transform::rotation(Vec3::ZERO, Vec3::X, TAU / 4.0));
-        let revolved = |curve: Curve| {
-            Surface::Revolution(Box::new(Revolution {
-                curve,
-                origin: Vec3::ZERO,
-                axis: Vec3::Z,
-            }))
-        };
-        let turned = Transform::rotation(Vec3::ZERO, Vec3::Z, 1.0);
-        let b = revolved(upright.clone());
-        assert!(same_domain(&b, &revolved(upright.transformed(&turned))));
-        assert!(!same_domain(&b, &revolved(upright.transformed(&aside))));
-        assert!(!same_domain(&a, &b));
-    }
-
-    fn region() -> Aabb {
-        Aabb {
-            min: Vec3::new(-50.0, -50.0, -50.0),
-            max: Vec3::new(50.0, 50.0, 50.0),
-        }
-    }
-
-    fn plane(o: [f64; 3], n: [f64; 3]) -> Surface {
-        let n = Vec3::from_array(n);
-        Surface::Plane(Plane {
-            frame: Frame::from_axis(Vec3::from_array(o), n).unwrap(),
-        })
-    }
-
-    fn cyl(o: [f64; 3], z: [f64; 3], r: f64) -> Surface {
-        Surface::Cylinder(Cylinder {
-            frame: Frame::from_axis(Vec3::from_array(o), Vec3::from_array(z)).unwrap(),
-            radius: r,
-        })
-    }
-
-    fn curves(a: &Surface, b: &Surface) -> (Vec<SsiCurve>, Vec<Point3>) {
-        match intersect(a, b, &region(), &mut Vec::new).unwrap() {
-            Ssi::Curves { curves, points } => (curves, points),
-            Ssi::Coincident => panic!("coincident"),
-        }
-    }
-
-    /// Every curve lies on both surfaces.
-    fn on_both(a: &Surface, b: &Surface, cs: &[SsiCurve]) {
-        for c in cs {
-            for i in 0..=16 {
-                let t = c.range.0 + (c.range.1 - c.range.0) * i as f64 / 16.0;
-                let p = c.curve.eval(t);
-                for s in [a, b] {
-                    let d = super::super::csi::signed_distance(s, p).abs();
-                    assert!(d < 1e-9, "{} off {} by {d}", c.curve.kind(), s.kind());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn plane_pairs_have_closed_forms() {
-        let p = plane([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]);
-        let q = plane([0.0, 2.0, 0.0], [0.0, 1.0, 1.0]);
-        let (cs, _) = curves(&p, &q);
-        assert_eq!(cs.len(), 1);
-        on_both(&p, &q, &cs);
-        let c_perp = cyl([1.0, 1.0, -5.0], [0.0, 0.0, 1.0], 3.0);
-        let (cs, _) = curves(&p, &c_perp);
-        assert!(matches!(cs[0].curve, Curve::Circle(_)));
-        on_both(&p, &c_perp, &cs);
-        let c_oblique = cyl([0.0, 0.0, 0.0], [0.3, 0.2, 1.0], 3.0);
-        let (cs, _) = curves(&p, &c_oblique);
-        assert!(matches!(cs[0].curve, Curve::Ellipse(_)));
-        on_both(&p, &c_oblique, &cs);
-        let c_along = cyl([0.0, 0.0, 3.0], [1.0, 0.0, 0.0], 2.5);
-        let (cs, _) = curves(&p, &c_along);
-        assert_eq!(cs.len(), 2);
-        on_both(&p, &c_along, &cs);
-        let sphere = Surface::Sphere(Sphere {
-            frame: Frame::new(Vec3::new(0.0, 0.0, 4.0), Vec3::Z, Vec3::X).unwrap(),
-            radius: 5.0,
-        });
-        let (cs, _) = curves(&p, &sphere);
-        assert!(matches!(&cs[0].curve, Curve::Circle(c) if (c.radius - 4.0).abs() < 1e-12));
-        let cone = Surface::Cone(Cone {
-            frame: Frame::WORLD,
-            radius: 2.0,
-            half_angle: 0.3,
-        });
-        let (cs, _) = curves(&p, &cone);
-        assert_eq!(cs.len(), 1);
-        on_both(&p, &cone, &cs);
-        let torus = Surface::Torus(Torus {
-            frame: Frame::WORLD,
-            major: 6.0,
-            minor: 2.0,
-        });
-        let (cs, _) = curves(&p, &torus);
-        assert_eq!(cs.len(), 2);
-        on_both(&p, &torus, &cs);
-    }
-
-    #[test]
-    fn tangent_plane_and_cylinder_touch_along_a_line() {
-        let p = plane([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
-        let c = cyl([5.0, 20.0, 0.0], [0.0, 0.0, 1.0], 5.0);
-        let (cs, _) = curves(&p, &c);
-        assert_eq!(cs.len(), 1);
-        assert!(cs[0].tangent);
-        let past = cyl([4.999999, 20.0, 0.0], [0.0, 0.0, 1.0], 5.0);
-        let (cs, _) = curves(&p, &past);
-        assert_eq!(cs.len(), 2);
-        assert!(cs.iter().all(|c| !c.tangent));
-        let short = cyl([5.000001, 20.0, 0.0], [0.0, 0.0, 1.0], 5.0);
-        assert!(curves(&p, &short).0.is_empty());
-    }
-
-    #[test]
-    fn coaxial_and_parallel_pairs_meet_in_circles_and_lines() {
-        let c = cyl([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 3.0);
-        let sphere = Surface::Sphere(Sphere {
-            frame: Frame::WORLD,
-            radius: 5.0,
-        });
-        let (cs, _) = curves(&c, &sphere);
-        assert_eq!(cs.len(), 2);
-        on_both(&c, &sphere, &cs);
-        let cone = Surface::Cone(Cone {
-            frame: Frame::WORLD,
-            radius: 1.0,
-            half_angle: 0.4,
-        });
-        let (cs, _) = curves(&c, &cone);
-        assert_eq!(cs.len(), 1);
-        on_both(&c, &cone, &cs);
-        let d = cyl([4.0, 0.0, 0.0], [0.0, 0.0, 1.0], 2.0);
-        let (cs, _) = curves(&c, &d);
-        assert_eq!(cs.len(), 2);
-        on_both(&c, &d, &cs);
-        let same = cyl([0.0, 0.0, 7.0], [0.0, 0.0, -1.0], 3.0);
-        assert!(matches!(
-            intersect(&c, &same, &region(), &mut Vec::new).unwrap(),
-            Ssi::Coincident
-        ));
-    }
-
-    #[test]
-    fn equal_crossing_cylinders_meet_in_two_ellipses_that_touch() {
-        let a = cyl([-20.0, 0.0, 0.0], [1.0, 0.0, 0.0], 5.0);
-        let b = cyl([0.0, -20.0, 0.0], [0.0, 1.0, 0.0], 5.0);
-        let (cs, pts) = curves(&a, &b);
-        assert_eq!(cs.len(), 2);
-        on_both(&a, &b, &cs);
-        assert_eq!(pts.len(), 2);
-        for p in pts {
-            assert!((p.z.abs() - 5.0).abs() < 1e-12 && p.x.abs() < 1e-12);
-        }
-    }
-
-    fn spline_extrusion() -> Surface {
-        let pts: Vec<Vec3> = (0..12)
-            .map(|i| {
-                let t = TAU * i as f64 / 12.0;
-                let r = if i % 2 == 0 { 10.0 } else { 9.0 };
-                Vec3::new(r * t.cos(), r * t.sin(), 0.0)
-            })
-            .collect();
-        Surface::Extrusion(Box::new(crate::geom::Extrusion {
-            curve: Curve::BSpline(crate::geom::BSpline::interpolate_periodic(&pts).unwrap()),
-            dir: Vec3::Z,
-        }))
-    }
-
-    #[test]
-    fn extrusions_meet_planes_and_parallel_cylinders_in_closed_form() {
-        let e = spline_extrusion();
-        let across = plane([0.0, 0.0, 3.0], [0.0, 0.0, 1.0]);
-        let (cs, _) = curves(&e, &across);
-        assert_eq!(cs.len(), 1);
-        assert!(cs[0].closed && matches!(cs[0].curve, Curve::BSpline(_)));
-        on_both(&e, &across, &cs);
-        let along = plane([2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
-        let (cs, _) = curves(&e, &along);
-        assert_eq!(cs.len(), 2);
-        assert!(cs.iter().all(|c| matches!(c.curve, Curve::Line(_))));
-        on_both(&e, &along, &cs);
-        let rod = cyl([9.5, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0);
-        let (cs, _) = curves(&rod, &e);
-        assert_eq!(cs.len(), 2);
-        on_both(&rod, &e, &cs);
-    }
-
-    #[test]
-    fn revolutions_meet_coaxial_surfaces_in_circles() {
-        let profile = Curve::BSpline(
-            crate::geom::BSpline::interpolate(&[
-                Vec3::new(4.0, 0.0, 0.0),
-                Vec3::new(6.0, 0.0, 2.0),
-                Vec3::new(5.0, 0.0, 4.0),
-                Vec3::new(7.0, 0.0, 6.0),
-            ])
-            .unwrap(),
-        );
-        let r = Surface::Revolution(Box::new(crate::geom::Revolution {
-            curve: profile,
-            origin: Vec3::ZERO,
-            axis: Vec3::Z,
-        }));
-        let across = plane([0.0, 0.0, 3.0], [0.0, 0.0, 1.0]);
-        let (cs, _) = curves(&r, &across);
-        assert_eq!(cs.len(), 1);
-        on_both(&r, &across, &cs);
-        let c = cyl([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 5.5);
-        let (cs, _) = curves(&c, &r);
-        assert!(cs.len() >= 2);
-        assert!(cs.iter().all(|c| matches!(c.curve, Curve::Circle(_))));
-        on_both(&c, &r, &cs);
-    }
-
-    #[test]
-    fn spheres_meet_in_a_circle_or_touch_at_a_point() {
-        let a = Surface::Sphere(Sphere {
-            frame: Frame::WORLD,
-            radius: 5.0,
-        });
-        let b = Surface::Sphere(Sphere {
-            frame: Frame::new(Vec3::new(4.0, 3.0, 0.0), Vec3::Z, Vec3::X).unwrap(),
-            radius: 4.0,
-        });
-        let (cs, _) = curves(&a, &b);
-        assert_eq!(cs.len(), 1);
-        on_both(&a, &b, &cs);
-        let touching = Surface::Sphere(Sphere {
-            frame: Frame::new(Vec3::new(8.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap(),
-            radius: 3.0,
-        });
-        let (cs, pts) = curves(&a, &touching);
-        assert!(cs.is_empty());
-        assert!(pts.len() == 1 && pts[0].dist(Vec3::new(5.0, 0.0, 0.0)) < 1e-12);
-        let tangent_plane = plane([0.0, 0.0, 5.0], [0.0, 0.0, 1.0]);
-        let (cs, pts) = curves(&a, &tangent_plane);
-        assert!(cs.is_empty());
-        assert_eq!(pts.len(), 1);
-    }
-
-    #[test]
-    fn crossing_cylinders_of_unequal_radii_are_traced() {
-        let a = cyl([-20.0, 0.0, 0.0], [1.0, 0.0, 0.0], 5.0);
-        let b = cyl([0.0, 0.0, -20.0], [0.0, 0.0, 1.0], 3.0);
-        let seeds = vec![Vec3::new(0.0, 3.0, 4.0), Vec3::new(0.0, 3.0, -4.0)];
-        let region = Aabb {
-            min: Vec3::new(-4.0, -6.0, -6.0),
-            max: Vec3::new(4.0, 6.0, 6.0),
-        };
-        let Ssi::Curves { curves, .. } = intersect(&a, &b, &region, &mut || seeds.clone()).unwrap()
-        else {
-            panic!("coincident");
-        };
-        assert_eq!(curves.len(), 2);
-        assert!(curves.iter().all(|c| c.closed));
-        for c in &curves {
-            for i in 0..=32 {
-                let p = c
-                    .curve
-                    .eval(c.range.0 + (c.range.1 - c.range.0) * i as f64 / 32.0);
-                for s in [&a, &b] {
-                    assert!(super::super::csi::signed_distance(s, p).abs() <= tol::LINEAR);
-                }
-            }
-        }
-    }
 }

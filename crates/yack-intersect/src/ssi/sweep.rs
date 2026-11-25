@@ -1,6 +1,8 @@
 // yack: Analytic pairs where one surface is swept by a family of lines or circles, each meeting the
 // Adapted from springrep@a03e8a1 src/boolean/ssi/sweep.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from boolean/ssi/sweep.rs to intersect/ssi/sweep.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
+// M3 hardening: families passed by static dispatch and borrowing their surfaces instead of
+// cloning them, named samples; the same arithmetic in the same order.
 //! Analytic pairs where one surface is swept by a family of lines or circles, each meeting the
 //! other surface in at most two points: a cylinder's generators against another cylinder or a
 //! sphere, and a torus's meridian circles against a plane or a sphere.
@@ -19,10 +21,13 @@ use std::f64::consts::{PI, TAU};
 use super::{Ssi, SsiCurve};
 use crate::{
     Result,
-    geom::{Curve, Cylinder, IntersectionCurve, Plane, Surface, Torus},
-    math::{Point3, Vec3},
+    geom::{Circle, Curve, Cylinder, IntersectionCurve, Plane, Surface, Torus},
+    math::{Frame, Point3, Vec3},
     numeric, tol,
 };
+
+/// The samples each branch is fitted through.
+const BRANCH_SAMPLES: usize = 24;
 
 /// A one-parameter family of lines or circles sweeping one surface.
 trait Family {
@@ -36,32 +41,26 @@ trait Family {
     fn member(&self, theta: f64) -> Option<Curve>;
 }
 
-fn margin(f: &dyn Family, c: f64) -> f64 {
+/// The member's margin at `c`: the lesser of its two.
+fn margin(f: &impl Family, c: f64) -> f64 {
     let [m1, m2] = f.margins(c);
     m1.min(m2)
 }
 
 /// The `c` in [-1, 1] where the margin is largest: where its two monotone parts cross when they
 /// run opposite ways, otherwise at an end.
-fn peak(f: &dyn Family) -> f64 {
+fn peak(f: &impl Family) -> f64 {
     let ([a0, b0], [a1, b1]) = (f.margins(-1.0), f.margins(1.0));
     let (da, db) = (a1 - a0, b1 - b0);
     let finite = a0.is_finite() && b0.is_finite();
     if finite && (da > 0.0) != (db > 0.0) && ((a0 - b0) > 0.0) != ((a1 - b1) > 0.0) {
-        return numeric::bisect(
-            &mut |c| {
-                let [a, b] = f.margins(c);
-                a - b
-            },
-            -1.0,
-            1.0,
-        );
+        let mut gap = |c| {
+            let [a, b] = f.margins(c);
+            a - b
+        };
+        return numeric::bisect(&mut gap, -1.0, 1.0);
     }
-    if margin(f, 1.0) >= margin(f, -1.0) {
-        1.0
-    } else {
-        -1.0
-    }
+    if margin(f, 1.0) >= margin(f, -1.0) { 1.0 } else { -1.0 }
 }
 
 /// How an arc of the family's angle ends.
@@ -77,6 +76,17 @@ enum End {
     Split(f64),
 }
 
+impl End {
+    /// The squared half chord taken out at this end.
+    fn correction(self) -> f64 {
+        match self {
+            End::Node(h2) | End::Split(h2) => h2,
+            End::Turn => 0.0,
+        }
+    }
+}
+
+/// A margin's sign, zero within the tolerance.
 fn snap(m: f64) -> i8 {
     if m > tol::LINEAR {
         1
@@ -102,7 +112,7 @@ fn node_snap(m: f64) -> i8 {
 
 /// The meeting point of `f` at `θ` on branch `sheet` (±1, or 0 for the middle), with `corr`
 /// subtracted from the squared half chord.
-fn at(f: &dyn Family, theta: f64, sheet: f64, corr: f64) -> Point3 {
+fn at(f: &impl Family, theta: f64, sheet: f64, corr: f64) -> Point3 {
     let (mid, dir, h2) = f.chord(theta);
     if sheet == 0.0 {
         return mid;
@@ -115,30 +125,30 @@ fn at(f: &dyn Family, theta: f64, sheet: f64, corr: f64) -> Point3 {
 /// within the tolerance but not zero leaves a chord there that the branches must close, and taking
 /// the same amount out all along moves a point near the arc's middle along its member by about
 /// `corr / 2√h2`, off the other surface by as much as the margin itself.
-fn at_closed(f: &dyn Family, theta: f64, sheet: f64, corrs: [f64; 2]) -> Point3 {
+fn at_closed(f: &impl Family, theta: f64, sheet: f64, corrs: [f64; 2]) -> Point3 {
     let h2 = f.chord(theta).2;
-    let corr = corrs
-        .iter()
-        .map(|&c| if h2 > c { c * (c / h2) } else { c })
-        .fold(0.0, f64::max);
+    let corr = corrs.iter().map(|&c| if h2 > c { c * (c / h2) } else { c }).fold(0.0, f64::max);
     at(f, theta, sheet, corr)
 }
 
-struct Out {
+/// The curves and points found so far, and the two surfaces they lie on.
+struct Out<'a> {
     curves: Vec<SsiCurve>,
     points: Vec<Point3>,
+    a: &'a Surface,
+    b: &'a Surface,
 }
 
-impl Out {
+impl Out<'_> {
+    /// Fits a branch through `sample` over `range`.
     fn fit(
         &mut self,
         sample: &dyn Fn(f64) -> Point3,
         range: (f64, f64),
         closed: bool,
-        a: &Surface,
-        b: &Surface,
     ) -> Result<()> {
-        let c = IntersectionCurve::fit_sampled(sample, range, a.clone(), b.clone(), closed, 24)?;
+        let (a, b) = (self.a.clone(), self.b.clone());
+        let c = IntersectionCurve::fit_sampled(sample, range, a, b, closed, BRANCH_SAMPLES)?;
         let range = c.approx.domain();
         self.curves.push(SsiCurve {
             curve: Curve::Intersection(Box::new(c)),
@@ -150,20 +160,14 @@ impl Out {
     }
 
     /// The branches over the arc `θ` in [t0, t1].
-    fn arc(
-        &mut self,
-        f: &dyn Family,
-        (t0, t1): (f64, f64),
-        (k0, k1): (End, End),
-        (a, b): (&Surface, &Surface),
-    ) -> Result<()> {
+    fn arc(&mut self, f: &impl Family, (t0, t1): (f64, f64), (k0, k1): (End, End)) -> Result<()> {
         if let (End::Turn, End::Turn) = (k0, k1) {
             let (m, h) = (0.5 * (t0 + t1), 0.5 * (t1 - t0));
             let sample = |phi: f64| {
                 let sheet = if phi.sin() >= 0.0 { 1.0 } else { -1.0 };
                 at(f, m - h * phi.cos(), sheet, 0.0)
             };
-            return self.fit(&sample, (0.0, TAU), true, a, b);
+            return self.fit(&sample, (0.0, TAU), true);
         }
         if let (End::Node(h0), End::Node(_)) = (k0, k1)
             && t1 - t0 > 1.5 * PI
@@ -172,14 +176,10 @@ impl Out {
             for sheet in [1.0, -1.0] {
                 self.points.push(at_closed(f, m, sheet, [h0, h0]));
             }
-            self.arc(f, (t0, m), (k0, End::Split(h0)), (a, b))?;
-            return self.arc(f, (m, t1), (End::Split(h0), k1), (a, b));
+            self.arc(f, (t0, m), (k0, End::Split(h0)))?;
+            return self.arc(f, (m, t1), (End::Split(h0), k1));
         }
-        let corr = |k: End| match k {
-            End::Node(h2) | End::Split(h2) => h2,
-            End::Turn => 0.0,
-        };
-        let (c0, c1) = (corr(k0), corr(k1));
+        let (c0, c1) = (k0.correction(), k1.correction());
         let theta = |s: f64| match (k0, k1) {
             (End::Turn, _) => t0 + (t1 - t0) * (1.0 - (0.5 * PI * s).cos()),
             (_, End::Turn) => t0 + (t1 - t0) * (0.5 * PI * s).sin(),
@@ -192,27 +192,20 @@ impl Out {
         }
         for sheet in [1.0, -1.0] {
             let sample = |s: f64| at_closed(f, theta(s), sheet, [c0, c1]);
-            self.fit(&sample, (0.0, 1.0), false, a, b)?;
+            self.fit(&sample, (0.0, 1.0), false)?;
         }
         Ok(())
     }
 }
 
 /// The intersection of `a` and `b` where `f` sweeps one of them and `other` is the other.
-fn solve(f: &dyn Family, other: &Surface, a: &Surface, b: &Surface) -> Result<Ssi> {
+fn solve(f: &impl Family, other: &Surface, a: &Surface, b: &Surface) -> Result<Ssi> {
     let c_peak = peak(f);
     let m_peak = margin(f, c_peak);
-    let mut out = Out {
-        curves: Vec::new(),
-        points: Vec::new(),
-    };
+    let mut out = Out { curves: Vec::new(), points: Vec::new(), a, b };
     let thetas = |c: f64| {
         let t = c.clamp(-1.0, 1.0).acos();
-        if t == 0.0 || t == PI {
-            vec![t]
-        } else {
-            vec![t, -t]
-        }
+        if t == 0.0 || t == PI { vec![t] } else { vec![t, -t] }
     };
     match snap(m_peak) {
         -1 => {}
@@ -226,12 +219,8 @@ fn solve(f: &dyn Family, other: &Surface, a: &Surface, b: &Surface) -> Result<Ss
                 {
                     let range = curve.domain();
                     let p = curve.eval(range.0);
-                    out.curves.push(SsiCurve {
-                        curve,
-                        range,
-                        closed: true,
-                        tangent: super::tangent_at(a, b, p),
-                    });
+                    let tangent = super::tangent_at(a, b, p);
+                    out.curves.push(SsiCurve { curve, range, closed: true, tangent });
                     continue;
                 }
                 let p = at(f, t, 0.0, 0.0);
@@ -257,21 +246,21 @@ fn solve(f: &dyn Family, other: &Surface, a: &Surface, b: &Surface) -> Result<Ss
                 (None, None) => {
                     for sheet in [1.0, -1.0] {
                         let sample = |t: f64| at(f, t, sheet, 0.0);
-                        out.fit(&sample, (0.0, TAU), true, a, b)?;
+                        out.fit(&sample, (0.0, TAU), true)?;
                     }
                 }
                 (Some((lo, kl)), None) => {
                     let t = lo.acos();
-                    out.arc(f, (-t, t), (kl, kl), (a, b))?;
+                    out.arc(f, (-t, t), (kl, kl))?;
                 }
                 (None, Some((hi, kh))) => {
                     let t = hi.acos();
-                    out.arc(f, (t, TAU - t), (kh, kh), (a, b))?;
+                    out.arc(f, (t, TAU - t), (kh, kh))?;
                 }
                 (Some((lo, kl)), Some((hi, kh))) => {
                     let (tl, th) = (lo.acos(), hi.acos());
-                    out.arc(f, (th, tl), (kh, kl), (a, b))?;
-                    out.arc(f, (-tl, -th), (kl, kh), (a, b))?;
+                    out.arc(f, (th, tl), (kh, kl))?;
+                    out.arc(f, (-tl, -th), (kl, kh))?;
                 }
             }
             for (c, t) in [(-1.0, PI), (1.0, 0.0)] {
@@ -281,34 +270,29 @@ fn solve(f: &dyn Family, other: &Surface, a: &Surface, b: &Surface) -> Result<Ss
             }
         }
     }
-    Ok(Ssi::Curves {
-        curves: out.curves,
-        points: out.points,
-    })
+    Ok(Ssi::Curves { curves: out.curves, points: out.points })
 }
 
 /// Two unit vectors square to each other and to `z`, the first along `x` where it has a part
 /// square to `z`.
 fn basis(z: Vec3, x: Vec3) -> (Vec3, Vec3) {
-    let e1 = (x - z * x.dot(z))
-        .unit()
-        .unwrap_or_else(|| z.any_perpendicular());
+    let e1 = (x - z * x.dot(z)).unit().unwrap_or_else(|| z.any_perpendicular());
     (e1, z.cross(e1))
 }
 
 /// A cylinder's generators against a cylinder whose axis is not parallel to them.
-struct GeneratorsCylinder {
+struct GeneratorsCylinder<'a> {
     origin: Point3,
     axis: Vec3,
     radius: f64,
     e1: Vec3,
     e2: Vec3,
-    other: Cylinder,
+    other: &'a Cylinder,
     /// The axes' signed distance along `e1`, their common normal.
     delta: f64,
 }
 
-impl Family for GeneratorsCylinder {
+impl Family for GeneratorsCylinder<'_> {
     fn margins(&self, c: f64) -> [f64; 2] {
         let s = self.delta + self.radius * c;
         [self.other.radius - s, self.other.radius + s]
@@ -367,22 +351,19 @@ impl Family for GeneratorsSphere {
 }
 
 /// A torus's meridian circles, `centre(θ) = origin + major·ρ(θ)`, `ρ(θ) = cos θ·e1 + sin θ·e2`.
-struct Meridians {
-    torus: Torus,
+struct Meridians<'a> {
+    torus: &'a Torus,
     e1: Vec3,
     e2: Vec3,
 }
 
-impl Meridians {
-    fn new(t: &Torus, toward: Vec3) -> Meridians {
-        let (e1, e2) = basis(t.frame.z, toward);
-        Meridians {
-            torus: t.clone(),
-            e1,
-            e2,
-        }
+impl<'a> Meridians<'a> {
+    fn new(torus: &'a Torus, toward: Vec3) -> Meridians<'a> {
+        let (e1, e2) = basis(torus.frame.z, toward);
+        Meridians { torus, e1, e2 }
     }
 
+    /// The unit direction from the axis toward the meridian at `θ`.
     fn radial(&self, theta: f64) -> Vec3 {
         self.e1 * theta.cos() + self.e2 * theta.sin()
     }
@@ -392,24 +373,23 @@ impl Meridians {
         self.torus.frame.origin + self.radial(theta) * s + self.torus.frame.z * w
     }
 
+    /// The meridian circle at `θ`.
     fn circle(&self, theta: f64) -> Curve {
         let rho = self.radial(theta);
-        let frame = crate::math::Frame {
+        let z = self.torus.frame.z;
+        let frame = Frame {
             origin: self.torus.frame.origin + rho * self.torus.major,
             x: rho,
-            y: self.torus.frame.z,
-            z: rho.cross(self.torus.frame.z),
+            y: z,
+            z: rho.cross(z),
         };
-        Curve::Circle(crate::geom::Circle {
-            frame,
-            radius: self.torus.minor,
-        })
+        Curve::Circle(Circle { frame, radius: self.torus.minor })
     }
 }
 
 /// A torus's meridians against a plane neither square to the axis nor holding it.
-struct MeridiansPlane {
-    m: Meridians,
+struct MeridiansPlane<'a> {
+    m: Meridians<'a>,
     /// The normal's parts along `e1` and along the axis.
     na: f64,
     nz: f64,
@@ -417,7 +397,7 @@ struct MeridiansPlane {
     e: f64,
 }
 
-impl Family for MeridiansPlane {
+impl Family for MeridiansPlane<'_> {
     fn margins(&self, c: f64) -> [f64; 2] {
         let (big, r) = (self.m.torus.major, self.m.torus.minor);
         let reach = r * (self.na * self.na * c * c + self.nz * self.nz).sqrt();
@@ -443,15 +423,15 @@ impl Family for MeridiansPlane {
 }
 
 /// A torus's meridians against a sphere whose centre is off the axis.
-struct MeridiansSphere {
-    m: Meridians,
+struct MeridiansSphere<'a> {
+    m: Meridians<'a>,
     /// The centre's distance from the axis (along `e1`) and height along it.
     sigma: f64,
     zeta: f64,
     big: f64,
 }
 
-impl MeridiansSphere {
+impl MeridiansSphere<'_> {
     /// In the meridian plane at `c`: the distance between the meridian's centre and the foot of
     /// the sphere's centre, and the centre's distance off the plane, squared.
     fn offsets(&self, c: f64) -> (f64, f64) {
@@ -461,7 +441,7 @@ impl MeridiansSphere {
     }
 }
 
-impl Family for MeridiansSphere {
+impl Family for MeridiansSphere<'_> {
     fn margins(&self, c: f64) -> [f64; 2] {
         let r = self.m.torus.minor;
         let (d, h2) = self.offsets(c);
@@ -476,16 +456,9 @@ impl Family for MeridiansSphere {
         let (d, h2) = self.offsets(c);
         let rho2 = (self.big - h2.sqrt()) * (self.big + h2.sqrt());
         // From the meridian's centre toward the foot of the sphere's centre, in (s, w).
-        let (ux, uz) = if d > 0.0 {
-            ((self.sigma * c - big) / d, self.zeta / d)
-        } else {
-            (1.0, 0.0)
-        };
-        let x = if d > 0.0 {
-            (d * d + r * r - rho2) / (2.0 * d)
-        } else {
-            0.0
-        };
+        let (ux, uz) =
+            if d > 0.0 { ((self.sigma * c - big) / d, self.zeta / d) } else { (1.0, 0.0) };
+        let x = if d > 0.0 { (d * d + r * r - rho2) / (2.0 * d) } else { 0.0 };
         let foot = self.m.world(theta, big + ux * x, uz * x);
         let dir = self.m.radial(theta) * (-uz) + self.m.torus.frame.z * ux;
         (foot, dir, (r - x) * (r + x))
@@ -496,15 +469,12 @@ impl Family for MeridiansSphere {
     }
 }
 
-fn generators_cylinder(b: &Cylinder, other: &Cylinder) -> Option<GeneratorsCylinder> {
+/// The generators of `b` against `other`, laid out from their common normal; `None` where the
+/// axes are parallel.
+fn generators_cylinder<'a>(b: &Cylinder, other: &'a Cylinder) -> Option<GeneratorsCylinder<'a>> {
     let n = other.frame.z.cross(b.frame.z).unit()?;
-    let mut delta = (b.frame.origin - other.frame.origin).dot(n);
-    let n = if delta < 0.0 {
-        delta = -delta;
-        -n
-    } else {
-        n
-    };
+    let delta = (b.frame.origin - other.frame.origin).dot(n);
+    let (n, delta) = if delta < 0.0 { (-n, -delta) } else { (n, delta) };
     let (e1, e2) = basis(b.frame.z, n);
     Some(GeneratorsCylinder {
         origin: b.frame.origin,
@@ -512,7 +482,7 @@ fn generators_cylinder(b: &Cylinder, other: &Cylinder) -> Option<GeneratorsCylin
         radius: b.radius,
         e1,
         e2,
-        other: other.clone(),
+        other,
         delta,
     })
 }
@@ -521,23 +491,14 @@ fn generators_cylinder(b: &Cylinder, other: &Cylinder) -> Option<GeneratorsCylin
 /// cylinders whose axes are not parallel, a cylinder and a sphere off its axis, and a torus against
 /// a plane or a sphere off its axis. `None` for any other pair, or one these do not decide.
 pub fn intersect(a: &Surface, b: &Surface) -> Option<Ssi> {
-    let run = |f: &dyn Family, other: &Surface| solve(f, other, a, b).ok();
     match (a, b) {
         (Surface::Cylinder(x), Surface::Cylinder(y)) => {
             // The smaller one sweeps: its generators cross the other's axis at the steeper angle.
-            let (sweep, other, os) = if x.radius <= y.radius {
-                (x, y, b)
-            } else {
-                (y, x, a)
-            };
-            run(&generators_cylinder(sweep, other)?, os)
+            let (sweep, other, os) = if x.radius <= y.radius { (x, y, b) } else { (y, x, a) };
+            solve(&generators_cylinder(sweep, other)?, os, a, b).ok()
         }
         (Surface::Cylinder(c), Surface::Sphere(s)) | (Surface::Sphere(s), Surface::Cylinder(c)) => {
-            let other = if matches!(a, Surface::Sphere(_)) {
-                a
-            } else {
-                b
-            };
+            let other = if matches!(a, Surface::Sphere(_)) { a } else { b };
             let w = s.frame.origin - c.frame.origin;
             let q = w - c.frame.z * w.dot(c.frame.z);
             let sigma = q.norm();
@@ -545,33 +506,27 @@ pub fn intersect(a: &Surface, b: &Surface) -> Option<Ssi> {
                 return None;
             }
             let (e1, e2) = basis(c.frame.z, -q);
-            run(
-                &GeneratorsSphere {
-                    origin: c.frame.origin,
-                    axis: c.frame.z,
-                    radius: c.radius,
-                    e1,
-                    e2,
-                    centre: s.frame.origin,
-                    big: s.radius,
-                    sigma,
-                },
-                other,
-            )
+            let f = GeneratorsSphere {
+                origin: c.frame.origin,
+                axis: c.frame.z,
+                radius: c.radius,
+                e1,
+                e2,
+                centre: s.frame.origin,
+                big: s.radius,
+                sigma,
+            };
+            solve(&f, other, a, b).ok()
         }
         // A torus whose tube passes its axis is not swept by meridians that each keep to one side;
         // one whose tube reaches the axis (a corner blend's) still is, its margins monotone.
         (Surface::Torus(t), _) | (_, Surface::Torus(t)) if t.major < t.minor => None,
         (Surface::Torus(t), Surface::Plane(p)) | (Surface::Plane(p), Surface::Torus(t)) => {
             let other = if matches!(a, Surface::Plane(_)) { a } else { b };
-            meridians_plane(t, p).and_then(|f| run(&f, other))
+            meridians_plane(t, p).and_then(|f| solve(&f, other, a, b).ok())
         }
         (Surface::Torus(t), Surface::Sphere(s)) | (Surface::Sphere(s), Surface::Torus(t)) => {
-            let other = if matches!(a, Surface::Sphere(_)) {
-                a
-            } else {
-                b
-            };
+            let other = if matches!(a, Surface::Sphere(_)) { a } else { b };
             let w = s.frame.origin - t.frame.origin;
             let zeta = w.dot(t.frame.z);
             let q = w - t.frame.z * zeta;
@@ -579,21 +534,15 @@ pub fn intersect(a: &Surface, b: &Surface) -> Option<Ssi> {
             if sigma <= tol::LINEAR {
                 return None;
             }
-            run(
-                &MeridiansSphere {
-                    m: Meridians::new(t, q),
-                    sigma,
-                    zeta,
-                    big: s.radius,
-                },
-                other,
-            )
+            let f = MeridiansSphere { m: Meridians::new(t, q), sigma, zeta, big: s.radius };
+            solve(&f, other, a, b).ok()
         }
         _ => None,
     }
 }
 
-fn meridians_plane(t: &Torus, p: &Plane) -> Option<MeridiansPlane> {
+/// A torus's meridians against a plane neither square to its axis nor holding it.
+fn meridians_plane<'a>(t: &'a Torus, p: &Plane) -> Option<MeridiansPlane<'a>> {
     let n = p.frame.z;
     let nz = n.dot(t.frame.z);
     let perp = n - t.frame.z * nz;
@@ -601,12 +550,8 @@ fn meridians_plane(t: &Torus, p: &Plane) -> Option<MeridiansPlane> {
     if na <= tol::ANGULAR {
         return None;
     }
-    Some(MeridiansPlane {
-        m: Meridians::new(t, perp),
-        na,
-        nz,
-        e: n.dot(p.frame.origin - t.frame.origin),
-    })
+    let e = n.dot(p.frame.origin - t.frame.origin);
+    Some(MeridiansPlane { m: Meridians::new(t, perp), na, nz, e })
 }
 
 /// A plane holding a torus's axis cuts it in the two meridian circles in that plane.
@@ -623,18 +568,10 @@ pub(crate) fn plane_through_axis(t: &Torus, p: &Plane) -> Option<Ssi> {
         .map(|theta| {
             let curve = m.circle(theta);
             let range = curve.domain();
-            SsiCurve {
-                curve,
-                range,
-                closed: true,
-                tangent: false,
-            }
+            SsiCurve { curve, range, closed: true, tangent: false }
         })
         .collect();
-    Some(Ssi::Curves {
-        curves,
-        points: Vec::new(),
-    })
+    Some(Ssi::curves(curves))
 }
 
 #[cfg(test)]
@@ -669,11 +606,7 @@ mod tests {
 
     /// A torus about z through the origin, major 6, minor 2.
     fn torus() -> Surface {
-        Surface::Torus(Torus {
-            frame: Frame::WORLD,
-            major: 6.0,
-            minor: 2.0,
-        })
+        Surface::Torus(Torus { frame: Frame::WORLD, major: 6.0, minor: 2.0 })
     }
 
     /// The curves and points, every one checked on both surfaces, and both orders alike.
@@ -681,27 +614,16 @@ mod tests {
         let Some(Ssi::Curves { curves, points }) = intersect(a, b) else {
             panic!("no closed form");
         };
-        let Some(Ssi::Curves {
-            curves: c2,
-            points: p2,
-        }) = intersect(b, a)
-        else {
+        let Some(Ssi::Curves { curves: c2, points: p2 }) = intersect(b, a) else {
             panic!("no closed form");
         };
         assert_eq!((c2.len(), p2.len()), (curves.len(), points.len()));
         for c in &curves {
             for i in 0..=64 {
-                let p = c
-                    .curve
-                    .eval(c.range.0 + (c.range.1 - c.range.0) * i as f64 / 64.0);
+                let p = c.curve.eval(c.range.0 + (c.range.1 - c.range.0) * i as f64 / 64.0);
                 for s in [a, b] {
                     let d = signed_distance(s, p).abs();
-                    assert!(
-                        d <= tol::LINEAR,
-                        "{} off {} by {d}",
-                        c.curve.kind(),
-                        s.kind()
-                    );
+                    assert!(d <= tol::LINEAR, "{} off {} by {d}", c.curve.kind(), s.kind());
                 }
             }
         }
@@ -801,10 +723,7 @@ mod tests {
         // a long thin loop whose ends turn where the surfaces cross at 1e-4 rad. Within the
         // tolerance of both surfaces there, a point can be 1e-4 mm along the band from the loop.
         let sigma = 1e-3;
-        let (c, s) = (
-            cyl([0.0; 3], [0.0, 0.0, 1.0], 5.0),
-            sphere([sigma, 0.0, 0.0], 5.0),
-        );
+        let (c, s) = (cyl([0.0; 3], [0.0, 0.0, 1.0], 5.0), sphere([sigma, 0.0, 0.0], 5.0));
         let (cs, pts) = meet(&c, &s);
         assert!(cs.len() == 1 && cs[0].closed && pts.is_empty());
         let turn = (sigma / 10.0).acos();
@@ -835,10 +754,7 @@ mod tests {
         assert_eq!(cs.len(), 4);
         assert!(pts.iter().any(|p| p.dist(Vec3::new(4.0, 0.0, 0.0)) < 1e-12));
         for y in [48f64.sqrt(), -48f64.sqrt()] {
-            assert!(
-                pts.iter().any(|p| p.dist(Vec3::new(4.0, y, 0.0)) < 1e-9),
-                "{pts:?}"
-            );
+            assert!(pts.iter().any(|p| p.dist(Vec3::new(4.0, y, 0.0)) < 1e-9), "{pts:?}");
         }
         // A plane tilted 0.1 across the top of the tube cuts a loop off each side of it.
         let (cs, _) = meet(&t, &plane([0.0, 0.0, 1.0], [-0.1, 0.0, 1.0]));
@@ -847,9 +763,7 @@ mod tests {
 
     #[test]
     fn a_plane_through_a_torus_axis_cuts_two_meridian_circles() {
-        let Surface::Torus(t) = torus() else {
-            unreachable!()
-        };
+        let Surface::Torus(t) = torus() else { unreachable!() };
         let p = Plane {
             frame: Frame::from_axis(Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0).unit().unwrap()).unwrap(),
         };
@@ -888,11 +802,7 @@ mod tests {
     fn planes_along_a_corner_blends_horn_torus_touch_or_cut_it() {
         // Major and minor 2 about z: the tube reaches the axis. x = 4 touches its outer equator at
         // (4, 0, 0); x = 1 cuts one loop from the tube about (2, 0, 0).
-        let t = Surface::Torus(Torus {
-            frame: Frame::WORLD,
-            major: 2.0,
-            minor: 2.0,
-        });
+        let t = Surface::Torus(Torus { frame: Frame::WORLD, major: 2.0, minor: 2.0 });
         let (cs, pts) = meet(&t, &plane([4.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
         assert!(cs.is_empty() && pts.len() == 1);
         assert!(pts[0].dist(Vec3::new(4.0, 0.0, 0.0)) < 1e-12);

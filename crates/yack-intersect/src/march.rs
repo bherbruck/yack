@@ -1,6 +1,9 @@
 // yack: The general surface–surface intersector: from each seed point on both surfaces, march along
 // Adapted from springrep@a03e8a1 src/boolean/march.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from boolean/march.rs to intersect/march.rs (M2.1, T2); paths only; then to yack-intersect (M3 W4), paths and visibility only.
+// M3 hardening: named steps and limits, the crossing and twin passes as their own functions,
+// windows, destructuring and checked access instead of indexing; the same arithmetic, and the same
+// surface queries, in the same order.
 //! The general surface–surface intersector: from each seed point on both surfaces, march along
 //! `n_a × n_b` with Newton refinement onto both, until the branch closes, leaves the region, or
 //! reaches a point where the surfaces are tangent; then fit an intersection curve to the points.
@@ -30,12 +33,41 @@ const MAX_TURN: f64 = 0.1;
 /// parameters settles anywhere along them.
 const HINTED_SIN: f64 = 0.05;
 
+/// The longest step is this share of the region's diagonal, and at least [`MIN_STEP`].
+const STEPS_PER_DIAGONAL: f64 = 40.0;
+const MIN_STEP: f64 = 1e-6; // tol: a floor on the step, in mm
+
+/// The shortest step, as a share of the longest.
+const SHORTEST_STEP: f64 = 1e-7; // tol: a relative step
+
+/// The most steps of one walk.
+const WALK_STEPS: usize = 20_000;
+
+/// A crossing's branches are started this share of the longest step out from it.
+const CROSSING_START: f64 = 1e-3; // tol: a relative step
+
+/// Newton's method along a domain edge: its steps, its difference step as a share of the edge's
+/// range, and how near the other surface it stops and must end.
+const EDGE_STEPS: usize = 50;
+const EDGE_DIFFERENCE: f64 = 1e-7; // tol: a relative difference step
+const EDGE_SETTLED: f64 = 1e-3; // tol: a share of tol::LINEAR
+const EDGE_ON: f64 = 1e-2; // tol: a share of tol::LINEAR
+
+/// Newton's method for a touching point: its steps, and the tilt at which it has arrived.
+const TOUCH_STEPS: usize = 40;
+const TOUCH_SETTLED: f64 = 1e-14; // tol: a sine at rounding
+
+/// The step of about a micrometre along the surface for a tilt's derivatives: the normals turn
+/// measurably, rounding does not.
+const TILT_STEP: f64 = 1e-6; // tol: a difference step, not a tolerance
+
 /// The parameters to refine the next step from, where the surfaces cross clearly enough there.
 fn hint(a: &Surface, b: &Surface, (ua, ub): UvPair) -> Option<UvPair> {
     let sin = a.normal(ua.x, ua.y).cross(b.normal(ub.x, ub.y)).norm();
     (sin >= HINTED_SIN).then_some((ua, ub))
 }
 
+/// `p`'s parameters on both surfaces.
 fn params(a: &Surface, b: &Surface, p: Point3) -> UvPair {
     (a.project(p), b.project(p))
 }
@@ -55,28 +87,18 @@ fn onto_domain_edge(
         let ((u0, u1), (v0, v1)) = n.domain();
         let (_, su, sv) = s.d1(at.x, at.y);
         for (along_u, bound) in [(true, u0), (true, u1), (false, v0), (false, v1)] {
-            let (cur, speed) = if along_u {
-                (at.x, su.norm())
-            } else {
-                (at.y, sv.norm())
-            };
+            let (cur, speed) = if along_u { (at.x, su.norm()) } else { (at.y, sv.norm()) };
             if (cur - bound).abs() * speed > reach {
                 continue;
             }
-            let iso = |t: f64| {
-                if along_u {
-                    s.eval(bound, t)
-                } else {
-                    s.eval(t, bound)
-                }
-            };
+            let iso = |t: f64| if along_u { s.eval(bound, t) } else { s.eval(t, bound) };
             let (lo, hi) = if along_u { (v0, v1) } else { (u0, u1) };
             let gap = |t: f64| super::csi::signed_distance(other, iso(t));
             let mut t = if along_u { at.y } else { at.x };
-            let h = 1e-7 * (hi - lo);
-            for _ in 0..50 {
+            let h = EDGE_DIFFERENCE * (hi - lo);
+            for _ in 0..EDGE_STEPS {
                 let f = gap(t);
-                if f.abs() <= 1e-3 * tol::LINEAR {
+                if f.abs() <= EDGE_SETTLED * tol::LINEAR {
                     break;
                 }
                 let df = (gap((t + h).min(hi)) - gap((t - h).max(lo))) / (2.0 * h);
@@ -86,7 +108,7 @@ fn onto_domain_edge(
                 t = (t - f / df).clamp(lo, hi);
             }
             let q = iso(t);
-            if gap(t).abs() <= 1e-2 * tol::LINEAR && q.dist(p) <= reach {
+            if gap(t).abs() <= EDGE_ON * tol::LINEAR && q.dist(p) <= reach {
                 return Some((q, params(a, b, q)));
             }
         }
@@ -102,10 +124,13 @@ fn tangent(a: &Surface, b: &Surface, (ua, ub): UvPair) -> Option<Vec3> {
     (n.norm() > f64::EPSILON.sqrt()).then(|| n.unit_or_zero())
 }
 
+/// Whether `p` lies in the region, its bounds included.
 fn inside(region: &Aabb, p: Point3) -> bool {
-    (0..3).all(|k| p[k] >= region.min[k] && p[k] <= region.max[k])
+    let (min, max) = (region.min.to_array(), region.max.to_array());
+    p.to_array().into_iter().zip(min).zip(max).all(|((x, lo), hi)| x >= lo && x <= hi)
 }
 
+/// The distance from `p` to the segment from `a` to `b`.
 fn segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
     let d = b - a;
     let l2 = d.norm2();
@@ -116,9 +141,9 @@ fn segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
     p.dist(a + d * t)
 }
 
+/// Whether `p` lies within `within` of the polyline through `line`.
 fn near_polyline(p: Point3, line: &[Point3], within: f64) -> bool {
-    line.windows(2)
-        .any(|w| segment_distance(p, w[0], w[1]) <= within)
+    line.windows(2).any(|w| matches!(*w, [a, b] if segment_distance(p, a, b) <= within))
 }
 
 /// Whether `p`, on both surfaces, lies on the branch traced through `line`: within `within` of a
@@ -133,14 +158,11 @@ fn on_branch(
     within: f64,
 ) -> bool {
     line.windows(2).any(|w| {
-        let d = w[1] - w[0];
+        let &[w0, w1] = w else { return false };
+        let d = w1 - w0;
         let l2 = d.norm2();
-        let t = if l2 > 0.0 {
-            ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let foot = w[0] + d * t;
+        let t = if l2 > 0.0 { ((p - w0).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        let foot = w0 + d * t;
         if p.dist(foot) > within {
             return false;
         }
@@ -161,6 +183,7 @@ fn joined(a: &Surface, b: &Surface, p: Point3, r: Point3, hints: Option<UvPair>)
     refine_onto_both_near(a, b, mid, hints).is_some_and(|m| m.0.dist(mid) < 0.1 * p.dist(r))
 }
 
+/// A traced branch: its points and their parameters on both surfaces.
 struct Branch {
     points: Vec<Point3>,
     uvs: Vec<UvPair>,
@@ -174,13 +197,12 @@ struct Branch {
 impl Branch {
     fn new(all: Vec<(Point3, UvPair)>, closed: bool, ends: Vec<Point3>) -> Branch {
         let (points, uvs) = all.into_iter().unzip();
-        Branch {
-            points,
-            uvs,
-            closed,
-            ends,
-            from: None,
-        }
+        Branch { points, uvs, closed, ends, from: None }
+    }
+
+    /// The indices of its last and first points: its ends, the last first.
+    fn end_indices(&self) -> [usize; 2] {
+        [self.points.len().saturating_sub(1), 0]
     }
 }
 
@@ -190,9 +212,9 @@ impl Branch {
 fn touching_point(a: &Surface, b: &Surface, p: Point3) -> Option<Point3> {
     let mut uv = a.project(p);
     let mut hint_b = b.project(p);
-    for _ in 0..40 {
-        let (g, j) = tilt(a, b, uv, &mut hint_b)?;
-        if g.x.abs().max(g.y.abs()) <= 1e-14 {
+    for _ in 0..TOUCH_STEPS {
+        let (g, [ju, jv]) = tilt(a, b, uv, &mut hint_b)?;
+        if g.x.abs().max(g.y.abs()) <= TOUCH_SETTLED {
             let q = a.eval(uv.x, uv.y);
             // Halfway to `b`: within half the tolerance of each when the gap is within it.
             let qb = b.project_near(q, hint_b);
@@ -203,7 +225,7 @@ fn touching_point(a: &Surface, b: &Surface, p: Point3) -> Option<Point3> {
             let touch = a.normal(ua.x, ua.y).cross(b.normal(ub.x, ub.y)).norm() <= tol::TANGENT;
             return (touch && distance_to(b, q) <= 0.5 * tol::LINEAR).then_some(q);
         }
-        let (su, sv) = solve2(j[0].x, j[1].x, j[0].y, j[1].y, -g.x, -g.y)?;
+        let (su, sv) = solve2(ju.x, jv.x, ju.y, jv.y, -g.x, -g.y)?;
         uv = Vec2::new(uv.x + su, uv.y + sv);
     }
     None
@@ -223,8 +245,7 @@ fn tilt(a: &Surface, b: &Surface, uv: Vec2, hint_b: &mut Vec2) -> Option<(Vec2, 
         Some((Vec2::new(su.dot(nb) / lu, sv.dot(nb) / lv), lu, lv))
     };
     let (g, lu, lv) = at(uv, hint_b)?;
-    // Steps of about a micrometre: the normals turn measurably, rounding does not.
-    let (du, dv) = (1e-6 / lu, 1e-6 / lv);
+    let (du, dv) = (TILT_STEP / lu, TILT_STEP / lv);
     let mut hb = *hint_b;
     let (gu, ..) = at(Vec2::new(uv.x + du, uv.y), &mut hb)?;
     let mut hb = *hint_b;
@@ -237,29 +258,25 @@ fn tilt(a: &Surface, b: &Surface, uv: Vec2, hint_b: &mut Vec2) -> Option<(Vec2, 
 fn crossing_directions(a: &Surface, b: &Surface, c: Point3) -> Vec<Vec3> {
     let uv = a.project(c);
     let mut hint_b = b.project(c);
-    let Some((_, j)) = tilt(a, b, uv, &mut hint_b) else {
+    let Some((_, [ju, jv])) = tilt(a, b, uv, &mut hint_b) else {
         return Vec::new();
     };
     let (_, su, sv) = a.d1(uv.x, uv.y);
     let (lu, lv) = (su.norm(), sv.norm());
     // The tilt along each direction is that row of the gap's second derivative over its length.
-    let (h11, h22) = (lu * j[0].x, lv * j[1].y);
-    let h12 = 0.5 * (lu * j[1].x + lv * j[0].y);
+    let (h11, h22) = (lu * ju.x, lv * jv.y);
+    let h12 = 0.5 * (lu * jv.x + lv * ju.y);
     let disc = h12 * h12 - h11 * h22;
     if disc <= 0.0 {
         return Vec::new();
     }
     let roots = |p: f64| [(-h12 + disc.sqrt()) / p, (-h12 - disc.sqrt()) / p];
-    let steps: Vec<Vec2> = if h22.abs() >= h11.abs() {
-        roots(h22).map(|m| Vec2::new(1.0, m)).to_vec()
+    let steps = if h22.abs() >= h11.abs() {
+        roots(h22).map(|m| Vec2::new(1.0, m))
     } else {
-        roots(h11).map(|m| Vec2::new(m, 1.0)).to_vec()
+        roots(h11).map(|m| Vec2::new(m, 1.0))
     };
-    steps
-        .into_iter()
-        .filter_map(|s| (su * s.x + sv * s.y).unit())
-        .flat_map(|d| [d, -d])
-        .collect()
+    steps.into_iter().filter_map(|s| (su * s.x + sv * s.y).unit()).flat_map(|d| [d, -d]).collect()
 }
 
 /// One direction of a branch from `p0`, whose parameters on the two surfaces are `uv0`, with
@@ -275,14 +292,14 @@ fn walk(
     h_max: f64,
     known: &[Point3],
 ) -> (Vec<(Point3, UvPair)>, bool, Option<Point3>) {
-    let h_min = h_max * 1e-7;
+    let h_min = h_max * SHORTEST_STEP;
     let mut pts = vec![(p0, uv0)];
     let (mut p, mut uv) = (p0, uv0);
     let mut h = h_max;
     let mut travelled = 0.0;
     let mut heading = None;
     let mut start = None;
-    for _ in 0..20_000 {
+    for _ in 0..WALK_STEPS {
         let Some(t) = tangent(a, b, uv) else {
             break;
         };
@@ -408,6 +425,8 @@ fn stalled_onto(
         .max_by(|x, y| (*x - p).dot(t).total_cmp(&(*y - p).dot(t)))
 }
 
+/// The branch through `p0` traced both ways (one way, if it closes), the crossings it ends on
+/// added to `crossings`.
 fn branch(
     a: &Surface,
     b: &Surface,
@@ -437,7 +456,7 @@ pub(crate) fn trace(
     region: &Aabb,
     seeds: &[Point3],
 ) -> Result<(Vec<SsiCurve>, Vec<Point3>)> {
-    let h_max = (region.diagonal() / 40.0).max(1e-6);
+    let h_max = (region.diagonal() / STEPS_PER_DIAGONAL).max(MIN_STEP);
     let mut branches: Vec<Branch> = Vec::new();
     let mut crossings = Vec::new();
     for &s in seeds {
@@ -447,33 +466,72 @@ pub(crate) fn trace(
         if !inside(region, p) || tangent(a, b, uv).is_none() {
             continue;
         }
-        if branches
-            .iter()
-            .any(|br| on_branch(a, b, p, uv, &br.points, 0.25 * h_max))
-        {
+        if branches.iter().any(|br| on_branch(a, b, p, uv, &br.points, 0.25 * h_max)) {
             continue;
         }
         let br = branch(a, b, region, (p, uv), h_max, seeds, &mut crossings);
         // A seed on a crossing can walk straight into it both ways: that is a point, not a
         // branch, and the branches through the crossing are traced from it below.
-        if br.points.iter().any(|q| q.dist(br.points[0]) > tol::LINEAR) {
+        if let Some(&first) = br.points.first()
+            && br.points.iter().any(|q| q.dist(first) > tol::LINEAR)
+        {
             branches.push(br);
         }
     }
-    // Every branch through a crossing is traced from it, since seeds may reach only one of them.
+    trace_from_crossings(a, b, region, seeds, h_max, &mut branches, &mut crossings);
+    drop_twin_loops(&mut branches, h_max);
+    // A loop inside which the surfaces never part by more than the tolerance is where they touch:
+    // it bounds no region of either.
+    branches.retain(|br| !br.closed || lens_depth(a, b, br) > tol::LINEAR);
+    let mut crossings = merge_crossings(a, b, crossings, &mut branches, h_max);
+    // A crossing found where the walk stalls in a band the surfaces share within the tolerance can
+    // lie off the curve the walk was on, so no curve fits through both; the branch then ends where
+    // the walk stopped, as it would have without the crossing.
+    loop {
+        let (i, e) = match fit_branches(a, b, &branches) {
+            Ok(out) => return Ok((out, crossings)),
+            Err(failed) => failed,
+        };
+        let bad = branches.get_mut(i).map(|br| std::mem::take(&mut br.ends)).unwrap_or_default();
+        if bad.is_empty() {
+            return Err(e);
+        }
+        let is_bad = |p: Point3| bad.iter().any(|q| q.dist(p) <= tol::LINEAR);
+        crossings.retain(|&c| !is_bad(c));
+        branches.retain(|br| br.from.is_none_or(|c| !is_bad(c)));
+        for br in &mut branches {
+            br.ends.retain(|&c| !is_bad(c));
+            for end in br.end_indices() {
+                if br.points.len() > 2 && br.points.get(end).is_some_and(|&p| is_bad(p)) {
+                    br.points.remove(end);
+                    br.uvs.remove(end);
+                }
+            }
+        }
+    }
+}
+
+/// Traces every branch through each crossing, since seeds may reach only one of them, adding the
+/// crossings those branches end on in turn.
+fn trace_from_crossings(
+    a: &Surface,
+    b: &Surface,
+    region: &Aabb,
+    seeds: &[Point3],
+    h_max: f64,
+    branches: &mut Vec<Branch>,
+    crossings: &mut Vec<Point3>,
+) {
     let mut k = 0;
-    while k < crossings.len() {
-        let c = crossings[k];
+    while let Some(&c) = crossings.get(k) {
+        let earlier = crossings.get(..k).unwrap_or_default();
         k += 1;
-        if crossings[..k - 1]
-            .iter()
-            .any(|&q| same_crossing(a, b, q, c, h_max))
-        {
+        if earlier.iter().any(|&q| same_crossing(a, b, q, c, h_max)) {
             continue;
         }
         for d in crossing_directions(a, b, c) {
             // Far enough out that the surfaces cross at an angle, near enough to stay on the branch.
-            let Some(q) = refine_across(a, b, c + d * (1e-3 * h_max), d) else {
+            let Some(q) = refine_across(a, b, c + d * (CROSSING_START * h_max), d) else {
                 continue;
             };
             let quv = params(a, b, q);
@@ -483,75 +541,42 @@ pub(crate) fn trace(
             let sign = if t.dot(d) >= 0.0 { 1.0 } else { -1.0 };
             let (pts, _, end) = walk(a, b, region, (q, quv), sign, h_max, seeds);
             // A branch already traced through `c` passes near where this one is half a step out.
-            let probe = pts
-                .iter()
-                .map(|x| x.0)
-                .find(|p| p.dist(c) >= 0.5 * h_max)
-                .unwrap_or(pts[pts.len() - 1].0);
+            let probe = pts.iter().map(|x| x.0).find(|p| p.dist(c) >= 0.5 * h_max);
+            let Some(probe) = probe.or_else(|| pts.last().map(|x| x.0)) else {
+                continue;
+            };
             if pts.len() < 2
-                || branches
-                    .iter()
-                    .any(|br| near_polyline(probe, &br.points, 0.1 * h_max))
+                || branches.iter().any(|br| near_polyline(probe, &br.points, 0.1 * h_max))
             {
                 continue;
             }
             crossings.extend(end);
             let mut all = vec![(c, params(a, b, c))];
-            all.extend(&pts[1..]);
+            all.extend(pts.iter().skip(1));
             let mut br = Branch::new(all, false, std::iter::once(c).chain(end).collect());
             br.from = Some(c);
             branches.push(br);
         }
     }
-    // A loop closed across a sharp tip leaves its seeds there off its chords, and one of them
-    // traces the loop again: two closed branches each within reach of the other are one loop.
+}
+
+/// Drops each closed branch that traces a loop an earlier one does. A loop closed across a sharp
+/// tip leaves its seeds there off its chords, and one of them traces the loop again: two closed
+/// branches each within reach of the other are one loop.
+fn drop_twin_loops(branches: &mut Vec<Branch>, h_max: f64) {
+    // Whether every point of `x` lies near `y`'s loop.
+    let along = |x: &Branch, y: &Branch| {
+        let mut ring = y.points.clone();
+        ring.extend(y.points.first());
+        x.points.iter().all(|&p| near_polyline(p, &ring, 0.25 * h_max))
+    };
+    let twin = |o: &Branch, br: &Branch| o.closed && along(br, o) && along(o, br);
     let mut k = 0;
-    while k < branches.len() {
-        let twin = |o: &Branch, br: &Branch| {
-            let along = |x: &Branch, y: &Branch| {
-                let mut ring = y.points.clone();
-                ring.push(y.points[0]);
-                x.points
-                    .iter()
-                    .all(|&p| near_polyline(p, &ring, 0.25 * h_max))
-            };
-            o.closed && along(br, o) && along(o, br)
-        };
-        if branches[k].closed && branches[..k].iter().any(|o| twin(o, &branches[k])) {
+    while let Some(br) = branches.get(k) {
+        if br.closed && branches.iter().take(k).any(|o| twin(o, br)) {
             branches.remove(k);
         } else {
             k += 1;
-        }
-    }
-    // A loop inside which the surfaces never part by more than the tolerance is where they touch:
-    // it bounds no region of either.
-    branches.retain(|br| !br.closed || lens_depth(a, b, br) > tol::LINEAR);
-    let crossings = merge_crossings(a, b, crossings, &mut branches, h_max);
-    // A crossing found where the walk stalls in a band the surfaces share within the tolerance can
-    // lie off the curve the walk was on, so no curve fits through both; the branch then ends where
-    // the walk stopped, as it would have without the crossing.
-    let mut crossings = crossings;
-    loop {
-        match fit_branches(a, b, &branches) {
-            Ok(out) => return Ok((out, crossings)),
-            Err((i, e)) => {
-                let bad = std::mem::take(&mut branches[i].ends);
-                if bad.is_empty() {
-                    return Err(e);
-                }
-                let is_bad = |p: Point3| bad.iter().any(|q| q.dist(p) <= tol::LINEAR);
-                crossings.retain(|&c| !is_bad(c));
-                branches.retain(|br| br.from.is_none_or(|c| !is_bad(c)));
-                for br in &mut branches {
-                    br.ends.retain(|&c| !is_bad(c));
-                    for end in [br.points.len() - 1, 0] {
-                        if br.points.len() > 2 && is_bad(br.points[end]) {
-                            br.points.remove(end);
-                            br.uvs.remove(end);
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -561,22 +586,24 @@ pub(crate) fn trace(
 fn lens_depth(a: &Surface, b: &Surface, br: &Branch) -> f64 {
     let n = br.points.len();
     let mut deepest: f64 = 0.0;
-    for i in 0..n {
-        let p = br.points[i];
-        let across = (0..n)
-            .filter(|&j| {
+    for (i, (&p, &(uv_a, uv_b))) in br.points.iter().zip(&br.uvs).enumerate() {
+        let across = br
+            .points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| {
                 let d = (i as isize - j as isize).unsigned_abs();
                 d.min(n - d) >= n / 4
             })
-            .min_by(|&j, &k| p.dist(br.points[j]).total_cmp(&p.dist(br.points[k])));
-        let Some(j) = across else {
+            .min_by(|(_, x), (_, y)| p.dist(**x).total_cmp(&p.dist(**y)));
+        let Some((_, &far)) = across else {
             continue;
         };
         for f in [0.25, 0.5, 0.75] {
-            let x = p.lerp(br.points[j], f);
-            let ua = a.project_near(x, br.uvs[i].0);
+            let x = p.lerp(far, f);
+            let ua = a.project_near(x, uv_a);
             let q = a.eval(ua.x, ua.y);
-            let ub = b.project_near(q, br.uvs[i].1);
+            let ub = b.project_near(q, uv_b);
             deepest = deepest.max((q - b.eval(ub.x, ub.y)).dot(b.normal(ub.x, ub.y)).abs());
         }
     }
@@ -639,17 +666,14 @@ fn merge_crossings(
     if moved.is_empty() {
         return kept;
     }
-    let onto = |p: Point3| {
-        moved
-            .iter()
-            .find(|(c, _)| c.dist(p) <= tol::LINEAR)
-            .map(|&(_, k)| k)
-    };
+    let onto = |p: Point3| moved.iter().find(|(c, _)| c.dist(p) <= tol::LINEAR).map(|&(_, k)| k);
     for br in branches.iter_mut().filter(|br| !br.closed) {
-        for end in [0, br.points.len() - 1] {
-            if let Some(k) = onto(br.points[end]) {
-                br.points[end] = k;
-                br.uvs[end] = params(a, b, k);
+        let [last, first] = br.end_indices();
+        for end in [first, last] {
+            let Some(k) = br.points.get(end).and_then(|&p| onto(p)) else { continue };
+            if let (Some(p), Some(uv)) = (br.points.get_mut(end), br.uvs.get_mut(end)) {
+                *p = k;
+                *uv = params(a, b, k);
             }
         }
         for e in &mut br.ends {
@@ -695,10 +719,10 @@ fn fit_branches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::Cylinder;
-    use crate::math::Frame;
-    use crate::geom::Torus;
     use crate::csi::signed_distance;
+    use crate::geom::Cylinder;
+    use crate::geom::Torus;
+    use crate::math::Frame;
 
     #[test]
     fn crossing_cylinders_trace_two_closed_loops() {
@@ -710,10 +734,7 @@ mod tests {
             frame: Frame::new(Vec3::new(0.0, -20.0, 0.0), Vec3::Y, Vec3::Z).unwrap(),
             radius: 3.0,
         });
-        let region = Aabb {
-            min: Vec3::new(-4.0, -6.0, -6.0),
-            max: Vec3::new(4.0, 6.0, 6.0),
-        };
+        let region = Aabb { min: Vec3::new(-4.0, -6.0, -6.0), max: Vec3::new(4.0, 6.0, 6.0) };
         let seeds = [Vec3::new(3.0, 4.0, 0.0), Vec3::new(-3.0, -4.0, 0.0)];
         let curves = trace(&a, &b, &region, &seeds).unwrap().0;
         assert_eq!(curves.len(), 2);
@@ -739,9 +760,7 @@ mod tests {
     fn assert_on_both(a: &Surface, b: &Surface, curves: &[SsiCurve]) {
         for c in curves {
             for i in 0..=64 {
-                let p = c
-                    .curve
-                    .eval(c.range.0 + (c.range.1 - c.range.0) * i as f64 / 64.0);
+                let p = c.curve.eval(c.range.0 + (c.range.1 - c.range.0) * i as f64 / 64.0);
                 assert!(signed_distance(a, p).abs() <= tol::LINEAR, "{p:?}");
                 assert!(signed_distance(b, p).abs() <= tol::LINEAR, "{p:?}");
             }
@@ -752,22 +771,13 @@ mod tests {
     fn branches_through_a_point_where_two_tori_touch_end_on_it() {
         // Two root blends, tubes of radius 3 about circles of radius 5 at z 3, touch the plane
         // z = 0 along circles that cross at (3, ±4, 0); there the tori touch each other too.
-        let (a, b) = (
-            torus([0.0, 0.0, 3.0], 5.0, 3.0),
-            torus([6.0, 0.0, 3.0], 5.0, 3.0),
-        );
-        let region = Aabb {
-            min: Vec3::new(1.5, 2.5, -0.5),
-            max: Vec3::new(4.5, 5.5, 1.5),
-        };
+        let (a, b) = (torus([0.0, 0.0, 3.0], 5.0, 3.0), torus([6.0, 0.0, 3.0], 5.0, 3.0));
+        let region = Aabb { min: Vec3::new(1.5, 2.5, -0.5), max: Vec3::new(4.5, 5.5, 1.5) };
         // On the mirror plane x = 3, which holds one branch through the touching point.
         let seeds = [Vec3::new(3.0, 4.5, 0.03)];
         let (curves, crossings) = trace(&a, &b, &region, &seeds).unwrap();
         let touch = Vec3::new(3.0, 4.0, 0.0);
-        assert!(
-            crossings.iter().any(|c| c.dist(touch) <= 1e-9),
-            "{crossings:?}"
-        );
+        assert!(crossings.iter().any(|c| c.dist(touch) <= 1e-9), "{crossings:?}");
         assert_on_both(&a, &b, &curves);
         // Both branches through it reach it from each side.
         let ends = curves
@@ -792,10 +802,7 @@ mod tests {
         };
         let (a, b) = (tube(0.0, 4.5, 8.0, 4.5), tube(10.0, 3.0, 6.0, 3.0));
         let touch = Vec3::new(6.4, 0.0, 4.8);
-        let region = Aabb {
-            min: Vec3::new(5.0, -0.5, 3.0),
-            max: Vec3::new(8.0, 2.0, 6.5),
-        };
+        let region = Aabb { min: Vec3::new(5.0, -0.5, 3.0), max: Vec3::new(8.0, 2.0, 6.5) };
         let (s, c) = 22.5f64.to_radians().sin_cos();
         let seed = touch + Vec3::new(c, 0.0, s) * 8e-8;
         let (curves, crossings) = trace(&a, &b, &region, &[seed]).unwrap();
@@ -814,15 +821,9 @@ mod tests {
         // A cylinder's top fillet against a copy moved 1e-5 mm along x: the tube meets the
         // cylinder near z = 17 ± √(6e-5 cos θ), two arcs that turn back into each other at
         // θ = ±90° with a radius of about 1.5e-6 mm.
-        let a = Surface::Cylinder(Cylinder {
-            frame: Frame::WORLD,
-            radius: 20.0,
-        });
+        let a = Surface::Cylinder(Cylinder { frame: Frame::WORLD, radius: 20.0 });
         let b = torus([1e-5, 0.0, 17.0], 17.0, 3.0);
-        let region = Aabb {
-            min: Vec3::new(-21.0, -21.0, 16.9),
-            max: Vec3::new(21.0, 21.0, 17.1),
-        };
+        let region = Aabb { min: Vec3::new(-21.0, -21.0, 16.9), max: Vec3::new(21.0, 21.0, 17.1) };
         let seeds = [Vec3::new(20.0, 0.0, 17.0077), Vec3::new(20.0, 0.0, 16.9923)];
         let (curves, _) = trace(&a, &b, &region, &seeds).unwrap();
         assert!(!curves.is_empty());
@@ -839,10 +840,7 @@ mod tests {
         };
         let (a, b) = (cyl(Vec3::X, 5.0), cyl(Vec3::Z, 6.0));
         // The half of the loop x = √(11 + z²) where y > 1: an open arc, seeded at its middle.
-        let region = Aabb {
-            min: Vec3::new(0.0, 1.0, -6.0),
-            max: Vec3::new(7.0, 6.0, 6.0),
-        };
+        let region = Aabb { min: Vec3::new(0.0, 1.0, -6.0), max: Vec3::new(7.0, 6.0, 6.0) };
         let seed = Vec3::new(11f64.sqrt(), 5.0, 0.0);
         let curves = trace(&a, &b, &region, &[seed]).unwrap().0;
         assert_eq!(curves.len(), 1);
@@ -891,15 +889,9 @@ mod tests {
         // The crossings at x = ±0.02 are 0.04 mm apart, within a step (0.078 mm here): merged into one,
         // the branches along x = ±0.02 fitted through a point off them and were lost.
         let (plane, saddle) = saddle_pair(0.02);
-        let region = Aabb {
-            min: Vec3::new(-0.9, -0.9, -1.0),
-            max: Vec3::new(0.9, 0.9, 1.0),
-        };
-        let seeds = [
-            Vec3::new(0.5, 0.0, 0.0),
-            Vec3::new(0.05, 0.5, 0.0),
-            Vec3::new(-0.05, -0.5, 0.0),
-        ];
+        let region = Aabb { min: Vec3::new(-0.9, -0.9, -1.0), max: Vec3::new(0.9, 0.9, 1.0) };
+        let seeds =
+            [Vec3::new(0.5, 0.0, 0.0), Vec3::new(0.05, 0.5, 0.0), Vec3::new(-0.05, -0.5, 0.0)];
         let (curves, crossings) = trace(&plane, &saddle, &region, &seeds).unwrap();
         assert_eq!(crossings.len(), 2);
         for x in [-0.02, 0.02] {

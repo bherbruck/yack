@@ -4,11 +4,6 @@
 //! `boolean/` in M2.1 (T2) so that `check`, `tweak`, `sweep` and `rays` need not reach into the
 //! boolean.
 
-
-// springrep's intersect indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names intersect's code uses.
 use yack_base::kernel::Error;
 use yack_base::kernel::Result;
