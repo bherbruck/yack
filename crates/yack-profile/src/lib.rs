@@ -16,6 +16,7 @@ use yack_math::kernel as math;
 use yack_tol as tol;
 use yack_topo::names;
 pub mod region;
+pub mod loops;
 
 use std::collections::BTreeSet;
 use std::f64::consts::TAU;

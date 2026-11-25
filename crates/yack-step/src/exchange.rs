@@ -1,31 +1,31 @@
-// yack: glue for yack's STEP and codec exchange over springrep's `step` and `codec`.
+// yack: glue for yack's STEP and codec exchange over this crate and yack-codec (moved from springrep's facade/exchange.rs, M3 W10).
 //! STEP read, write and sew, and the binary codec, with the protocol's argument shapes.
 
-use crate::{Result, codec, step, topo::Brep};
+use crate::{Result, topo::Brep};
 
 /// The solid as an AP214 STEP file.
 pub fn write_step(b: &Brep) -> Result<String> {
-    step::write(b, "yack")
+    crate::write(b, "yack")
 }
 
 /// The solids in a STEP file's product structure.
 pub fn read_step(text: &str) -> Result<Brep> {
-    step::read_part(text.as_bytes(), "step")
+    crate::read_part(text.as_bytes(), "step")
 }
 
 /// The solid sewn from a STEP file's faces, closing gaps up to `tolerance`.
 pub fn sew_step(text: &str, tolerance: f64) -> Result<Brep> {
-    step::sew(text.as_bytes(), tolerance)
+    crate::sew(text.as_bytes(), tolerance)
 }
 
 /// The solid as springrep's exact binary encoding.
 pub fn encode(b: &Brep) -> Vec<u8> {
-    codec::to_bytes(std::slice::from_ref(b))
+    yack_codec::to_bytes(std::slice::from_ref(b))
 }
 
 /// The one solid encoded in `bytes`, or `None` when they are not exactly one encoded solid.
 pub fn decode(bytes: &[u8]) -> Option<Brep> {
-    let mut v = codec::from_bytes(bytes)?;
+    let mut v = yack_codec::from_bytes(bytes)?;
     if v.len() == 1 { v.pop() } else { None }
 }
 
@@ -49,7 +49,7 @@ pub fn check_written(text: &str, volume: f64, area: f64) -> std::result::Result<
     // area stays exact: `area_to` at that tolerance read conformance slabs-f7989a77c5e3f560's
     // area 2e-5 off (237.44601 for 237.45083) and refused a sound file.
     let rel = WRITTEN_AGREES * MEASURE_MARGIN;
-    let (v, a) = (crate::measure::volume_to(&back, rel), crate::measure::area(&back));
+    let (v, a) = (yack_measure::volume_to(&back, rel), yack_measure::area(&back));
     let off = |x: f64, want: f64| (x - want).abs() / want.abs().max(1.0);
     if off(v, volume) <= WRITTEN_AGREES && off(a, area) <= WRITTEN_AGREES {
         Ok((v, a))

@@ -193,8 +193,13 @@ dependencies = [
 name = "yack-bridge"
 version = "0.0.0"
 dependencies = [
+ "yack-base",
  "yack-cadrs",
+ "yack-check",
+ "yack-geom",
+ "yack-math",
  "yack-springrep",
+ "yack-topo",
 ]
 
 [[package]]

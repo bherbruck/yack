@@ -20,6 +20,7 @@ pub mod bbox;
 mod facts;
 pub mod domain;
 pub mod history;
+pub mod local;
 mod memo;
 mod parts;
 pub mod pcurve;

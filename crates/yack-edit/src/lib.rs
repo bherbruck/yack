@@ -42,6 +42,8 @@ use crate::{
 };
 
 mod affine;
+pub mod glue;
+pub mod requirement;
 
 pub use affine::{Affine, affine};
 pub use crate::tweak::{move_faces, move_faces_by};

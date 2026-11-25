@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use yack_cadrs::native::pcurve::closed_periods;
 use yack_cadrs::native::{Body, Curve as CCurve, Frame as CFrame, NurbsCurve as CNurbsCurve, P3, Surface as CSurface, V3};
+use crate::builder::Builder;
 use yack_springrep::{
-    facade::bridge::Builder,
     geom::{
         BSpline, Circle, Cone, Curve as SCurve, Cylinder, Ellipse, Extrusion, Line, NurbsCurve as SNurbsCurve,
         NurbsSurface as SNurbsSurface, Plane, Revolution, Sphere, Surface as SSurface, Torus,

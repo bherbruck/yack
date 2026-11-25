@@ -22,6 +22,7 @@ use yack_topo as topo;
 mod cdt;
 pub mod display;
 mod face;
+pub mod pick;
 mod predicates;
 mod query;
 #[cfg(test)]

@@ -766,6 +766,14 @@ fn extremes_on_piece(
     }
 }
 
+/// The closed C² cubic through `points` (chord-length parameters), as protocol periodic-spline
+/// data: knots `u₋₃ … u_{n+3}` and the `n` control points with the first three repeated.
+pub fn periodic_through(points: &[[f64; 2]]) -> Result<(Vec<f64>, Vec<[f64; 2]>)> {
+    let p3: Vec<Vec3> = points.iter().map(|p| Vec3::new(p[0], p[1], 0.0)).collect();
+    let s = BSpline::interpolate_periodic(&p3)?;
+    Ok((s.knots().to_vec(), s.control_points().iter().map(|c| [c.x, c.y]).collect()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

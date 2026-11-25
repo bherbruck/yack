@@ -18,7 +18,7 @@ mod nurbs;
 pub(crate) use nurbs::tests::octant;
 mod surface;
 
-pub use bspline::BSpline;
+pub use bspline::{BSpline, periodic_through};
 pub use chord::{MeshOptions, edge_params};
 pub use curve::{Circle, Curve, Ellipse, Line};
 pub use intersection::{IntersectionCurve, UvPair};

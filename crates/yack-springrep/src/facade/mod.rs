@@ -3,7 +3,6 @@
 //! computes. Each one does only the arithmetic the protocol's argument shapes need.
 
 pub mod api;
-pub mod bridge;
-pub mod edit;
-pub mod exchange;
-pub mod loops;
+pub use yack_edit::glue as edit;
+pub use yack_profile::loops;
+pub use yack_step::exchange;

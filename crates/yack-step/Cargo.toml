@@ -19,10 +19,10 @@ yack-base = { path = "../yack-base" }
 yack-math = { path = "../yack-math" }
 yack-p21 = { path = "../yack-p21" }
 yack-tol = { path = "../yack-tol" }
-
-[dev-dependencies]
 yack-codec = { path = "../yack-codec" }
 yack-measure = { path = "../yack-measure" }
+
+[dev-dependencies]
 yack-profile = { path = "../yack-profile" }
 
 [lints]

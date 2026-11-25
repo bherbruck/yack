@@ -1,4 +1,4 @@
-// yack: one closed planar loop rounded at every corner, or offset, over springrep's profile regions.
+// yack: one closed planar loop rounded at every corner, or offset, over this crate's regions (moved from springrep's facade/loops.rs, M3 W10).
 //! Glue for `yack::Loop::rounded` and `Loop::offset` (w-m03-api's design): the loop as a region
 //! of one loop, run through [`Region::fillet`] at each corner or [`Region::offset`], and back.
 //! Lines and arcs only; the loop keeps its own direction.
@@ -7,10 +7,8 @@ use std::f64::consts::TAU;
 
 use crate::{
     Error, Result,
-    profile::{
-        Names, Segment,
-        region::{Geom, Loop, Region, Seg},
-    },
+    Names, Segment,
+    region::{Geom, Loop, Region, Seg},
     tol,
 };
 
@@ -67,7 +65,7 @@ fn region_geom(segs: &[Segment], i: usize) -> Result<Geom> {
 }
 
 /// The loop as a region of one loop, as given (not normalised: it keeps its direction).
-fn region_of(segs: &[Segment]) -> Result<Region> {
+#[allow(clippy::indexing_slicing)] fn region_of(segs: &[Segment]) -> Result<Region> { // D26: checked access in hardening
     if segs.is_empty() {
         return Err(Error::InvalidInput("an empty loop".into()));
     }

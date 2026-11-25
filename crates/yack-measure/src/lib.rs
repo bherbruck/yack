@@ -21,6 +21,7 @@ use yack_numeric as numeric;
 use yack_tol as tol;
 use yack_topo as topo;
 mod sample;
+pub mod guard;
 mod tables;
 mod tolerant;
 

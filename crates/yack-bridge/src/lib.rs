@@ -5,6 +5,7 @@
 
 use core::fmt;
 
+mod builder;
 mod report;
 mod selfcheck;
 mod to_cadrs;

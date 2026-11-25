@@ -128,8 +128,11 @@ REQ = ("// yack: which refusals break a stated requirement (moved from springrep
        + body("requirement", None) + "\n\n#[cfg(test)]\nmod tests {\n    use super::breaks_requirement;\n\n"
        + m_.group(1) + "}\n")
 tests_left = tests.replace(m_.group(0), "\n", 1)
+# the remaining tests name it only as `super::breaks_requirement` (w-h1-60: a bare import of it was unused
+# and raised springrep's clippy count 0 -> 1), so they import only what they name bare
+keep_req = re.search(r"(?<![\w:])breaks_requirement\(", tests_left) is not None
 tests_left = sub1(tests_left, "    use super::{Point3, Vec3, breaks_requirement};\n",
-                  "    use super::breaks_requirement;\n    use crate::math::{Point3, Vec3};\n", api_p)
+                  ("    use super::breaks_requirement;\n" if keep_req else "") + "    use crate::math::{Point3, Vec3};\n", api_p)
 tests_left = re.sub(r"\n\n\n+", "\n\n", tests_left).replace("\n\n}\n", "\n}\n")
 
 # yack-geom: periodic_through goes into bspline.rs, before its tests
@@ -216,6 +219,31 @@ for d in ["yack-topo", "yack-math", "yack-geom", "yack-check", "yack-base"]:  # 
         c_ = sub1(c_, 'yack-cadrs = { path = "../yack-cadrs" }\n',
                   f'yack-cadrs = {{ path = "../yack-cadrs" }}\n{d} = {{ path = "../{d}" }}\n', bc)
 wr(bc, c_)
+
+# ---- 3b. each crate's Cargo.toml carries every crate its new code names (w-h1-58: yack-step had yack-codec
+# and yack-measure only as dev-dependencies) ----
+NEW = {"yack-mesh": ["pick.rs"], "yack-topo": ["local.rs"], "yack-measure": ["guard.rs"], "yack-geom": ["bspline.rs"],
+       "yack-edit": ["glue.rs", "requirement.rs"], "yack-step": ["exchange.rs"], "yack-profile": ["loops.rs"],
+       "yack-bridge": ["builder.rs"]}
+for k, fs in NEW.items():
+    code = "\n".join(live_text(rd(C(k, f))) for f in fs)
+    names = sorted({c.replace("_", "-") for c in re.findall(r"(?<![\w:])(yack_\w+?)(?:::|\b(?=\s+as\b)|;)", code)} - {k})
+    cp = os.path.join(crates, k, "Cargo.toml")
+    c = rd(cp)
+    sec = lambda name: re.search(r"(?ms)^\[" + re.escape(name) + r"\]\n(.*?)(?=^\[|\Z)", c)
+    for d in names:
+        dep, dev = sec("dependencies"), sec("dev-dependencies")
+        if re.search(r"(?m)^" + re.escape(d) + r" = ", dep.group(1)):
+            continue
+        line = f'{d} = {{ path = "../{d}" }}\n'
+        if dev and line in dev.group(1):  # a dev-dependency the live code now needs: move it up
+            c = c[:dev.start(1)] + dev.group(1).replace(line, "", 1) + c[dev.end(1):]
+            if not sec("dev-dependencies").group(1).strip():
+                c = re.sub(r"(?m)^\[dev-dependencies\]\n\n?", "", c)
+            dep = sec("dependencies")
+        c = c[:dep.end(1)].rstrip("\n") + "\n" + line + "\n" + c[dep.end(1):].lstrip("\n")
+        print(f"cargo: {k} gains {d}")
+    wr(cp, c)
 
 # ---- 4. springrep: the facade re-exports ----
 def pub_use(path, names):

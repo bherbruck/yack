@@ -31,6 +31,7 @@ mod part21;
 mod read;
 mod topology;
 mod write;
+pub mod exchange;
 
 pub use crate::build::{Healed, MAX_HEAL};
 pub use read::{Body, Crossed, Healing, Import, Tolerant, read, read_part};

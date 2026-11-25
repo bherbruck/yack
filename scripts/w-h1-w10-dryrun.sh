@@ -98,6 +98,16 @@ if k == "yack-bridge" and int(layer["yack-springrep"]) >= int(layer[k]):
 if bad:
     sys.exit(f"DRY RUN REFUSES: gate 1, {k} (layer {layer[k]}) depends on {bad} at or above it")
 print(f"gate 1: {k}'s deps all below layer {layer[k]}, springrep above")
+# every crate the live code names is a [dependencies] entry (w-h1-58: dev-only deps broke the lib build)
+sys.path.insert(0, "/home/brenn/github/yack/scripts")
+from m3_move import live_text, rs_files
+code = "\n".join(live_text(open(p_).read()) for p_ in rs_files(f"{d}/crates/{k}/src"))
+used = {c.replace("_", "-") for c in re.findall(r"(?<![\w:])(yack_\w+?)(?:::|\b(?=\s+as\b)|;)", code)} & set(layer) - {k}
+mdep = re.search(r"(?ms)^\[dependencies\]\n(.*?)(?=^\[|\Z)", cargo)
+have = set(re.findall(r"(?m)^(yack-[\w-]+) = ", mdep.group(1) if mdep else ""))
+if used - have:
+    sys.exit(f"DRY RUN REFUSES: {k}'s live code names {sorted(used - have)}, not in its Cargo [dependencies]")
+print(f"cargo: {k}'s [dependencies] cover every crate its live code names")
 EOF
 done
 # the target crates' new, changed and deleted files (W9c works in an existing crate)
@@ -111,6 +121,10 @@ done
 X="${X# } "
 for f in layers.toml scores/eps.txt scores/lints.txt scores/filesize.txt; do cmp -s $f $D/$f || X="$X$f "; done
 X="$SRX$X"
+# a `use` the file never names again is an unused import, which raises springrep's clippy count (w-h1-60)
+python3 /home/brenn/github/yack/scripts/w10-imports.py "$D" || exit 1
+# a Cargo.toml change rewrites Cargo.lock in the post build (lead, after w-h1-58)
+case " $X " in *Cargo.toml*) X="${X}Cargo.lock ";; esac
 # scores another worker holds hunks in go under --dirty-ok (lead's ruling, W7); anything else dirty refuses
 DOK=""; for f in scores/eps.txt scores/lints.txt scores/filesize.txt crates/yack-measure/src/lib.rs; do  # W10: my held E1-E3 hunks (lead, option b)
  case " $X " in *" $f "*) [ -n "$(git status --porcelain -- $f)" ] && DOK="$DOK $f";; esac; done

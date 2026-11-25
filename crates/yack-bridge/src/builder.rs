@@ -1,13 +1,12 @@
-// yack: glue for yack-bridge: a checked builder of springrep `Brep`s from outside the crate.
+// yack: a checked builder of springrep `Brep`s for yack-bridge (moved from springrep's facade/bridge.rs, M3 W10).
 //! What `yack-bridge` needs that springrep keeps crate-private: building a `Brep` entity by entity
 //! (with local tolerances and face names), finished by springrep's own checker.
 
-use crate::{
-    Error, Result, check,
-    geom::{Curve, Surface},
-    math::Point3,
-    topo::{Brep, CoedgeSpec, EdgeId, FaceId, FaceName, LoopId, ShellId, SolidId, VertexId},
-};
+use yack_base::kernel::{Error, Result};
+use yack_check as check;
+use yack_geom::{Curve, Surface};
+use yack_math::kernel::Point3;
+use yack_topo::{Brep, CoedgeSpec, EdgeId, FaceId, FaceName, LoopId, ShellId, SolidId, VertexId};
 
 /// A `Brep` under construction. Entities get ids in the order they are added.
 #[derive(Debug, Default)]
