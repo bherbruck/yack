@@ -25,7 +25,10 @@ pub fn edge_length(b: &Brep, e: EdgeId) -> f64 {
     let mut speed = |t: f64| c.d1(t).1.norm();
     let pieces = cuts.windows(2);
     pieces
-        .map(|w| integrate(&mut speed, w[0], w[1], 1e-10))
+        .filter_map(|w| match *w {
+            [a, z] => Some(integrate(&mut speed, a, z, 1e-10)),
+            _ => None,
+        })
         .sum()
 }
 
@@ -87,7 +90,11 @@ pub fn face_extent(b: &Brep, f: FaceId, dir: Vec3) -> (f64, f64) {
                 for q in reached_patches(n, &polys) {
                     let (bl, bh) = (q.bbox.min, q.bbox.max);
                     let along = |k: usize| {
-                        let pick = |i: usize| if k >> i & 1 == 1 { bh[i] } else { bl[i] };
+                        let (hi, lo) = (bh.to_array(), bl.to_array());
+                    let pick = |i: usize| {
+                        let corner = if k >> i & 1 == 1 { hi } else { lo };
+                        corner.get(i).copied().unwrap_or_default()
+                    };
                         pick(0) * d.x + pick(1) * d.y + pick(2) * d.z
                     };
                     let (ql, qh) = (0..8)

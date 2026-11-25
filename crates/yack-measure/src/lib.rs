@@ -1,6 +1,8 @@
 // yack: Area, volume, mass properties and tight bounding box, from the exact geometry rather than a
 // Adapted from springrep@a03e8a1 src/measure.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the face-box family moved to topo/bbox.rs (M2), re-exported here; then to yack-measure (M3 W5), paths and visibility only.
+// Changes: the face-box family moved to topo/bbox.rs (M2), re-exported here; then to yack-measure
+// (M3 W5), paths and visibility only; hardening (w-h1): ordered maps, checked access, a shared
+// disjoint-set forest, poisoned caches recovered.
 //! Area, volume, mass properties and tight bounding box, from the exact geometry rather than a
 //! mesh.
 //!
@@ -11,9 +13,6 @@
 //! the boundary integral is adaptive.
 
 
-// springrep's measure indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names measure's code uses.
 use yack_geom as geom;
@@ -32,6 +31,8 @@ pub use tolerant::{volume_agrees, volume_to};
 pub use crate::topo::bbox::{bbox, face_bbox, loose_bbox};
 pub use crate::topo::bbox::{face_box, face_hull_box, in_face, reached_patches, stationary, uv_polygons};
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::PoisonError;
 use std::f64::consts::TAU;
 
 use crate::{
@@ -110,15 +111,16 @@ fn inner_rule<const K: usize>(
         _ => true,
     };
     let mut sum = [0.0; K];
-    for w in cuts.windows(2) {
+    for piece in cuts.windows(2) {
+        let &[w0, w1] = piece else { continue };
         let n_chunks = if turns {
-            ((w[1] - w[0]).abs() / TAU).ceil().max(1.0) as usize
+            ((w1 - w0).abs() / TAU).ceil().max(1.0) as usize
         } else {
             1
         };
         for k in 0..n_chunks {
-            let x0 = w[0] + (w[1] - w[0]) * k as f64 / n_chunks as f64;
-            let x1 = w[0] + (w[1] - w[0]) * (k + 1) as f64 / n_chunks as f64;
+            let x0 = w0 + (w1 - w0) * k as f64 / n_chunks as f64;
+            let x1 = w0 + (w1 - w0) * (k + 1) as f64 / n_chunks as f64;
             let (m, h) = ((x0 + x1) * 0.5, (x1 - x0) * 0.5);
             for &(x, wt) in gauss(order) {
                 let q = m + h * x;
@@ -128,8 +130,8 @@ fn inner_rule<const K: usize>(
                     None => s.d1(q, at),
                 };
                 let d = density(p, su.cross(sv));
-                for i in 0..K {
-                    sum[i] += wt * h * d[i];
+                for (s, di) in sum.iter_mut().zip(d) {
+                    *s += wt * h * di;
                 }
             }
         }
@@ -153,24 +155,24 @@ fn face_sum<const K: usize>(
     for (&lp, tables) in b.face(f).loops.iter().zip(tables) {
         for (&co, table) in b.lp(lp).coedges.iter().zip(tables) {
             let v = coedge_integral(b, co, table, inner, inner_v, tol, rel);
-            for i in 0..K {
-                total[i] += v[i];
-            }
+            add_into(&mut total, v);
         }
     }
     total
 }
 
 /// The face's area and its contribution `⅓∬ (p − c)·n dA` to the volume of its solid.
-#[allow(clippy::panic)] fn face_integrals(b: &Brep, f: FaceId, c: Point3, scale: f64, rel: f64) -> (f64, f64) {
+fn face_integrals(b: &Brep, f: FaceId, c: Point3, scale: f64, rel: f64) -> (f64, f64) {
     let key = IntegralKey::new(c, scale, rel, b.face(f).reversed);
-    if let Some((k, v)) = *b.memo(f).integrals.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}"))
+    // The cache holds a plain value, which a panic elsewhere cannot leave half written: a
+    // poisoned lock's value is as good as any.
+    if let Some((k, v)) = *b.memo(f).integrals.lock().unwrap_or_else(PoisonError::into_inner)
         && k == key
     {
         return v;
     }
     let v = face_integrals_anew(b, f, c, scale, rel);
-    *b.memo(f).integrals.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}")) = Some((key, v));
+    *b.memo(f).integrals.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v));
     v
 }
 
@@ -247,21 +249,25 @@ fn face_integrals_anew(b: &Brep, f: FaceId, c: Point3, scale: f64, rel: f64) -> 
 /// `⅓∬ x·n`, `¼∬ xᵢ (x·n)` and `⅕∬ xᵢxⱼ (x·n) dA` with `x = p − c`, by the divergence theorem,
 /// in the order 1, x, y, z, xx, yy, zz, xy, yz, zx.
 fn face_moments(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 10] {
-    let m = face_moments_and_area(b, f, c, scale);
-    std::array::from_fn(|i| m[i])
+    let mut moments = [0.0; 10];
+    for (x, &y) in moments.iter_mut().zip(&face_moments_and_area(b, f, c, scale)) {
+        *x = y;
+    }
+    moments
 }
 
 /// [`face_moments`] with the face's area after them. One pass gives both, so a solid measured for
 /// its volume and area and then its centre integrates each of these faces once.
-#[allow(clippy::panic)] fn face_moments_and_area(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 11] {
+fn face_moments_and_area(b: &Brep, f: FaceId, c: Point3, scale: f64) -> [f64; 11] {
     let key = IntegralKey::new(c, scale, EXACT, b.face(f).reversed);
-    if let Some((k, v)) = *b.memo(f).moments.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}"))
+    // As in `face_integrals`: a poisoned lock's plain value is sound.
+    if let Some((k, v)) = *b.memo(f).moments.lock().unwrap_or_else(PoisonError::into_inner)
         && k == key
     {
         return v;
     }
     let v = face_moments_anew(b, f, c, scale);
-    *b.memo(f).moments.lock().unwrap_or_else(|e| panic!("called `Result::unwrap()` on an `Err` value: {e:?}")) = Some((key, v));
+    *b.memo(f).moments.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v));
     v
 }
 
@@ -361,7 +367,11 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
         let x = ((t - a) / (z - a) * n as f64).clamp(0.0, n as f64);
         let k = (x.floor() as usize).min(n - 1);
         let s = x - k as f64;
-        table[k] * (1.0 - s) + table[k + 1] * s
+        match (table.get(k), table.get(k + 1)) {
+            (Some(&lo), Some(&hi)) => lo * (1.0 - s) + hi * s,
+            // A projected pcurve's table has two entries at least.
+            _ => table.first().copied().unwrap_or_default(),
+        }
     };
     let uv_and_rate = |t: f64| -> (Vec2, Vec2) {
         match &coedge.pcurve {
@@ -417,23 +427,22 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
     cuts.push(t1);
     let order = if rel > EXACT { 8 } else { 16 };
     let mut sum = [0.0; K];
-    for w in cuts.windows(2) {
+    for piece in cuts.windows(2) {
+        let &[w0, w1] = piece else { continue };
         // Most pieces are short and smooth, and a pair of nested low rules settles them with a
         // third of the points the halving below takes to accept one. To a rough tolerance the
         // shorter pair settles most of them with half as many again.
         let short = (rel > EXACT)
-            .then(|| kronrod_k(&f, w[0], w[1], tol, &KRONROD_7))
+            .then(|| kronrod_k(&f, w0, w1, tol, &KRONROD_7))
             .flatten();
-        let r = match short.or_else(|| kronrod_k(&f, w[0], w[1], tol, &KRONROD_15)) {
+        let r = match short.or_else(|| kronrod_k(&f, w0, w1, tol, &KRONROD_15)) {
             Some(r) => r,
             None => {
-                let (whole, _) = gauss_k(&f, w[0], w[1], order);
-                adapt_k(&f, (w[0], w[1]), whole, tol, order, 0)
+                let (whole, _) = gauss_k(&f, w0, w1, order);
+                adapt_k(&f, (w0, w1), whole, tol, order, 0)
             }
         };
-        for i in 0..K {
-            sum[i] += r[i];
-        }
+        add_into(&mut sum, r);
     }
     if coedge.reversed {
         sum.map(|x| -x)
@@ -463,15 +472,16 @@ fn kronrod_k<const K: usize>(
         } else {
             (f(m - h * x), f(m + h * x))
         };
-        for i in 0..K {
-            kr[i] += wk * (l[i] + r[i]);
-            ga[i] += wg * (l[i] + r[i]);
-            size[i] += wk * (l[i].abs() + r[i].abs());
+        let sums = kr.iter_mut().zip(ga.iter_mut()).zip(size.iter_mut());
+        for (((k, g), s), (li, ri)) in sums.zip(l.into_iter().zip(r)) {
+            *k += wk * (li + ri);
+            *g += wg * (li + ri);
+            *s += wk * (li.abs() + ri.abs());
         }
     }
-    let ok = (0..K).all(|i| {
-        let floor = (1e-14 * kr[i].abs()).max(ROUNDING * size[i]);
-        ((kr[i] - ga[i]) * h).abs() <= tol[i].max(floor * h.abs())
+    let ok = kr.iter().zip(&ga).zip(&size).zip(&tol).all(|(((&k, &g), &s), &t)| {
+        let floor = (1e-14 * k.abs()).max(ROUNDING * s);
+        ((k - g) * h).abs() <= t.max(floor * h.abs())
     });
     ok.then(|| kr.map(|x| x * h))
 }
@@ -487,9 +497,9 @@ fn gauss_k<const K: usize>(
     let (mut s, mut size) = ([0.0; K], [0.0; K]);
     for &(x, w) in gauss(order) {
         let v = f(m + h * x);
-        for i in 0..K {
-            s[i] += w * v[i];
-            size[i] += w * v[i].abs();
+        for ((si, zi), vi) in s.iter_mut().zip(size.iter_mut()).zip(v) {
+            *si += w * vi;
+            *zi += w * vi.abs();
         }
     }
     (s.map(|x| x * h), size.map(|x| x * h.abs()))
@@ -505,13 +515,12 @@ fn adapt_k<const K: usize>(
 ) -> [f64; K] {
     let m = 0.5 * (a + b);
     let ((l, ls), (r, rs)) = (gauss_k(f, a, m, order), gauss_k(f, m, b, order));
-    let mut both = [0.0; K];
-    for i in 0..K {
-        both[i] = l[i] + r[i];
-    }
-    let ok = (0..K).all(|i| {
-        let floor = (1e-14 * both[i].abs()).max(ROUNDING * (ls[i] + rs[i]));
-        (both[i] - whole[i]).abs() <= tol[i].max(floor)
+    let mut both = l;
+    add_into(&mut both, r);
+    let sizes = ls.iter().zip(&rs);
+    let ok = both.iter().zip(&whole).zip(&tol).zip(sizes).all(|(((&x, &w), &t), (&a, &z))| {
+        let floor = (1e-14 * x.abs()).max(ROUNDING * (a + z));
+        (x - w).abs() <= t.max(floor)
     });
     if ok || depth >= 20 {
         return both;
@@ -519,11 +528,16 @@ fn adapt_k<const K: usize>(
     let half = tol.map(|t| t * 0.5);
     let x = adapt_k(f, (a, m), l, half, order, depth + 1);
     let y = adapt_k(f, (m, b), r, half, order, depth + 1);
-    let mut out = [0.0; K];
-    for i in 0..K {
-        out[i] = x[i] + y[i];
-    }
+    let mut out = x;
+    add_into(&mut out, y);
     out
+}
+
+/// `sum[i] += v[i]` for every `i`.
+fn add_into<const K: usize>(sum: &mut [f64; K], v: [f64; K]) {
+    for (s, x) in sum.iter_mut().zip(v) {
+        *s += x;
+    }
 }
 
 /// A centre and size for conditioning the integrals. The vertices' box serves: it costs no
@@ -717,8 +731,10 @@ fn vector_area(b: &Brep, f: FaceId, a: Point3, scale: f64) -> Vec3 {
             cuts.extend(c.breakpoints(t0, t1));
             cuts.push(t1);
             let mut along = Vec3::ZERO;
-            for w in cuts.windows(2) {
-                along += integrate_vec(&g, w[0], w[1], tol);
+            for piece in cuts.windows(2) {
+                if let &[a, z] = piece {
+                    along += integrate_vec(&g, a, z, tol);
+                }
             }
             sum = if coedge.reversed {
                 sum - along
@@ -772,7 +788,7 @@ pub fn area_and_volume(b: &Brep) -> (f64, f64) {
         .map(|s| {
             b.solid_faces(s)
                 .into_iter()
-                .map(|f| per[f.index()].1)
+                .filter_map(|f| per.get(f.index()).map(|x| x.1))
                 .sum::<f64>()
         })
         .sum();
@@ -795,10 +811,7 @@ pub fn mass_properties(b: &Brep) -> MassProperties {
     let mut m = [0.0; 10];
     for s in b.solid_ids() {
         for f in b.solid_faces(s) {
-            let fm = face_moments(b, f, c, scale);
-            for i in 0..10 {
-                m[i] += fm[i];
-            }
+            add_into(&mut m, face_moments(b, f, c, scale));
         }
     }
     from_moments(m, c)
@@ -809,10 +822,7 @@ pub fn solid_mass_properties(b: &Brep, s: SolidId) -> MassProperties {
     let (c, scale) = moment_reference(b);
     let mut m = [0.0; 10];
     for f in b.solid_faces(s) {
-        let fm = face_moments(b, f, c, scale);
-        for i in 0..10 {
-            m[i] += fm[i];
-        }
+        add_into(&mut m, face_moments(b, f, c, scale));
     }
     from_moments(m, c)
 }
@@ -840,16 +850,16 @@ fn from_moments(m: [f64; 10], c: Point3) -> MassProperties {
     };
     let about_c = [[m[4], m[7], m[9]], [m[7], m[5], m[8]], [m[9], m[8], m[6]]];
     let mut s = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            s[i][j] = about_c[i][j] - v * d[i] * d[j];
+    for ((s_row, about_row), &di) in s.iter_mut().zip(&about_c).zip(&d) {
+        for ((sij, &aij), &dj) in s_row.iter_mut().zip(about_row).zip(&d) {
+            *sij = aij - v * di * dj;
         }
     }
     let trace = s[0][0] + s[1][1] + s[2][2];
     let mut inertia = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            inertia[i][j] = if i == j { trace } else { 0.0 } - s[i][j];
+    for (i, (inertia_row, s_row)) in inertia.iter_mut().zip(&s).enumerate() {
+        for (j, (x, &sij)) in inertia_row.iter_mut().zip(s_row).enumerate() {
+            *x = if i == j { trace } else { 0.0 } - sij;
         }
     }
     MassProperties {
@@ -878,32 +888,57 @@ fn material_regions(b: &Brep, v: VertexId, fans: &[Vec<FaceId>], scale: f64) -> 
     let p = b.vertex(v).point;
     let near: Vec<Option<Point3>> = fans.iter().map(|fs| point_near(b, fs, p, scale)).collect();
     let n = fans.len();
-    // side[i][j]: whether fan j lies on fan i's material side.
-    let side: Vec<Vec<Option<bool>>> = (0..n)
-        .map(|i| {
-            (0..n)
-                .map(|j| near[j].and_then(|q| material_side(b, &fans[i], v, q)))
-                .collect()
-        })
+    // Row i, column j: whether fan j lies on fan i's material side.
+    let sides: Vec<Vec<Option<bool>>> = fans
+        .iter()
+        .map(|fan| near.iter().map(|nj| nj.and_then(|q| material_side(b, fan, v, q))).collect())
         .collect();
-    let mut parent: Vec<usize> = (0..n).collect();
-    fn root(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            i = p[i];
-        }
-        i
-    }
+    let side = |i: usize, j: usize| sides.get(i).and_then(|row| row.get(j)).copied().flatten();
+    let mut forest = Forest::new(n);
     for i in 0..n {
         for j in i + 1..n {
-            let mutual = side[i][j] == Some(true) && side[j][i] == Some(true);
-            let parted = (0..n).any(|k| k != i && k != j && side[k][i] != side[k][j]);
+            let mutual = side(i, j) == Some(true) && side(j, i) == Some(true);
+            let parted = (0..n).any(|k| k != i && k != j && side(k, i) != side(k, j));
             if mutual && !parted {
-                let (x, y) = (root(&mut parent, i), root(&mut parent, j));
-                parent[x.max(y)] = x.min(y);
+                forest.join(i, j);
             }
         }
     }
-    (0..n).filter(|&i| root(&mut parent, i) == i).count()
+    (0..n).filter(|&i| forest.root(i) == i).count()
+}
+
+/// Disjoint sets over `0..n`, each named by its least member.
+struct Forest(Vec<usize>);
+
+impl Forest {
+    fn new(n: usize) -> Forest {
+        Forest((0..n).collect())
+    }
+
+    /// The least member of `i`'s set; halves the path there on the way.
+    fn root(&mut self, mut i: usize) -> usize {
+        loop {
+            let Some(&up) = self.0.get(i) else { return i };
+            if up == i {
+                return i;
+            }
+            let grand = self.0.get(up).copied().unwrap_or(up);
+            if let Some(x) = self.0.get_mut(i) {
+                *x = grand;
+            }
+            i = grand;
+        }
+    }
+
+    /// Merges the sets of `i` and `j` under the lesser root.
+    fn join(&mut self, i: usize, j: usize) {
+        let (x, y) = (self.root(i), self.root(j));
+        if x != y
+            && let Some(p) = self.0.get_mut(x.max(y))
+        {
+            *p = x.min(y);
+        }
+    }
 }
 
 /// A point inside one of the faces `faces`, about `step` from their vertex at `p`.
@@ -979,9 +1014,8 @@ fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<b
     (d.abs() > 1e-3 * crate::tol::LINEAR).then_some(d < 0.0)
 }
 
-#[allow(clippy::disallowed_types)] pub fn betti(b: &Brep) -> [u64; 3] { // D26: BTree* in hardening, proven by digests
-    #[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
-    let mut verts: HashSet<VertexId> = HashSet::new();
+pub fn betti(b: &Brep) -> [u64; 3] {
+    let mut verts: BTreeSet<VertexId> = BTreeSet::new();
     let (mut edges, mut pulled) = (0i64, 0i64);
     for e in b.edge_ids() {
         let edge = b.edge(e);
@@ -1002,7 +1036,7 @@ fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<b
     // Resolving each vertex where fans meet into the manifold boundary of the interior replaces
     // it by its link, the material on a small sphere round it. Where the vertex ends an edge
     // pieces share, that is one piece of link per fan, and the edge's own term splits them.
-    let on_radial: HashSet<VertexId> = b
+    let on_radial: BTreeSet<VertexId> = b
         .radial_edges()
         .flat_map(|e| [b.edge(e).start, b.edge(e).end])
         .collect();
@@ -1026,29 +1060,18 @@ fn material_side(b: &Brep, faces: &[FaceId], v: VertexId, q: Point3) -> Option<b
     let chi = chi_b - chi_m / 2;
     // Faces' outer sides joined across the empty wedges at each edge.
     let ids: Vec<FaceId> = b.face_ids().collect();
-    let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, &f)| (f, i)).collect();
-    let mut parent: Vec<usize> = (0..ids.len()).collect();
-    #[allow(clippy::disallowed_types)] fn root(p: &mut [usize], mut i: usize) -> usize { // D26: BTree* in hardening, proven by digests
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
+    let at: BTreeMap<FaceId, usize> = ids.iter().enumerate().map(|(i, &f)| (f, i)).collect();
+    let mut forest = Forest::new(ids.len());
     for c in b.coedge_ids() {
-        if let Some(o) = b.beside(c) {
-            let (x, y) = (
-                root(&mut parent, at[&b.coedge_face(c)]),
-                root(&mut parent, at[&b.coedge_face(o)]),
-            );
-            if x != y {
-                parent[x.max(y)] = x.min(y);
-            }
+        if let Some(o) = b.beside(c)
+            && let (Some(&x), Some(&y)) = (at.get(&b.coedge_face(c)), at.get(&b.coedge_face(o)))
+        {
+            forest.join(x, y);
         }
     }
-    let mut groups: HashMap<usize, Vec<FaceId>> = HashMap::new();
+    let mut groups: BTreeMap<usize, Vec<FaceId>> = BTreeMap::new();
     for (i, &f) in ids.iter().enumerate() {
-        groups.entry(root(&mut parent, i)).or_default().push(f);
+        groups.entry(forest.root(i)).or_default().push(f);
     }
     let voids = groups
         .values()
@@ -1084,9 +1107,10 @@ impl Outline {
                 };
                 let ts = coedge_params(b, co, 64);
                 let pts: Vec<Point3> = ts.iter().map(|&t| c.eval(t)).collect();
-                for k in 0..ts.len() - 1 {
-                    let m = c.eval(0.5 * (ts[k] + ts[k + 1]));
-                    rim_sag = rim_sag.max(chord_distance(m, pts[k], pts[k + 1]));
+                for (t, q) in ts.windows(2).zip(pts.windows(2)) {
+                    let (&[t0, t1], &[q0, q1]) = (t, q) else { continue };
+                    let m = c.eval(0.5 * (t0 + t1));
+                    rim_sag = rim_sag.max(chord_distance(m, q0, q1));
                 }
                 rim.push(pts);
             }
@@ -1118,7 +1142,7 @@ impl Outline {
             .rim
             .iter()
             .flat_map(|pts| pts.windows(2))
-            .any(|w| chord_distance(p, w[0], w[1]) <= near);
+            .any(|w| matches!(*w, [a, z] if chord_distance(p, a, z) <= near));
         if !by_rim {
             return polygon;
         }
@@ -1155,9 +1179,10 @@ pub(crate) fn outline_sag(b: &Brep, f: FaceId) -> f64 {
             };
             let ts = coedge_params(b, co, 64);
             let uv = b.coedge_uvs(co, &ts);
-            for k in 0..ts.len() - 1 {
-                let m = (uv[k] + uv[k + 1]) * 0.5;
-                sag = sag.max(s.eval(m.x, m.y).dist(c.eval(0.5 * (ts[k] + ts[k + 1]))));
+            for (t, w) in ts.windows(2).zip(uv.windows(2)) {
+                let (&[t0, t1], &[w0, w1]) = (t, w) else { continue };
+                let m = (w0 + w1) * 0.5;
+                sag = sag.max(s.eval(m.x, m.y).dist(c.eval(0.5 * (t0 + t1))));
             }
         }
     }
@@ -1216,7 +1241,7 @@ pub fn edge_at(b: &Brep, p: Point3) -> Option<(crate::topo::EdgeId, f64)> {
             .filter(|&c| b.coedge(c).edge == e)
             .map(|c| b.coedge_face(c))
             .collect();
-        fs.len() == 2 && fs[0] == fs[1]
+        matches!(fs.as_slice(), [x, y] if x == y)
     };
     b.edge_ids()
         .filter_map(|e| {
@@ -1289,22 +1314,20 @@ impl<'a> Outlines<'a> {
         let b = self.b;
         // Each surface's point nearest `p`, nearest first: the first its face holds is the
         // nearest point of the faces.
-        let mut near: Vec<(f64, usize, Point3)> = self
+        let mut near: Vec<(f64, _, Point3)> = self
             .faces
             .iter()
-            .enumerate()
-            .map(|(k, held)| {
+            .map(|held| {
                 let s = &b.face(held.0).surface;
                 let uv = s.project(p);
                 let q = s.eval(uv.x, uv.y);
-                (q.dist(p), k, q)
+                (q.dist(p), held, q)
             })
             .collect();
         near.sort_by(|x, y| x.0.total_cmp(&y.0));
-        let face = near.into_iter().find_map(|(d, k, q)| {
-            let held = &self.faces[k];
-            self.on_face(held, q, 0.0).map(|uv| (d, held.0, uv))
-        });
+        let face = near
+            .into_iter()
+            .find_map(|(d, held, q)| self.on_face(held, q, 0.0).map(|uv| (d, held.0, uv)));
         let edge = b
             .edge_ids()
             .filter_map(|e| {
@@ -1435,7 +1458,9 @@ pub fn face_centroid(b: &Brep, f: FaceId) -> Point3 {
         let mut pts = Vec::new();
         for &c in &b.lp(lp).coedges {
             let uv = b.coedge_uvs(c, &coedge_params(b, c, 32));
-            pts.extend_from_slice(&uv[..uv.len() - 1]);
+            if let Some((_, all_but_last)) = uv.split_last() {
+                pts.extend_from_slice(all_but_last);
+            }
         }
         polys.push(pts);
     }
@@ -1445,8 +1470,7 @@ pub fn face_centroid(b: &Brep, f: FaceId) -> Point3 {
     // ∬ g du dv = ∮ G dv, with G(u, v) = ∫ g from u_ref to u.
     let (mut area, mut moment) = (0.0, Vec3::ZERO);
     for poly in &polys {
-        for i in 0..poly.len() {
-            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        for (&p, &q) in poly.iter().zip(poly.iter().cycle().skip(1)) {
             let dv = q.y - p.y;
             if dv == 0.0 {
                 continue;
@@ -1467,7 +1491,7 @@ pub fn face_centroid(b: &Brep, f: FaceId) -> Point3 {
         }
     }
     if area == 0.0 {
-        return polys[0].first().map_or(Vec3::ZERO, |uv| s.eval(uv.x, uv.y));
+        return polys.first().and_then(|poly| poly.first()).map_or(Vec3::ZERO, |uv| s.eval(uv.x, uv.y));
     }
     moment * (1.0 / area)
 }
