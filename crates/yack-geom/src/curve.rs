@@ -1,9 +1,13 @@
 // yack: 3-D curves: lines, circles and ellipses in closed form, B-splines, and intersection curves.
 // Adapted from springrep@a03e8a1 src/geom/curve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/geom/curve.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
+// Changes: moved from springrep's src/geom/curve.rs to yack-geom (M3 W3). M3 hardening: named
+// constants and pieces, the nearest-point searches share their sampling and local-least test over
+// iterators instead of indexing, and `extremes` asks for the spline first instead of a counted
+// `panic!`; the same arithmetic in the same order.
 //! 3-D curves: lines, circles and ellipses in closed form, B-splines, and intersection curves.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{PI, SQRT_2, TAU};
+use std::iter::once;
 
 use super::{BSpline, IntersectionCurve, NurbsCurve};
 use crate::{
@@ -44,13 +48,35 @@ pub enum Curve {
     Nurbs(Box<NurbsCurve>),
 }
 
+/// The equal steps each smooth piece is sampled at when searching for a nearest point.
+const SAMPLES_PER_PIECE: u32 = 16;
+
+/// A range at least this fraction short of a period still counts as the whole period.
+const WHOLE_PERIOD_SLACK: f64 = 1e-12; // tol: relative rounding of a period's length
+
+/// The most Newton steps a nearest-point refinement takes.
+const NEWTON_STEPS: usize = 50;
+
+/// A Newton step this small, relative to the parameter, has converged.
+const NEWTON_STEP_DONE: f64 = 1e-15; // tol: relative parameter rounding
+
+/// A distance derivative this small is flat: Newton's method stops there.
+const FLAT_SLOPE: f64 = 1e-300; // tol: guards a division, not a geometric tolerance
+
+/// The intervals each smooth piece is sampled at when looking for a stationary coordinate.
+const ROOT_SAMPLES_PER_PIECE: usize = 12;
+
+/// The bisection steps that pin the nearest point of an ellipse: more than enough to reach the
+/// last bit of any `f64`.
+const ELLIPSE_BISECTIONS: usize = 1100;
+
 impl Line {
     /// The line from `a` to `b`, parameterised by arc length from `a`; `None` if they coincide.
     pub fn through(a: Point3, b: Point3) -> Option<(Line, f64)> {
         let d = b - a;
-        let len = d.norm();
+        let length = d.norm();
         let dir = d.unit()?;
-        Some((Line { origin: a, dir }, len))
+        Some((Line { origin: a, dir }, length))
     }
 }
 
@@ -67,24 +93,21 @@ impl Curve {
     }
 
     pub fn eval(&self, t: f64) -> Point3 {
-        match self {
-            Curve::BSpline(b) => b.eval(t),
-            Curve::Intersection(c) => c.approx.eval(t),
-            _ => self.d2(t).0,
+        match self.spline() {
+            Some(spline) => spline.eval(t),
+            None => self.d2(t).0,
         }
     }
 
     pub fn d1(&self, t: f64) -> (Point3, Vec3) {
-        let spline = |b: &BSpline| {
-            let [p, d, _] = b.eval_ders(t, 1);
-            (p, d)
-        };
-        match self {
-            Curve::BSpline(b) => spline(b),
-            Curve::Intersection(c) => spline(&c.approx),
-            _ => {
-                let (p, d, _) = self.d2(t);
-                (p, d)
+        match self.spline() {
+            Some(spline) => {
+                let [point, tangent, _] = spline.eval_ders(t, 1);
+                (point, tangent)
+            }
+            None => {
+                let (point, tangent, _) = self.d2(t);
+                (point, tangent)
             }
         }
     }
@@ -92,53 +115,53 @@ impl Curve {
     /// The spline the curve evaluates, for the B-spline and intersection curves.
     pub fn spline(&self) -> Option<&BSpline> {
         match self {
-            Curve::BSpline(b) => Some(b),
-            Curve::Intersection(c) => Some(&c.approx),
+            Curve::BSpline(spline) => Some(spline),
+            Curve::Intersection(curve) => Some(&curve.approx),
             _ => None,
         }
     }
 
     pub fn d2(&self, t: f64) -> (Point3, Vec3, Vec3) {
         match self {
-            Curve::Line(l) => (l.origin + l.dir * t, l.dir, Vec3::ZERO),
-            Curve::Circle(c) => {
-                let (s, co) = t.sin_cos();
-                let f = &c.frame;
-                let r = c.radius;
+            Curve::Line(line) => (line.origin + line.dir * t, line.dir, Vec3::ZERO),
+            Curve::Circle(circle) => {
+                let (sin, cos) = t.sin_cos();
+                let f = &circle.frame;
+                let r = circle.radius;
                 (
-                    f.origin + (f.x * co + f.y * s) * r,
-                    (f.y * co - f.x * s) * r,
-                    (f.x * co + f.y * s) * -r,
+                    f.origin + (f.x * cos + f.y * sin) * r,
+                    (f.y * cos - f.x * sin) * r,
+                    (f.x * cos + f.y * sin) * -r,
                 )
             }
-            Curve::Ellipse(e) => {
-                let (s, co) = t.sin_cos();
-                let f = &e.frame;
-                let (a, b) = (e.major, e.minor);
+            Curve::Ellipse(ellipse) => {
+                let (sin, cos) = t.sin_cos();
+                let f = &ellipse.frame;
+                let (a, b) = (ellipse.major, ellipse.minor);
                 (
-                    f.origin + f.x * (a * co) + f.y * (b * s),
-                    f.y * (b * co) - f.x * (a * s),
-                    -(f.x * (a * co) + f.y * (b * s)),
+                    f.origin + f.x * (a * cos) + f.y * (b * sin),
+                    f.y * (b * cos) - f.x * (a * sin),
+                    -(f.x * (a * cos) + f.y * (b * sin)),
                 )
             }
-            Curve::BSpline(b) => {
-                let [p, d, dd] = b.eval_ders(t, 2);
-                (p, d, dd)
+            Curve::BSpline(spline) => {
+                let [point, d1, d2] = spline.eval_ders(t, 2);
+                (point, d1, d2)
             }
-            Curve::Intersection(c) => {
-                let [p, d, dd] = c.approx.eval_ders(t, 2);
-                (p, d, dd)
+            Curve::Intersection(curve) => {
+                let [point, d1, d2] = curve.approx.eval_ders(t, 2);
+                (point, d1, d2)
             }
-            Curve::Nurbs(c) => c.d2(t),
+            Curve::Nurbs(nurbs) => nurbs.d2(t),
         }
     }
 
     pub fn period(&self) -> Option<f64> {
         match self {
             Curve::Circle(_) | Curve::Ellipse(_) => Some(TAU),
-            Curve::BSpline(b) => b.period(),
-            Curve::Intersection(c) => c.approx.period(),
-            Curve::Nurbs(c) => c.period(),
+            Curve::BSpline(spline) => spline.period(),
+            Curve::Intersection(curve) => curve.approx.period(),
+            Curve::Nurbs(nurbs) => nurbs.period(),
             Curve::Line(_) => None,
         }
     }
@@ -148,9 +171,9 @@ impl Curve {
         match self {
             Curve::Line(_) => (f64::NEG_INFINITY, f64::INFINITY),
             Curve::Circle(_) | Curve::Ellipse(_) => (0.0, TAU),
-            Curve::BSpline(b) => b.domain(),
-            Curve::Intersection(c) => c.approx.domain(),
-            Curve::Nurbs(c) => c.domain(),
+            Curve::BSpline(spline) => spline.domain(),
+            Curve::Intersection(curve) => curve.approx.domain(),
+            Curve::Nurbs(nurbs) => nurbs.domain(),
         }
     }
 
@@ -158,123 +181,114 @@ impl Curve {
     /// sampling split there.
     pub fn breakpoints(&self, t0: f64, t1: f64) -> Vec<f64> {
         match self {
-            Curve::BSpline(b) => b.breakpoints(t0, t1),
-            Curve::Intersection(c) => c.approx.breakpoints(t0, t1),
-            Curve::Nurbs(c) => c.breakpoints(t0, t1),
+            Curve::BSpline(spline) => spline.breakpoints(t0, t1),
+            Curve::Intersection(curve) => curve.approx.breakpoints(t0, t1),
+            Curve::Nurbs(nurbs) => nurbs.breakpoints(t0, t1),
             _ => Vec::new(),
         }
     }
 
+    /// `t0`, the breakpoints between and `t1`: the ends of the curve's smooth pieces over them.
+    fn piece_ends(&self, t0: f64, t1: f64) -> Vec<f64> {
+        once(t0).chain(self.breakpoints(t0, t1)).chain(once(t1)).collect()
+    }
+
     pub fn transformed(&self, t: &Transform) -> Curve {
         match self {
-            Curve::Line(l) => Curve::Line(Line {
-                origin: t.point(l.origin),
-                dir: t.vector(l.dir),
-            }),
-            Curve::Circle(c) => Curve::Circle(Circle {
-                frame: c.frame.transformed(t),
-                radius: c.radius,
-            }),
-            Curve::Ellipse(e) => Curve::Ellipse(Ellipse {
-                frame: e.frame.transformed(t),
-                ..*e
-            }),
-            Curve::BSpline(b) => Curve::BSpline(b.transformed(t)),
-            Curve::Intersection(c) => Curve::Intersection(Box::new(c.transformed(t))),
-            Curve::Nurbs(c) => Curve::Nurbs(Box::new(c.transformed(t))),
+            Curve::Line(line) => {
+                Curve::Line(Line { origin: t.point(line.origin), dir: t.vector(line.dir) })
+            }
+            Curve::Circle(circle) => {
+                Curve::Circle(Circle { frame: circle.frame.transformed(t), radius: circle.radius })
+            }
+            Curve::Ellipse(ellipse) => {
+                Curve::Ellipse(Ellipse { frame: ellipse.frame.transformed(t), ..*ellipse })
+            }
+            Curve::BSpline(spline) => Curve::BSpline(spline.transformed(t)),
+            Curve::Intersection(curve) => Curve::Intersection(Box::new(curve.transformed(t))),
+            Curve::Nurbs(nurbs) => Curve::Nurbs(Box::new(nurbs.transformed(t))),
         }
     }
 
     /// The parameter in [t0, t1] of the point of the curve nearest `p`.
     pub fn project(&self, p: Point3, t0: f64, t1: f64) -> f64 {
         match self {
-            Curve::Line(l) => (p - l.origin).dot(l.dir).clamp(t0, t1),
-            Curve::Circle(c) => {
-                let q = c.frame.to_local(p);
-                let a = q.y.atan2(q.x);
-                self.angle_in_range(a, p, t0, t1)
+            Curve::Line(line) => (p - line.origin).dot(line.dir).clamp(t0, t1),
+            Curve::Circle(circle) => {
+                let q = circle.frame.to_local(p);
+                self.angle_in_range(q.y.atan2(q.x), p, t0, t1)
             }
-            Curve::Ellipse(e) => {
-                let q = e.frame.to_local(p);
-                let t = ellipse_nearest(e.major, e.minor, q.x, q.y);
+            Curve::Ellipse(ellipse) => {
+                let q = ellipse.frame.to_local(p);
+                let t = ellipse_nearest(ellipse.major, ellipse.minor, q.x, q.y);
                 let t = t0 + (t - t0).rem_euclid(TAU);
                 if t <= t1 {
                     return t;
                 }
                 // The nearest point lies outside the range: the nearest within it is an end or a
                 // second local least, which the sampled search finds.
-                let s = self.project_numeric(p, t0, t1);
-                [t0, t1, s]
+                let sampled = self.project_numeric(p, t0, t1);
+                [t0, t1, sampled]
                     .into_iter()
                     .min_by(|&x, &y| self.eval(x).dist(p).total_cmp(&self.eval(y).dist(p)))
-                    .unwrap_or(s)
+                    .unwrap_or(sampled)
             }
-            Curve::Nurbs(n) => {
-                let (a, b) = n.domain();
-                if n.period().is_none() && (t0 < a || t1 > b) {
+            Curve::Nurbs(nurbs) => {
+                let (start, end) = nurbs.domain();
+                if nurbs.period().is_none() && (t0 < start || t1 > end) {
                     self.project_numeric(p, t0, t1)
                 } else {
-                    self.project_pieces(p, t0, t1, |t| n.span_box(t))
+                    self.project_pieces(p, t0, t1, |t| nurbs.span_box(t))
                 }
             }
             _ => match self.spline() {
-                Some(b) => b.nearest(p, None, t0, t1),
+                Some(spline) => spline.nearest(p, None, t0, t1),
                 None => self.project_numeric(p, t0, t1),
             },
         }
     }
 
-    fn angle_in_range(&self, a: f64, p: Point3, t0: f64, t1: f64) -> f64 {
-        let a = t0 + (a - t0).rem_euclid(TAU);
-        if a <= t1 {
-            return a;
+    /// The angle `angle` moved by whole turns into [t0, t1], or else the nearer end of the range.
+    fn angle_in_range(&self, angle: f64, p: Point3, t0: f64, t1: f64) -> f64 {
+        let angle = t0 + (angle - t0).rem_euclid(TAU);
+        if angle <= t1 {
+            return angle;
         }
-        let near0 = self.eval(t0).dist(p);
-        let near1 = self.eval(t1).dist(p);
-        if near0 <= near1 { t0 } else { t1 }
+        let to_start = self.eval(t0).dist(p);
+        let to_end = self.eval(t1).dist(p);
+        if to_start <= to_end { t0 } else { t1 }
+    }
+
+    /// The period, if [t0, t1] spans a whole one: a nearest-point search then wraps round it.
+    fn period_spanned(&self, t0: f64, t1: f64) -> Option<f64> {
+        self.period().filter(|&period| t1 - t0 >= period * (1.0 - WHOLE_PERIOD_SLACK))
+    }
+
+    /// `(distance to p, t)` at [`SAMPLES_PER_PIECE`] equal steps over [a, b], both ends included.
+    fn piece_samples(&self, p: Point3, a: f64, b: f64) -> impl Iterator<Item = (f64, f64)> + '_ {
+        (0..=SAMPLES_PER_PIECE).map(move |k| {
+            let t = a + (b - a) * f64::from(k) / f64::from(SAMPLES_PER_PIECE);
+            (self.eval(t).dist(p), t)
+        })
     }
 
     /// The nearest point by samples, each local least of them refined by Newton's method. Over a
     /// whole period of a closed curve the parameter wraps round instead of stopping at the range's
     /// ends, which are one point: the nearest point can lie just across them from the best sample.
     fn project_numeric(&self, p: Point3, t0: f64, t1: f64) -> f64 {
-        let wrap = self.period().filter(|&w| t1 - t0 >= w * (1.0 - 1e-12));
-        let mut cuts = vec![t0];
-        cuts.extend(self.breakpoints(t0, t1));
-        cuts.push(t1);
-        let mut samples: Vec<(f64, f64)> = Vec::new();
-        for w in cuts.windows(2) {
-            let n = 16;
-            for i in 0..=n {
-                let t = w[0] + (w[1] - w[0]) * i as f64 / n as f64;
-                samples.push((self.eval(t).dist(p), t));
-            }
-        }
-        let refine = |t: f64| self.refine_nearest(p, t, t0, t1, wrap);
-        let n = samples.len();
+        let wrap = self.period_spanned(t0, t1);
+        let ends = self.piece_ends(t0, t1);
+        let samples: Vec<(f64, f64)> =
+            consecutive(&ends).flat_map(|(a, b)| self.piece_samples(p, a, b)).collect();
         let mut best = samples
             .iter()
             .copied()
-            .fold((f64::INFINITY, t0), |a, b| if b.0 < a.0 { b } else { a });
-        for k in 0..n {
-            let d = samples[k].0;
-            let before = if k > 0 {
-                samples[k - 1].0
-            } else {
-                f64::INFINITY
-            };
-            let after = if k + 1 < n {
-                samples[k + 1].0
-            } else {
-                f64::INFINITY
-            };
-            if d > before || d > after {
-                continue;
-            }
-            let t = refine(samples[k].1);
-            let dt = self.eval(t).dist(p);
-            if dt < best.0 {
-                best = (dt, t);
+            .fold((f64::INFINITY, t0), |best, s| if s.0 < best.0 { s } else { best });
+        for start in local_leasts(&samples) {
+            let t = self.refine_nearest(p, start, t0, t1, wrap);
+            let distance = self.eval(t).dist(p);
+            if distance < best.0 {
+                best = (distance, t);
             }
         }
         best.1
@@ -285,62 +299,29 @@ impl Curve {
     /// sampled as there, and a sample is a local least as there, its neighbour across a piece's end
     /// being the same point.
     fn project_pieces(&self, p: Point3, t0: f64, t1: f64, hull: impl Fn(f64) -> Aabb) -> f64 {
-        let wrap = self.period().filter(|&w| t1 - t0 >= w * (1.0 - 1e-12));
-        let mut cuts = vec![t0];
-        cuts.extend(self.breakpoints(t0, t1));
-        cuts.push(t1);
-        let gap = |bb: &Aabb| {
-            let d = Vec3::new(
-                (bb.min.x - p.x).max(p.x - bb.max.x).max(0.0),
-                (bb.min.y - p.y).max(p.y - bb.max.y).max(0.0),
-                (bb.min.z - p.z).max(p.z - bb.max.z).max(0.0),
-            );
-            d.norm()
-        };
-        let mut order: Vec<(f64, usize)> = cuts
-            .windows(2)
-            .enumerate()
-            .map(|(i, w)| (gap(&hull(0.5 * (w[0] + w[1]))), i))
+        let wrap = self.period_spanned(t0, t1);
+        let ends = self.piece_ends(t0, t1);
+        let mut pieces: Vec<(f64, f64, f64)> = consecutive(&ends)
+            .map(|(a, b)| (box_distance(&hull(0.5 * (a + b)), p), a, b))
             .collect();
-        order.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let last = cuts.len() - 2;
-        let n = 16;
+        pieces.sort_by(|x, y| x.0.total_cmp(&y.0));
         let mut best = (f64::INFINITY, t0);
-        let mut ds = [0.0; 17];
-        for (g, i) in order {
-            if g > best.0 {
+        let mut samples = [(0.0, 0.0); SAMPLES_PER_PIECE as usize + 1];
+        for (box_gap, a, b) in pieces {
+            if box_gap > best.0 {
                 break;
             }
-            let (a, b) = (cuts[i], cuts[i + 1]);
-            for (k, d) in ds.iter_mut().enumerate() {
-                let t = a + (b - a) * k as f64 / n as f64;
-                *d = self.eval(t).dist(p);
-                if *d < best.0 {
-                    best = (*d, t);
+            for (slot, sample) in samples.iter_mut().zip(self.piece_samples(p, a, b)) {
+                *slot = sample;
+                if sample.0 < best.0 {
+                    best = sample;
                 }
             }
-            for k in 0..=n {
-                let before = if k > 0 {
-                    ds[k - 1]
-                } else if i == 0 {
-                    f64::INFINITY
-                } else {
-                    ds[0]
-                };
-                let after = if k < n {
-                    ds[k + 1]
-                } else if i == last {
-                    f64::INFINITY
-                } else {
-                    ds[n]
-                };
-                if ds[k] > before || ds[k] > after {
-                    continue;
-                }
-                let t = self.refine_nearest(p, a + (b - a) * k as f64 / n as f64, t0, t1, wrap);
-                let dt = self.eval(t).dist(p);
-                if dt < best.0 {
-                    best = (dt, t);
+            for start in local_leasts(&samples) {
+                let t = self.refine_nearest(p, start, t0, t1, wrap);
+                let distance = self.eval(t).dist(p);
+                if distance < best.0 {
+                    best = (distance, t);
                 }
             }
         }
@@ -350,20 +331,20 @@ impl Curve {
     /// Newton's method on the squared distance to `p` from `t`, held to [t0, t1] or wrapped
     /// round `wrap`.
     fn refine_nearest(&self, p: Point3, mut t: f64, t0: f64, t1: f64, wrap: Option<f64>) -> f64 {
-        for _ in 0..50 {
-            let (c, d1, d2) = self.d2(t);
-            let r = c - p;
-            let f = r.dot(d1);
-            let df = d1.norm2() + r.dot(d2);
-            if df.abs() < 1e-300 {
+        for _ in 0..NEWTON_STEPS {
+            let (point, d1, d2) = self.d2(t);
+            let r = point - p;
+            let slope = r.dot(d1);
+            let curvature = d1.norm2() + r.dot(d2);
+            if curvature.abs() < FLAT_SLOPE {
                 break;
             }
-            let step = f / df.max(d1.norm2() * 0.1);
+            let step = slope / curvature.max(d1.norm2() * 0.1);
             let next = match wrap {
-                Some(w) => t0 + (t - step - t0).rem_euclid(w),
+                Some(period) => t0 + (t - step - t0).rem_euclid(period),
                 None => (t - step).clamp(t0, t1),
             };
-            let done = step.abs() <= 1e-15 * (1.0 + t.abs()) || next == t;
+            let done = step.abs() <= NEWTON_STEP_DONE * (1.0 + t.abs()) || next == t;
             t = next;
             if done {
                 break;
@@ -372,62 +353,80 @@ impl Curve {
         t
     }
 
-    /// Parameters strictly inside (t0, t1) where the curve's coordinate along `dir` is stationary.
     /// The tight box of the curve over [t0, t1].
     pub fn bbox(&self, t0: f64, t1: f64) -> Aabb {
-        if let Some(s) = self.spline() {
-            return s.bbox(t0, t1);
+        if let Some(spline) = self.spline() {
+            return spline.bbox(t0, t1);
         }
         let mut bb = Aabb::EMPTY;
         bb.add(self.eval(t0));
         bb.add(self.eval(t1));
-        for ax in [Vec3::X, Vec3::Y, Vec3::Z] {
-            for t in self.extremes(ax, t0, t1) {
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            for t in self.extremes(axis, t0, t1) {
                 bb.add(self.eval(t));
             }
         }
         bb
     }
 
-    #[allow(clippy::panic)] pub fn extremes(&self, dir: Vec3, t0: f64, t1: f64) -> Vec<f64> {
-        let in_range = |base: f64| -> Vec<f64> {
-            let mut out = Vec::new();
-            let k0 = ((t0 - base) / PI).floor() as i64;
-            let k1 = ((t1 - base) / PI).ceil() as i64;
-            for k in k0..=k1 {
-                let t = base + k as f64 * PI;
-                if t > t0 && t < t1 {
-                    out.push(t);
-                }
-            }
-            out
+    /// Parameters strictly inside (t0, t1) where the curve's coordinate along `dir` is stationary.
+    pub fn extremes(&self, dir: Vec3, t0: f64, t1: f64) -> Vec<f64> {
+        if let Some(spline) = self.spline() {
+            return spline.extremes(dir, t0, t1);
+        }
+        let inside = |t: &f64| *t > t0 && *t < t1;
+        // A conic's coordinate is stationary at `base` and every half turn from it.
+        let half_turns_from = |base: f64| -> Vec<f64> {
+            let first = ((t0 - base) / PI).floor() as i64;
+            let last = ((t1 - base) / PI).ceil() as i64;
+            (first..=last).map(|k| base + k as f64 * PI).filter(inside).collect()
         };
         match self {
             Curve::Line(_) => Vec::new(),
-            Curve::Circle(c) => in_range(dir.dot(c.frame.y).atan2(dir.dot(c.frame.x))),
-            Curve::Ellipse(e) => {
-                in_range((e.minor * dir.dot(e.frame.y)).atan2(e.major * dir.dot(e.frame.x)))
+            Curve::Circle(circle) => {
+                half_turns_from(dir.dot(circle.frame.y).atan2(dir.dot(circle.frame.x)))
             }
-            _ if self.spline().is_some() => {
-                self.spline().unwrap_or_else(|| panic!("checked above")).extremes(dir, t0, t1)
-            }
+            Curve::Ellipse(ellipse) => half_turns_from(
+                (ellipse.minor * dir.dot(ellipse.frame.y))
+                    .atan2(ellipse.major * dir.dot(ellipse.frame.x)),
+            ),
             _ => {
-                let mut cuts = vec![t0];
-                cuts.extend(self.breakpoints(t0, t1));
-                cuts.push(t1);
-                let mut out = Vec::new();
-                for w in cuts.windows(2) {
-                    let mut f = |t: f64| self.d1(t).1.dot(dir);
-                    for r in numeric::roots(&mut f, w[0], w[1], 12) {
-                        if r > t0 && r < t1 {
-                            out.push(r);
-                        }
-                    }
-                }
-                out
+                let ends = self.piece_ends(t0, t1);
+                let mut along = |t: f64| self.d1(t).1.dot(dir);
+                consecutive(&ends)
+                    .flat_map(|(a, b)| numeric::roots(&mut along, a, b, ROOT_SAMPLES_PER_PIECE))
+                    .filter(inside)
+                    .collect()
             }
         }
     }
+}
+
+/// Each value paired with the next.
+fn consecutive(values: &[f64]) -> impl Iterator<Item = (f64, f64)> + '_ {
+    values.iter().copied().zip(values.iter().copied().skip(1))
+}
+
+/// The parameters of the `(distance, t)` samples no farther than either neighbour: the local
+/// leasts of the distance, the ends having no neighbour beyond them.
+fn local_leasts(samples: &[(f64, f64)]) -> impl Iterator<Item = f64> + '_ {
+    let distances = samples.iter().map(|&(distance, _)| distance);
+    let before = once(f64::INFINITY).chain(distances.clone());
+    let after = distances.skip(1).chain(once(f64::INFINITY));
+    before.zip(samples).zip(after).filter_map(|((before, &(distance, t)), after)| {
+        let farther = distance > before || distance > after;
+        (!farther).then_some(t)
+    })
+}
+
+/// The distance from `p` to the nearest point of the box `bb`; zero inside it.
+fn box_distance(bb: &Aabb, p: Point3) -> f64 {
+    Vec3::new(
+        (bb.min.x - p.x).max(p.x - bb.max.x).max(0.0),
+        (bb.min.y - p.y).max(p.y - bb.max.y).max(0.0),
+        (bb.min.z - p.z).max(p.z - bb.max.z).max(0.0),
+    )
+    .norm()
 }
 
 /// The parameter `t` of the point `(a cos t, b sin t)` nearest `(x, y)`, solved rather than
@@ -440,7 +439,7 @@ impl Curve {
 /// bisection pins it to the last bit. The other quadrants follow by symmetry. On an axis the
 /// equation loses a term, and the answer is the vertex on that axis, or, on the longer axis
 /// inside the centres of curvature of its vertices, the point whose normal passes through.
-pub(crate) fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
+fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
     let (px, py) = (x.abs(), y.abs());
     let (a2, b2) = (a * a, b * b);
     let (u, v) = if px == 0.0 && py == 0.0 {
@@ -466,11 +465,9 @@ pub(crate) fn ellipse_nearest(a: f64, b: f64, x: f64, y: f64) -> f64 {
         // F is positive just above −min(a, b)², and negative once λ passes the larger of the
         // two terms' own roots: each term is then below a half.
         let mut lo = -a2.min(b2);
-        let mut hi = (std::f64::consts::SQRT_2 * a * px - a2)
-            .max(std::f64::consts::SQRT_2 * b * py - b2)
-            .max(lo);
+        let mut hi = (SQRT_2 * a * px - a2).max(SQRT_2 * b * py - b2).max(lo);
         let mut l = hi;
-        for _ in 0..1100 {
+        for _ in 0..ELLIPSE_BISECTIONS {
             l = 0.5 * (lo + hi);
             if l == lo || l == hi {
                 break;
@@ -522,11 +519,7 @@ mod tests {
     fn ellipse_projection_finds_a_nearest_point_just_across_its_start() {
         // The nearest point is at t = -0.08, a period from the range's end: the best of the
         // samples is the start, and a step clamped there stops short of it.
-        let e = Curve::Ellipse(Ellipse {
-            frame: Frame::WORLD,
-            major: 5.0,
-            minor: 3.0,
-        });
+        let e = Curve::Ellipse(Ellipse { frame: Frame::WORLD, major: 5.0, minor: 3.0 });
         let want = TAU - 0.08;
         let p = e.eval(want);
         let t = e.project(p, 0.0, TAU);
@@ -538,11 +531,7 @@ mod tests {
     fn ellipse_projection_is_exact_beside_a_sharp_tip() {
         // A long thin ellipse, its two sides a hair apart near the tip: every point on it
         // projects to itself, wherever the samples fall.
-        let e = Curve::Ellipse(Ellipse {
-            frame: Frame::WORLD,
-            major: 20.0,
-            minor: 0.3,
-        });
+        let e = Curve::Ellipse(Ellipse { frame: Frame::WORLD, major: 20.0, minor: 0.3 });
         for k in 0..400 {
             let t = TAU * k as f64 / 400.0 + 0.003;
             let p = e.eval(t);
@@ -564,11 +553,7 @@ mod tests {
     #[test]
     fn ellipse_projection_and_extremes() {
         let frame = Frame::WORLD;
-        let e = Curve::Ellipse(Ellipse {
-            frame,
-            major: 30.0,
-            minor: 20.0,
-        });
+        let e = Curve::Ellipse(Ellipse { frame, major: 30.0, minor: 20.0 });
         let t = e.project(Vec3::new(40.0, 1.0, 0.0), 0.0, TAU);
         assert!(t.abs() < 0.1);
         let ext = e.extremes(Vec3::X, 0.0, TAU);
@@ -590,13 +575,10 @@ mod tests {
         if closed {
             ctrl[n - 1] = ctrl[0];
         }
-        let knots: Vec<f64> = (0..n + 4)
-            .map(|i| (i as f64 - 3.0).clamp(0.0, (n - 3) as f64))
-            .collect();
+        let knots: Vec<f64> =
+            (0..n + 4).map(|i| (i as f64 - 3.0).clamp(0.0, (n - 3) as f64)).collect();
         let weights = (0..n).map(|i| 1.0 + 0.3 * (i % 3) as f64).collect();
-        Curve::Nurbs(Box::new(
-            NurbsCurve::new(3, knots, ctrl, Some(weights)).unwrap(),
-        ))
+        Curve::Nurbs(Box::new(NurbsCurve::new(3, knots, ctrl, Some(weights)).unwrap()))
     }
 
     #[test]

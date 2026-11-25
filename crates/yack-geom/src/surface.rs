@@ -1,12 +1,15 @@
 // yack: Surfaces: the analytic five in closed form, and the swept and ruled surfaces built on curves.
 // Adapted from springrep@a03e8a1 src/geom/surface.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/geom/surface.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
+// Changes: moved from springrep's src/geom/surface.rs to yack-geom (M3 W3). M3 hardening: named
+// constants and bindings, iterators instead of indexing, and an extrusion's projection asks for
+// its spline once instead of a counted `panic!`; the same arithmetic in the same order.
 //! Surfaces: the analytic five in closed form, and the swept and ruled surfaces built on curves.
 //!
 //! Each surface's natural normal is `∂S/∂u × ∂S/∂v`; a face whose material lies on that side is
 //! not reversed. On every surface swept about an axis `u` is the angle about it.
 
 use std::f64::consts::TAU;
+use std::iter::once;
 
 use super::{Curve, NurbsSurface};
 use crate::{
@@ -89,12 +92,50 @@ pub enum Surface {
     Nurbs(Box<NurbsSurface>),
 }
 
-fn d_radial(f: &Frame, u: f64) -> Vec3 {
-    f.y * u.cos() - f.x * u.sin()
+/// A point this near a frame's axis, in both local coordinates, has angle zero about it.
+const ON_AXIS: f64 = 1e-300; // tol: guards `atan2` at the origin, not a geometric tolerance
+
+/// A derivatives' cross product shorter than this is degenerate: no normal is read from it.
+const DEGENERATE_CROSS: f64 = 1e-12; // tol: squared-length scale of a vanishing normal
+
+/// How far a degenerate normal's probes step off the point, in parameter.
+const POLE_PROBE: f64 = 1e-6; // tol: parameter offset to read a limit normal
+
+/// Two points within this fraction of [`tol::LINEAR`] are one point: the hint's `u` names a pole.
+const POLE_FRACTION: f64 = 1e-3; // tol: fraction of the linear tolerance
+
+/// The most Newton steps a projection takes.
+const PROJECTION_STEPS: usize = 60;
+
+/// The most Newton steps along an extrusion's curve.
+const EXTRUSION_STEPS: usize = 30;
+
+/// A Newton step this small, relative to the parameters, has converged.
+const STEP_DONE: f64 = 1e-15; // tol: relative parameter rounding
+
+/// A Newton step that moves the point farther than this relative rounding is refused.
+const FARTHER: f64 = 1e-12; // tol: relative distance rounding
+
+/// The absolute slack on that comparison, for a point already on the surface.
+const DISTANCE_ROUNDING: f64 = 1e-15; // tol: absolute distance rounding
+
+/// An extrusion's Newton iteration whose last step is below this, relative to `u`, has settled.
+const EXTRUSION_SETTLED: f64 = 1e-9; // tol: relative parameter rounding
+
+/// The largest parameter magnitude searched on a curve without a finite domain (a line).
+const SEARCH_EXTENT: f64 = 1e4;
+
+/// The seeds each smooth piece of a curve gives a projection's search.
+const SEEDS_PER_PIECE: u32 = 8;
+
+/// The derivative of [`Frame::radial`] by `u`.
+fn d_radial(frame: &Frame, u: f64) -> Vec3 {
+    frame.y * u.cos() - frame.x * u.sin()
 }
 
+/// The angle of `local` about the frame's `z`, in [0, 2π); zero on the axis.
 fn angle_of(local: Vec3) -> f64 {
-    if local.x.abs() < 1e-300 && local.y.abs() < 1e-300 {
+    if local.x.abs() < ON_AXIS && local.y.abs() < ON_AXIS {
         0.0
     } else {
         local.y.atan2(local.x).rem_euclid(TAU)
@@ -123,77 +164,67 @@ impl Surface {
     /// The point and its two first partial derivatives.
     pub fn d1(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
         match self {
-            Surface::Plane(s) => (s.frame.at(u, v), s.frame.x, s.frame.y),
-            Surface::Cylinder(s) => {
-                let f = &s.frame;
-                let e = f.radial(u);
+            Surface::Plane(plane) => (plane.frame.at(u, v), plane.frame.x, plane.frame.y),
+            Surface::Cylinder(cylinder) => {
+                let f = &cylinder.frame;
+                let radial = f.radial(u);
                 (
-                    f.origin + e * s.radius + f.z * v,
-                    d_radial(f, u) * s.radius,
+                    f.origin + radial * cylinder.radius + f.z * v,
+                    d_radial(f, u) * cylinder.radius,
                     f.z,
                 )
             }
-            Surface::Cone(s) => {
-                let f = &s.frame;
-                let (sa, ca) = s.half_angle.sin_cos();
-                let rho = s.radius + v * sa;
-                let e = f.radial(u);
+            Surface::Cone(cone) => {
+                let f = &cone.frame;
+                let (sin, cos) = cone.half_angle.sin_cos();
+                let rho = cone.radius + v * sin;
+                let radial = f.radial(u);
                 (
-                    f.origin + e * rho + f.z * (v * ca),
+                    f.origin + radial * rho + f.z * (v * cos),
                     d_radial(f, u) * rho,
-                    e * sa + f.z * ca,
+                    radial * sin + f.z * cos,
                 )
             }
-            Surface::Sphere(s) => {
-                let f = &s.frame;
-                let (sv, cv) = v.sin_cos();
-                let e = f.radial(u);
-                let r = s.radius;
+            Surface::Sphere(sphere) => {
+                let f = &sphere.frame;
+                let (sin, cos) = v.sin_cos();
+                let radial = f.radial(u);
+                let r = sphere.radius;
                 (
-                    f.origin + (e * cv + f.z * sv) * r,
-                    d_radial(f, u) * (r * cv),
-                    (f.z * cv - e * sv) * r,
+                    f.origin + (radial * cos + f.z * sin) * r,
+                    d_radial(f, u) * (r * cos),
+                    (f.z * cos - radial * sin) * r,
                 )
             }
-            Surface::Torus(s) => {
-                let f = &s.frame;
-                let (sv, cv) = v.sin_cos();
-                let e = f.radial(u);
-                let rho = s.major + s.minor * cv;
+            Surface::Torus(torus) => {
+                let f = &torus.frame;
+                let (sin, cos) = v.sin_cos();
+                let radial = f.radial(u);
+                let rho = torus.major + torus.minor * cos;
                 (
-                    f.origin + e * rho + f.z * (s.minor * sv),
+                    f.origin + radial * rho + f.z * (torus.minor * sin),
                     d_radial(f, u) * rho,
-                    (f.z * cv - e * sv) * s.minor,
+                    (f.z * cos - radial * sin) * torus.minor,
                 )
             }
-            Surface::Extrusion(s) => {
-                let (p, d) = s.curve.d1(u);
-                (p + s.dir * v, d, s.dir)
+            Surface::Extrusion(extrusion) => {
+                let (point, tangent) = extrusion.curve.d1(u);
+                (point + extrusion.dir * v, tangent, extrusion.dir)
             }
-            Surface::Revolution(s) => {
-                let (q, dq) = s.curve.d1(v);
-                let rot = Transform::rotation(s.origin, s.axis, u);
-                let p = rot.point(q);
-                (p, s.axis.cross(p - s.origin), rot.vector(dq))
+            Surface::Revolution(revolution) => {
+                let (q, dq) = revolution.curve.d1(v);
+                let rotation = Transform::rotation(revolution.origin, revolution.axis, u);
+                let point = rotation.point(q);
+                (point, revolution.axis.cross(point - revolution.origin), rotation.vector(dq))
             }
-            Surface::Ruled(s) => {
-                let (ta, sa) = (
-                    s.a_range.0 + u * (s.a_range.1 - s.a_range.0),
-                    s.a_range.1 - s.a_range.0,
-                );
-                let (tb, sb) = (
-                    s.b_range.0 + u * (s.b_range.1 - s.b_range.0),
-                    s.b_range.1 - s.b_range.0,
-                );
-                let (pa, da) = s.a.d1(ta);
-                let (pb, db) = s.b.d1(tb);
-                (
-                    pa.lerp(pb, v),
-                    da * (sa * (1.0 - v)) + db * (sb * v),
-                    pb - pa,
-                )
+            Surface::Ruled(ruled) => {
+                let a_span = ruled.a_range.1 - ruled.a_range.0;
+                let b_span = ruled.b_range.1 - ruled.b_range.0;
+                let (pa, da) = ruled.a.d1(ruled.a_range.0 + u * a_span);
+                let (pb, db) = ruled.b.d1(ruled.b_range.0 + u * b_span);
+                (pa.lerp(pb, v), da * (a_span * (1.0 - v)) + db * (b_span * v), pb - pa)
             }
-            Surface::Nurbs(s) => s.d1(u, v),
+            Surface::Nurbs(nurbs) => nurbs.d1(u, v),
         }
     }
 
@@ -201,49 +232,51 @@ impl Surface {
     /// the limit from inside the parameter domain.
     pub fn normal(&self, u: f64, v: f64) -> Vec3 {
         match self {
-            Surface::Plane(s) => s.frame.z,
-            Surface::Cylinder(s) => s.frame.radial(u),
-            Surface::Cone(s) => {
-                let (sa, ca) = s.half_angle.sin_cos();
-                let rho = s.radius + v * sa;
-                let n = s.frame.radial(u) * ca - s.frame.z * sa;
+            Surface::Plane(plane) => plane.frame.z,
+            Surface::Cylinder(cylinder) => cylinder.frame.radial(u),
+            Surface::Cone(cone) => {
+                let (sin, cos) = cone.half_angle.sin_cos();
+                let rho = cone.radius + v * sin;
+                let n = cone.frame.radial(u) * cos - cone.frame.z * sin;
                 if rho < 0.0 { -n } else { n }
             }
-            Surface::Sphere(s) => {
-                let (sv, cv) = v.sin_cos();
-                s.frame.radial(u) * cv + s.frame.z * sv
+            Surface::Sphere(sphere) => {
+                let (sin, cos) = v.sin_cos();
+                sphere.frame.radial(u) * cos + sphere.frame.z * sin
             }
-            Surface::Torus(s) => {
-                let (sv, cv) = v.sin_cos();
-                let n = s.frame.radial(u) * cv + s.frame.z * sv;
-                if s.major + s.minor * cv < 0.0 { -n } else { n }
+            Surface::Torus(torus) => {
+                let (sin, cos) = v.sin_cos();
+                let n = torus.frame.radial(u) * cos + torus.frame.z * sin;
+                if torus.major + torus.minor * cos < 0.0 { -n } else { n }
             }
             _ => {
                 let (_, su, sv) = self.d1(u, v);
-                if let Some(n) = su.cross(sv).unit().filter(|_| su.cross(sv).norm() > 1e-12) {
+                if let Some(n) = natural_normal(su, sv) {
                     return n;
                 }
                 // At a pole where `su` vanishes it grows as `suv·(v − v_pole)`, so the normal is
                 // the limit of `suv × sv` taken from inside the domain (and alike for `sv`).
-                if let Surface::Nurbs(n) = self {
-                    let ((u0, u1), (v0, v1)) = n.domain();
-                    let [_, su, sv, _, suv, _] = n.d2(u, v);
-                    let (limit, top) = if su.norm() <= sv.norm() {
+                if let Surface::Nurbs(nurbs) = self {
+                    let ((u0, u1), (v0, v1)) = nurbs.domain();
+                    let [_, su, sv, _, suv, _] = nurbs.d2(u, v);
+                    let (limit, past_middle) = if su.norm() <= sv.norm() {
                         (suv.cross(sv), v - v0 > v1 - v)
                     } else {
                         (su.cross(suv), u - u0 > u1 - u)
                     };
-                    if let Some(l) = limit.unit() {
-                        return if top { -l } else { l };
+                    if let Some(limit) = limit.unit() {
+                        return if past_middle { -limit } else { limit };
                     }
                 }
-                for (du, dv) in [(0.0, 1e-6), (0.0, -1e-6), (1e-6, 0.0), (-1e-6, 0.0)] {
-                    let (_, su, sv) = self.d1(u + du, v + dv);
-                    if let Some(n) = su.cross(sv).unit() {
-                        return n;
-                    }
-                }
-                Vec3::ZERO
+                let probes =
+                    [(0.0, POLE_PROBE), (0.0, -POLE_PROBE), (POLE_PROBE, 0.0), (-POLE_PROBE, 0.0)];
+                probes
+                    .into_iter()
+                    .find_map(|(du, dv)| {
+                        let (_, su, sv) = self.d1(u + du, v + dv);
+                        su.cross(sv).unit()
+                    })
+                    .unwrap_or(Vec3::ZERO)
             }
         }
     }
@@ -255,8 +288,8 @@ impl Surface {
             | Surface::Sphere(_)
             | Surface::Torus(_)
             | Surface::Revolution(_) => Some(TAU),
-            Surface::Extrusion(s) => s.curve.period(),
-            Surface::Nurbs(s) => s.u_period(),
+            Surface::Extrusion(extrusion) => extrusion.curve.period(),
+            Surface::Nurbs(nurbs) => nurbs.u_period(),
             Surface::Plane(_) | Surface::Ruled(_) => None,
         }
     }
@@ -264,8 +297,8 @@ impl Surface {
     pub fn v_period(&self) -> Option<f64> {
         match self {
             Surface::Torus(_) => Some(TAU),
-            Surface::Revolution(s) => s.curve.period(),
-            Surface::Nurbs(s) => s.v_period(),
+            Surface::Revolution(revolution) => revolution.curve.period(),
+            Surface::Nurbs(nurbs) => nurbs.v_period(),
             _ => None,
         }
     }
@@ -273,23 +306,22 @@ impl Surface {
     /// Parameters strictly inside (u0, u1) where the surface may lose smoothness along `u`.
     pub fn u_breakpoints(&self, u0: f64, u1: f64) -> Vec<f64> {
         match self {
-            Surface::Extrusion(s) => s.curve.breakpoints(u0, u1),
-            Surface::Ruled(s) => {
-                let map = |r: (f64, f64), c: &Curve| -> Vec<f64> {
-                    let (lo, hi) = (r.0 + u0 * (r.1 - r.0), r.0 + u1 * (r.1 - r.0));
+            Surface::Extrusion(extrusion) => extrusion.curve.breakpoints(u0, u1),
+            Surface::Ruled(ruled) => {
+                // A side's breakpoints, mapped from its own range onto [0, 1].
+                let side = |range: (f64, f64), curve: &Curve| -> Vec<f64> {
+                    let span = range.1 - range.0;
+                    let (lo, hi) = (range.0 + u0 * span, range.0 + u1 * span);
                     let (lo, hi) = (lo.min(hi), lo.max(hi));
-                    c.breakpoints(lo, hi)
-                        .into_iter()
-                        .map(|t| (t - r.0) / (r.1 - r.0))
-                        .collect()
+                    curve.breakpoints(lo, hi).into_iter().map(|t| (t - range.0) / span).collect()
                 };
-                let mut out = map(s.a_range, &s.a);
-                out.extend(map(s.b_range, &s.b));
+                let mut out = side(ruled.a_range, &ruled.a);
+                out.extend(side(ruled.b_range, &ruled.b));
                 out.sort_by(f64::total_cmp);
                 out.dedup();
                 out
             }
-            Surface::Nurbs(s) => s.u_breakpoints(u0, u1),
+            Surface::Nurbs(nurbs) => nurbs.u_breakpoints(u0, u1),
             _ => Vec::new(),
         }
     }
@@ -297,101 +329,102 @@ impl Surface {
     /// Parameters strictly inside (v0, v1) where the surface may lose smoothness along `v`.
     pub fn v_breakpoints(&self, v0: f64, v1: f64) -> Vec<f64> {
         match self {
-            Surface::Revolution(s) => s.curve.breakpoints(v0, v1),
-            Surface::Nurbs(s) => s.v_breakpoints(v0, v1),
+            Surface::Revolution(revolution) => revolution.curve.breakpoints(v0, v1),
+            Surface::Nurbs(nurbs) => nurbs.v_breakpoints(v0, v1),
             _ => Vec::new(),
         }
     }
 
     pub fn transformed(&self, t: &Transform) -> Surface {
         match self {
-            Surface::Plane(s) => Surface::Plane(Plane {
-                frame: s.frame.transformed(t),
-            }),
-            Surface::Cylinder(s) => Surface::Cylinder(Cylinder {
-                frame: s.frame.transformed(t),
-                ..*s
-            }),
-            Surface::Cone(s) => Surface::Cone(Cone {
-                frame: s.frame.transformed(t),
-                ..*s
-            }),
-            Surface::Sphere(s) => Surface::Sphere(Sphere {
-                frame: s.frame.transformed(t),
-                ..*s
-            }),
-            Surface::Torus(s) => Surface::Torus(Torus {
-                frame: s.frame.transformed(t),
-                ..*s
-            }),
-            Surface::Extrusion(s) => Surface::Extrusion(Box::new(Extrusion {
-                curve: s.curve.transformed(t),
-                dir: t.vector(s.dir),
+            Surface::Plane(plane) => Surface::Plane(Plane { frame: plane.frame.transformed(t) }),
+            Surface::Cylinder(cylinder) => {
+                Surface::Cylinder(Cylinder { frame: cylinder.frame.transformed(t), ..*cylinder })
+            }
+            Surface::Cone(cone) => {
+                Surface::Cone(Cone { frame: cone.frame.transformed(t), ..*cone })
+            }
+            Surface::Sphere(sphere) => {
+                Surface::Sphere(Sphere { frame: sphere.frame.transformed(t), ..*sphere })
+            }
+            Surface::Torus(torus) => {
+                Surface::Torus(Torus { frame: torus.frame.transformed(t), ..*torus })
+            }
+            Surface::Extrusion(extrusion) => Surface::Extrusion(Box::new(Extrusion {
+                curve: extrusion.curve.transformed(t),
+                dir: t.vector(extrusion.dir),
             })),
-            Surface::Revolution(s) => Surface::Revolution(Box::new(Revolution {
-                curve: s.curve.transformed(t),
-                origin: t.point(s.origin),
-                axis: t.vector(s.axis),
+            Surface::Revolution(revolution) => Surface::Revolution(Box::new(Revolution {
+                curve: revolution.curve.transformed(t),
+                origin: t.point(revolution.origin),
+                axis: t.vector(revolution.axis),
             })),
-            Surface::Ruled(s) => Surface::Ruled(Box::new(Ruled {
-                a: s.a.transformed(t),
-                b: s.b.transformed(t),
-                ..(**s).clone()
+            Surface::Ruled(ruled) => Surface::Ruled(Box::new(Ruled {
+                a: ruled.a.transformed(t),
+                a_range: ruled.a_range,
+                b: ruled.b.transformed(t),
+                b_range: ruled.b_range,
             })),
-            Surface::Nurbs(s) => Surface::Nurbs(Box::new(s.transformed(t))),
+            Surface::Nurbs(nurbs) => Surface::Nurbs(Box::new(nurbs.transformed(t))),
         }
     }
 
     /// The parameters of the surface point nearest `p`. A periodic parameter comes back in its
     /// first period.
-    #[allow(clippy::panic)] pub fn project(&self, p: Point3) -> Vec2 {
+    pub fn project(&self, p: Point3) -> Vec2 {
         match self {
-            Surface::Plane(s) => {
-                let l = s.frame.to_local(p);
-                Vec2::new(l.x, l.y)
+            Surface::Plane(plane) => {
+                let local = plane.frame.to_local(p);
+                Vec2::new(local.x, local.y)
             }
-            Surface::Cylinder(s) => {
-                let l = s.frame.to_local(p);
-                Vec2::new(angle_of(l), l.z)
+            Surface::Cylinder(cylinder) => {
+                let local = cylinder.frame.to_local(p);
+                Vec2::new(angle_of(local), local.z)
             }
-            Surface::Cone(s) => {
-                let l = s.frame.to_local(p);
-                let rho = l.x.hypot(l.y);
-                let (sa, ca) = s.half_angle.sin_cos();
-                Vec2::new(angle_of(l), (rho - s.radius) * sa + l.z * ca)
+            Surface::Cone(cone) => {
+                let local = cone.frame.to_local(p);
+                let rho = local.x.hypot(local.y);
+                let (sin, cos) = cone.half_angle.sin_cos();
+                Vec2::new(angle_of(local), (rho - cone.radius) * sin + local.z * cos)
             }
-            Surface::Sphere(s) => {
-                let l = s.frame.to_local(p);
-                Vec2::new(angle_of(l), l.z.atan2(l.x.hypot(l.y)))
+            Surface::Sphere(sphere) => {
+                let local = sphere.frame.to_local(p);
+                Vec2::new(angle_of(local), local.z.atan2(local.x.hypot(local.y)))
             }
-            Surface::Torus(s) => {
-                let l = s.frame.to_local(p);
-                let rho = l.x.hypot(l.y);
-                Vec2::new(angle_of(l), l.z.atan2(rho - s.major).rem_euclid(TAU))
+            Surface::Torus(torus) => {
+                let local = torus.frame.to_local(p);
+                let rho = local.x.hypot(local.y);
+                Vec2::new(angle_of(local), local.z.atan2(rho - torus.major).rem_euclid(TAU))
             }
-            Surface::Extrusion(s) if s.curve.spline().is_some() => {
-                let (a, b) = s.curve.domain();
-                let spline = s.curve.spline().unwrap_or_else(|| panic!("checked above"));
-                // The nearest point lies on the generator through the curve point nearest `p`
-                // seen along the extrusion.
-                let u = spline.nearest(p, Some(s.dir), a, b);
-                let v = (p - s.curve.eval(u)).dot(s.dir);
-                self.refine_projection(p, std::iter::once(Vec2::new(u, v)))
+            Surface::Extrusion(extrusion) => {
+                let curve = &extrusion.curve;
+                match curve.spline() {
+                    Some(spline) => {
+                        let (a, b) = curve.domain();
+                        // The nearest point lies on the generator through the curve point nearest
+                        // `p` seen along the extrusion.
+                        let u = spline.nearest(p, Some(extrusion.dir), a, b);
+                        let v = (p - curve.eval(u)).dot(extrusion.dir);
+                        self.refine_projection(p, once(Vec2::new(u, v)))
+                    }
+                    None => {
+                        let (a, b) = finite_domain(curve);
+                        let seeds = curve_seeds(curve, a, b)
+                            .into_iter()
+                            .map(|u| Vec2::new(u, (p - curve.eval(u)).dot(extrusion.dir)));
+                        self.refine_projection(p, seeds)
+                    }
+                }
             }
-            Surface::Extrusion(s) => {
-                let (a, b) = finite_domain(&s.curve);
-                let seeds = curve_seeds(&s.curve, a, b)
-                    .into_iter()
-                    .map(|u| Vec2::new(u, (p - s.curve.eval(u)).dot(s.dir)));
-                self.refine_projection(p, seeds)
-            }
-            Surface::Revolution(s) => {
-                let (a, b) = finite_domain(&s.curve);
-                let frame = Frame::from_axis(s.origin, s.axis).unwrap_or(Frame::WORLD);
-                let ang = angle_of(frame.to_local(p));
-                let seeds = curve_seeds(&s.curve, a, b).into_iter().map(|v| {
-                    let q = frame.to_local(s.curve.eval(v));
-                    Vec2::new((ang - angle_of(q)).rem_euclid(TAU), v)
+            Surface::Revolution(revolution) => {
+                let curve = &revolution.curve;
+                let (a, b) = finite_domain(curve);
+                let frame =
+                    Frame::from_axis(revolution.origin, revolution.axis).unwrap_or(Frame::WORLD);
+                let angle = angle_of(frame.to_local(p));
+                let seeds = curve_seeds(curve, a, b).into_iter().map(|v| {
+                    let q = frame.to_local(curve.eval(v));
+                    Vec2::new((angle - angle_of(q)).rem_euclid(TAU), v)
                 });
                 self.refine_projection(p, seeds)
             }
@@ -400,7 +433,7 @@ impl Surface {
                     .flat_map(|i| (0..=4).map(move |j| Vec2::new(i as f64 / 16.0, j as f64 / 4.0)));
                 self.refine_projection(p, seeds)
             }
-            Surface::Nurbs(s) => s.project(p),
+            Surface::Nurbs(nurbs) => nurbs.project(p),
         }
     }
 
@@ -408,7 +441,7 @@ impl Surface {
     /// more seeds where the nearest few settle off it ([`NurbsSurface::project_onto`]).
     pub fn project_onto(&self, p: Point3) -> Vec2 {
         match self {
-            Surface::Nurbs(s) => s.project_onto(p),
+            Surface::Nurbs(nurbs) => nurbs.project_onto(p),
             _ => self.project(p),
         }
     }
@@ -424,21 +457,17 @@ impl Surface {
     /// the one evaluation that places the parameters.
     pub fn project_near_at(&self, p: Point3, hint: Vec2) -> (Vec2, Point3, Vec3) {
         let uv = self.project_near_raw(p, hint);
-        let (q, su, sv) = self.d1(uv.x, uv.y);
+        let (point, su, sv) = self.d1(uv.x, uv.y);
         let out = self.toward(uv, hint, su);
-        let n = match self {
+        let normal = match self {
             Surface::Plane(_)
             | Surface::Cylinder(_)
             | Surface::Cone(_)
             | Surface::Sphere(_)
             | Surface::Torus(_) => self.normal(out.x, out.y),
-            _ => su
-                .cross(sv)
-                .unit()
-                .filter(|_| su.cross(sv).norm() > 1e-12)
-                .unwrap_or_else(|| self.normal(out.x, out.y)),
+            _ => natural_normal(su, sv).unwrap_or_else(|| self.normal(out.x, out.y)),
         };
-        (out, q, n)
+        (out, point, normal)
     }
 
     /// [`Surface::project_near`] with the partial derivatives there, a spline's from its span
@@ -446,7 +475,7 @@ impl Surface {
     pub fn project_near_d1(&self, p: Point3, hint: Vec2) -> (Vec2, Vec3, Vec3) {
         let uv = self.project_near_raw(p, hint);
         let (_, su, sv) = match self {
-            Surface::Nurbs(n) => n.d1_by_polys(uv.x, uv.y),
+            Surface::Nurbs(nurbs) => nurbs.d1_by_polys(uv.x, uv.y),
             _ => self.d1(uv.x, uv.y),
         };
         (self.toward(uv, hint, su), su, sv)
@@ -454,24 +483,21 @@ impl Surface {
 
     /// The parameters [`Surface::project_near`] places `p` at, before they are moved toward `hint`.
     fn project_near_raw(&self, p: Point3, hint: Vec2) -> Vec2 {
+        let on_surface = |uv: Vec2| self.eval(uv.x, uv.y).dist(p) <= tol::LINEAR;
         match self {
             // A point on the surface near the hint is found by Newton from the hint alone; the
             // global seed search is needed only when that lands off the surface.
-            Surface::Extrusion(e) if e.curve.spline().is_some() => {
-                match extrusion_near(e, p, hint.x) {
-                    Some(uv) if self.eval(uv.x, uv.y).dist(p) <= tol::LINEAR => uv,
+            Surface::Extrusion(extrusion) if extrusion.curve.spline().is_some() => {
+                match extrusion_near(extrusion, p, hint.x) {
+                    Some(uv) if on_surface(uv) => uv,
                     _ => self.project(p),
                 }
             }
             Surface::Extrusion(_) | Surface::Revolution(_) | Surface::Ruled(_) => {
-                let local = self.refine_projection(p, std::iter::once(hint));
-                if self.eval(local.x, local.y).dist(p) <= tol::LINEAR {
-                    local
-                } else {
-                    self.project(p)
-                }
+                let local = self.refine_projection(p, once(hint));
+                if on_surface(local) { local } else { self.project(p) }
             }
-            Surface::Nurbs(s) => s.project_near(p, hint),
+            Surface::Nurbs(nurbs) => nurbs.project_near(p, hint),
             _ => self.project(p),
         }
     }
@@ -480,12 +506,13 @@ impl Surface {
     /// hint's where the point is a pole: where the hint's `u` names the same point.
     fn toward(&self, uv: Vec2, hint: Vec2, su: Vec3) -> Vec2 {
         let shift = |x: f64, h: f64, period: Option<f64>| match period {
-            Some(t) => x + ((h - x) / t).round() * t,
+            Some(period) => x + ((h - x) / period).round() * period,
             None => x,
         };
         // A small `su` alone is not a pole: just beside one, the hint's `u` can be a whole
         // tolerance away, which a fit to half the tolerance cannot absorb.
-        let pole = || self.eval(hint.x, uv.y).dist(self.eval(uv.x, uv.y)) <= 1e-3 * tol::LINEAR;
+        let pole =
+            || self.eval(hint.x, uv.y).dist(self.eval(uv.x, uv.y)) <= POLE_FRACTION * tol::LINEAR;
         let u = if su.norm() <= tol::LINEAR && pole() {
             hint.x
         } else {
@@ -494,31 +521,28 @@ impl Surface {
         Vec2::new(u, shift(uv.y, hint.y, self.v_period()))
     }
 
+    /// Newton's method on the distance to `p` from the nearest of `seeds`, each step taken only
+    /// if it comes no farther; periodic parameters are wrapped into their first period after.
     fn refine_projection(&self, p: Point3, seeds: impl Iterator<Item = Vec2>) -> Vec2 {
         let mut best = (f64::INFINITY, Vec2::ZERO);
-        for s in seeds {
-            let d = self.eval(s.x, s.y).dist(p);
-            if d < best.0 {
-                best = (d, s);
+        for seed in seeds {
+            let distance = self.eval(seed.x, seed.y).dist(p);
+            if distance < best.0 {
+                best = (distance, seed);
             }
         }
         let mut uv = best.1;
-        for _ in 0..60 {
+        for _ in 0..PROJECTION_STEPS {
             let (q, su, sv) = self.d1(uv.x, uv.y);
             let r = q - p;
-            let Some((du, dv)) = solve2(
-                su.dot(su),
-                su.dot(sv),
-                su.dot(sv),
-                sv.dot(sv),
-                -su.dot(r),
-                -sv.dot(r),
-            ) else {
+            let Some((du, dv)) =
+                solve2(su.dot(su), su.dot(sv), su.dot(sv), sv.dot(sv), -su.dot(r), -sv.dot(r))
+            else {
                 break;
             };
             let next = Vec2::new(uv.x + du, uv.y + dv);
-            let done = du.abs() + dv.abs() <= 1e-15 * (1.0 + uv.x.abs() + uv.y.abs());
-            if self.eval(next.x, next.y).dist(p) > r.norm() * (1.0 + 1e-12) + 1e-15 {
+            let done = du.abs() + dv.abs() <= STEP_DONE * (1.0 + uv.x.abs() + uv.y.abs());
+            if self.eval(next.x, next.y).dist(p) > r.norm() * (1.0 + FARTHER) + DISTANCE_ROUNDING {
                 break;
             }
             uv = next;
@@ -527,64 +551,73 @@ impl Surface {
             }
         }
         let wrap = |x: f64, period: Option<f64>, start: f64| match period {
-            Some(t) => start + (x - start).rem_euclid(t),
+            Some(period) => start + (x - start).rem_euclid(period),
             None => x,
         };
         let u0 = match self {
-            Surface::Extrusion(s) => s.curve.domain().0,
+            Surface::Extrusion(extrusion) => extrusion.curve.domain().0,
             _ => 0.0,
         };
         let v0 = match self {
-            Surface::Revolution(s) => s.curve.domain().0,
+            Surface::Revolution(revolution) => revolution.curve.domain().0,
             _ => 0.0,
         };
-        Vec2::new(
-            wrap(uv.x, self.u_period(), u0),
-            wrap(uv.y, self.v_period(), v0),
-        )
+        Vec2::new(wrap(uv.x, self.u_period(), u0), wrap(uv.y, self.v_period(), v0))
     }
+}
+
+/// The unit normal `su × sv`, unless the cross product is too short to give one.
+fn natural_normal(su: Vec3, sv: Vec3) -> Option<Vec3> {
+    let cross = su.cross(sv);
+    cross.unit().filter(|_| cross.norm() > DEGENERATE_CROSS)
 }
 
 /// The nearest point of an extrusion by Newton's method on the curve parameter alone, from `u`:
 /// across the extrusion's direction the surface is its curve, and `v` follows in closed form.
-fn extrusion_near(e: &Extrusion, p: Point3, mut u: f64) -> Option<Vec2> {
-    let flat = |w: Vec3| w - e.dir * w.dot(e.dir);
+fn extrusion_near(extrusion: &Extrusion, p: Point3, mut u: f64) -> Option<Vec2> {
+    let dir = extrusion.dir;
+    let flat = |w: Vec3| w - dir * w.dot(dir);
     let mut step = f64::INFINITY;
-    for _ in 0..30 {
-        let (c, d1, d2) = e.curve.d2(u);
-        let (r, d1) = (flat(c - p), flat(d1));
-        let f = r.dot(d1);
-        let df = d1.norm2() + r.dot(flat(d2));
-        if df <= 0.0 {
+    for _ in 0..EXTRUSION_STEPS {
+        let (point, d1, d2) = extrusion.curve.d2(u);
+        let (r, d1) = (flat(point - p), flat(d1));
+        let slope = r.dot(d1);
+        let curvature = d1.norm2() + r.dot(flat(d2));
+        if curvature <= 0.0 {
             return None;
         }
-        step = f / df;
+        step = slope / curvature;
         u -= step;
-        if step.abs() <= 1e-15 * (1.0 + u.abs()) {
+        if step.abs() <= STEP_DONE * (1.0 + u.abs()) {
             break;
         }
     }
-    // Rounding may keep the last steps from vanishing; the caller checks the point is on `e`.
-    (step.abs() <= 1e-9 * (1.0 + u.abs())).then(|| Vec2::new(u, (p - e.curve.eval(u)).dot(e.dir)))
+    // Rounding may keep the last steps from vanishing; the caller checks the point is on the
+    // extrusion.
+    (step.abs() <= EXTRUSION_SETTLED * (1.0 + u.abs()))
+        .then(|| Vec2::new(u, (p - extrusion.curve.eval(u)).dot(dir)))
 }
 
-fn finite_domain(c: &Curve) -> (f64, f64) {
-    let (a, b) = c.domain();
-    (a.max(-1e4), b.min(1e4))
+/// The curve's domain, cut to [`SEARCH_EXTENT`] either side of zero.
+fn finite_domain(curve: &Curve) -> (f64, f64) {
+    let (a, b) = curve.domain();
+    (a.max(-SEARCH_EXTENT), b.min(SEARCH_EXTENT))
 }
 
-fn curve_seeds(c: &Curve, a: f64, b: f64) -> Vec<f64> {
-    let mut cuts = vec![a];
-    cuts.extend(c.breakpoints(a, b));
-    cuts.push(b);
-    let mut out = Vec::new();
-    for w in cuts.windows(2) {
-        for i in 0..8 {
-            out.push(w[0] + (w[1] - w[0]) * i as f64 / 8.0);
-        }
-    }
-    out.push(b);
-    out
+/// Projection seeds along the curve over [a, b]: [`SEEDS_PER_PIECE`] equal steps over each
+/// smooth piece, and `b`.
+fn curve_seeds(curve: &Curve, a: f64, b: f64) -> Vec<f64> {
+    let ends: Vec<f64> = once(a).chain(curve.breakpoints(a, b)).chain(once(b)).collect();
+    let starts = ends.iter().copied();
+    starts
+        .clone()
+        .zip(starts.skip(1))
+        .flat_map(|(start, end)| {
+            (0..SEEDS_PER_PIECE)
+                .map(move |i| start + (end - start) * f64::from(i) / f64::from(SEEDS_PER_PIECE))
+        })
+        .chain(once(b))
+        .collect()
 }
 
 #[cfg(test)]
@@ -614,30 +647,13 @@ mod tests {
             ])
             .unwrap(),
         );
-        let circle = Curve::Circle(Circle {
-            frame: Frame::WORLD,
-            radius: 3.0,
-        });
+        let circle = Curve::Circle(Circle { frame: Frame::WORLD, radius: 3.0 });
         vec![
             Surface::Plane(Plane { frame: f }),
-            Surface::Cylinder(Cylinder {
-                frame: f,
-                radius: 4.0,
-            }),
-            Surface::Cone(Cone {
-                frame: f,
-                radius: 4.0,
-                half_angle: 0.4,
-            }),
-            Surface::Sphere(Sphere {
-                frame: f,
-                radius: 4.0,
-            }),
-            Surface::Torus(Torus {
-                frame: f,
-                major: 6.0,
-                minor: 2.0,
-            }),
+            Surface::Cylinder(Cylinder { frame: f, radius: 4.0 }),
+            Surface::Cone(Cone { frame: f, radius: 4.0, half_angle: 0.4 }),
+            Surface::Sphere(Sphere { frame: f, radius: 4.0 }),
+            Surface::Torus(Torus { frame: f, major: 6.0, minor: 2.0 }),
             Surface::Extrusion(Box::new(Extrusion {
                 curve: Curve::BSpline(spline),
                 dir: Vec3::new(0.0, 0.6, 0.8),
@@ -667,11 +683,7 @@ mod tests {
             assert!(su.dist(fu) < 1e-7, "{} su", s.kind());
             assert!(sv.dist(fv) < 1e-7, "{} sv", s.kind());
             let n = s.normal(u, v);
-            assert!(
-                n.dist(su.cross(sv).unit().unwrap()) < 1e-12,
-                "{} normal",
-                s.kind()
-            );
+            assert!(n.dist(su.cross(sv).unit().unwrap()) < 1e-12, "{} normal", s.kind());
         }
     }
 
@@ -696,16 +708,8 @@ mod tests {
                 };
                 let p = s.eval(u, v);
                 let uv = s.project_near(p, Vec2::new(u, v));
-                assert!(
-                    s.eval(uv.x, uv.y).dist(p) < 1e-9,
-                    "{} at {u},{v}: {uv:?}",
-                    s.kind()
-                );
-                assert!(
-                    (uv.x - u).abs() < 1e-7 && (uv.y - v).abs() < 1e-7,
-                    "{}",
-                    s.kind()
-                );
+                assert!(s.eval(uv.x, uv.y).dist(p) < 1e-9, "{} at {u},{v}: {uv:?}", s.kind());
+                assert!((uv.x - u).abs() < 1e-7 && (uv.y - v).abs() < 1e-7, "{}", s.kind());
             }
         }
     }

@@ -25,10 +25,7 @@ impl MeshOptions {
 
     /// A mesh within `linear` of the exact geometry, at the kernel's own limit on the turn.
     pub fn within(linear: f64) -> MeshOptions {
-        MeshOptions {
-            linear,
-            angular: MeshOptions::ANGULAR,
-        }
+        MeshOptions { linear, angular: MeshOptions::ANGULAR }
     }
 }
 
@@ -55,10 +52,8 @@ pub fn edge_params(curve: &Curve, t0: f64, t1: f64, options: &MeshOptions) -> Ve
                 .breakpoints(t0, t1)
                 .into_iter()
                 .filter(|&k| k > t0 + margin && k < t1 - margin);
-            let cuts: Vec<f64> = std::iter::once(t0)
-                .chain(inner_knots)
-                .chain(std::iter::once(t1))
-                .collect();
+            let cuts: Vec<f64> =
+                std::iter::once(t0).chain(inner_knots).chain(std::iter::once(t1)).collect();
             let mut dense = vec![t0];
             for (start, end) in consecutive(&cuts) {
                 let length = end - start;
@@ -85,9 +80,7 @@ fn circle_params(radius: f64, t0: f64, t1: f64, options: &MeshOptions) -> Vec<f6
     let turn_step = options.angular.max((options.linear / radius).min(FRAC_PI_2));
     let step = deflection_step.min(turn_step).max(MIN_CIRCLE_STEP);
     let steps = ((t1 - t0) / step).ceil().max(1.0) as usize;
-    (0..=steps)
-        .map(|i| t0 + (t1 - t0) * i as f64 / steps as f64)
-        .collect()
+    (0..=steps).map(|i| t0 + (t1 - t0) * i as f64 / steps as f64).collect()
 }
 
 /// Each value paired with the next.
@@ -108,16 +101,9 @@ fn coarsen(curve: &Curve, dense: &[f64], options: &MeshOptions) -> Vec<f64> {
     let [first, _, _, ..] = dense else {
         return dense.to_vec();
     };
-    let samples: Vec<Sample> = dense
-        .iter()
-        .map(|&t| Sample {
-            point: curve.eval(t),
-            tangent: curve.d1(t).1,
-        })
-        .collect();
-    let middles: Vec<Point3> = consecutive(dense)
-        .map(|(a, b)| curve.eval(0.5 * (a + b)))
-        .collect();
+    let samples: Vec<Sample> =
+        dense.iter().map(|&t| Sample { point: curve.eval(t), tangent: curve.d1(t).1 }).collect();
+    let middles: Vec<Point3> = consecutive(dense).map(|(a, b)| curve.eval(0.5 * (a + b))).collect();
     // Whether one chord from sample `from` to sample `to` stands for every sample and middle
     // between them.
     let chord_fits = |from: usize, to: usize| {
@@ -129,18 +115,14 @@ fn coarsen(curve: &Curve, dense: &[f64], options: &MeshOptions) -> Vec<f64> {
         }
         let near = |p: Point3| segment_distance(p, start.point, end.point) <= options.linear;
         inner.iter().all(|s| near(s.point))
-            && middles
-                .get(from..to)
-                .is_some_and(|span| span.iter().all(|&m| near(m)))
+            && middles.get(from..to).is_some_and(|span| span.iter().all(|&m| near(m)))
     };
     let last = dense.len() - 1;
     let mut kept = vec![*first];
     let mut from = 0;
     while from < last {
-        let to = (from + 2..=last)
-            .take_while(|&to| chord_fits(from, to))
-            .last()
-            .unwrap_or(from + 1);
+        let to =
+            (from + 2..=last).take_while(|&to| chord_fits(from, to)).last().unwrap_or(from + 1);
         kept.extend(dense.get(to));
         from = to;
     }
@@ -151,24 +133,14 @@ fn coarsen(curve: &Curve, dense: &[f64], options: &MeshOptions) -> Vec<f64> {
 fn segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
     let ab = b - a;
     let length_squared = ab.dot(ab);
-    let s = if length_squared > 0.0 {
-        ((p - a).dot(ab) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let s =
+        if length_squared > 0.0 { ((p - a).dot(ab) / length_squared).clamp(0.0, 1.0) } else { 0.0 };
     p.dist(a + ab * s)
 }
 
 /// Halves `a..b` until each piece's chord is within the limits (or [`MAX_DEPTH`] is reached), and
 /// pushes the end of each piece in order.
-fn subdivide(
-    curve: &Curve,
-    a: f64,
-    b: f64,
-    options: &MeshOptions,
-    depth: u32,
-    out: &mut Vec<f64>,
-) {
+fn subdivide(curve: &Curve, a: f64, b: f64, options: &MeshOptions, depth: u32, out: &mut Vec<f64>) {
     let (start, start_tangent) = curve.d1(a);
     let (end, end_tangent) = curve.d1(b);
     let chord = end - start;
