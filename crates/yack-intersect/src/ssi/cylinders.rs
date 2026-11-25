@@ -16,12 +16,11 @@ use crate::{
 
 /// Two cylinders of one radius whose axes cross meet in two ellipses, in the planes bisecting
 /// the axes, which touch where the common perpendicular meets the cylinders.
-#[allow(clippy::panic)]
 fn equal_crossing_cylinders(o: Point3, a1: Vec3, a2: Vec3, r: f64) -> Option<Ssi> {
-    let nhat = a1.cross(a2).unit().unwrap_or_else(|| panic!("axes are not parallel"));
+    let nhat = a1.cross(a2).unit()?;
     let mut curves = Vec::new();
     for m in [a1 - a2, a1 + a2] {
-        let m = m.unit().unwrap_or_else(|| panic!("axes are not parallel"));
+        let m = m.unit()?;
         let e = m.cross(nhat);
         let frame = Frame { origin: o, x: e, y: m.cross(e), z: m };
         curves.push(SsiCurve {

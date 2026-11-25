@@ -247,13 +247,8 @@ fn circle_curve(frame: Frame, radius: f64, tangent: bool) -> SsiCurve {
 
 /// The frame at `origin` about the unit `z`, its `x` toward `x_hint` where that has a part square
 /// to `z`; `None` only for a `z` of no length.
-#[allow(clippy::panic)]
 fn frame_at(origin: Point3, z: Vec3, x_hint: Vec3) -> Option<Frame> {
-    Some(
-        Frame::new(origin, z, x_hint)
-            .or_else(|_| Frame::from_axis(origin, z))
-            .unwrap_or_else(|e| panic!("axis is a unit vector: {e:?}")),
-    )
+    Frame::new(origin, z, x_hint).or_else(|_| Frame::from_axis(origin, z)).ok()
 }
 
 /// The intersection of `a` and `b` within `region`. `seeds` gives points on both surfaces where

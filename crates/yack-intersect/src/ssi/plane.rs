@@ -25,7 +25,6 @@ const NEARLY_ALONG: f64 = 1e-6; // tol: an angle, in radians
 const PAIR_MARGIN: f64 = 1e-9; // tol: a cosine's rounding
 
 /// Two planes meet in a line, unless they are parallel.
-#[allow(clippy::panic)]
 pub(super) fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Option<Ssi> {
     let (n1, n2) = (a.z, b.z);
     let d = n1.cross(n2);
@@ -37,13 +36,12 @@ pub(super) fn plane_plane(a: &Frame, b: &Frame, region: &Aabb) -> Option<Ssi> {
     // not take the difference of two large numbers: at an angle θ, 1 − c² is θ², and that form's
     // rounding put the point θ⁻² · 1e-16 off both planes, 1e-5 mm at θ = 1.5e-5.
     let p0 = (n2 * h1 - n1 * h2).cross(d) * (1.0 / d.dot(d));
-    let dir = d.unit().unwrap_or_else(|| panic!("planes are not parallel"));
+    let dir = d.unit()?;
     Some(Ssi::curves(line_curve(p0, dir, region, false).into_iter().collect()))
 }
 
 /// A plane against a cylinder: a circle across the axis, lines (or a touching line) along it, an
 /// ellipse otherwise.
-#[allow(clippy::panic)]
 pub(super) fn plane_cylinder(p: &Frame, c: &Cylinder, region: &Aabb) -> Option<Ssi> {
     let (n, a, r) = (p.z, c.frame.z, c.radius);
     let an = a.dot(n);
@@ -64,7 +62,7 @@ pub(super) fn plane_cylinder(p: &Frame, c: &Cylinder, region: &Aabb) -> Option<S
             let mid = c.frame.origin - n * (0.5 * (delta + delta.signum() * r));
             line_curve(mid, a, region, true).into_iter().collect()
         } else {
-            let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis lies along the plane"));
+            let w = a.cross(n).unit()?;
             let s = ((r - delta.abs()) * (r + delta.abs())).sqrt();
             [foot + w * s, foot - w * s]
                 .into_iter()
@@ -80,7 +78,7 @@ pub(super) fn plane_cylinder(p: &Frame, c: &Cylinder, region: &Aabb) -> Option<S
     }
     let t = (p.origin - c.frame.origin).dot(n) / an;
     let centre = c.frame.origin + a * t;
-    let w = a.cross(n).unit().unwrap_or_else(|| panic!("axis is oblique to the plane"));
+    let w = a.cross(n).unit()?;
     let m = n.cross(w);
     let frame = Frame { origin: centre, x: m, y: n.cross(m), z: n };
     let ellipse = Curve::Ellipse(Ellipse { frame, major: r / an.abs(), minor: r });

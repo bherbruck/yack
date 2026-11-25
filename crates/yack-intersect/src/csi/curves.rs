@@ -341,7 +341,6 @@ impl<'a> CurveIndex<'a> {
     }
 
     /// As [`curve_distance`].
-    #[allow(clippy::panic)]
     fn distance(&self, p: Point3) -> (f64, f64) {
         let gap = |bb: &Aabb| {
             let d = Vec3::new(
@@ -357,7 +356,7 @@ impl<'a> CurveIndex<'a> {
         let (Some(&(_, nearest)), Some(first)) =
             (gaps.iter().min_by(|a, b| a.0.total_cmp(&b.0)), self.spans.first())
         else {
-            panic!("an index over {:?} has spans", self.range);
+            return curve_distance(self.curve, self.range, p);
         };
         let bound = curve_distance(self.curve, (nearest.lo, nearest.hi), p).0;
         let mut order: Vec<(f64, &Span)> = gaps.into_iter().filter(|&(g, _)| g <= bound).collect();
@@ -416,11 +415,7 @@ pub(super) fn sampled_curve_curve(
         }
     }
     // Each wanted sample's parameter and distance; every neighbour of one was sampled above.
-    #[allow(clippy::panic)]
-    let value = |k: usize| match (ts.get(k), samples.get(k)) {
-        (Some(&t), Some(&Some(d))) => Some((t, d)),
-        _ => panic!("a wanted sample's neighbours are sampled"),
-    };
+    let value = |k: usize| Some((*ts.get(k)?, (*samples.get(k)?)?));
     let mut out: Vec<Point3> = Vec::new();
     for (k, _) in wanted.iter().enumerate().filter(|&(_, &w)| w) {
         let Some(at) = value(k) else { continue };
