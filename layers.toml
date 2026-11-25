@@ -214,7 +214,7 @@ license = "MIT OR Apache-2.0"
 
 # ---- temporary engines (PLAN §3.2) ----
 [crate.yack-springrep]
-layer = 9
+layer = 11
 kind = "temporary"
 owner = "lead"
 deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh", "yack-build", "yack-tweak", "yack-boolean", "yack-blend", "yack-edit"]
@@ -238,7 +238,7 @@ delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
 [crate.yack-bridge]
-layer = 10
+layer = 12
 kind = "temporary"
 owner = "lead"
 deps = ["yack-springrep", "yack-cadrs"]
@@ -247,7 +247,7 @@ license = "MIT OR Apache-2.0"
 
 # ---- the public crate ----
 [crate.yack]
-layer = 11
+layer = 13
 kind = "public"
 owner = "api-owner"
 deps = ["*kernel", "yack-springrep", "yack-cadrs", "yack-bridge"]
@@ -255,21 +255,21 @@ license = "MIT OR Apache-2.0"
 
 # ---- tools (outside the kernel DAG; never a dependency of a kernel crate) ----
 [crate.xtask]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "harness-owner"
 deps = []
 license = "MIT OR Apache-2.0"
 
 [crate.yack-testkit]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "harness-owner"
 deps = ["yack"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-conformance]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "api-owner"
 deps = ["yack"]
@@ -277,14 +277,14 @@ external = ["brep-protocol"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-acceptance]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "w-m04-conf"
 deps = ["yack"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-bench]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "api-owner"
 deps = ["yack"]
@@ -292,7 +292,7 @@ license = "MIT OR Apache-2.0"
 
 # The SMLib corpus (M6): the runner grades through yack's public API only.
 [crate.yack-corpus]
-layer = 12
+layer = 14
 kind = "tool"
 owner = "api-owner"
 deps = ["yack"]
@@ -301,7 +301,7 @@ license = "MIT OR Apache-2.0"
 # Run once by `xtask corpus smlib --fetch`: converts SMLib's models to STEP with yack-cadrs's smb
 # reader. It goes with yack-cadrs in M4 unless the reader is ported into it first (lead's call).
 [crate.yack-corpus-fetch]
-layer = 12
+layer = 14
 kind = "temporary"
 owner = "api-owner"
 deps = ["yack-cadrs"]
@@ -354,7 +354,7 @@ shaped = []
 corner = ["run"]
 rolling = ["run"]
 sew = ["run"]
-saddle = ["run", "corner"]
+saddle = ["run", "corner", "saddle_patch"]
 
 [modules.yack-springrep]
 error = []
