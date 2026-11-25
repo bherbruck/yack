@@ -1,8 +1,12 @@
 // yack: Non-rational B-spline curves, and cubic interpolation through point lists.
 // Adapted from springrep@a03e8a1 src/geom/bspline.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/geom/bspline.rs to yack-geom (M3 W3);; `.expect` as a counted `panic!` (gate 9).
+// Changes: moved from springrep's src/geom/bspline.rs to yack-geom (M3 W3). M3 hardening: one
+// checked constructor keeps the domain, spans and their polynomials carry their own ranges and
+// control points (windows, not index arithmetic), interpolation reads its points by slice
+// patterns, named constants, and no counted `panic!`; the same arithmetic in the same order.
 //! Non-rational B-spline curves, and cubic interpolation through point lists.
 
+use std::iter::{repeat_n, repeat_with};
 use std::sync::{Arc, OnceLock};
 
 use crate::{
@@ -17,6 +21,25 @@ use crate::{
 pub(super) const MAX_DEGREE: usize = 3;
 const W: usize = MAX_DEGREE + 1;
 
+/// A span's ball is grown by this fraction of its radius, and by as much again in mm, so rounding
+/// cannot leave a control point outside it.
+const BALL_SLACK: f64 = 1e-12; // tol: rounding of a bounding ball
+
+/// The equal steps each piece is sampled at when searching for a nearest point.
+const NEAREST_SAMPLES: u32 = 8;
+
+/// The most Newton steps a nearest-point search takes on one piece.
+const NEWTON_STEPS: usize = 50;
+
+/// A distance derivative this small is flat: Newton's method stops there.
+const FLAT_SLOPE: f64 = 1e-300; // tol: guards a division, not a geometric tolerance
+
+/// A Newton step this small, relative to the parameter, has converged.
+const NEWTON_STEP_DONE: f64 = 1e-15; // tol: relative parameter rounding
+
+/// A quadratic coefficient this small beside the derivative's size is no quadratic.
+const NEGLIGIBLE_COEFFICIENT: f64 = 1e-14; // tol: relative rounding of polynomial coefficients
+
 /// A non-rational B-spline. A periodic one stores its first `degree` control points again at the
 /// end and its knot vector unwrapped past both ends, so evaluation is the open algorithm on the
 /// wrapped parameter.
@@ -26,6 +49,8 @@ pub struct BSpline {
     knots: Vec<f64>,
     ctrl: Vec<Vec3>,
     periodic: bool,
+    /// `knots[degree]` and `knots[ctrl.len()]`: the parameter range, one period when periodic.
+    domain: (f64, f64),
     spans: SpanCache,
     polys: PolyCache,
 }
@@ -50,19 +75,37 @@ impl PartialEq for SpanCache {
     }
 }
 
-/// Each nonempty span's curve as polynomials in the span's local parameter, about its start and
-/// about its end, by span number: evaluating one is a Horner pass with no basis recurrence. Built
-/// on first use; it depends only on the spline, so it never takes part in equality.
+/// Each nonempty span's curve as polynomials in the span's local parameter, by span number:
+/// evaluating one is a Horner pass with no basis recurrence. Built on first use; it depends only
+/// on the spline, so it never takes part in equality.
 #[derive(Clone, Debug, Default)]
-struct PolyCache(OnceLock<Arc<Vec<Option<SpanSeries>>>>);
+struct PolyCache(OnceLock<Arc<Vec<Option<SpanPoly>>>>);
 
-/// One span's coefficients about its start and about its end.
-type SpanSeries = [Vec<Vec3>; 2];
+/// One nonempty span's range and its curve's coefficients, lowest order first, about its start
+/// and about its end.
+#[derive(Debug)]
+struct SpanPoly {
+    t0: f64,
+    t1: f64,
+    about_start: Vec<Vec3>,
+    about_end: Vec<Vec3>,
+}
 
 impl PartialEq for PolyCache {
     fn eq(&self, _: &PolyCache) -> bool {
         true
     }
+}
+
+/// Each knot paired with the next.
+fn knot_pairs(knots: &[f64]) -> impl Iterator<Item = (f64, f64)> + '_ {
+    knots.iter().copied().zip(knots.iter().copied().skip(1))
+}
+
+/// The points whose coordinates `coordinates` lists in threes.
+fn points_from(coordinates: &[f64]) -> Vec<Vec3> {
+    let (triples, _) = coordinates.as_chunks::<3>();
+    triples.iter().map(|&[x, y, z]| Vec3::new(x, y, z)).collect()
 }
 
 impl BSpline {
@@ -78,22 +121,36 @@ impl BSpline {
         if knots.len() != ctrl.len() + degree + 1 {
             return invalid("B-spline knot count must be control points + degree + 1");
         }
-        if knots.windows(2).any(|w| w[1] < w[0]) {
+        if knot_pairs(&knots).any(|(a, b)| b < a) {
             return invalid("B-spline knots must not decrease");
         }
-        let s = BSpline {
-            degree,
-            knots,
-            ctrl,
-            periodic: false,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        };
+        let s = BSpline::from_parts(degree, knots, ctrl, false)?;
         let (a, b) = s.domain();
         if b - a <= 0.0 {
             return invalid("B-spline has an empty domain");
         }
         Ok(s)
+    }
+
+    /// The spline of parts whose counts fit, its domain read once from its knots.
+    fn from_parts(
+        degree: usize,
+        knots: Vec<f64>,
+        ctrl: Vec<Vec3>,
+        periodic: bool,
+    ) -> Result<BSpline> {
+        let (Some(&start), Some(&end)) = (knots.get(degree), knots.get(ctrl.len())) else {
+            return invalid("B-spline knot count must be control points + degree + 1");
+        };
+        Ok(BSpline {
+            degree,
+            knots,
+            ctrl,
+            periodic,
+            domain: (start, end),
+            spans: SpanCache::default(),
+            polys: PolyCache::default(),
+        })
     }
 
     pub fn degree(&self) -> usize {
@@ -113,7 +170,7 @@ impl BSpline {
     }
 
     pub fn domain(&self) -> (f64, f64) {
-        (self.knots[self.degree], self.knots[self.ctrl.len()])
+        self.domain
     }
 
     pub fn period(&self) -> Option<f64> {
@@ -134,10 +191,13 @@ impl BSpline {
         };
         match self.period() {
             Some(p) => {
+                // The knots of one period, `knots[degree..=ctrl.len()]`, repeated.
+                let period_knots =
+                    self.knots.iter().skip(self.degree).take(self.ctrl.len() + 1 - self.degree);
                 let start = ((t0 - a) / p).floor() as i64;
                 let end = ((t1 - a) / p).ceil() as i64;
                 for w in start..=end {
-                    for &k in &self.knots[self.degree..=self.ctrl.len()] {
+                    for &k in period_knots.clone() {
                         push(k + w as f64 * p);
                     }
                 }
@@ -164,18 +224,22 @@ impl BSpline {
         }
     }
 
+    /// The nonempty knot span `i` (`knots[i] ≤ t < knots[i + 1]`, `degree ≤ i < ctrl.len()`) that
+    /// holds `t`; past an end, the end's span.
     fn span(&self, t: f64) -> usize {
         let (p, m) = (self.degree, self.ctrl.len());
-        if t >= self.knots[m] {
+        let (start, end) = self.domain();
+        let knot = |i: usize| self.knots.get(i).copied();
+        if t >= end {
             let mut i = m - 1;
-            while i > p && self.knots[i] >= self.knots[m] {
+            while i > p && knot(i).is_some_and(|k| k >= end) {
                 i -= 1;
             }
             return i;
         }
-        if t <= self.knots[p] {
+        if t <= start {
             let mut i = p;
-            while i + 1 < m && self.knots[i + 1] <= self.knots[p] {
+            while i + 1 < m && knot(i + 1).is_some_and(|k| k <= start) {
                 i += 1;
             }
             return i;
@@ -183,11 +247,7 @@ impl BSpline {
         let (mut lo, mut hi) = (p, m);
         while hi - lo > 1 {
             let mid = (lo + hi) / 2;
-            if t < self.knots[mid] {
-                hi = mid
-            } else {
-                lo = mid
-            }
+            if knot(mid).is_some_and(|k| t < k) { hi = mid } else { lo = mid }
         }
         lo
     }
@@ -199,70 +259,78 @@ impl BSpline {
 
     /// The point and its first `nd` derivatives at `t`, from the span's polynomial about the
     /// nearer end of the span: exact at both ends, and its local parameter at most ½.
-    #[allow(clippy::panic)] pub fn eval_ders(&self, t: f64, nd: usize) -> [Vec3; 3] {
+    pub fn eval_ders(&self, t: f64, nd: usize) -> [Vec3; 3] {
         let t = self.wrap(t);
-        let i = self.span(t);
-        let (t0, t1) = (self.knots[i], self.knots[i + 1]);
-        let h = t1 - t0;
-        let x = (t - t0) / h;
-        let (s, end) = if x > 0.5 { (x - 1.0, 1) } else { (x, 0) };
-        let c = &self.polys()[i]
-            .as_ref()
-            .unwrap_or_else(|| panic!("a span holds its parameter"))[end];
-        let p = self.degree;
-        let (mut p0, mut p1, mut p2) = (c[p], Vec3::ZERO, Vec3::ZERO);
-        for k in (0..p).rev() {
+        debug_assert!(
+            matches!(self.polys().get(self.span(t)), Some(Some(_))),
+            "every span `span` gives is nonempty"
+        );
+        let Some(Some(poly)) = self.polys().get(self.span(t)) else {
+            // Every span `span` gives is nonempty, so it has its polynomials.
+            return self.eval_ders_by_basis(t, nd);
+        };
+        let h = poly.t1 - poly.t0;
+        let x = (t - poly.t0) / h;
+        let (s, coefficients) =
+            if x > 0.5 { (x - 1.0, &poly.about_end) } else { (x, &poly.about_start) };
+        let mut highest_first = coefficients.iter().rev();
+        let mut p0 = highest_first.next().copied().unwrap_or(Vec3::ZERO);
+        let (mut p1, mut p2) = (Vec3::ZERO, Vec3::ZERO);
+        for &c in highest_first {
             if nd >= 2 {
                 p2 = p2 * s + p1;
             }
             if nd >= 1 {
                 p1 = p1 * s + p0;
             }
-            p0 = p0 * s + c[k];
+            p0 = p0 * s + c;
         }
         [p0, p1 / h, p2 * (2.0 / (h * h))]
     }
 
-    fn polys(&self) -> &[Option<SpanSeries>] {
+    fn polys(&self) -> &[Option<SpanPoly>] {
         self.polys.0.get_or_init(|| {
             let p = self.degree;
-            let mut out = vec![None; self.ctrl.len()];
-            for (i, o) in out.iter_mut().enumerate().skip(p) {
-                if self.knots[i + 1] <= self.knots[i] {
-                    continue;
+            let spans = knot_pairs(&self.knots).skip(p).zip(self.ctrl.windows(p + 1)).enumerate();
+            let polys = spans.map(|(k, ((t0, t1), points))| {
+                if t1 <= t0 {
+                    return None;
                 }
-                *o = Some([false, true].map(|end| {
-                    let basis = super::nurbs::span_poly(p, &self.knots, i, end);
-                    (0..=p)
-                        .map(|k| {
-                            (0..=p).fold(Vec3::ZERO, |a, j| a + self.ctrl[i - p + j] * basis[j][k])
-                        })
-                        .collect()
-                }));
-            }
-            Arc::new(out)
+                // The span's coefficient of each order: its control points weighted by their
+                // basis functions' coefficients of that order.
+                let series = |end: bool| {
+                    let basis = super::nurbs::span_poly(p, &self.knots, k + p, end);
+                    let mut coefficients = vec![Vec3::ZERO; p + 1];
+                    for (&point, row) in points.iter().zip(&basis) {
+                        for (c, &b) in coefficients.iter_mut().zip(row) {
+                            *c += point * b;
+                        }
+                    }
+                    coefficients
+                };
+                Some(SpanPoly { t0, t1, about_start: series(false), about_end: series(true) })
+            });
+            // The spans before the degree's are not the curve's.
+            Arc::new(repeat_with(|| None).take(p).chain(polys).collect())
         })
     }
 
     /// [`BSpline::eval_ders`] by the basis recurrence, for checking the polynomials.
-    #[cfg(test)]
     fn eval_ders_by_basis(&self, t: f64, nd: usize) -> [Vec3; 3] {
         let t = self.wrap(t);
         let i = self.span(t);
         let ders = self.basis_ders(i, t, nd);
+        let points = self.ctrl.iter().skip(i - self.degree).take(self.degree + 1);
         let mut out = [Vec3::ZERO; 3];
-        for (k, row) in ders.iter().enumerate().take(nd.min(2) + 1) {
-            let mut s = Vec3::ZERO;
-            for (j, &n) in row.iter().enumerate().take(self.degree + 1) {
-                s += self.ctrl[i - self.degree + j] * n;
-            }
-            out[k] = s;
+        for (slot, row) in out.iter_mut().zip(&ders).take(nd.min(2) + 1) {
+            *slot = points.clone().zip(row).fold(Vec3::ZERO, |s, (&q, &n)| s + q * n);
         }
         out
     }
 
     pub fn eval(&self, t: f64) -> Vec3 {
-        self.eval_ders(t, 0)[0]
+        let [point, ..] = self.eval_ders(t, 0);
+        point
     }
 
     pub fn transformed(&self, t: &Transform) -> BSpline {
@@ -277,18 +345,15 @@ impl BSpline {
     fn spans(&self) -> &[Span] {
         self.spans.0.get_or_init(|| {
             let p = self.degree;
-            let spans = (p..self.ctrl.len())
-                .filter(|&i| self.knots[i + 1] > self.knots[i])
-                .map(|i| {
-                    let pts = &self.ctrl[i - p..=i];
-                    let centre = pts.iter().fold(Vec3::ZERO, |a, &q| a + q) / pts.len() as f64;
-                    let radius = pts.iter().map(|q| q.dist(centre)).fold(0.0, f64::max);
-                    Span {
-                        t0: self.knots[i],
-                        t1: self.knots[i + 1],
-                        centre,
-                        radius: radius * (1.0 + 1e-12) + 1e-12,
-                    }
+            let spans = knot_pairs(&self.knots)
+                .skip(p)
+                .zip(self.ctrl.windows(p + 1))
+                .filter(|&((t0, t1), _)| t1 > t0)
+                .map(|((t0, t1), points)| {
+                    let centre =
+                        points.iter().fold(Vec3::ZERO, |a, &q| a + q) / points.len() as f64;
+                    let radius = points.iter().map(|q| q.dist(centre)).fold(0.0, f64::max);
+                    Span { t0, t1, centre, radius: radius * (1.0 + BALL_SLACK) + BALL_SLACK }
                 })
                 .collect();
             Arc::new(spans)
@@ -319,7 +384,7 @@ impl BSpline {
         let spans = self.spans();
         for shift in shifts {
             let first = spans.partition_point(|s| s.t1 + shift < t0);
-            for s in &spans[first..] {
+            for s in spans.iter().skip(first) {
                 if s.t0 + shift > t1 {
                     break;
                 }
@@ -335,8 +400,7 @@ impl BSpline {
     /// Parameters strictly inside (t0, t1) where the coordinate along `dir` is stationary: on each
     /// piece that coordinate's derivative is a polynomial of degree below three, solved exactly.
     pub fn extremes(&self, dir: Vec3, t0: f64, t1: f64) -> Vec<f64> {
-        self.extremes_along(&[dir], t0, t1, |_| false)
-            .swap_remove(0)
+        self.extremes_along(&[dir], t0, t1, |_| false).into_iter().next().unwrap_or_default()
     }
 
     /// The tight box of the curve over [t0, t1]: its ends and every coordinate's extremes.
@@ -347,9 +411,13 @@ impl BSpline {
         // A piece whose control points' ball lies in the ends' box cannot widen it.
         let ends = bb;
         let inside = |s: &Span| {
-            (0..3).all(|k| {
-                s.centre[k] - s.radius >= ends.min[k] && s.centre[k] + s.radius <= ends.max[k]
-            })
+            let (centre, min, max) =
+                (s.centre.to_array(), ends.min.to_array(), ends.max.to_array());
+            centre
+                .into_iter()
+                .zip(min)
+                .zip(max)
+                .all(|((c, lo), hi)| c - s.radius >= lo && c + s.radius <= hi)
         };
         for ts in self.extremes_along(&[Vec3::X, Vec3::Y, Vec3::Z], t0, t1, inside) {
             for t in ts {
@@ -369,7 +437,10 @@ impl BSpline {
         inside: impl Fn(&Span) -> bool,
     ) -> Vec<Vec<f64>> {
         let mut outs = vec![Vec::new(); dirs.len()];
-        let der = |t: f64| self.eval_ders(t, 1)[1];
+        let der = |t: f64| {
+            let [_, tangent, _] = self.eval_ders(t, 1);
+            tangent
+        };
         let mut last: Option<(f64, Vec3)> = None;
         for (lo, hi, span) in self.pieces(t0, t1) {
             if hi <= lo || span.is_some_and(&inside) {
@@ -410,26 +481,25 @@ impl BSpline {
             .collect();
         let dist = |t: f64| flat(self.eval(t) - p).norm();
         let search = |lo: f64, hi: f64| {
-            let n = 8;
             let mut seed = (f64::INFINITY, lo);
-            for i in 0..=n {
-                let t = lo + (hi - lo) * i as f64 / n as f64;
+            for i in 0..=NEAREST_SAMPLES {
+                let t = lo + (hi - lo) * f64::from(i) / f64::from(NEAREST_SAMPLES);
                 let d = dist(t);
                 if d < seed.0 {
                     seed = (d, t);
                 }
             }
             let mut t = seed.1;
-            for _ in 0..50 {
+            for _ in 0..NEWTON_STEPS {
                 let [c, d1, d2] = self.eval_ders(t, 2);
                 let (r, d1, d2) = (flat(c - p), flat(d1), flat(d2));
-                let f = r.dot(d1);
-                let df = d1.norm2() + r.dot(d2);
-                if df.abs() < 1e-300 {
+                let slope = r.dot(d1);
+                let curvature = d1.norm2() + r.dot(d2);
+                if curvature.abs() < FLAT_SLOPE {
                     break;
                 }
-                let next = (t - f / df.max(d1.norm2() * 0.1)).clamp(lo, hi);
-                let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
+                let next = (t - slope / curvature.max(d1.norm2() * 0.1)).clamp(lo, hi);
+                let done = (next - t).abs() <= NEWTON_STEP_DONE * (1.0 + t.abs());
                 t = next;
                 if done {
                     break;
@@ -440,11 +510,11 @@ impl BSpline {
         };
         // The search stops at the first piece whose gap passes the best distance, and the piece of
         // least gap comes first, so no piece whose gap passes that piece's distance is reached.
-        let Some(first) = (0..pieces.len()).min_by(|&a, &b| pieces[a].0.total_cmp(&pieces[b].0))
+        let Some(&(_, first_lo, first_hi)) = pieces.iter().min_by(|x, y| x.0.total_cmp(&y.0))
         else {
             return t0;
         };
-        let bound = search(pieces[first].1, pieces[first].2).0;
+        let bound = search(first_lo, first_hi).0;
         let mut order: Vec<(f64, f64, f64)> = pieces.into_iter().filter(|q| q.0 <= bound).collect();
         order.sort_by(|x, y| x.0.total_cmp(&y.0));
         let mut best = (f64::INFINITY, t0);
@@ -460,13 +530,12 @@ impl BSpline {
         best.1
     }
 
-    /// The basis function values of every control point at `t`, for collocation.
+    /// The basis function values of every control point at `t`, for collocation: the first
+    /// control point they weigh, and their values.
     fn basis_row(&self, t: f64) -> (usize, Vec<f64>) {
         let i = self.span(t);
-        (
-            i - self.degree,
-            self.basis_ders(i, t, 0)[0][..=self.degree].to_vec(),
-        )
+        let [values, ..] = self.basis_ders(i, t, 0);
+        (i - self.degree, values.iter().take(self.degree + 1).copied().collect())
     }
 
     /// The open spline through `points` in order, at chord-length parameters. Four or more points
@@ -484,28 +553,24 @@ impl BSpline {
     /// not-a-knot ends from four points, a quadratic through three, a line through two.
     pub fn interpolate_at(points: &[Vec3], params: &[f64]) -> Result<BSpline> {
         let n = points.len();
+        let (Some(&first), Some(&last)) = (params.first(), params.last()) else {
+            return invalid("interpolation needs a parameter for each of at least two points");
+        };
         if n < 2 || params.len() != n {
             return invalid("interpolation needs a parameter for each of at least two points");
         }
-        let p = (n - 1).min(3);
-        let mut knots = vec![params[0]; p + 1];
-        if p == 3 {
-            knots.extend_from_slice(&params[2..n - 2]);
+        let degree = (n - 1).min(3);
+        let mut knots = vec![first; degree + 1];
+        if degree == 3 {
+            // Not-a-knot: no knot at the second point or the second last.
+            knots.extend(params.iter().skip(2).take(n - 4));
         }
-        knots.extend(std::iter::repeat_n(params[n - 1], p + 1));
-        let shape = BSpline {
-            degree: p,
-            knots,
-            ctrl: vec![Vec3::ZERO; n],
-            periodic: false,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        };
+        knots.extend(repeat_n(last, degree + 1));
+        let shape = BSpline::from_parts(degree, knots, vec![Vec3::ZERO; n], false)?;
         let rows = params.iter().map(|&t| shape.basis_row(t)).collect();
-        let b: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
-        let x = solve_banded(rows, b, 3)?;
-        let ctrl = x.chunks(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
-        BSpline::new(p, shape.knots, ctrl)
+        let coordinates: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
+        let solved = solve_banded(rows, coordinates, 3)?;
+        BSpline::new(degree, shape.knots, points_from(&solved))
     }
 
     /// The open cubic through `points` at chord-length parameters, with a knot at every inner
@@ -517,65 +582,46 @@ impl BSpline {
         if n < 3 {
             return BSpline::interpolate(points);
         }
-        let t = chord_params(points, false)?;
-        let mut knots = vec![t[0]; 4];
-        knots.extend_from_slice(&t[1..n - 1]);
-        knots.extend([t[n - 1]; 4]);
+        let params = chord_params(points, false)?;
+        let nodes: Vec<(f64, Vec3)> = params.iter().copied().zip(points.iter().copied()).collect();
+        let [(t_first, p_first), ref inner @ .., (t_last, p_last)] = *nodes.as_slice() else {
+            return invalid("interpolation needs a parameter for each of at least two points");
+        };
+        let mut knots = vec![t_first; 4];
+        knots.extend(inner.iter().map(|&(t, _)| t));
+        knots.extend([t_last; 4]);
         let m = n + 2;
-        let shape = BSpline {
-            degree: 3,
-            knots,
-            ctrl: vec![Vec3::ZERO; m],
-            periodic: false,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        };
-        // The derivative at `t[at]` of the polynomial through the points `idx` (Lagrange form).
-        let slope = |idx: &[usize], at: usize| {
-            let mut d = Vec3::ZERO;
-            for &j in idx {
-                let l = if j == at {
-                    idx.iter()
-                        .filter(|&&m| m != j)
-                        .map(|&m| 1.0 / (t[j] - t[m]))
-                        .sum::<f64>()
-                } else {
-                    idx.iter()
-                        .filter(|&&m| m != j && m != at)
-                        .map(|&m| (t[at] - t[m]) / (t[j] - t[m]))
-                        .product::<f64>()
-                        / (t[j] - t[at])
-                };
-                d += points[j] * l;
-            }
-            d
-        };
+        let shape = BSpline::from_parts(3, knots, vec![Vec3::ZERO; m], false)?;
+        // Each end's slope from the polynomial through its nearest few points.
         let k = n.min(4);
-        let head: Vec<usize> = (0..k).collect();
-        let tail: Vec<usize> = (n - k..n).collect();
-        let (start, end) = (slope(&head, 0), slope(&tail, n - 1));
-        let mut a = Vec::with_capacity(m);
-        let mut b: Vec<f64> = Vec::with_capacity(3 * m);
-        let put = |a: &mut Vec<_>, at: f64, der: usize| {
-            let i = shape.span(at);
-            let ders = shape.basis_ders(i, at, der);
-            a.push((i - 3, ders[der][..=3].to_vec()));
+        let (Some((head, _)), Some((_, tail))) =
+            (nodes.split_at_checked(k), nodes.split_at_checked(n - k))
+        else {
+            return invalid("interpolation needs a parameter for each of at least two points");
         };
-        put(&mut a, t[0], 0);
-        b.extend(points[0].to_array());
-        put(&mut a, t[0], 1);
-        b.extend(start.to_array());
-        for k in 1..n - 1 {
-            put(&mut a, t[k], 0);
-            b.extend(points[k].to_array());
+        let (start, end) = (lagrange_slope(head, 0), lagrange_slope(tail, k - 1));
+        // A collocation row: the basis values (`der` 0) or first derivatives (`der` 1) at `at`.
+        let row = |at: f64, der: usize| {
+            let i = shape.span(at);
+            let [values, slopes, ..] = shape.basis_ders(i, at, der);
+            (i - 3, if der == 0 { values } else { slopes }.to_vec())
+        };
+        let mut rows = Vec::with_capacity(m);
+        let mut coordinates: Vec<f64> = Vec::with_capacity(3 * m);
+        rows.push(row(t_first, 0));
+        coordinates.extend(p_first.to_array());
+        rows.push(row(t_first, 1));
+        coordinates.extend(start.to_array());
+        for &(t, p) in inner {
+            rows.push(row(t, 0));
+            coordinates.extend(p.to_array());
         }
-        put(&mut a, t[n - 1], 1);
-        b.extend(end.to_array());
-        put(&mut a, t[n - 1], 0);
-        b.extend(points[n - 1].to_array());
-        let x = solve_banded(a, b, 3)?;
-        let ctrl = x.chunks(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
-        BSpline::new(3, shape.knots, ctrl)
+        rows.push(row(t_last, 1));
+        coordinates.extend(end.to_array());
+        rows.push(row(t_last, 0));
+        coordinates.extend(p_last.to_array());
+        let solved = solve_banded(rows, coordinates, 3)?;
+        BSpline::new(3, shape.knots, points_from(&solved))
     }
 
     /// The closed C² cubic through `points` and back to the first, at chord-length parameters.
@@ -591,55 +637,39 @@ impl BSpline {
     /// one period on. Splines through different points at the same parameters share their knots.
     pub fn interpolate_periodic_at(points: &[Vec3], params: &[f64]) -> Result<BSpline> {
         let n = points.len();
-        if n < 3 || params.len() != n + 1 || params.windows(2).any(|w| w[1] <= w[0]) {
-            return invalid(
-                "a periodic spline needs three or more points at increasing parameters",
-            );
+        let refuse =
+            || invalid("a periodic spline needs three or more points at increasing parameters");
+        if n < 3 || params.len() != n + 1 || knot_pairs(params).any(|(a, b)| b <= a) {
+            return refuse();
         }
-        let period = params[n] - params[0];
-        let p = 3;
-        // Knots u_{-3} .. u_{n+3}, with u_{i+n} = u_i + period.
-        let knot = |i: isize| -> f64 {
-            let k = i.rem_euclid(n as isize) as usize;
-            params[k] + period * (i.div_euclid(n as isize)) as f64
+        let (Some((&last, at_points)), Some(&first)) = (params.split_last(), params.first()) else {
+            return refuse();
         };
-        let knots: Vec<f64> = (-3..=(n as isize + 3)).map(knot).collect();
-        let shape = BSpline {
-            degree: p,
-            knots,
-            ctrl: vec![Vec3::ZERO; n + p],
-            periodic: false,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        };
+        let period = last - first;
+        let degree = 3;
+        // Knots u_{-3} .. u_{n+3}, with u_{i+n} = u_i + period: from u_{n-3} of the points' own.
+        let knots: Vec<f64> = (-3..=(n as isize + 3))
+            .zip(at_points.iter().cycle().skip(n - 3))
+            .map(|(i, &u)| u + period * (i.div_euclid(n as isize)) as f64)
+            .collect();
+        let shape = BSpline::from_parts(degree, knots, vec![Vec3::ZERO; n + degree], false)?;
         // Unknown `q` is control point `q + 1`, which puts each row's largest basis value, at the
         // point's own knot, on the diagonal as the cyclic solve wants.
-        let rows = params[..n]
+        let rows = at_points
             .iter()
             .map(|&t| {
                 let (first, vals) = shape.basis_row(t);
                 ((first + n - 1) % n, vals)
             })
             .collect();
-        let b: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
-        let x = solve_cyclic(rows, b, 3)?;
-        let mut ctrl: Vec<Vec3> = (0..n)
-            .map(|i| {
-                let q = (i + n - 1) % n;
-                Vec3::new(x[3 * q], x[3 * q + 1], x[3 * q + 2])
-            })
-            .collect();
-        for i in 0..p {
-            ctrl.push(ctrl[i]);
-        }
-        Ok(BSpline {
-            degree: p,
-            knots: shape.knots,
-            ctrl,
-            periodic: true,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        })
+        let coordinates: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
+        let solved = points_from(&solve_cyclic(rows, coordinates, 3)?);
+        // Control point `i` is unknown `i − 1` (the last for the first), and the first `degree`
+        // come again at the end.
+        let rotated: Vec<Vec3> =
+            solved.last().into_iter().chain(solved.iter().take(n - 1)).copied().collect();
+        let ctrl = rotated.iter().chain(rotated.iter().take(degree)).copied().collect();
+        BSpline::from_parts(degree, shape.knots, ctrl, true)
     }
 }
 
@@ -649,30 +679,50 @@ impl BSpline {
     /// three repeated after them, as [`BSpline::interpolate_periodic_at`] makes them.
     pub fn periodic_cubic(knots: Vec<f64>, ctrl: Vec<Vec3>) -> Result<BSpline> {
         let n = ctrl.len().saturating_sub(3);
-        if n < 3 || knots.len() != n + 7 || ctrl[n..] != ctrl[..3] {
+        if n < 3 || knots.len() != n + 7 || ctrl.get(n..) != ctrl.get(..3) {
             return invalid("a periodic cubic needs n + 7 knots and its first three points again");
         }
-        Ok(BSpline {
-            degree: 3,
-            knots,
-            ctrl,
-            periodic: true,
-            spans: SpanCache::default(),
-            polys: PolyCache::default(),
-        })
+        BSpline::from_parts(3, knots, ctrl, true)
     }
 }
 
+/// The derivative at node `at` of the polynomial through the `(parameter, point)` `nodes`, in
+/// Lagrange form.
+fn lagrange_slope(nodes: &[(f64, Vec3)], at: usize) -> Vec3 {
+    debug_assert!(at < nodes.len(), "node {at} is one of the nodes");
+    let Some(&(t_at, _)) = nodes.get(at) else {
+        return Vec3::ZERO;
+    };
+    let mut d = Vec3::ZERO;
+    for (j, &(t_j, p_j)) in nodes.iter().enumerate() {
+        let others = nodes.iter().enumerate().filter(|&(m, _)| m != j);
+        let l = if j == at {
+            others.map(|(_, &(t_m, _))| 1.0 / (t_j - t_m)).sum::<f64>()
+        } else {
+            others
+                .filter(|&(m, _)| m != at)
+                .map(|(_, &(t_m, _))| (t_at - t_m) / (t_j - t_m))
+                .product::<f64>()
+                / (t_j - t_at)
+        };
+        d += p_j * l;
+    }
+    d
+}
+
+/// The cumulative chord lengths of `points`, from zero; round to the first again when `closed`.
 pub fn chord_params(points: &[Vec3], closed: bool) -> Result<Vec<f64>> {
-    let mut params = vec![0.0];
-    let n = points.len();
-    let count = if closed { n } else { n - 1 };
-    for i in 0..count {
-        let d = points[i].dist(points[(i + 1) % n]);
+    let count = if closed { points.len() } else { points.len().saturating_sub(1) };
+    let mut params = Vec::with_capacity(count + 1);
+    let mut length = 0.0;
+    params.push(length);
+    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(count) {
+        let d = a.dist(*b);
         if d <= tol::LINEAR {
             return invalid("interpolation points must be distinct");
         }
-        params.push(params[i] + d);
+        length += d;
+        params.push(length);
     }
     Ok(params)
 }
@@ -694,8 +744,8 @@ fn extremes_on_piece(
         return;
     }
     let mut ss = Vec::new();
-    if qa.abs() <= 1e-14 * scale {
-        if qb.abs() > 1e-14 * scale {
+    if qa.abs() <= NEGLIGIBLE_COEFFICIENT * scale {
+        if qb.abs() > NEGLIGIBLE_COEFFICIENT * scale {
             ss.push(-g0 / qb);
         }
     } else {
@@ -739,11 +789,7 @@ mod tests {
             .collect();
         let c = BSpline::interpolate(&pts).unwrap();
         let (a, b) = c.domain();
-        for (t0, t1) in [
-            (a, b),
-            (a + 0.3 * (b - a), a + 0.35 * (b - a)),
-            (0.5, 0.5 + 1e-3),
-        ] {
+        for (t0, t1) in [(a, b), (a + 0.3 * (b - a), a + 0.35 * (b - a)), (0.5, 0.5 + 1e-3)] {
             let bb = c.bbox(t0, t1);
             let mut dense = Aabb::EMPTY;
             for i in 0..=4000 {
@@ -758,9 +804,8 @@ mod tests {
 
     #[test]
     fn open_cubic_passes_through_its_points_and_its_derivative_matches_differences() {
-        let pts: Vec<Vec3> = (0..7)
-            .map(|i| Vec3::new(i as f64, (i as f64 * 0.7).sin() * 3.0, 0.0))
-            .collect();
+        let pts: Vec<Vec3> =
+            (0..7).map(|i| Vec3::new(i as f64, (i as f64 * 0.7).sin() * 3.0, 0.0)).collect();
         let s = BSpline::interpolate(&pts).unwrap();
         let params = chord_params(&pts, false).unwrap();
         for (p, &t) in pts.iter().zip(&params) {
@@ -815,10 +860,8 @@ mod tests {
         let mid = 0.5 * (tf[1] + tf[2]);
         let lagrange: Vec3 = (0..4)
             .map(|j| {
-                let l: f64 = (0..4)
-                    .filter(|&m| m != j)
-                    .map(|m| (mid - tf[m]) / (tf[j] - tf[m]))
-                    .product();
+                let l: f64 =
+                    (0..4).filter(|&m| m != j).map(|m| (mid - tf[m]) / (tf[j] - tf[m])).product();
                 pts[j] * l
             })
             .fold(Vec3::ZERO, |a, b| a + b);
@@ -858,12 +901,8 @@ mod tests {
         let mut splines = vec![wobbly_ring(), BSpline::interpolate(&pts(11)).unwrap()];
         let ctrl = pts(6);
         splines.push(
-            BSpline::new(
-                2,
-                vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.5, 4.0, 4.0, 4.0],
-                ctrl.clone(),
-            )
-            .unwrap(),
+            BSpline::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.5, 4.0, 4.0, 4.0], ctrl.clone())
+                .unwrap(),
         );
         splines.push(BSpline::new(1, vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.5, 5.0, 5.0], ctrl).unwrap());
         for c in &splines {
@@ -948,11 +987,7 @@ mod tests {
 
     #[test]
     fn three_points_give_a_quadratic() {
-        let pts = [
-            Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 0.0),
-            Vec3::new(2.0, 0.0, 0.0),
-        ];
+        let pts = [Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::new(2.0, 0.0, 0.0)];
         let s = BSpline::interpolate(&pts).unwrap();
         assert_eq!(s.degree(), 2);
         assert!(s.eval(s.domain().1).dist(pts[2]) < 1e-14);
