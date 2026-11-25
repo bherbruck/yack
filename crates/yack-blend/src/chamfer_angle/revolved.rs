@@ -297,7 +297,7 @@ fn seam(body: &Brep, e: EdgeId, f: FaceId) -> bool {
 }
 
 /// `body` with the rim `edge` bevelled: set back `distance` along `face`, the bevel at `angle`
-/// (radians) to it; the bevel face is `<feature>.bevel`.
+/// (radians) to it; the bevel face is `<feature>.bevel_0`, the call's one edge.
 pub(super) fn chamfer(
     body: &Brep,
     edge: EdgeId,
@@ -385,7 +385,7 @@ pub(super) fn chamfer(
         if n.feature != TOOL {
             Some(n.clone())
         } else if n.face == "bevel" {
-            Some(FaceName::new(feature, "bevel"))
+            Some(FaceName::new(feature, "bevel_0"))
         } else {
             None
         }

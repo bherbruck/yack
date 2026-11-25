@@ -26,7 +26,7 @@ const STRATEGIES: &[Strategy] = &[Strategy { name: "revolved", run: revolved::ch
 
 /// `body` with `edge` bevelled: set back `distance` along `face`, one of the edge's two faces, the
 /// bevel at `angle` (radians, strictly between 0 and a right angle) to that face. The bevel face is
-/// `<feature>.bevel`; every other face keeps its names. Declines (an [`Error::Unsupported`] naming
+/// `<feature>.bevel_0`; every other face keeps its names. Declines (an [`Error::Unsupported`] naming
 /// each strategy's reason) where no strategy answers.
 pub fn chamfer_angle(
     body: &Brep,
@@ -129,7 +129,7 @@ mod tests {
             near(&out, 250.0 * PI - 2.0 * PI * (5.0 - 1.0 / 3.0) * drop / 2.0);
             let bevels = out
                 .face_ids()
-                .filter(|&f| out.face(f).names.contains(&FaceName::new("k", "bevel")))
+                .filter(|&f| out.face(f).names.contains(&FaceName::new("k", "bevel_0")))
                 .count();
             assert_eq!(bevels, 1);
         }
