@@ -1,6 +1,6 @@
 // yack: `cargo xtask digest`: result digests per conformance and bench case (PLAN §6.4, M1.6).
 //! `cargo xtask digest [--check] [--only conformance|bench] [--seed N] [--threads N] [--ref DIR]
-//!                    [--bin-dir DIR --tree FINGERPRINT]`
+//!                    [--bin-dir DIR --tree FINGERPRINT] [--keep-log]`
 //!
 //! Records `Solid::digest()` of every result, sorted and timestamp-free, in
 //! `scores/digests/conformance-seed<N>.txt` and `scores/digests/bench.txt`. `--check` diffs a fresh
@@ -13,6 +13,12 @@
 //! share of the families, so the n-th block of its log is the n-th case of its results.
 //!
 //! Bench: `yack-bench --digests` prints `<case> <hex>` or `<case> refused` per case.
+//!
+//! `--keep-log`: the adapter also logs `strategy <rung>` after each digest, the ladder rung that
+//! built the solid. With this flag those lines are kept per case, as `<case> <k> <op> <rung>` (the
+//! digest lines' keys), in `strategies-conformance-seed<N>.txt` beside the digest files. That file
+//! is a record, not a ratchet: it is rewritten on every run, in `--check` runs too, and never
+//! compared. The digest files and their checks are the same with or without the flag.
 //!
 //! Policy: the first run records a baseline. After that, plain writes are refused. Only the
 //! lead re-blesses, with `--bless --reason "<why the digests changed>"`, and the reason and the
@@ -28,12 +34,14 @@ use std::process::{Command, ExitCode, Stdio};
 const USAGE: &str = "\
 usage: cargo xtask digest [--check | --bless --reason \"why\"] [--only conformance|bench] [--seed N]
                           [--families A,B | --sample PERCENT] [--threads N] [--ref DIR]
-                          [--bin-dir DIR --tree FINGERPRINT] [--dir DIGESTS_DIR]
+                          [--bin-dir DIR --tree FINGERPRINT] [--dir DIGESTS_DIR] [--keep-log]
   --check            diff a fresh run against scores/digests/ (exit 1 on any difference)
   --bless --reason   re-record a baseline (the lead only; the reason goes into the header)
   --families A,B     conformance: only these families (with --check)
   --sample PERCENT   conformance: the families whose name hashes into the first PERCENT of 100
-                     (deterministic; `--sample 10` takes 1-2 min), with --check";
+                     (deterministic; `--sample 10` takes 1-2 min), with --check
+  --keep-log         conformance: also write each result's ladder rung to
+                     strategies-conformance-seed<N>.txt beside the digests (a record, never checked)";
 
 /// The environment variable the adapter reads (set by the proxy on its child only).
 pub const LOG_VAR: &str = "YACK_DIGESTS";
@@ -58,19 +66,46 @@ struct Opts {
     tree: Option<String>,
     /// Where the digest files live (default scores/digests).
     dir: Option<PathBuf>,
+    /// Also write the ladder rung of each conformance result (`--keep-log`).
+    keep_log: bool,
 }
 
 fn parse(args: &[String]) -> Result<Opts, String> {
     let root = crate::meta::root();
-    let mut o = Opts { check: false, bless: false, reason: None, families: None, sample: None, conformance: true, bench: true, seed: 0, threads: 4, reference: root.join("../yack-ref"), bin_dir: None, tree: None, dir: None };
+    let mut o = Opts {
+        check: false,
+        bless: false,
+        reason: None,
+        families: None,
+        sample: None,
+        conformance: true,
+        bench: true,
+        seed: 0,
+        threads: 4,
+        reference: root.join("../yack-ref"),
+        bin_dir: None,
+        tree: None,
+        dir: None,
+        keep_log: false,
+    };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--check" => o.check = true,
+            "--keep-log" => o.keep_log = true,
             "--bless" => o.bless = true,
             "--reason" => o.reason = Some(it.next().ok_or(USAGE)?.clone()),
-            "--families" => o.families = Some(it.next().ok_or(USAGE)?.split(',').map(str::to_string).collect()),
-            "--sample" => o.sample = Some(it.next().and_then(|s| s.parse().ok()).filter(|&p| p > 0 && p <= 100).ok_or(USAGE)?),
+            "--families" => {
+                o.families = Some(it.next().ok_or(USAGE)?.split(',').map(str::to_string).collect())
+            }
+            "--sample" => {
+                o.sample = Some(
+                    it.next()
+                        .and_then(|s| s.parse().ok())
+                        .filter(|&p| p > 0 && p <= 100)
+                        .ok_or(USAGE)?,
+                )
+            }
             "--bin-dir" => o.bin_dir = Some(PathBuf::from(it.next().ok_or(USAGE)?)),
             "--tree" => o.tree = Some(it.next().ok_or(USAGE)?.clone()),
             "--dir" => o.dir = Some(PathBuf::from(it.next().ok_or(USAGE)?)),
@@ -80,7 +115,10 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 _ => return Err(USAGE.into()),
             },
             "--seed" => o.seed = it.next().and_then(|s| s.parse().ok()).ok_or(USAGE)?,
-            "--threads" => o.threads = it.next().and_then(|s| s.parse().ok()).filter(|&n| n > 0).ok_or(USAGE)?,
+            "--threads" => {
+                o.threads =
+                    it.next().and_then(|s| s.parse().ok()).filter(|&n| n > 0).ok_or(USAGE)?
+            }
             "--ref" => o.reference = PathBuf::from(it.next().ok_or(USAGE)?),
             _ => return Err(format!("unknown argument `{a}`\n{USAGE}")),
         }
@@ -92,7 +130,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         return Err("--bless needs --reason \"<why the digests changed>\"".into());
     }
     if !o.check && (o.families.is_some() || o.sample.is_some()) {
-        return Err("--families/--sample check a subset; a baseline is always recorded in full".into());
+        return Err(
+            "--families/--sample check a subset; a baseline is always recorded in full".into()
+        );
     }
     if o.bin_dir.is_some() != o.tree.is_some() {
         return Err(format!("--bin-dir and --tree go together\n{USAGE}"));
@@ -141,8 +181,20 @@ fn drive(o: &Opts) -> Result<bool, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut ok = true;
     if o.conformance {
-        let (lines, subset) = conformance(&root, o)?;
-        ok &= settle(&dir.join(format!("conformance-seed{}.txt", o.seed)), &lines, o, subset.as_ref())?;
+        let (lines, rungs, subset) = conformance(&root, o)?;
+        ok &= settle(
+            &dir.join(format!("conformance-seed{}.txt", o.seed)),
+            &lines,
+            o,
+            subset.as_ref(),
+        )?;
+        if o.keep_log {
+            record_rungs(
+                &dir.join(format!("strategies-conformance-seed{}.txt", o.seed)),
+                &rungs,
+                o,
+            )?;
+        }
     }
     if o.bench {
         let lines = bench(&binary(&root, o, "yack-bench")?)?;
@@ -153,14 +205,24 @@ fn drive(o: &Opts) -> Result<bool, String> {
 
 /// Writes `lines` to `path` (first record, or `--bless`), or with `--check` diffs them against it,
 /// limited to the cases of `subset`'s families when given. True when nothing differs.
-fn settle(path: &Path, lines: &BTreeSet<String>, o: &Opts, subset: Option<&BTreeSet<String>>) -> Result<bool, String> {
+fn settle(
+    path: &Path,
+    lines: &BTreeSet<String>,
+    o: &Opts,
+    subset: Option<&BTreeSet<String>>,
+) -> Result<bool, String> {
     let name = path.display();
     let check = o.check;
     if !check {
         if path.is_file() && !o.bless {
-            return Err(format!("{name} exists; re-recording it is `--bless --reason \"..\"` (the lead only)"));
+            return Err(format!(
+                "{name} exists; re-recording it is `--bless --reason \"..\"` (the lead only)"
+            ));
         }
-        let mut head = format!("# Solid::digest() per result (cargo xtask digest); tree {}\n", o.tree.as_deref().unwrap_or("unrecorded"));
+        let mut head = format!(
+            "# Solid::digest() per result (cargo xtask digest); tree {}\n",
+            o.tree.as_deref().unwrap_or("unrecorded")
+        );
         if let Some(r) = &o.reason {
             head.push_str(&format!("# reason: {}\n", r.replace('\n', " ")));
         }
@@ -176,7 +238,9 @@ fn settle(path: &Path, lines: &BTreeSet<String>, o: &Opts, subset: Option<&BTree
         .map_err(|e| format!("{name}: {e} (record it first with `cargo xtask digest`)"))?
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter(|l| subset.is_none_or(|fs| fs.contains(family(l.split(' ').next().unwrap_or_default()))))
+        .filter(|l| {
+            subset.is_none_or(|fs| fs.contains(family(l.split(' ').next().unwrap_or_default())))
+        })
         .map(str::to_string)
         .collect();
     let gone: Vec<_> = old.difference(lines).collect();
@@ -196,6 +260,20 @@ fn settle(path: &Path, lines: &BTreeSet<String>, o: &Opts, subset: Option<&BTree
     }
 }
 
+/// Writes the ladder rung of each result to `path` (`--keep-log`): a record, rewritten every run.
+fn record_rungs(path: &Path, rungs: &BTreeSet<String>, o: &Opts) -> Result<(), String> {
+    let head = format!(
+        "# ladder rung per conformance result (cargo xtask digest --keep-log); tree {}; a record, not ratcheted\n",
+        o.tree.as_deref().unwrap_or("unrecorded")
+    );
+    let body: String = head + &rungs.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let tmp = path.with_extension(format!("txt.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, body).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("digest: wrote {} ({} lines)", path.display(), rungs.len());
+    Ok(())
+}
+
 /// `<digests dir>/.lock` holding the writer's pid: one recording at a time. Released on drop; a
 /// lock whose pid is gone is stale and taken over.
 struct Lock(PathBuf);
@@ -212,7 +290,10 @@ impl Lock {
                 Err(_) => {
                     let pid = std::fs::read_to_string(&lock).unwrap_or_default().trim().to_string();
                     if !pid.is_empty() && Path::new("/proc").join(&pid).exists() {
-                        return Err(format!("{} is held by pid {pid}: another digest recording is in progress", lock.display()));
+                        return Err(format!(
+                            "{} is held by pid {pid}: another digest recording is in progress",
+                            lock.display()
+                        ));
                     }
                     let _ = std::fs::remove_file(&lock); // stale
                 }
@@ -229,12 +310,23 @@ impl Drop for Lock {
 }
 
 fn bench(exe: &Path) -> Result<BTreeSet<String>, String> {
-    let out = Command::new(exe).arg("--digests").output().map_err(|e| format!("{}: {e}", exe.display()))?;
+    let out = Command::new(exe)
+        .arg("--digests")
+        .output()
+        .map_err(|e| format!("{}: {e}", exe.display()))?;
     if !out.status.success() {
-        return Err(format!("{} --digests failed: {}", exe.display(), String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "{} --digests failed: {}",
+            exe.display(),
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
-    let lines: BTreeSet<String> =
-        String::from_utf8_lossy(&out.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+    let lines: BTreeSet<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
     if lines.is_empty() {
         return Err("yack-bench --digests printed nothing".into());
     }
@@ -249,8 +341,9 @@ fn family(id: &str) -> &str {
 /// Families with their case counts, from the conformance baseline of `seed`.
 fn families(root: &Path, seed: u64) -> Result<Vec<(String, usize)>, String> {
     let p = root.join(format!("scores/conformance/seed{seed}.json"));
-    let text = std::fs::read_to_string(&p)
-        .map_err(|e| format!("{}: {e} (run `cargo xtask conformance --seed {seed} --bless` first)", p.display()))?;
+    let text = std::fs::read_to_string(&p).map_err(|e| {
+        format!("{}: {e} (run `cargo xtask conformance --seed {seed} --bless` first)", p.display())
+    })?;
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     if let Json::Obj(members) = json::parse(&text)? {
         for (id, _) in members {
@@ -295,10 +388,14 @@ fn subset(fams: &[(String, usize)], o: &Opts) -> Result<Option<BTreeSet<String>>
         }
         return Ok(Some(want.iter().cloned().collect()));
     }
-    Ok(o.sample.map(|p| fams.iter().filter(|(f, _)| fnv(f) % 100 < p).map(|(f, _)| f.clone()).collect()))
+    Ok(o.sample
+        .map(|p| fams.iter().filter(|(f, _)| fnv(f) % 100 < p).map(|(f, _)| f.clone()).collect()))
 }
 
-fn conformance(root: &Path, o: &Opts) -> Result<(BTreeSet<String>, Option<BTreeSet<String>>), String> {
+/// The digest lines, the rung lines (`--keep-log`) and the families chosen, of a conformance run.
+type Conformance = (BTreeSet<String>, BTreeSet<String>, Option<BTreeSet<String>>);
+
+fn conformance(root: &Path, o: &Opts) -> Result<Conformance, String> {
     let runner = o.reference.join("bin/release/brep-conformance");
     if !runner.is_file() {
         return Err(format!("no runner at {}", runner.display()));
@@ -306,12 +403,17 @@ fn conformance(root: &Path, o: &Opts) -> Result<(BTreeSet<String>, Option<BTreeS
     let adapter = binary(root, o, "yack-conformance")?;
     // a private scratch dir per run (tree + pid), so two digest runs never share logs or results;
     // removed when the run assembled cleanly, kept for diagnosis otherwise
-    let work = o.reference.join("tmp").join(format!("digest-{}-{}", o.tree.as_deref().unwrap_or("local"), std::process::id()));
+    let work = o.reference.join("tmp").join(format!(
+        "digest-{}-{}",
+        o.tree.as_deref().unwrap_or("local"),
+        std::process::id()
+    ));
     std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
     let me = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let all = families(root, o.seed)?;
     let chosen = subset(&all, o)?;
-    let fams: Vec<(String, usize)> = all.into_iter().filter(|(f, _)| chosen.as_ref().is_none_or(|c| c.contains(f))).collect();
+    let fams: Vec<(String, usize)> =
+        all.into_iter().filter(|(f, _)| chosen.as_ref().is_none_or(|c| c.contains(f))).collect();
     if fams.is_empty() {
         return Err("the sample selects no family; raise --sample".into());
     }
@@ -324,11 +426,20 @@ fn conformance(root: &Path, o: &Opts) -> Result<(BTreeSet<String>, Option<BTreeS
         let out = work.join(format!("seed{}-{i}.json", o.seed));
         std::fs::write(&log, "").map_err(|e| format!("{}: {e}", log.display()))?;
         // the runner splits this on whitespace and starts it once per thread
-        let command = format!("{} digest-proxy {} {}", me.display(), log.display(), adapter.display());
+        let command =
+            format!("{} digest-proxy {} {}", me.display(), log.display(), adapter.display());
         let child = Command::new(&runner)
             .arg("--adapter")
             .arg(&command)
-            .args(["--seed", &o.seed.to_string(), "--threads", "1", "--family", &fams.join(","), "--out"])
+            .args([
+                "--seed",
+                &o.seed.to_string(),
+                "--threads",
+                "1",
+                "--family",
+                &fams.join(","),
+                "--out",
+            ])
             .arg(&out)
             .stdout(Stdio::null())
             .spawn()
@@ -347,35 +458,57 @@ fn conformance(root: &Path, o: &Opts) -> Result<(BTreeSet<String>, Option<BTreeS
         }
         let done: usize = runs
             .iter()
-            .map(|(_, log, _)| std::fs::read_to_string(log).map(|t| t.lines().filter(|l| *l == "reset").count()).unwrap_or(0))
+            .map(|(_, log, _)| {
+                std::fs::read_to_string(log)
+                    .map(|t| t.lines().filter(|l| *l == "reset").count())
+                    .unwrap_or(0)
+            })
             .sum();
-        println!("digest: {done}/{total} cases, {running} runners left, {}s", started.elapsed().as_secs());
+        println!(
+            "digest: {done}/{total} cases, {running} runners left, {}s",
+            started.elapsed().as_secs()
+        );
         if running == 0 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_secs(15));
     }
-    let mut lines = BTreeSet::new();
+    let (mut lines, mut rungs) = (BTreeSet::new(), BTreeSet::new());
     for (_, log, out) in &runs {
-        let results = json::parse(&std::fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))?)?;
+        let results = json::parse(
+            &std::fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))?,
+        )?;
         let ids: Vec<String> = results
             .get("cases")
             .map(Json::as_arr)
             .unwrap_or_default()
             .iter()
-            .map(|c| c.get("id").and_then(Json::as_str).map(str::to_string).ok_or("a case without an id"))
+            .map(|c| {
+                c.get("id").and_then(Json::as_str).map(str::to_string).ok_or("a case without an id")
+            })
             .collect::<Result<_, _>>()?;
         let text = std::fs::read_to_string(log).map_err(|e| format!("{}: {e}", log.display()))?;
         lines.extend(assemble(&ids, &text).map_err(|e| format!("{}: {e}", log.display()))?);
+        rungs.extend(assemble_rungs(&ids, &text).map_err(|e| format!("{}: {e}", log.display()))?);
     }
     let _ = std::fs::remove_dir_all(&work);
-    Ok((lines, chosen))
+    Ok((lines, rungs, chosen))
 }
 
-/// Pairs the log's blocks (split at `reset`) with the case ids, in order:
-/// `<case> <k> <op> <hex>` for the k-th solid the case's calls returned.
-pub fn assemble(ids: &[String], log: &str) -> Result<BTreeSet<String>, String> {
-    let mut blocks: Vec<Vec<(String, String)>> = vec![Vec::new()];
+/// One solid a case's calls returned: the op that returned it, its digest, and the ladder rung
+/// that built it when the log names one.
+struct Returned {
+    op: String,
+    digest: String,
+    rung: Option<String>,
+}
+
+/// The log's blocks (split at `reset`), paired with the case ids in order.
+fn case_blocks<'a>(
+    ids: &'a [String],
+    log: &str,
+) -> Result<Vec<(&'a String, Vec<Returned>)>, String> {
+    let mut blocks: Vec<Vec<Returned>> = vec![Vec::new()];
     let mut op = String::from("?");
     for line in log.lines() {
         if line == "reset" {
@@ -385,7 +518,11 @@ pub fn assemble(ids: &[String], log: &str) -> Result<BTreeSet<String>, String> {
         } else if let Some(h) = line.strip_prefix("digest ")
             && let Some(b) = blocks.last_mut()
         {
-            b.push((op.clone(), h.to_string()));
+            b.push(Returned { op: op.clone(), digest: h.to_string(), rung: None });
+        } else if let Some(r) = line.strip_prefix("strategy ")
+            && let Some(last) = blocks.last_mut().and_then(|b| b.last_mut())
+        {
+            last.rung = Some(r.to_string());
         }
     }
     // the last reset closes the last case; what follows it (the runner's closing probes of what
@@ -400,10 +537,28 @@ pub fn assemble(ids: &[String], log: &str) -> Result<BTreeSet<String>, String> {
             ids.len()
         ));
     }
+    Ok(ids.iter().zip(blocks).collect())
+}
+
+/// Pairs the log's blocks (split at `reset`) with the case ids, in order:
+/// `<case> <k> <op> <hex>` for the k-th solid the case's calls returned.
+pub fn assemble(ids: &[String], log: &str) -> Result<BTreeSet<String>, String> {
     let mut out = BTreeSet::new();
-    for (id, b) in ids.iter().zip(blocks) {
-        for (k, (op, h)) in b.into_iter().enumerate() {
-            out.insert(format!("{id} {k:03} {op} {h}"));
+    for (id, b) in case_blocks(ids, log)? {
+        for (k, r) in b.into_iter().enumerate() {
+            out.insert(format!("{id} {k:03} {} {}", r.op, r.digest));
+        }
+    }
+    Ok(out)
+}
+
+/// As [`assemble`], with the ladder rung in place of the digest: `<case> <k> <op> <rung>`, `?`
+/// where the log names none.
+pub fn assemble_rungs(ids: &[String], log: &str) -> Result<BTreeSet<String>, String> {
+    let mut out = BTreeSet::new();
+    for (id, b) in case_blocks(ids, log)? {
+        for (k, r) in b.into_iter().enumerate() {
+            out.insert(format!("{id} {k:03} {} {}", r.op, r.rung.as_deref().unwrap_or("?")));
         }
     }
     Ok(out)
@@ -422,7 +577,8 @@ pub fn proxy(args: &[String]) -> ExitCode {
 }
 
 fn relay(args: &[String]) -> Result<(), String> {
-    let (log_path, rest) = args.split_first().ok_or("usage: xtask digest-proxy <log> <adapter> [args..]")?;
+    let (log_path, rest) =
+        args.split_first().ok_or("usage: xtask digest-proxy <log> <adapter> [args..]")?;
     let (adapter, adapter_args) = rest.split_first().ok_or("no adapter given")?;
     let mut log = std::fs::OpenOptions::new()
         .append(true)
@@ -443,19 +599,25 @@ fn relay(args: &[String]) -> Result<(), String> {
     let mut reply = String::new();
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| format!("stdin: {e}"))?;
-        let cmd = json::parse(&line).ok().and_then(|v| v.get("cmd").and_then(Json::as_str).map(str::to_string));
+        let cmd = json::parse(&line)
+            .ok()
+            .and_then(|v| v.get("cmd").and_then(Json::as_str).map(str::to_string));
         match cmd.as_deref() {
             Some("reset") => writeln!(log, "reset"),
             Some(c) => writeln!(log, "op {c}"),
             None => Ok(()),
         }
         .map_err(|e| format!("{log_path}: {e}"))?;
-        writeln!(to_child, "{line}").and_then(|()| to_child.flush()).map_err(|e| format!("adapter stdin: {e}"))?;
+        writeln!(to_child, "{line}")
+            .and_then(|()| to_child.flush())
+            .map_err(|e| format!("adapter stdin: {e}"))?;
         reply.clear();
         if from_child.read_line(&mut reply).map_err(|e| format!("adapter stdout: {e}"))? == 0 {
             return Err("the adapter closed its stdout".into());
         }
-        out.write_all(reply.as_bytes()).and_then(|()| out.flush()).map_err(|e| format!("stdout: {e}"))?;
+        out.write_all(reply.as_bytes())
+            .and_then(|()| out.flush())
+            .map_err(|e| format!("stdout: {e}"))?;
     }
     drop(to_child);
     let _ = child.wait();
@@ -473,6 +635,16 @@ mod tests {
         let got: Vec<String> = assemble(&ids, log).unwrap().into_iter().collect();
         assert_eq!(got, ["b-2 000 box aa", "b-2 001 union bb", "c-3 000 sphere cc"]);
         assert!(assemble(&ids[..2], log).is_err());
+        // the rungs keep the same keys; a solid the log gives no rung for has `?`
+        let rungs: Vec<String> = assemble_rungs(&ids, log).unwrap().into_iter().collect();
+        assert_eq!(rungs, ["b-2 000 box ?", "b-2 001 union ?", "c-3 000 sphere x"]);
+    }
+
+    #[test]
+    fn keep_log_is_a_flag() {
+        let o = |a: &[&str]| parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert!(o(&["--check", "--keep-log"]).unwrap().keep_log);
+        assert!(!o(&["--check"]).unwrap().keep_log);
     }
 
     #[test]
@@ -481,7 +653,10 @@ mod tests {
         let o = |a: &[&str]| parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         let ten = subset(&fams, &o(&["--check", "--sample", "10"]).unwrap()).unwrap().unwrap();
         assert!((5..=40).contains(&ten.len()), "{}", ten.len());
-        assert_eq!(subset(&fams, &o(&["--check", "--sample", "10"]).unwrap()).unwrap().unwrap(), ten);
+        assert_eq!(
+            subset(&fams, &o(&["--check", "--sample", "10"]).unwrap()).unwrap().unwrap(),
+            ten
+        );
         assert!(o(&["--bless"]).is_err());
         assert!(o(&["--sample", "10"]).is_err());
         assert!(o(&["--check", "--bless", "--reason", "x"]).is_err());
@@ -491,7 +666,10 @@ mod tests {
 
     #[test]
     fn groups_balance_families() {
-        let fams: Vec<(String, usize)> = [("a", 10), ("b", 6), ("c", 5), ("d", 1)].iter().map(|(f, n)| (f.to_string(), *n)).collect();
+        let fams: Vec<(String, usize)> = [("a", 10), ("b", 6), ("c", 5), ("d", 1)]
+            .iter()
+            .map(|(f, n)| (f.to_string(), *n))
+            .collect();
         let g = groups(&fams, 2);
         assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), [11, 11]);
         assert_eq!(family("booleans-0b66"), "booleans");
