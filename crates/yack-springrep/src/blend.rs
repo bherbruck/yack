@@ -1,7 +1,8 @@
 // yack: Chamfers and fillets on solid edges. Each comes three ways: `fillet` and `chamfer` pick every
 // Adapted from springrep@a03e8a1 src/blend.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: faces_named and edges_named moved in from pick.rs (to blend/named.rs), EdgeName out to
-// topo::names (M2.5, T8).
+// topo::names (M2.5, T8); the hand-run SPRINGREP_BLEND_VERIFY mode (env read, clocks, compare) removed
+// (M3 W9a-0).
 //! Chamfers and fillets on solid edges. Each comes three ways: `fillet` and `chamfer` pick every
 //! edge where the surfaces of two named faces meet; the `_named` forms take [`EdgeName`]s, which
 //! can also pick only where the faces carrying the names meet; the `_edges` forms take the edges
@@ -696,7 +697,6 @@ fn blend_picked(
         )?;
         tools.push(spilled(body, tool, &spills[i], feature)?);
     }
-    let sewing = std::time::Instant::now();
     let sew_tools = if spills.iter().any(|s| !s.is_empty()) {
         Err("a concave blend that runs over the edge of its face".to_string())
     } else {
@@ -784,7 +784,6 @@ fn blend_picked(
         }
         Ok(out)
     };
-    let sewing = sewing.elapsed();
     #[cfg(test)]
     match FORCE.get() {
         Some(Method::Sewn) => return sewn.map_err(Error::Unsupported),
@@ -803,7 +802,6 @@ fn blend_picked(
         }
         None => {}
     }
-    let verify = verifying();
     let tooled = |tools| {
         saddled(by_tools(
             body,
@@ -818,18 +816,8 @@ fn blend_picked(
         ))
     };
     match sewn {
-        Ok(out) if !verify => Ok(out),
-        Ok(out) => {
-            let cutting = std::time::Instant::now();
-            let tooled = tooled(tools);
-            compare(out, tooled, sewing, cutting.elapsed(), feature)
-        }
-        Err(why) => {
-            if verify {
-                eprintln!("springrep-blend: {feature} tool ({why})");
-            }
-            tooled(tools)
-        }
+        Ok(out) => Ok(out),
+        Err(_) => tooled(tools),
     }
 }
 
@@ -868,52 +856,6 @@ thread_local! {
     /// The one way this thread's blends are made, in tests, in place of sewing with the tools to
     /// fall back on.
     static FORCE: std::cell::Cell<Option<Method>> = const { std::cell::Cell::new(None) };
-}
-
-/// Whether blends run both ways and compare (`SPRINGREP_BLEND_VERIFY` set), for a run by hand.
-fn verifying() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("SPRINGREP_BLEND_VERIFY").is_some())
-}
-
-/// The sewn result, when it equals the tools' to 1e-9 of its area and volume with the same faces
-/// named alike; otherwise an error naming the difference.
-fn compare(
-    sewn: Brep,
-    tooled: Result<Brep>,
-    sewing: std::time::Duration,
-    cutting: std::time::Duration,
-    feature: &str,
-) -> Result<Brep> {
-    let tooled = match tooled {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("springrep-blend: {feature} sewn (tools fail: {e})");
-            return Ok(sewn);
-        }
-    };
-    let (sa, sv) = crate::measure::area_and_volume(&sewn);
-    let (ta, tv) = crate::measure::area_and_volume(&tooled);
-    let (da, dv) = ((sa - ta).abs() / ta.abs(), (sv - tv).abs() / tv.abs());
-    let same_names = sewn.name_counts() == tooled.name_counts();
-    eprintln!(
-        "springrep-blend: {feature} sewn (area {da:.1e}, volume {dv:.1e}, faces {} vs {}, names {}, \
-         sewing {:.3} ms, cutting {:.3} ms)",
-        sewn.face_count(),
-        tooled.face_count(),
-        if same_names { "same" } else { "differ" },
-        sewing.as_secs_f64() * 1e3,
-        cutting.as_secs_f64() * 1e3,
-    );
-    if da > 1e-9 || dv > 1e-9 || !same_names {
-        return Err(Error::InvalidResult(vec![format!(
-            "the sewn blend differs from the tools': area {sa} vs {ta}, volume {sv} vs {tv}, \
-             names {:?} vs {:?}",
-            sewn.name_counts(),
-            tooled.name_counts()
-        )]));
-    }
-    Ok(sewn)
 }
 
 /// The blend made by cutting each piece from the body, or adding it, with a boolean.
