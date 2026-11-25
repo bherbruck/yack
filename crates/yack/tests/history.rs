@@ -345,6 +345,11 @@ fn native_rungs_name_their_faces_for_history() -> Result<()> {
                 let found = audit("native", &[input], &s);
                 assert!(found.is_empty(), "native, {name}: {found:?}");
                 eprintln!("native, {name}: {} faces, every one with an origin", s.faces().len());
+                if name.ends_with("chamfered") {
+                    // the bevel (`bevel_0`) comes from the very edge chamfered
+                    let from_rim = s.history().rows().filter(|(_, _, o)| o.contains(&FaceOrigin::Edge { operand: 0, edge: rim })).count();
+                    assert_eq!(from_rim, 1, "native chamfer_angle: the bevel should come from the rim edge");
+                }
                 built += 1;
             }
             Err(e) => eprintln!("native, {name}: declined ({:?}: {})", e.kind, e.detail),
