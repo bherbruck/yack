@@ -254,3 +254,61 @@ fn an_extrusion_below_its_plane_is_made_from_nothing_like_one_above() -> Result<
     assert!(h.rows().all(|(_, c, o)| c == Change::Generated && matches!(o, [FaceOrigin::Segment { .. }])));
     Ok(())
 }
+
+
+/// The cadrs-only ops' histories, reported (not yet held to invariant 3): how many faces each
+/// answer has, how many have an origin, and the audit's findings. `--nocapture` prints the table.
+#[test]
+fn cadrs_only_ops_report_their_histories() -> Result<()> {
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let top = b.face_at([5.0, 5.0, 10.0])?;
+    let sq = Profile::rectangle([-5.0, -5.0], [5.0, 5.0])?;
+    let small = Profile::rectangle([-1.0, -1.0], [1.0, 1.0])?;
+    let rim = Profile::circle([0.0, 0.0], 5.0)?;
+    let up = |x: f64, y: f64, z: [f64; 3]| Spline3::bezier(&[[x, y, 0.0], z]);
+    let posts = [[1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]];
+    let guides = posts.map(|[x, y]| up(x, y, [x, y, 4.0])).into_iter().collect::<Result<Vec<_>>>()?;
+    let spires = posts.map(|[x, y]| up(x, y, [0.0, 0.0, 3.0])).into_iter().collect::<Result<Vec<_>>>()?;
+    let tri = |a: [f64; 3], c: [f64; 3], d: [f64; 3]| -> Result<Patch> {
+        Ok(Patch::PlanarFill { boundary: vec![Spline3::bezier(&[a, c])?, Spline3::bezier(&[c, d])?, Spline3::bezier(&[d, a])?] })
+    };
+    let (o, x, y, z) = ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+    let corners = [Point3::new(0.0, 0.0, 0.0), Point3::new(40.0, 0.0, 0.0), Point3::new(20.0, 34.0, 0.0)];
+    let net = vec![vec![[0.0, 0.0, 12.0].into(), [0.0, 10.0, 12.0].into()], vec![[10.0, 0.0, 12.0].into(), [10.0, 10.0, 12.0].into()]];
+    let mill = cylinder(&Frame::at([2.0, 5.0, 9.0]), 1.0, 3.0)?;
+    let ball = sphere(&Frame::WORLD, 1.0)?;
+    let calls: Vec<(&str, Vec<&Solid>, Result<Solid>)> = vec![
+        ("chamfer_angle", vec![&b], b.chamfer_angle(b.edge_at([5.0, 0.0, 10.0])?, top, 1.0, deg(45.0))),
+        ("cut_swept", vec![&b, &mill], b.cut_swept(&mill, &Motion::slide([6.0, 0.0, 0.0]))),
+        ("spindle_torus", vec![], spindle_torus(&Frame::WORLD, 1.0, 2.0)),
+        ("screw_tapered", vec![], screw_tapered(&Frame::WORLD, &Profile::rectangle([4.0, 0.0], [5.0, 1.0])?, Lead::per_turn(3.0), deg(360.0), 0.1)),
+        ("sweep_mitered", vec![], sweep_mitered(&Frame::along(corners[0], Dir3::X)?, &sq, &corners, false)),
+        ("sewn", vec![], sewn(&[tri(o, y, x)?, tri(o, x, z)?, tri(o, z, y)?, tri(x, y, z)?])),
+        ("loft_guided", vec![], loft_guided(&[(Frame::WORLD, small.clone()), (Frame::at([0.0, 0.0, 4.0]), small.clone())], &guides)),
+        ("extrude_drafted", vec![], extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), false)),
+        ("ruled", vec![], ruled(&Frame::at([0.0, 0.0, -5.0]), &rim, &Frame::new([0.0, 0.0, 5.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0])?, &rim)),
+        ("sweep_helix", vec![], sweep_helix(&Frame::along([10.0, 0.0, 0.0], [0.0, 62.83, 5.0])?, &Profile::circle([0.0, 0.0], 1.0)?, [0.0; 3], Dir3::Z, Lead::per_turn(5.0), deg(360.0))),
+        ("sweep_scaled", vec![], sweep_scaled(&Frame::WORLD, &small, &[PathPiece::Line { length: 10.0 }], deg(0.0), 0.5)),
+        ("loft_to_point", vec![], loft_to_point(&Frame::WORLD, &small, [0.0, 0.0, 3.0], &spires)),
+        ("replace_face", vec![&b], b.replace_face(top, &Patch::Bezier { ctrl: net })),
+        ("thicken", vec![&b], b.thicken(&[top], 1.0, Join::Round)),
+        ("shell_rounded", vec![&b], b.shell_rounded(&[top], 1.0)),
+        ("shell_outward_rounded", vec![&b], b.shell_outward_rounded(&[top], 1.0)),
+        ("swept", vec![&ball], ball.swept(&Motion::slide([5.0, 0.0, 0.0]))),
+    ];
+    for (op, inputs, made) in calls {
+        match made {
+            Ok(s) => {
+                let h = s.history();
+                let with = h.rows().filter(|(_, _, o)| !o.is_empty()).count();
+                let mut kinds: Vec<String> = h.rows().flat_map(|(_, _, o)| o.iter().map(|x| format!("{x:?}").split([' ', '{', '(']).next().unwrap_or("").to_string())).collect();
+                kinds.sort();
+                kinds.dedup();
+                let found = audit(op, &inputs, &s);
+                eprintln!("cadrs-only {op} ({}): {} faces, {with} with an origin {kinds:?}; {} findings", s.strategy(), s.faces().len(), found.len());
+            }
+            Err(e) => eprintln!("cadrs-only {op}: refused ({:?})", e.kind),
+        }
+    }
+    Ok(())
+}
