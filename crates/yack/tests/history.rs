@@ -198,12 +198,10 @@ fn step(r: &mut Rng, s: &Solid) -> Option<(&'static str, Solid, Option<Solid>)> 
     }
 }
 
-/// M4.11's property: over seeded 5-op chains, every step's history passes invariant 3 (as far as
-/// the audit holds it), the composed history names only faces of the chain's own inputs, and
+/// M4.11's property: over seeded 5-op chains, every step's history passes invariant 3, the composed history names only faces of the chain's own inputs, and
 /// composing is associative.
 #[test]
 fn composed_histories_over_five_op_chains_reach_back_to_the_inputs() -> Result<()> {
-    let mut warnings = 0;
     for seed in 1..=40u64 {
         let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ seed);
         let start = block(&Frame::WORLD, [10.0, 10.0, 8.0])?;
@@ -216,11 +214,8 @@ fn composed_histories_over_five_op_chains_reach_back_to_the_inputs() -> Result<(
             let Some((op, next, tool)) = step(&mut r, &s) else { continue };
             let mut ops = vec![&s];
             ops.extend(tool.as_ref());
-            // invariant 3 warns until the lead enforces it (PLAN §6.2)
-            for f in audit(op, &ops, &next) {
-                eprintln!("invariant 3 (warning), seed {seed} ({}): {f}", next.strategy());
-                warnings += 1;
-            }
+            let found = audit(op, &ops, &next);
+            assert!(found.is_empty(), "seed {seed} ({}): {found:?}", next.strategy());
             if let Some(t) = &tool {
                 inputs.extend(t.faces());
             }
@@ -246,7 +241,6 @@ fn composed_histories_over_five_op_chains_reach_back_to_the_inputs() -> Result<(
             assert_eq!(left, right, "seed {seed}: compose is not associative");
         }
     }
-    eprintln!("invariant 3 over the chains: {warnings} warnings");
     Ok(())
 }
 
