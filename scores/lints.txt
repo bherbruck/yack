@@ -1,7 +1,7 @@
 # denied-lint sites per temporary crate, and contract panics per listed shipping crate (gate 9; may only fall)
 yack-cadrs 127
 yack-geom 0
-yack-intersect 13
+yack-intersect 12
 yack-linalg 24
 yack-measure 5
 yack-mesh 13
