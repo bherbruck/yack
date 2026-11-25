@@ -1,6 +1,8 @@
 // yack: Planar regions bounded by lines and circular arcs, in sketch millimetres: outlines combined,
 // Adapted from springrep@a03e8a1 src/profile/region.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/profile/region.rs to yack-profile (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
+// M3 hardening: loops walked as cyclic pairs, boundary linking without unwraps, checked access
+// instead of indexing, named rounding limits; the same arithmetic in the same order.
 //! Planar regions bounded by lines and circular arcs, in sketch millimetres: outlines combined,
 //! their corners rounded and the whole offset in the sketch plane, before one sweep makes the
 //! solid. Every boundary piece carries the names of the outline edges it lies on, so a piece where
@@ -8,7 +10,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{NamedSegment, Names, Profile, ProfileLoop, Segment};
+use super::{NamedSegment, Names, Profile, ProfileLoop, Segment, cyclic_pairs, polar, shoelace};
 use crate::{
     error::{Error, Result},
     math::Vec2,
@@ -56,9 +58,14 @@ pub enum Op {
     Intersect,
 }
 
-fn polar(c: Vec2, r: f64, a: f64) -> Vec2 {
-    Vec2::new(c.x + r * a.cos(), c.y + r * a.sin())
-}
+/// Below this a length is zero, for a direction divided by it.
+const NO_LENGTH: f64 = 1e-300; // tol: an underflow guard
+
+/// A sweep this close to a full turn is a whole circle.
+const FULL_TURN_ROUNDING: f64 = 1e-9; // tol: angle rounding, in radians
+
+/// How far inside a hole, across its boundary, the point that finds its outer loop lies.
+const HOLE_PROBE: f64 = 1e-6; // tol: a probing step, not a tolerance
 
 /// `a` wrapped into (-π, π].
 fn wrap(a: f64) -> f64 {
@@ -100,7 +107,7 @@ impl Geom {
     /// The unit direction of travel at `t`.
     pub fn tangent(&self, t: f64) -> Vec2 {
         match *self {
-            Geom::Line { a, b } => (b - a) / a.dist(b).max(1e-300),
+            Geom::Line { a, b } => (b - a) / a.dist(b).max(NO_LENGTH),
             Geom::Arc { a0, sweep, .. } => {
                 let a = a0 + sweep * t;
                 Vec2::new(-a.sin(), a.cos()) * sweep.signum()
@@ -110,28 +117,17 @@ impl Geom {
 
     pub fn sub(&self, t0: f64, t1: f64) -> Geom {
         match *self {
-            Geom::Line { .. } => Geom::Line {
-                a: self.at(t0),
-                b: self.at(t1),
-            },
-            Geom::Arc { c, r, a0, sweep } => Geom::Arc {
-                c,
-                r,
-                a0: a0 + sweep * t0,
-                sweep: sweep * (t1 - t0),
-            },
+            Geom::Line { .. } => Geom::Line { a: self.at(t0), b: self.at(t1) },
+            Geom::Arc { c, r, a0, sweep } => {
+                Geom::Arc { c, r, a0: a0 + sweep * t0, sweep: sweep * (t1 - t0) }
+            }
         }
     }
 
     pub fn reversed(&self) -> Geom {
         match *self {
             Geom::Line { a, b } => Geom::Line { a: b, b: a },
-            Geom::Arc { c, r, a0, sweep } => Geom::Arc {
-                c,
-                r,
-                a0: a0 + sweep,
-                sweep: -sweep,
-            },
+            Geom::Arc { c, r, a0, sweep } => Geom::Arc { c, r, a0: a0 + sweep, sweep: -sweep },
         }
     }
 
@@ -141,7 +137,7 @@ impl Geom {
         match *self {
             Geom::Line { a, b } => {
                 let d = b - a;
-                (p - a).dot(d) / d.dot(d).max(1e-300)
+                (p - a).dot(d) / d.dot(d).max(NO_LENGTH)
             }
             Geom::Arc { c, a0, sweep, .. } => {
                 let s = sweep.signum() * ((p.y - c.y).atan2(p.x - c.x) - a0);
@@ -150,11 +146,7 @@ impl Geom {
                 if self.is_full() {
                     return s / TAU;
                 }
-                if s > span && s - span > TAU - s {
-                    (s - TAU) / span
-                } else {
-                    s / span
-                }
+                if s > span && s - span > TAU - s { (s - TAU) / span } else { s / span }
             }
         }
     }
@@ -184,11 +176,7 @@ impl Geom {
                 let (a, b) = (self.start(), self.end());
                 let inside_disc = p.dist(c) < r;
                 if self.is_full() {
-                    return if inside_disc {
-                        TAU * sweep.signum()
-                    } else {
-                        0.0
-                    };
+                    return if inside_disc { TAU * sweep.signum() } else { 0.0 };
                 }
                 // The arc and its chord back bound a circular segment, wound the arc's way. One
                 // cross product decides both the chord's angle and the side, so rounding cannot
@@ -200,11 +188,7 @@ impl Geom {
                 }
                 let m = self.at(0.5);
                 let side = x * (b - a).cross(m - a) > 0.0;
-                let corr = if inside_disc && side {
-                    TAU * sweep.signum()
-                } else {
-                    0.0
-                };
+                let corr = if inside_disc && side { TAU * sweep.signum() } else { 0.0 };
                 x.atan2(u.dot(v)) + corr
             }
         }
@@ -281,14 +265,11 @@ fn meetings(g: &Geom, h: &Geom) -> Vec<(f64, f64)> {
 
 /// The segment cut at the parameters `ts`; a whole circle is cut into arcs between them.
 fn split(seg: &Seg, ts: &[f64]) -> Vec<Seg> {
-    let len = seg.geom.len().max(1e-300);
+    let len = seg.geom.len().max(NO_LENGTH);
     let close = |a: f64, b: f64| (a - b).abs() * len <= tol::LINEAR;
     let mut ts: Vec<f64> = ts.iter().map(|t| t.clamp(0.0, 1.0)).collect();
     ts.sort_by(f64::total_cmp);
-    let piece = |g: Geom| Seg {
-        geom: g,
-        names: seg.names.clone(),
-    };
+    let piece = |g: Geom| Seg { geom: g, names: seg.names.clone() };
     if seg.geom.is_full() {
         let mut cuts: Vec<f64> = Vec::new();
         for t in ts {
@@ -301,17 +282,9 @@ fn split(seg: &Seg, ts: &[f64]) -> Vec<Seg> {
         if cuts.is_empty() {
             return vec![seg.clone()];
         }
-        let n = cuts.len();
-        return (0..n)
-            .map(|i| {
-                let t1 = if i + 1 < n {
-                    cuts[i + 1]
-                } else {
-                    cuts[0] + 1.0
-                };
-                piece(seg.geom.sub(cuts[i], t1))
-            })
-            .collect();
+        // Each cut to the next, the last round to the first a turn on.
+        let ends = cuts.iter().skip(1).copied().chain(cuts.first().map(|&c| c + 1.0));
+        return cuts.iter().zip(ends).map(|(&t0, t1)| piece(seg.geom.sub(t0, t1))).collect();
     }
     let mut cuts = vec![0.0];
     for t in ts {
@@ -321,7 +294,10 @@ fn split(seg: &Seg, ts: &[f64]) -> Vec<Seg> {
     }
     cuts.push(1.0);
     cuts.windows(2)
-        .map(|w| piece(seg.geom.sub(w[0], w[1])))
+        .filter_map(|w| match *w {
+            [t0, t1] => Some(piece(seg.geom.sub(t0, t1))),
+            _ => None,
+        })
         .collect()
 }
 
@@ -359,11 +335,7 @@ impl Region {
                 return (Class::On { same }, s.names.clone());
             }
         }
-        let class = if self.contains(m) {
-            Class::Inside
-        } else {
-            Class::Outside
-        };
+        let class = if self.contains(m) { Class::Inside } else { Class::Outside };
         (class, Names::new())
     }
 
@@ -373,11 +345,11 @@ impl Region {
         let b: Vec<&Seg> = other.segs().collect();
         let mut ta = vec![Vec::new(); a.len()];
         let mut tb = vec![Vec::new(); b.len()];
-        for (i, sa) in a.iter().enumerate() {
-            for (j, sb) in b.iter().enumerate() {
+        for (sa, cuts_a) in a.iter().zip(&mut ta) {
+            for (sb, cuts_b) in b.iter().zip(&mut tb) {
                 for (s, t) in meetings(&sa.geom, &sb.geom) {
-                    ta[i].push(s);
-                    tb[j].push(t);
+                    cuts_a.push(s);
+                    cuts_b.push(t);
                 }
             }
         }
@@ -402,11 +374,7 @@ impl Region {
                         let mut names = piece.names.clone();
                         names.extend(on_names);
                         kept.push(Seg {
-                            geom: if rev {
-                                piece.geom.reversed()
-                            } else {
-                                piece.geom.clone()
-                            },
+                            geom: if rev { piece.geom.reversed() } else { piece.geom.clone() },
                             names,
                         });
                     }
@@ -421,22 +389,23 @@ impl Region {
     pub fn fillet(&mut self, a: &str, b: &str, radius: f64) -> Result<usize> {
         let mut done = 0;
         loop {
-            let mut found = None;
-            'search: for (li, lp) in self.loops.iter().enumerate() {
+            let named = |s: &Seg, x: &str| s.names.contains(x);
+            // The first corner (a loop, and the index of the segment after it) between the two.
+            let found = self.loops.iter().enumerate().find_map(|(li, lp)| {
                 let n = lp.segs.len();
-                for i in 0..n {
-                    let (p, q) = (&lp.segs[(i + n - 1) % n], &lp.segs[i]);
-                    let named = |s: &Seg, x: &str| s.names.contains(x);
-                    if n > 1 && ((named(p, a) && named(q, b)) || (named(p, b) && named(q, a))) {
-                        found = Some((li, i));
-                        break 'search;
-                    }
+                if n < 2 {
+                    return None;
                 }
-            }
-            let Some((li, i)) = found else {
+                let before = lp.segs.iter().cycle().skip(n - 1);
+                before
+                    .zip(&lp.segs)
+                    .position(|(p, q)| (named(p, a) && named(q, b)) || (named(p, b) && named(q, a)))
+                    .map(|i| (li, i))
+            });
+            let Some((lp, i)) = found.and_then(|(li, i)| Some((self.loops.get_mut(li)?, i))) else {
                 return Ok(done);
             };
-            round_corner(&mut self.loops[li], i, radius, a, b)?;
+            round_corner(lp, i, radius, a, b)?;
             done += 1;
         }
     }
@@ -455,15 +424,18 @@ impl Region {
 
     /// Errors unless no two segments of the region cross or touch except at their shared ends.
     pub fn check_simple(&self) -> Result<()> {
-        let all: Vec<(usize, usize, &Seg)> = self
+        // Every segment, with its loop, its place in the loop and the loop's length.
+        let all: Vec<(usize, usize, usize, &Seg)> = self
             .loops
             .iter()
             .enumerate()
-            .flat_map(|(l, lp)| lp.segs.iter().enumerate().map(move |(i, s)| (l, i, s)))
+            .flat_map(|(l, lp)| {
+                let n = lp.segs.len();
+                lp.segs.iter().enumerate().map(move |(i, s)| (l, i, n, s))
+            })
             .collect();
-        for (x, &(la, ia, sa)) in all.iter().enumerate() {
-            for &(lb, ib, sb) in &all[x + 1..] {
-                let n = self.loops[la].segs.len();
+        for (x, &(la, ia, n, sa)) in all.iter().enumerate() {
+            for &(lb, ib, _, sb) in all.iter().skip(x + 1) {
                 let near = |t: f64, at: f64, g: &Geom| (t - at).abs() * g.len() <= tol::LINEAR;
                 for (s, t) in meetings(&sa.geom, &sb.geom) {
                     let shared = la == lb
@@ -489,19 +461,13 @@ impl Region {
     /// Joins neighbouring segments of each loop that lie on one line or circle, their names
     /// united.
     pub fn merged(&self) -> Region {
-        Region {
-            loops: self.loops.iter().map(merge_loop).collect(),
-        }
+        Region { loops: self.loops.iter().map(merge_loop).collect() }
     }
 
     /// The region of one outline drawn either way round, turned counter-clockwise.
     pub fn outline_ccw(mut self) -> Region {
         for l in &mut self.loops {
-            let pts = polygon(l);
-            let a: f64 = (0..pts.len())
-                .map(|i| pts[i].cross(pts[(i + 1) % pts.len()]))
-                .sum();
-            if a < 0.0 {
+            if shoelace(&polygon(l)) < 0.0 {
                 l.segs.reverse();
                 for s in &mut l.segs {
                     s.geom = s.geom.reversed();
@@ -513,12 +479,7 @@ impl Region {
 
     /// The outer loops, each with the holes inside it.
     pub fn faces(&self) -> Vec<(Loop, Vec<Loop>)> {
-        let area = |l: &Loop| -> f64 {
-            let pts = polygon(l);
-            (0..pts.len())
-                .map(|i| pts[i].cross(pts[(i + 1) % pts.len()]))
-                .sum::<f64>()
-        };
+        let area = |l: &Loop| shoelace(&polygon(l));
         let mut outers: Vec<(Loop, f64, Vec<Loop>)> = Vec::new();
         let mut holes = Vec::new();
         for l in &self.loops {
@@ -530,14 +491,14 @@ impl Region {
             }
         }
         for h in holes {
-            let p = h.segs[0].geom.at(0.5);
-            let probe = h.segs[0].geom.at(0.5) + h.segs[0].geom.tangent(0.5).perp() * -1e-6;
+            // A hole with no boundary bounds nothing.
+            let Some(first) = h.segs.first() else { continue };
+            let p = first.geom.at(0.5);
+            let probe = first.geom.at(0.5) + first.geom.tangent(0.5).perp() * -HOLE_PROBE;
             let owner = outers
                 .iter_mut()
                 .filter(|(o, _, _)| {
-                    let r = Region {
-                        loops: vec![o.clone()],
-                    };
+                    let r = Region { loops: vec![o.clone()] };
                     r.contains(probe) || r.contains(p)
                 })
                 .min_by(|x, y| x.1.total_cmp(&y.1));
@@ -553,17 +514,12 @@ impl Geom {
     fn segment(&self) -> Segment {
         match *self {
             Geom::Line { a, b } => Segment::Line { a, b },
-            Geom::Arc { c, r, sweep, .. } if sweep.abs() >= TAU - 1e-9 => Segment::Circle {
-                center: c,
-                radius: r,
-                ccw: sweep > 0.0,
-            },
-            Geom::Arc { c, r, a0, sweep } => Segment::Arc {
-                center: c,
-                radius: r,
-                start: a0,
-                sweep,
-            },
+            Geom::Arc { c, r, sweep, .. } if sweep.abs() >= TAU - FULL_TURN_ROUNDING => {
+                Segment::Circle { center: c, radius: r, ccw: sweep > 0.0 }
+            }
+            Geom::Arc { c, r, a0, sweep } => {
+                Segment::Arc { center: c, radius: r, start: a0, sweep }
+            }
         }
     }
 }
@@ -571,24 +527,14 @@ impl Geom {
 impl Region {
     /// The polygon through `points`, its edges unnamed.
     pub fn polygon(points: &[Vec2]) -> Region {
-        let n = points.len();
-        let area2: f64 = (0..n).map(|i| points[i].cross(points[(i + 1) % n])).sum();
         let mut pts = points.to_vec();
-        if area2 < 0.0 {
+        if shoelace(points) < 0.0 {
             pts.reverse();
         }
-        let segs = (0..n)
-            .map(|i| Seg {
-                geom: Geom::Line {
-                    a: pts[i],
-                    b: pts[(i + 1) % n],
-                },
-                names: Names::new(),
-            })
+        let segs = cyclic_pairs(&pts)
+            .map(|(&a, &b)| Seg { geom: Geom::Line { a, b }, names: Names::new() })
             .collect();
-        Region {
-            loops: vec![Loop { segs }],
-        }
+        Region { loops: vec![Loop { segs }] }
     }
 
     /// The region `profile` encloses. Only lines, arcs and whole circles bound a region.
@@ -599,22 +545,10 @@ impl Region {
             for s in &lp.segments {
                 let geom = match s.segment {
                     Segment::Line { a, b } => Geom::Line { a, b },
-                    Segment::Arc {
-                        center,
-                        radius,
-                        start,
-                        sweep,
-                    } => Geom::Arc {
-                        c: center,
-                        r: radius,
-                        a0: start,
-                        sweep,
-                    },
-                    Segment::Circle {
-                        center,
-                        radius,
-                        ccw,
-                    } => Geom::Arc {
+                    Segment::Arc { center, radius, start, sweep } => {
+                        Geom::Arc { c: center, r: radius, a0: start, sweep }
+                    }
+                    Segment::Circle { center, radius, ccw } => Geom::Arc {
                         c: center,
                         r: radius,
                         a0: 0.0,
@@ -624,10 +558,7 @@ impl Region {
                         return unsupported("a region bounded by a curve other than a line or arc");
                     }
                 };
-                segs.push(Seg {
-                    geom,
-                    names: s.names.clone(),
-                });
+                segs.push(Seg { geom, names: s.names.clone() });
             }
             loops.push(Loop { segs });
         }
@@ -641,10 +572,7 @@ impl Region {
             segments: l
                 .segs
                 .iter()
-                .map(|s| NamedSegment {
-                    segment: s.geom.segment(),
-                    names: s.names.clone(),
-                })
+                .map(|s| NamedSegment { segment: s.geom.segment(), names: s.names.clone() })
                 .collect(),
         };
         let out: Vec<Profile> = self
@@ -675,24 +603,25 @@ fn polygon(l: &Loop) -> Vec<Vec2> {
 
 /// Kept boundary pieces joined end to end into loops. Where several pieces leave one point, the
 /// one turning most to the left from the way in is taken, so each loop bounds one face.
-#[allow(clippy::panic)] fn link(mut pieces: Vec<Seg>) -> Result<Vec<Loop>> {
+fn link(mut pieces: Vec<Seg>) -> Result<Vec<Loop>> {
     pieces.retain(|s| s.geom.len() > tol::LINEAR || s.geom.is_full());
     let mut used = vec![false; pieces.len()];
     let mut loops = Vec::new();
-    for first in 0..pieces.len() {
-        if used[first] {
-            continue;
+    for (first, piece) in pieces.iter().enumerate() {
+        match used.get_mut(first) {
+            Some(u) if !*u => *u = true,
+            _ => continue,
         }
-        used[first] = true;
-        let mut lp = vec![pieces[first].clone()];
-        let start = pieces[first].geom.start();
+        let mut lp = vec![piece.clone()];
+        let start = piece.geom.start();
+        // The last piece taken.
+        let mut last = piece;
         let mut guard = 0;
-        while lp.last().unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")).geom.end().dist(start) > tol::LINEAR {
-            let last = &lp.last().unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value")).geom;
-            let (end, back) = (last.end(), -last.tangent(1.0));
+        while last.geom.end().dist(start) > tol::LINEAR {
+            let (end, back) = (last.geom.end(), -last.geom.tangent(1.0));
             let mut best: Option<(usize, f64)> = None;
-            for (k, p) in pieces.iter().enumerate() {
-                if used[k] || p.geom.start().dist(end) > tol::LINEAR {
+            for (k, (p, &taken)) in pieces.iter().zip(&used).enumerate() {
+                if taken || p.geom.start().dist(end) > tol::LINEAR {
                     continue;
                 }
                 // Clockwise angle from the way back to the way out, in (0, 2π].
@@ -705,14 +634,17 @@ fn polygon(l: &Loop) -> Vec<Vec2> {
                     best = Some((k, cw));
                 }
             }
-            let Some((k, _)) = best else {
+            let (Some((k, _)), Some(next)) = (best, best.and_then(|(k, _)| pieces.get(k))) else {
                 return Err(Error::InvalidResult(vec![format!(
                     "a region boundary is open at ({:.6}, {:.6})",
                     end.x, end.y
                 )]));
             };
-            used[k] = true;
-            lp.push(pieces[k].clone());
+            if let Some(u) = used.get_mut(k) {
+                *u = true;
+            }
+            lp.push(next.clone());
+            last = next;
             guard += 1;
             if guard > pieces.len() {
                 return Err(Error::Numerical("region boundary did not close".into()));
@@ -726,21 +658,13 @@ fn polygon(l: &Loop) -> Vec<Vec2> {
 fn same_carrier(g: &Geom, h: &Geom) -> bool {
     match (g, h) {
         (Geom::Line { a, b }, Geom::Line { a: p, b: q }) => {
-            let d = (*b - *a) / a.dist(*b).max(1e-300);
+            let d = (*b - *a) / a.dist(*b).max(NO_LENGTH);
             let off = |x: Vec2| (x - *a).cross(d).abs();
             off(*p) <= tol::LINEAR && off(*q) <= tol::LINEAR && d.dot(*q - *p) > 0.0
         }
-        (
-            Geom::Arc {
-                c, r, sweep: s1, ..
-            },
-            Geom::Arc {
-                c: c2,
-                r: r2,
-                sweep: s2,
-                ..
-            },
-        ) => c.dist(*c2) <= tol::LINEAR && (r - r2).abs() <= tol::LINEAR && s1 * s2 > 0.0,
+        (Geom::Arc { c, r, sweep: s1, .. }, Geom::Arc { c: c2, r: r2, sweep: s2, .. }) => {
+            c.dist(*c2) <= tol::LINEAR && (r - r2).abs() <= tol::LINEAR && s1 * s2 > 0.0
+        }
         _ => false,
     }
 }
@@ -750,15 +674,12 @@ fn join(g: &Geom, h: &Geom) -> Geom {
         (Geom::Line { a, .. }, Geom::Line { b, .. }) => Geom::Line { a: *a, b: *b },
         (Geom::Arc { c, r, a0, sweep }, Geom::Arc { sweep: s2, .. }) => {
             let total = sweep + s2;
+            let whole = total.abs() >= TAU - FULL_TURN_ROUNDING;
             Geom::Arc {
                 c: *c,
                 r: *r,
-                a0: if total.abs() >= TAU - 1e-9 { 0.0 } else { *a0 },
-                sweep: if total.abs() >= TAU - 1e-9 {
-                    TAU * total.signum()
-                } else {
-                    total
-                },
+                a0: if whole { 0.0 } else { *a0 },
+                sweep: if whole { TAU * total.signum() } else { total },
             }
         }
         _ => g.clone(),
@@ -767,22 +688,22 @@ fn join(g: &Geom, h: &Geom) -> Geom {
 
 fn merge_loop(l: &Loop) -> Loop {
     let mut segs = l.segs.clone();
-    let mut changed = true;
-    while changed && segs.len() > 1 {
-        changed = false;
-        let n = segs.len();
-        for i in 0..n {
-            let j = (i + 1) % n;
-            if same_carrier(&segs[i].geom, &segs[j].geom) {
-                let geom = join(&segs[i].geom, &segs[j].geom);
-                let mut names = segs[i].names.clone();
-                names.extend(segs[j].names.iter().cloned());
-                segs[i] = Seg { geom, names };
-                segs.remove(j);
-                changed = true;
-                break;
-            }
+    while segs.len() > 1 {
+        // The first segment that runs on along the next one's carrier, joined with it.
+        let Some((i, joined)) = cyclic_pairs(&segs).enumerate().find_map(|(i, (s, t))| {
+            same_carrier(&s.geom, &t.geom).then(|| {
+                let mut names = s.names.clone();
+                names.extend(t.names.iter().cloned());
+                (i, Seg { geom: join(&s.geom, &t.geom), names })
+            })
+        }) else {
+            break;
+        };
+        let j = (i + 1) % segs.len();
+        if let Some(s) = segs.get_mut(i) {
+            *s = joined;
         }
+        segs.remove(j);
     }
     Loop { segs }
 }
@@ -793,20 +714,12 @@ fn parallels(g: &Geom, r: f64) -> Vec<Geom> {
     match *g {
         Geom::Line { a, b } => {
             let n = ((b - a) / a.dist(b)).perp() * r;
-            vec![
-                Geom::Line { a: a + n, b: b + n },
-                Geom::Line { a: a - n, b: b - n },
-            ]
+            vec![Geom::Line { a: a + n, b: b + n }, Geom::Line { a: a - n, b: b - n }]
         }
         Geom::Arc { c, r: rr, .. } => [rr + r, rr - r]
             .into_iter()
             .filter(|&x| x > tol::LINEAR)
-            .map(|x| Geom::Arc {
-                c,
-                r: x,
-                a0: 0.0,
-                sweep: TAU,
-            })
+            .map(|x| Geom::Arc { c, r: x, a0: 0.0, sweep: TAU })
             .collect(),
     }
 }
@@ -824,7 +737,9 @@ fn foot(g: &Geom, x: Vec2) -> Vec2 {
 fn round_corner(lp: &mut Loop, i: usize, radius: f64, na: &str, nb: &str) -> Result<()> {
     let n = lp.segs.len();
     let ip = (i + n - 1) % n;
-    let (p, q) = (lp.segs[ip].clone(), lp.segs[i].clone());
+    let (Some(p), Some(q)) = (lp.segs.get(ip).cloned(), lp.segs.get(i).cloned()) else {
+        return Err(Error::InvalidInput(format!("no corner where {na} meets {nb}")));
+    };
     let corner = q.geom.start();
     let mut best: Option<(Vec2, f64, f64)> = None;
     for op in parallels(&p.geom, radius) {
@@ -849,12 +764,7 @@ fn round_corner(lp: &mut Loop, i: usize, radius: f64, na: &str, nb: &str) -> Res
     let (fp, fq) = (p.geom.at(tp), q.geom.at(tq));
     let a0 = (fp.y - c.y).atan2(fp.x - c.x);
     let sweep = wrap((fq.y - c.y).atan2(fq.x - c.x) - a0);
-    let arc = Geom::Arc {
-        c,
-        r: radius,
-        a0,
-        sweep,
-    };
+    let arc = Geom::Arc { c, r: radius, a0, sweep };
     if arc.tangent(0.0).dot(p.geom.tangent(tp)) < 0.0 {
         return Err(Error::Numerical(format!(
             "the fillet where {na} meets {nb} turns against its edges"
@@ -864,21 +774,12 @@ fn round_corner(lp: &mut Loop, i: usize, radius: f64, na: &str, nb: &str) -> Res
     for (k, s) in lp.segs.iter().enumerate() {
         if k == ip {
             if tp * s.geom.len() > tol::LINEAR {
-                new.push(Seg {
-                    geom: s.geom.sub(0.0, tp),
-                    names: s.names.clone(),
-                });
+                new.push(Seg { geom: s.geom.sub(0.0, tp), names: s.names.clone() });
             }
-            new.push(Seg {
-                geom: arc.clone(),
-                names: Names::new(),
-            });
+            new.push(Seg { geom: arc.clone(), names: Names::new() });
         } else if k == i {
             if (1.0 - tq) * s.geom.len() > tol::LINEAR {
-                new.push(Seg {
-                    geom: s.geom.sub(tq, 1.0),
-                    names: s.names.clone(),
-                });
+                new.push(Seg { geom: s.geom.sub(tq, 1.0), names: s.names.clone() });
             }
         } else {
             new.push(s.clone());
@@ -901,12 +802,7 @@ fn offset_geom(g: &Geom, d: f64) -> Result<Geom> {
             if r2 <= tol::LINEAR {
                 return unsupported("an offset that swallows an arc");
             }
-            Geom::Arc {
-                c,
-                r: r2,
-                a0,
-                sweep,
-            }
+            Geom::Arc { c, r: r2, a0, sweep }
         }
     })
 }
@@ -929,12 +825,7 @@ fn trim_to(g: &Geom, p: Vec2, at_end: bool) -> Geom {
                 Geom::Arc { c, r, a0, sweep: s }
             } else {
                 let s = k * (k * (a0 + sweep - ap)).rem_euclid(TAU);
-                Geom::Arc {
-                    c,
-                    r,
-                    a0: ap,
-                    sweep: s,
-                }
+                Geom::Arc { c, r, a0: ap, sweep: s }
             }
         }
     }
@@ -942,54 +833,50 @@ fn trim_to(g: &Geom, p: Vec2, at_end: bool) -> Geom {
 
 fn offset_loop(lp: &Loop, d: f64) -> Result<Loop> {
     let n = lp.segs.len();
-    if n == 1 {
+    if let [only] = lp.segs.as_slice() {
         return Ok(Loop {
-            segs: vec![Seg {
-                geom: offset_geom(&lp.segs[0].geom, d)?,
-                names: Names::new(),
-            }],
+            segs: vec![Seg { geom: offset_geom(&only.geom, d)?, names: Names::new() }],
         });
     }
-    let mut segs: Vec<Geom> = lp
-        .segs
-        .iter()
-        .map(|s| offset_geom(&s.geom, d))
-        .collect::<Result<_>>()?;
+    let mut segs: Vec<Geom> =
+        lp.segs.iter().map(|s| offset_geom(&s.geom, d)).collect::<Result<_>>()?;
     let mut joins: Vec<Option<Geom>> = vec![None; n];
-    for i in 0..n {
+    // Each corner: the original segments either side of it, in place `i` and the next.
+    for (i, (before, after)) in cyclic_pairs(&lp.segs).enumerate() {
         let j = (i + 1) % n;
-        let v = lp.segs[j].geom.start();
-        let (e, s) = (segs[i].end(), segs[j].start());
+        let v = after.geom.start();
+        let (Some(gi), Some(gj)) = (segs.get(i).cloned(), segs.get(j).cloned()) else {
+            return unsupported("an offset loop shorter than its corners");
+        };
+        let (e, s) = (gi.end(), gj.start());
         if e.dist(s) <= tol::LINEAR {
             continue;
         }
-        let turn = lp.segs[i]
-            .geom
-            .tangent(1.0)
-            .cross(lp.segs[j].geom.tangent(0.0));
+        let turn = before.geom.tangent(1.0).cross(after.geom.tangent(0.0));
         if turn * d > 0.0 {
             let a0 = (e.y - v.y).atan2(e.x - v.x);
             let sweep = wrap((s.y - v.y).atan2(s.x - v.x) - a0);
-            joins[i] = Some(Geom::Arc {
-                c: v,
-                r: d.abs(),
-                a0,
-                sweep,
-            });
+            if let Some(join) = joins.get_mut(i) {
+                *join = Some(Geom::Arc { c: v, r: d.abs(), a0, sweep });
+            }
         } else {
-            let Some(p) = carrier_crossings(&segs[i], &segs[j])
+            let Some(p) = carrier_crossings(&gi, &gj)
                 .into_iter()
                 .min_by(|x, y| x.dist(v).total_cmp(&y.dist(v)))
             else {
                 return unsupported("an offset corner whose edges never meet");
             };
-            segs[i] = trim_to(&segs[i], p, true);
-            segs[j] = trim_to(&segs[j], p, false);
+            if let Some(g) = segs.get_mut(i) {
+                *g = trim_to(&gi, p, true);
+            }
+            if let Some(g) = segs.get_mut(j) {
+                *g = trim_to(&gj, p, false);
+            }
         }
     }
     let mut out = Vec::new();
-    for (i, g) in segs.into_iter().enumerate() {
-        let orig = &lp.segs[i].geom;
+    for ((g, original), join) in segs.into_iter().zip(&lp.segs).zip(joins) {
+        let orig = &original.geom;
         let same_way = match (&g, orig) {
             (Geom::Line { a, b }, Geom::Line { a: p, b: q }) => (*b - *a).dot(*q - *p) > 0.0,
             (Geom::Arc { sweep, .. }, Geom::Arc { sweep: s0, .. }) => sweep * s0 > 0.0,
@@ -998,15 +885,9 @@ fn offset_loop(lp: &Loop, d: f64) -> Result<Loop> {
         if !same_way || g.len() <= tol::LINEAR {
             return unsupported("an offset that swallows an edge");
         }
-        out.push(Seg {
-            geom: g,
-            names: Names::new(),
-        });
-        if let Some(j) = joins[i].take() {
-            out.push(Seg {
-                geom: j,
-                names: Names::new(),
-            });
+        out.push(Seg { geom: g, names: Names::new() });
+        if let Some(j) = join {
+            out.push(Seg { geom: j, names: Names::new() });
         }
     }
     Ok(Loop { segs: out })
@@ -1021,21 +902,13 @@ mod tests {
     }
 
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64, p: &str) -> Region {
-        let pts = [
-            Vec2::new(x0, y0),
-            Vec2::new(x1, y0),
-            Vec2::new(x1, y1),
-            Vec2::new(x0, y1),
-        ];
+        let pts = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
         let side = ["v_min", "u_max", "v_max", "u_min"];
         Region {
             loops: vec![Loop {
                 segs: (0..4)
                     .map(|i| Seg {
-                        geom: Geom::Line {
-                            a: pts[i],
-                            b: pts[(i + 1) % 4],
-                        },
+                        geom: Geom::Line { a: pts[i], b: pts[(i + 1) % 4] },
                         names: names(&format!("{p}_{}", side[i])),
                     })
                     .collect(),
@@ -1047,12 +920,7 @@ mod tests {
         Region {
             loops: vec![Loop {
                 segs: vec![Seg {
-                    geom: Geom::Arc {
-                        c,
-                        r,
-                        a0: 0.0,
-                        sweep: TAU,
-                    },
+                    geom: Geom::Arc { c, r, a0: 0.0, sweep: TAU },
                     names: names(&format!("{p}_side")),
                 }],
             }],
@@ -1106,10 +974,7 @@ mod tests {
                 loops: vec![Loop {
                     segs: (0..v.len())
                         .map(|i| Seg {
-                            geom: Geom::Line {
-                                a: v[i],
-                                b: v[(i + 1) % v.len()],
-                            },
+                            geom: Geom::Line { a: v[i], b: v[(i + 1) % v.len()] },
                             names: names(&format!("{p}_{i}")),
                         })
                         .collect(),
@@ -1134,12 +999,7 @@ mod tests {
             (circle(c, m(0.008) / 2.0, "floor"), Op::Add),
             (
                 poly(
-                    &[
-                        (0.0514, 0.0355),
-                        (0.0514, 0.0395),
-                        (0.057, 0.0395),
-                        (0.057, 0.0355),
-                    ],
+                    &[(0.0514, 0.0355), (0.0514, 0.0395), (0.057, 0.0395), (0.057, 0.0355)],
                     "pil",
                 )
                 .outline_ccw(),
@@ -1158,9 +1018,7 @@ mod tests {
     #[test]
     fn hole_and_slot_of_circles() {
         let plate = rect(-5.0, -5.0, 5.0, 5.0, "p");
-        let holed = plate
-            .combine(&circle(Vec2::ZERO, 2.0, "h"), Op::Cut)
-            .unwrap();
+        let holed = plate.combine(&circle(Vec2::ZERO, 2.0, "h"), Op::Cut).unwrap();
         assert_eq!(holed.loops.len(), 2);
         assert!((area(&holed) - (100.0 - 4.0 * PI)).abs() < 1e-9);
         assert_eq!(holed.faces().len(), 1);

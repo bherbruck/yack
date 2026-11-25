@@ -1,22 +1,20 @@
 // yack: Planar profiles in sketch coordinates: closed loops of named segments, the first loop the
 // Adapted from springrep@a03e8a1 src/profile.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/profile.rs to yack-profile (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
+// M3 hardening: loops walked as cyclic pairs of points and segments, one shoelace area, a
+// rational Bézier's de Casteljau and a run's straight stretches by windows and groups instead of
+// indexing; the same arithmetic in the same order.
 //! Planar profiles in sketch coordinates: closed loops of named segments, the first loop the
 //! outer boundary and the rest holes. A sweep names each face it makes after its segment.
 
-
-// springrep's profile indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names profile's code uses.
+use yack_base::kernel as error;
 use yack_base::kernel::Error;
 use yack_base::kernel::Result;
-use yack_base::kernel as error;
 use yack_geom as geom;
 use yack_math::kernel as math;
-use yack_topo::names;
 use yack_tol as tol;
+use yack_topo::names;
 pub mod region;
 
 use std::collections::BTreeSet;
@@ -30,7 +28,18 @@ use crate::{
 
 /// A turn between consecutive points smaller than this, in radians, leaves them on one straight
 /// edge; generated profiles are read with it.
-pub const STRAIGHT_TURN: f64 = 1e-7;
+pub const STRAIGHT_TURN: f64 = 1e-7; // tol: an angle, in radians
+
+/// Each item of `items` with the one after it, the last with the first.
+fn cyclic_pairs<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    items.iter().zip(items.iter().cycle().skip(1))
+}
+
+/// Twice the signed area of the closed polygon through `points` (the shoelace sum): positive when
+/// they run counter-clockwise.
+fn shoelace(points: &[Vec2]) -> f64 {
+    cyclic_pairs(points).map(|(a, &b)| a.cross(b)).sum()
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Segment {
@@ -141,21 +150,14 @@ impl Segment {
         let q = u * (-t.sin()) + v * t.cos();
         let (major, minor) = if p.norm() >= q.norm() { (p, q) } else { (q, p) };
         let (ra, rb) = (major.norm(), minor.norm());
-        let (mx, my) = (
-            major * (1.0 / ra),
-            Vec2::new(-major.y, major.x) * (1.0 / ra),
-        );
+        let (mx, my) = (major * (1.0 / ra), Vec2::new(-major.y, major.x) * (1.0 / ra));
         let param = |x: Vec2| {
             let d = x - c;
             (d.dot(my) / rb).atan2(d.dot(mx) / ra)
         };
         let (t0, t1, ts) = (param(a), param(b), param(shoulder));
         let ccw = (t1 - t0).rem_euclid(TAU);
-        let sweep = if (ts - t0).rem_euclid(TAU) < ccw {
-            ccw
-        } else {
-            ccw - TAU
-        };
+        let sweep = if (ts - t0).rem_euclid(TAU) < ccw { ccw } else { ccw - TAU };
         Ok(Segment::Ellipse {
             center: c,
             rotation: major.y.atan2(major.x),
@@ -170,25 +172,13 @@ impl Segment {
     pub fn at(&self, s: f64) -> Vec2 {
         match self {
             Segment::Line { a, b } => a.lerp(*b, s),
-            Segment::Arc {
-                center,
-                radius,
-                start,
-                sweep,
-            } => polar(*center, *radius, start + sweep * s),
-            Segment::Circle {
-                center,
-                radius,
-                ccw,
-            } => polar(*center, *radius, if *ccw { TAU * s } else { -TAU * s }),
-            Segment::Ellipse {
-                center,
-                rotation,
-                major,
-                minor,
-                start,
-                sweep,
-            } => {
+            Segment::Arc { center, radius, start, sweep } => {
+                polar(*center, *radius, start + sweep * s)
+            }
+            Segment::Circle { center, radius, ccw } => {
+                polar(*center, *radius, if *ccw { TAU * s } else { -TAU * s })
+            }
+            Segment::Ellipse { center, rotation, major, minor, start, sweep } => {
                 let t = start + sweep * s;
                 let (m, n) = (
                     Vec2::new(rotation.cos(), rotation.sin()),
@@ -198,30 +188,26 @@ impl Segment {
             }
             Segment::Spline { curve, reversed } => {
                 let (a, b) = curve.domain();
-                let t = if *reversed {
-                    b + (a - b) * s
-                } else {
-                    a + (b - a) * s
-                };
+                let t = if *reversed { b + (a - b) * s } else { a + (b - a) * s };
                 let p = curve.eval(t);
                 Vec2::new(p.x, p.y)
             }
             Segment::Bezier { ctrl, weights } => {
-                // De Casteljau on the homogeneous points.
-                let mut h: Vec<(Vec2, f64)> = ctrl
-                    .iter()
-                    .zip(weights)
-                    .map(|(&p, &w)| (p * w, w))
-                    .collect();
-                for k in (1..h.len()).rev() {
-                    for i in 0..k {
-                        h[i] = (
-                            h[i].0 * (1.0 - s) + h[i + 1].0 * s,
-                            h[i].1 * (1.0 - s) + h[i + 1].1 * s,
-                        );
-                    }
+                // De Casteljau on the homogeneous points: each level mixes each neighbouring pair.
+                let mut h: Vec<(Vec2, f64)> =
+                    ctrl.iter().zip(weights).map(|(&p, &w)| (p * w, w)).collect();
+                while h.len() > 1 {
+                    h = h
+                        .windows(2)
+                        .filter_map(|pair| match *pair {
+                            [(p, w), (q, v)] => {
+                                Some((p * (1.0 - s) + q * s, w * (1.0 - s) + v * s))
+                            }
+                            _ => None,
+                        })
+                        .collect();
                 }
-                h[0].0 * (1.0 / h[0].1)
+                h.first().map_or(Vec2::new(f64::NAN, f64::NAN), |&(p, w)| p * (1.0 / w))
             }
         }
     }
@@ -269,36 +255,21 @@ impl Segment {
     }
 
     /// The segment as a curve on `frame`'s plane, sketch `(x, y)` at `frame.at(x, y)`.
-    #[allow(clippy::panic)] pub fn place(&self, frame: &Frame) -> PlacedSegment {
+    // A Bézier whose knots and weights do not fit its points is a contract break (counted in
+    // scores/lints.txt): `place` is infallible for its callers in yack-springrep.
+    #[allow(clippy::panic)]
+    pub fn place(&self, frame: &Frame) -> PlacedSegment {
         let at = |p: Vec2| frame.at(p.x, p.y);
         let dir = |a: f64| frame.radial(a);
-        let circle_frame = |c: Vec2, a: f64| Frame {
-            origin: at(c),
-            x: dir(a),
-            y: dir(a + TAU / 4.0),
-            z: frame.z,
-        };
+        let circle_frame =
+            |c: Vec2, a: f64| Frame { origin: at(c), x: dir(a), y: dir(a + TAU / 4.0), z: frame.z };
         match self {
             Segment::Line { a, b } => {
-                let (line, len) = Line::through(at(*a), at(*b)).unwrap_or((
-                    Line {
-                        origin: at(*a),
-                        dir: frame.x,
-                    },
-                    0.0,
-                ));
-                PlacedSegment {
-                    curve: Curve::Line(line),
-                    range: (0.0, len),
-                    forward: true,
-                }
+                let (line, len) = Line::through(at(*a), at(*b))
+                    .unwrap_or((Line { origin: at(*a), dir: frame.x }, 0.0));
+                PlacedSegment { curve: Curve::Line(line), range: (0.0, len), forward: true }
             }
-            Segment::Arc {
-                center,
-                radius,
-                start,
-                sweep,
-            } => {
+            Segment::Arc { center, radius, start, sweep } => {
                 let x_at = if *sweep >= 0.0 { *start } else { start + sweep };
                 PlacedSegment {
                     curve: Curve::Circle(Circle {
@@ -309,26 +280,12 @@ impl Segment {
                     forward: *sweep >= 0.0,
                 }
             }
-            Segment::Circle {
-                center,
-                radius,
-                ccw,
-            } => PlacedSegment {
-                curve: Curve::Circle(Circle {
-                    frame: circle_frame(*center, 0.0),
-                    radius: *radius,
-                }),
+            Segment::Circle { center, radius, ccw } => PlacedSegment {
+                curve: Curve::Circle(Circle { frame: circle_frame(*center, 0.0), radius: *radius }),
                 range: (0.0, TAU),
                 forward: *ccw,
             },
-            Segment::Ellipse {
-                center,
-                rotation,
-                major,
-                minor,
-                start,
-                sweep,
-            } => PlacedSegment {
+            Segment::Ellipse { center, rotation, major, minor, start, sweep } => PlacedSegment {
                 curve: Curve::Ellipse(Ellipse {
                     frame: circle_frame(*center, *rotation),
                     major: *major,
@@ -347,17 +304,15 @@ impl Segment {
                 forward: !reversed,
             },
             Segment::Bezier { ctrl, weights } => {
-                let d = ctrl.len() - 1;
+                let d = ctrl.len().saturating_sub(1);
                 let mut knots = vec![0.0; d + 1];
                 knots.extend(vec![1.0; d + 1]);
                 let pts = ctrl.iter().map(|&p| at(p)).collect();
                 let c = crate::geom::NurbsCurve::new(d, knots, pts, Some(weights.clone()))
-                    .unwrap_or_else(|e| panic!("a Bézier's knots and weights fit its points: {e:?}"));
-                PlacedSegment {
-                    curve: Curve::Nurbs(Box::new(c)),
-                    range: (0.0, 1.0),
-                    forward: true,
-                }
+                    .unwrap_or_else(|e| {
+                        panic!("a Bézier's knots and weights fit its points: {e:?}")
+                    });
+                PlacedSegment { curve: Curve::Nurbs(Box::new(c)), range: (0.0, 1.0), forward: true }
             }
         }
     }
@@ -376,8 +331,7 @@ impl ProfileLoop {
 
     /// Twice the signed area of [`ProfileLoop::polygon`]: positive when counter-clockwise.
     pub fn signed_area2(&self) -> f64 {
-        let p = self.polygon();
-        (0..p.len()).map(|i| p[i].cross(p[(i + 1) % p.len()])).sum()
+        shoelace(&self.polygon())
     }
 
     pub fn reverse(&mut self) {
@@ -392,9 +346,8 @@ impl ProfileLoop {
         if n == 0 {
             return invalid("a profile loop has no segments");
         }
-        for i in 0..n {
-            let a = &self.segments[i].segment;
-            let b = &self.segments[(i + 1) % n].segment;
+        for (named_a, named_b) in cyclic_pairs(&self.segments) {
+            let (a, b) = (&named_a.segment, &named_b.segment);
             if n == 1 && !a.is_closed() {
                 return invalid("a single-segment loop must be a closed curve");
             }
@@ -404,7 +357,7 @@ impl ProfileLoop {
             if a.end().dist(b.start()) > tol::LINEAR {
                 return invalid(format!(
                     "profile segment {} ends at {:?} but the next starts at {:?}",
-                    self.segments[i].label(),
+                    named_a.label(),
                     a.end(),
                     b.start()
                 ));
@@ -437,55 +390,44 @@ fn turn(a: Vec2, b: Vec2, c: Vec2) -> f64 {
 }
 
 fn spline_through(points: &[Vec2]) -> Result<Segment> {
-    if points.len() == 2 {
-        return Ok(Segment::Line {
-            a: points[0],
-            b: points[1],
-        });
+    if let &[a, b] = points {
+        return Ok(Segment::Line { a, b });
     }
     let p3: Vec<Vec3> = points.iter().map(|&p| v3(p)).collect();
-    Ok(Segment::Spline {
-        curve: BSpline::interpolate_bessel(&p3)?,
-        reversed: false,
-    })
+    Ok(Segment::Spline { curve: BSpline::interpolate_bessel(&p3)?, reversed: false })
 }
 
 /// The edges through one run of points between corners: one line through each stretch of
 /// collinear points, and one spline through each stretch between them.
 fn run_segments(run: &[Vec2]) -> Result<Vec<Segment>> {
-    let n = run.len();
-    let straight =
-        |j: usize| j > 0 && j + 1 < n && turn(run[j - 1], run[j], run[j + 1]) < STRAIGHT_TURN;
+    // Whether each point is the middle of three collinear ones; the run's ends never are.
+    let mut collinear = vec![false; run.len()];
+    for (flag, three) in collinear.iter_mut().skip(1).zip(run.windows(3)) {
+        if let &[a, b, c] = three {
+            *flag = turn(a, b, c) < STRAIGHT_TURN;
+        }
+    }
     // Segment k joins run[k] and run[k + 1]; it is straight when an end is a collinear point.
-    let seg_straight: Vec<bool> = (0..n - 1).map(|k| straight(k) || straight(k + 1)).collect();
+    let seg_straight: Vec<bool> = collinear.windows(2).map(|ends| ends.contains(&true)).collect();
     let mut out = Vec::new();
     let mut k = 0;
-    while k < n - 1 {
-        let kind = seg_straight[k];
-        let mut e = k;
-        while e + 1 < n - 1 && seg_straight[e + 1] == kind {
-            e += 1;
-        }
-        let pts = &run[k..=e + 1];
-        out.push(if kind {
-            Segment::Line {
-                a: pts[0],
-                b: pts[pts.len() - 1],
-            }
-        } else {
-            spline_through(pts)?
+    // Each stretch of segments of one kind becomes one edge through its points.
+    for stretch in seg_straight.chunk_by(|a, b| a == b) {
+        let (Some(&straight), Some(pts)) = (stretch.first(), run.get(k..=k + stretch.len())) else {
+            return invalid("a run of profile points split past its end");
+        };
+        out.push(match (straight, pts.first(), pts.last()) {
+            (true, Some(&a), Some(&b)) => Segment::Line { a, b },
+            _ => spline_through(pts)?,
         });
-        k = e + 1;
+        k += stretch.len();
     }
     Ok(out)
 }
 
 fn ccw_points(points: &[Vec2]) -> Vec<Vec2> {
-    let a: f64 = (0..points.len())
-        .map(|i| points[i].cross(points[(i + 1) % points.len()]))
-        .sum();
     let mut p = points.to_vec();
-    if a < 0.0 {
+    if shoelace(points) < 0.0 {
         p.reverse();
     }
     p
@@ -494,19 +436,12 @@ fn ccw_points(points: &[Vec2]) -> Vec<Vec2> {
 impl NamedSegment {
     /// `segment` carrying the one name `name`.
     pub fn new(segment: Segment, name: impl Into<String>) -> NamedSegment {
-        NamedSegment {
-            segment,
-            names: Names::from([name.into()]),
-        }
+        NamedSegment { segment, names: Names::from([name.into()]) }
     }
 
     /// The edge's names as one word, for a message: `a+b`.
     pub fn label(&self) -> String {
-        self.names
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join("+")
+        self.names.iter().map(String::as_str).collect::<Vec<_>>().join("+")
     }
 
     /// The straight edge from `a` to `b`.
@@ -517,12 +452,7 @@ impl NamedSegment {
     /// The arc about `center` from angle `start` through `sweep`, both in radians: counter-clockwise
     /// when `sweep > 0`.
     pub fn arc(center: Vec2, radius: f64, start: f64, sweep: f64, name: &str) -> NamedSegment {
-        let arc = Segment::Arc {
-            center,
-            radius,
-            start,
-            sweep,
-        };
+        let arc = Segment::Arc { center, radius, start, sweep };
         named(arc, name)
     }
 }
@@ -530,9 +460,7 @@ impl NamedSegment {
 impl Profile {
     /// The profile of one loop, `segments` end to end.
     pub fn outline(segments: Vec<NamedSegment>) -> Profile {
-        Profile {
-            loops: vec![ProfileLoop { segments }],
-        }
+        Profile { loops: vec![ProfileLoop { segments }] }
     }
 
     /// A `width × height` rectangle; its edges are `v_min`, `u_max`, `v_max`, `u_min`.
@@ -554,31 +482,17 @@ impl Profile {
 
     /// A circle whose one edge is `name`.
     pub fn named_circle(center: Vec2, diameter: f64, name: &str) -> Profile {
-        let circle = Segment::Circle {
-            center,
-            radius: diameter / 2.0,
-            ccw: true,
-        };
+        let circle = Segment::Circle { center, radius: diameter / 2.0, ccw: true };
         Profile::outline(vec![named(circle, name)])
     }
 
     /// A polygon; edge `i` runs from point `i` to point `i + 1` and is named `names[i]`.
     pub fn polygon(points: &[Vec2], names: &[&str]) -> Profile {
-        let n = points.len();
-        let segments = (0..n)
-            .map(|i| {
-                named(
-                    Segment::Line {
-                        a: points[i],
-                        b: points[(i + 1) % n],
-                    },
-                    names[i % names.len()],
-                )
-            })
+        let segments = cyclic_pairs(points)
+            .zip(names.iter().cycle())
+            .map(|((&a, &b), name)| named(Segment::Line { a, b }, name))
             .collect();
-        Profile {
-            loops: vec![ProfileLoop { segments }],
-        }
+        Profile { loops: vec![ProfileLoop { segments }] }
     }
 
     /// A closed outline through `points`, every edge named `name`.
@@ -589,12 +503,9 @@ impl Profile {
         let pts = ccw_points(points);
         let n = pts.len();
         let segments: Vec<Segment> = match interp {
-            PointsInterp::Polyline => (0..n)
-                .map(|i| Segment::Line {
-                    a: pts[i],
-                    b: pts[(i + 1) % n],
-                })
-                .collect(),
+            PointsInterp::Polyline => {
+                cyclic_pairs(&pts).map(|(&a, &b)| Segment::Line { a, b }).collect()
+            }
             PointsInterp::PeriodicSpline => {
                 let p3: Vec<Vec3> = pts.iter().map(|&p| v3(p)).collect();
                 vec![Segment::Spline {
@@ -603,8 +514,13 @@ impl Profile {
                 }]
             }
             PointsInterp::Smooth { corner } => {
-                let corners: Vec<usize> = (0..n)
-                    .filter(|&i| turn(pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]) > corner)
+                // Each point with the one before it and the one after, round the loop.
+                let before = pts.iter().cycle().skip(n - 1);
+                let corners: Vec<usize> = before
+                    .zip(cyclic_pairs(&pts))
+                    .enumerate()
+                    .filter(|&(_, (&a, (&b, &c)))| turn(a, b, c) > corner)
+                    .map(|(i, _)| i)
                     .collect();
                 if corners.is_empty() {
                     let p3: Vec<Vec3> = pts.iter().map(|&p| v3(p)).collect();
@@ -614,13 +530,13 @@ impl Profile {
                     }]
                 } else {
                     let mut out = Vec::new();
-                    for (k, &c) in corners.iter().enumerate() {
-                        let end = corners[(k + 1) % corners.len()];
+                    for (&c, &end) in cyclic_pairs(&corners) {
                         let len = match (end + n - c) % n {
                             0 => n,
                             l => l,
                         };
-                        let run: Vec<Vec2> = (0..=len).map(|j| pts[(c + j) % n]).collect();
+                        let run: Vec<Vec2> =
+                            pts.iter().cycle().skip(c).take(len + 1).copied().collect();
                         out.extend(run_segments(&run)?);
                     }
                     out
@@ -655,7 +571,13 @@ impl Profile {
                 if pts.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
                     return invalid(format!("profile segment {} is not finite", seg.label()));
                 }
-                let len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
+                let len: f64 = pts
+                    .windows(2)
+                    .filter_map(|step| match *step {
+                        [a, b] => Some(a.dist(b)),
+                        _ => None,
+                    })
+                    .sum();
                 if len <= tol::LINEAR {
                     return invalid(format!(
                         "profile segment {} is {len:e} mm long, within the tolerance",
@@ -682,33 +604,20 @@ mod tests {
 
     #[test]
     fn rect_is_counter_clockwise_and_named() {
-        let p = Profile::rect(Vec2::new(1.0, 1.0), 4.0, 2.0)
-            .normalized()
-            .unwrap();
+        let p = Profile::rect(Vec2::new(1.0, 1.0), 4.0, 2.0).normalized().unwrap();
         assert!(p.loops[0].signed_area2() > 0.0);
-        let names: Vec<String> = p.loops[0]
-            .segments
-            .iter()
-            .map(NamedSegment::label)
-            .collect();
+        let names: Vec<String> = p.loops[0].segments.iter().map(NamedSegment::label).collect();
         assert_eq!(names, ["v_min", "u_max", "v_max", "u_min"]);
     }
 
     #[test]
     fn holes_are_turned_clockwise() {
         let hole = Profile::circle(Vec2::ZERO, 2.0).loops.remove(0);
-        let p = Profile::rect(Vec2::ZERO, 10.0, 10.0)
-            .with_holes([hole])
-            .normalized()
-            .unwrap();
+        let p = Profile::rect(Vec2::ZERO, 10.0, 10.0).with_holes([hole]).normalized().unwrap();
         assert!(p.loops[1].signed_area2() < 0.0);
         assert_eq!(
             p.loops[1].segments[0].segment,
-            Segment::Circle {
-                center: Vec2::ZERO,
-                radius: 1.0,
-                ccw: false
-            }
+            Segment::Circle { center: Vec2::ZERO, radius: 1.0, ccw: false }
         );
     }
 
@@ -722,14 +631,8 @@ mod tests {
             let a = std::f64::consts::PI * i as f64 / 24.0;
             pts.push(Vec2::new(1.5 + 1.5 * a.cos(), 3.0 + 1.5 * a.sin()));
         }
-        let p = Profile::points(
-            &pts,
-            PointsInterp::Smooth {
-                corner: 15f64.to_radians(),
-            },
-            "side",
-        )
-        .unwrap();
+        let p = Profile::points(&pts, PointsInterp::Smooth { corner: 15f64.to_radians() }, "side")
+            .unwrap();
         let kinds: Vec<&str> = p.loops[0]
             .segments
             .iter()
