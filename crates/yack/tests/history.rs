@@ -332,20 +332,24 @@ fn native_rungs_name_their_faces_for_history() -> Result<()> {
     let pin = cylinder(&Frame::WORLD, 2.0, 6.0)?;
     let ball = sphere(&Frame::WORLD, 1.0)?;
     let inputs = [("block", &b), ("cylinder", &pin), ("sphere", &ball)];
+    let (rim, cap) = (pin.edge_at([2.0, 0.0, 6.0])?, pin.face_at([0.0, 0.0, 6.0])?);
     force(Engine::Native);
-    let swept: Vec<(&str, &Solid, Result<Solid>)> = inputs.iter().map(|&(n, s)| (n, s, s.swept(&Motion::slide([5.0, 2.0, 1.0])))).collect();
+    let mut swept: Vec<(&str, &Solid, Result<Solid>)> = inputs.iter().map(|&(n, s)| (n, s, s.swept(&Motion::slide([5.0, 2.0, 1.0])))).collect();
+    // yack-blend's native chamfer_angle: a rim between coaxial faces of revolution (a cylinder's top)
+    swept.push(("cylinder's rim, chamfered", &pin, pin.chamfer_angle(rim, cap, 0.5, deg(45.0))));
     force(Engine::Both);
     let mut built = 0;
     for (name, input, made) in swept {
         match made {
             Ok(s) => {
-                let found = audit("native swept", &[input], &s);
-                assert!(found.is_empty(), "native swept of a {name}: {found:?}");
+                let found = audit("native", &[input], &s);
+                assert!(found.is_empty(), "native, {name}: {found:?}");
+                eprintln!("native, {name}: {} faces, every one with an origin", s.faces().len());
                 built += 1;
             }
-            Err(e) => eprintln!("native swept of a {name}: declined ({:?}: {})", e.kind, e.detail),
+            Err(e) => eprintln!("native, {name}: declined ({:?}: {})", e.kind, e.detail),
         }
     }
-    assert!(built > 0, "the native swept rung built none of the slides");
+    assert!(built > 0, "the native rungs built none of the cases");
     Ok(())
 }
