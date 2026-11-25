@@ -1,13 +1,13 @@
 // yack: Which faces and edges of one solid come near which of the other's, from meshes of both. A mesh
 // Adapted from springrep@a03e8a1 src/boolean/near.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/near.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Which faces and edges of one solid come near which of the other's, from meshes of both. A mesh
 //! lies within its deflection of the exact geometry, so two faces or edges whose pieces stay
 //! farther apart than both deflections and the tolerances cannot meet, and the boolean skips their
 //! intersection without tracing or projecting anything. Only the faces whose boxes reach a face of
 //! the other solid are meshed: a large part touched in one corner costs that corner.
 
-use std::collections::{HashMap, HashSet};
+#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 
 use crate::{
     math::{Aabb, Point3},
@@ -44,7 +44,7 @@ fn margin(deflections: [f64; 2], reach: f64) -> f64 {
 
 /// One solid's chosen faces as triangles and chosen edges as segments, each tagged with its face's
 /// or edge's index in the arena's order.
-struct Pieces {
+#[allow(clippy::disallowed_types)] struct Pieces { // D26: BTree* in hardening, proven by digests
     tris: Vec<(usize, [Point3; 3])>,
     segs: Vec<(usize, [Point3; 2])>,
     /// Chosen faces the mesher left without triangles, and chosen edges without a curve: near
@@ -54,7 +54,7 @@ struct Pieces {
     deflection: f64,
 }
 
-impl Pieces {
+#[allow(clippy::disallowed_types)] impl Pieces { // D26: BTree* in hardening, proven by digests
     fn new(b: &Brep, faces: &[bool], edges: &[bool]) -> Option<Pieces> {
         let (part, index) = faces_of(b, faces);
         let mut bare_faces: HashSet<usize> = index.values().copied().collect();
@@ -98,7 +98,7 @@ impl Pieces {
 
 /// A copy of the faces of `x` that `keep` marks, with their edges and vertices, and the index in
 /// `x`'s order of the face each copy came from.
-fn faces_of(x: &Brep, keep: &[bool]) -> (Brep, HashMap<FaceId, usize>) {
+#[allow(clippy::disallowed_types)] fn faces_of(x: &Brep, keep: &[bool]) -> (Brep, HashMap<FaceId, usize>) { // D26: BTree* in hardening, proven by digests
     let mut out = Brep::new();
     let mut verts: HashMap<VertexId, VertexId> = HashMap::new();
     let mut edges: HashMap<EdgeId, EdgeId> = HashMap::new();
@@ -184,7 +184,7 @@ fn reaching(own: &[Aabb], other: &Bvh, d: f64) -> Vec<bool> {
 
 /// The pairs of the two solids' faces, edges, and edges against faces, that come within reach of
 /// each other, by index in each arena's order.
-pub(crate) struct Near {
+#[allow(clippy::disallowed_types)] pub(crate) struct Near { // D26: BTree* in hardening, proven by digests
     faces: HashSet<(usize, usize)>,
     edges: HashSet<(usize, usize)>,
     /// `(side, edge of that side, face of the other)`.
@@ -196,7 +196,7 @@ pub(crate) struct Near {
     touched_edges: [HashSet<usize>; 2],
 }
 
-impl Near {
+#[allow(clippy::disallowed_types)] impl Near { // D26: BTree* in hardening, proven by digests
     /// The pairs within `reach` of each other beyond the meshes' deflections, given each solid's
     /// face and edge boxes in its arena's order; `None` where a solid cannot be meshed, when every
     /// pair counts as near.

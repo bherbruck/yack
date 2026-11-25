@@ -1,6 +1,6 @@
 // yack: Boolean union, difference and intersection of solids.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Boolean union, difference and intersection of solids.
 //!
 //! The steps, each in its own module:
@@ -17,6 +17,34 @@
 //!    operation selects pieces, and `sew` joins them, merges faces on one surface, and checks the
 //!    result.
 
+
+// springrep's boolean code indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names the moved code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel::Result;
+use yack_check as check;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_intersect as intersect;
+use yack_locate as locate;
+use yack_math::kernel as math;
+use yack_measure as measure;
+use yack_mesh as mesh;
+use yack_numeric as numeric;
+use yack_profile as profile;
+use yack_build::sweep;
+use yack_tol as tol;
+use yack_topo as topo;
+use yack_tweak as tweak;
+#[cfg(test)]
+use yack_codec as codec;
+#[cfg(test)]
+use yack_build::loft;
+#[cfg(test)]
+use yack_build::primitive;
 mod arrange;
 mod near;
 mod plane;
@@ -31,7 +59,7 @@ pub use plane::{half_space, split};
 pub use section::{SectionEdge, section, section_area, section_curves};
 pub use unify::unify;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 use std::f64::consts::PI;
 use std::rc::Rc;
 
@@ -48,13 +76,10 @@ use crate::{
     },
 };
 use crate::{
-    Error, Result,
     topo::coedge_params,
     geom::{Curve, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
-    measure,
     math::bvh::Bvh,
-    tol,
     topo::{
         Brep, CoedgeId, CoedgeSpec, EdgeId, FaceId, FaceName, Facts, OnFace, SolidId,
         VertexId,
@@ -155,7 +180,7 @@ pub fn boolean(a: &Brep, b: &Brep, op: Op) -> Result<Brep> {
 /// [`boolean`], taking `facts` the caller's construction makes true instead of computing them. A
 /// fact that does not hold is [`Error::InvalidInput`]. Facts name the inputs' own ids; where some
 /// solids pass through untouched, the facts about the rest follow them into the copies combined.
-pub(crate) fn boolean_with(a: &Brep, b: &Brep, op: Op, facts: &Facts) -> Result<Brep> {
+pub fn boolean_with(a: &Brep, b: &Brep, op: Op, facts: &Facts) -> Result<Brep> {
     Ok(simplify::merge_edges(combined(a, b, op, facts)?))
 }
 
@@ -390,10 +415,10 @@ pub fn solids_of(x: &Brep, solids: &[SolidId]) -> Brep {
     copy_solids(x, solids).0
 }
 
-type Copied = (Brep, HashMap<EdgeId, EdgeId>, HashMap<FaceId, FaceId>);
+#[allow(clippy::disallowed_types)] type Copied = (Brep, HashMap<EdgeId, EdgeId>, HashMap<FaceId, FaceId>); // D26: BTree* in hardening, proven by digests
 
 /// [`solids_of`], with the copy's id of each edge and face copied.
-fn copy_solids(x: &Brep, solids: &[SolidId]) -> Copied {
+#[allow(clippy::disallowed_types)] fn copy_solids(x: &Brep, solids: &[SolidId]) -> Copied { // D26: BTree* in hardening, proven by digests
     let mut out = Brep::new();
     let mut verts: HashMap<VertexId, VertexId> = HashMap::new();
     let mut edges: HashMap<EdgeId, EdgeId> = HashMap::new();
@@ -522,7 +547,7 @@ struct Piece {
     rank: u8,
 }
 
-struct Work<'a> {
+#[allow(clippy::disallowed_types)] struct Work<'a> { // D26: BTree* in hardening, proven by digests
     breps: [&'a Brep; 2],
     pool: Vec<Point3>,
     /// Each pool vertex's tolerance: an input vertex's own, [`tol::LINEAR`] for a meeting, and a
@@ -738,7 +763,7 @@ fn locate_piece(dom: &Domain, pts: [Point3; 3]) -> Where {
     }
 }
 
-impl<'a> Work<'a> {
+#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
     fn new(breps: [&'a Brep; 2]) -> Work<'a> {
         let mut w = Work {
             breps,
@@ -1480,7 +1505,7 @@ impl<'a> Work<'a> {
     /// hit left it where it was found, on no curve. That one is this meeting, found from the other
     /// solid's edge, and anywhere in the band: it moves onto the curve, so the two solids' edges
     /// and the curve all pass one vertex where they cross.
-    fn touch_vertex(
+    #[allow(clippy::panic)] fn touch_vertex(
         &mut self,
         p: Point3,
         t: f64,
@@ -1499,14 +1524,14 @@ impl<'a> Work<'a> {
             }
         }
         let base = &self.bases[bi];
-        let curve = base.curve.clone().expect("pierced edges have curves");
+        let curve = base.curve.clone().unwrap_or_else(|| panic!("pierced edges have curves"));
         let range = base.range;
         let surface = &self.faces[fi].dom.surface;
         let near = |d: f64| d.abs() <= tol::LINEAR;
         let on_cut = |q: Point3| {
             on.is_none_or(|ci| {
                 let cut = &self.bases[ci];
-                let c = cut.curve.as_ref().expect("cuts have curves");
+                let c = cut.curve.as_ref().unwrap_or_else(|| panic!("cuts have curves"));
                 csi::within(c, cut.range, q, tol::LINEAR)
             })
         };
@@ -1903,7 +1928,7 @@ impl<'a> Work<'a> {
 
     /// Step 2a: every base split at its vertices into pieces; intersection pieces outside either
     /// face are dropped.
-    fn split_curves(&mut self) {
+    #[allow(clippy::panic)] fn split_curves(&mut self) {
         self.base_pieces = vec![Vec::new(); self.bases.len()];
         let mut plans: Vec<(usize, Vec<f64>, Vec<usize>)> = Vec::new();
         let indexed = self.pool.len();
@@ -1948,7 +1973,7 @@ impl<'a> Work<'a> {
                         let mid = base
                             .curve
                             .as_ref()
-                            .expect("cut has a curve")
+                            .unwrap_or_else(|| panic!("cut has a curve"))
                             .eval(t + 0.5 * period);
                         if !self.cut_inside_both(bi, mid) {
                             continue;
@@ -2060,7 +2085,7 @@ impl<'a> Work<'a> {
             && self.faces[fb].dom.locate(p) != Where::Outside
     }
 
-    fn add_piece(&mut self, bi: usize, range: (f64, f64), v0: usize, v1: usize) {
+    #[allow(clippy::panic)] fn add_piece(&mut self, bi: usize, range: (f64, f64), v0: usize, v1: usize) {
         let base = &self.bases[bi];
         let mut inside = Vec::new();
         let rank = match base.kind {
@@ -2069,7 +2094,7 @@ impl<'a> Work<'a> {
             // pieces touch along it, an edge four faces use; where it keeps one, the two halves of
             // that face merge again across it.
             BaseKind::Cut { fa, fb, .. } => {
-                let c = base.curve.as_ref().expect("cut has a curve");
+                let c = base.curve.as_ref().unwrap_or_else(|| panic!("cut has a curve"));
                 let ends = [0.0, 0.5, 1.0].map(|f| c.eval(range.0 + (range.1 - range.0) * f));
                 let (la, lb) = (
                     locate_piece(&self.faces[fa].dom, ends),
@@ -2113,7 +2138,7 @@ impl<'a> Work<'a> {
     }
 
     /// Step 2b: pieces that run along each other become one, the lowest-ranked.
-    fn dedup(&mut self) {
+    #[allow(clippy::panic)] fn dedup(&mut self) {
         let n = self.pieces.len();
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(p: &mut [usize], i: usize) -> usize {
@@ -2146,7 +2171,7 @@ impl<'a> Work<'a> {
                         continue;
                     }
                     let pj = &self.pieces[j];
-                    let cj = self.bases[pj.base].curve.as_ref().expect("has a curve");
+                    let cj = self.bases[pj.base].curve.as_ref().unwrap_or_else(|| panic!("has a curve"));
                     let within =
                         tol::coincidence(self.bases[pj.base].tol, self.bases[self.pieces[i].base].tol);
                     let same = [0.25, 0.5, 0.75].iter().all(|&f| {

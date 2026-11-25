@@ -1,6 +1,6 @@
 // yack: Faces of the second input lying a hair off a face of the first, moved onto that face's surface
 // Adapted from springrep@a03e8a1 src/boolean/snap.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/snap.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Faces of the second input lying a hair off a face of the first, moved onto that face's surface
 //! before the boolean: within [`SNAP`] all over, or within [`SNAP_GRAZING`] where the two cross at
 //! an angle below [`tol::TANGENT`], which the tolerance cannot place. A part placed by a rounded
@@ -10,7 +10,7 @@
 //! in its seat is meant to be, and the volume moved is at most the gap times the face's area. Faces
 //! that cross at a steeper angle are left for the boolean, which places their crossing.
 
-use std::collections::HashMap;
+#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
 
 use crate::{
     check,
@@ -123,7 +123,7 @@ fn facing(s: &Surface, like: &Surface) -> Surface {
 /// would otherwise keep how far along the curve the move left it: a cylinder moved across its axis
 /// by 1.1e-7 mm onto its seat's surface has its seam 1.1e-7 mm round the circle from the seat's,
 /// and the boolean would cut a piece of edge just over the tolerance long between the two.
-fn pins(
+#[allow(clippy::disallowed_types)] fn pins( // D26: BTree* in hardening, proven by digests
     a: &Brep,
     b: &Brep,
     moved: &HashMap<FaceId, Surface>,
@@ -313,7 +313,7 @@ fn overlap(a: &Aabb, b: &Aabb) -> bool {
 /// `b` with each of its faces that lies within [`SNAP`] of a face of `a` all over moved onto that
 /// face's surface; `None` where none does, or where moving them would not keep `b` a valid solid
 /// with every vertex within [`MOST_MOVED`] of where it was.
-pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> {
+#[allow(clippy::disallowed_types)] pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
     // A face of `a` whose hull box, which holds its box, misses every face of `b` by the reach
     // cannot pair with one, and its box is not worked out.
     let mut reach = Aabb::EMPTY;
@@ -429,7 +429,7 @@ pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> {
 
 /// `b` with the faces of `moved` on their new surfaces, where that keeps it a valid solid with no
 /// vertex moved further than [`MOST_MOVED`] times `gap`.
-fn moved_whole(a: &Brep, b: &Brep, moved: &HashMap<FaceId, Surface>, gap: f64) -> Option<Brep> {
+#[allow(clippy::disallowed_types)] fn moved_whole(a: &Brep, b: &Brep, moved: &HashMap<FaceId, Surface>, gap: f64) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
     let out = tweak::move_faces_pinned(b, moved, &pins(a, b, moved, MOST_MOVED * gap)).ok()?;
     let far = b
         .vertex_ids()

@@ -10,7 +10,7 @@
 #![warn(unreachable_pub)]
 
 pub mod blend;
-pub mod boolean;
+pub use yack_boolean as boolean;
 pub use yack_build::build;
 pub use yack_check as check;
 pub use yack_codec as codec;
@@ -22,7 +22,6 @@ pub mod facade;
 use yack_base::kernel as error;
 pub use yack_geom as geom;
 pub(crate) use yack_intersect as intersect;
-pub(crate) use yack_locate as locate;
 pub use yack_build::loft;
 #[cfg(test)]
 mod moved_tests;

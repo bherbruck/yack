@@ -1,13 +1,13 @@
 // yack: Whether two solids are one solid: every vertex, edge and face of one coincides with one of the
 // Adapted from springrep@a03e8a1 src/boolean/same.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/same.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Whether two solids are one solid: every vertex, edge and face of one coincides with one of the
 //! other's, within the two entities' tolerances, decided in order of dimension (D. J. Jackson,
 //! "Boundary representation modelling with local tolerances", Solid Modeling '95, section 4). A
 //! boolean takes such a pair from its topology instead of
 //! intersecting faces that lie on each other everywhere, which is where tracing is least stable.
 
-use std::collections::HashMap;
+#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
 
 use crate::{
     intersect::{csi, ssi::same_domain},
@@ -78,7 +78,7 @@ fn match_vertices(x: &Brep, y: &Brep) -> Option<Vec<VertexId>> {
 
 /// Each edge of `x` paired with an edge of `y` between the paired vertices whose curve runs within
 /// the sum of the two edges' tolerances of its own.
-fn match_edges(x: &Brep, y: &Brep, vmap: &[VertexId]) -> Option<Vec<EdgeId>> {
+#[allow(clippy::disallowed_types)] fn match_edges(x: &Brep, y: &Brep, vmap: &[VertexId]) -> Option<Vec<EdgeId>> { // D26: BTree* in hardening, proven by digests
     let ends = |a: VertexId, b: VertexId| (a.min(b), a.max(b));
     let mut by_ends: HashMap<(VertexId, VertexId), Vec<EdgeId>> = HashMap::new();
     for e in y.edge_ids() {
@@ -121,7 +121,7 @@ fn match_edges(x: &Brep, y: &Brep, vmap: &[VertexId]) -> Option<Vec<EdgeId>> {
 
 /// Each face of `x` paired with a face of `y` bounded by the paired edges, lying on it and facing
 /// the same way.
-fn match_faces(x: &Brep, y: &Brep, emap: &[EdgeId]) -> bool {
+#[allow(clippy::disallowed_types)] fn match_faces(x: &Brep, y: &Brep, emap: &[EdgeId]) -> bool { // D26: BTree* in hardening, proven by digests
     let edges_of = |b: &Brep, f: FaceId, map: &dyn Fn(EdgeId) -> EdgeId| {
         let mut es: Vec<EdgeId> = b
             .face(f)

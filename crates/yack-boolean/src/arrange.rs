@@ -1,6 +1,6 @@
 // yack: Splitting a face by cuts in its parameter plane: the boundary trims and both directions of every
 // Adapted from springrep@a03e8a1 src/boolean/arrange.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/arrange.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Splitting a face by cuts in its parameter plane: the boundary trims and both directions of every
 //! cut form a planar graph, whose regions, traced with the face's material on the left, are the
 //! pieces of the face.
@@ -33,7 +33,7 @@ struct Graph<'a> {
     scale: Vec2,
 }
 
-impl Graph<'_> {
+#[allow(clippy::match_like_matches_macro)] impl Graph<'_> { // M3 W8: moved verbatim; hardening rewrites it as matches!
     fn oriented(&self, d: Vec2) -> Vec2 {
         Vec2::new(self.sigma * d.x * self.scale.x, d.y * self.scale.y)
     }

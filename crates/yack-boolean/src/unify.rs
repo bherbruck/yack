@@ -1,6 +1,6 @@
 // yack: Same-domain face merging on a finished solid: faces on
 // Adapted from springrep@a03e8a1 src/boolean/unify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/unify.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Same-domain face merging on a finished solid: faces on
 //! one surface, facing one way, that share an edge become one face carrying every name the merged
 //! faces carried. Booleans already merge the faces they keep; this is for solids no boolean made,

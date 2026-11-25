@@ -1,12 +1,12 @@
 // yack: Dissolving redundant vertices: a vertex only two edges meet, both between the same two faces and
 // Adapted from springrep@a03e8a1 src/boolean/simplify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/simplify.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Dissolving redundant vertices: a vertex only two edges meet, both between the same two faces and
 //! on one curve (one line, one circle, or the same curve running on), divides nothing. A boolean
 //! leaves such vertices where an imprint split an edge that the result then keeps whole on both
 //! sides; here each such pair of edges becomes one edge.
 
-use std::collections::{BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 
 use crate::{
     geom::Curve,
@@ -59,7 +59,7 @@ fn continues(a: &Curve, b: &Curve) -> bool {
     }
 }
 
-fn merge_once(b: &Brep) -> Option<Brep> {
+#[allow(clippy::disallowed_types)] fn merge_once(b: &Brep) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
     let (tol_vs, tol_es) = b.tolerant();
     let tolerant_v: BTreeSet<VertexId> = tol_vs.iter().map(|x| x.0).collect();
     let tolerant_e: BTreeSet<EdgeId> = tol_es.iter().map(|x| x.0).collect();

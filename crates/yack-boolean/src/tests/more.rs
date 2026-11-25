@@ -1,16 +1,12 @@
 // yack: springrep boolean unit tests, continued (moved out of tests.rs for the file-size cap).
 // Adapted from springrep@a03e8a1 src/boolean/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved verbatim from the end of boolean/tests.rs into this child module.
+// Changes: moved verbatim from the end of boolean/tests.rs into this child module; then to yack-boolean (M3 W8), paths and visibility only.
 use super::*;
 
 /// Solids whose faces bulge past their own edges: a ball and a ring turned off the axes, a spline
 /// profile turned part way round an axis, and a ball stretched into a spline surface.
 fn bulging() -> Vec<Brep> {
-    use crate::{
-        edit::{Affine, affine},
-        primitive,
-        profile::PointsInterp,
-    };
+    use crate::{primitive, profile::PointsInterp};
     let tilted = Frame::new(
         Vec3::new(1.0, -2.0, 0.5),
         Vec3::new(0.3, -0.5, 0.8),
@@ -28,14 +24,11 @@ fn bulging() -> Vec<Brep> {
     let wavy = Profile::points(&outline, PointsInterp::PeriodicSpline, "w").unwrap();
     let plane = Frame::new(tilted.origin, -tilted.y, tilted.x).unwrap();
     let ball = primitive::sphere(&tilted, 2.0, "s").unwrap();
-    let map = Affine {
-        m: [[1.1, -0.9, 0.5], [-1.0, 0.6, 0.5], [1.3, 0.6, 0.4]],
-        t: Vec3::new(2.0, -3.0, 1.0),
-    };
     vec![
         primitive::torus(&tilted, 3.0, 1.0, "t").unwrap(),
         revolve(&wavy, &plane, tilted.origin, tilted.z, 2.2, "r").unwrap(),
-        affine(&ball, &map).unwrap(),
+        // affine-ball fixture: edit::affine's stretch of the ball above, proven by w-h4-9.
+        fixture("affine-ball"),
         ball,
     ]
 }

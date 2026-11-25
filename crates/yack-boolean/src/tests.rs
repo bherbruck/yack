@@ -1,6 +1,6 @@
 // yack: springrep module src/boolean/tests.rs
 // Adapted from springrep@a03e8a1 src/boolean/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/tests.rs to yack-boolean (M3 W8); paths and visibility only.
 use std::f64::consts::{PI, TAU};
 
 use super::*;
@@ -13,6 +13,18 @@ use crate::{
     profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
 };
+
+/// A solid built above yack-boolean (with blend or edit), read from its fixture: the same solid bit for
+/// bit, as the printer that wrote each one proved (w-h4-9, M3 W8).
+fn fixture(name: &str) -> Brep {
+    let bytes: &[u8] = match name {
+        "rounded" => include_bytes!("../tests/data/rounded.yack"),
+        "key-chamfered" => include_bytes!("../tests/data/key-chamfered.yack"),
+        "affine-ball" => include_bytes!("../tests/data/affine-ball.yack"),
+        _ => panic!("no fixture {name}"),
+    };
+    yack_codec::from_bytes(bytes).and_then(|mut v| v.pop()).unwrap()
+}
 
 fn block(lo: [f64; 3], hi: [f64; 3]) -> Brep {
     let c = Vec2::new(0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]));
@@ -229,8 +241,8 @@ fn solids_apart_from_the_other_input_pass_through() {
 
 #[test]
 fn a_torus_face_is_boxed_by_its_own_extremes_not_the_whole_torus() {
-    let r = rod([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 20.0, 20.0);
-    let rounded = crate::blend::fillet(&r, &[("h.end", "h.side")], 3.0, "f").unwrap();
+    // rounded fixture: blend::fillet's rod of radius 20, 20 long, rounded 3 at its top, proven by w-h4-9.
+    let rounded = fixture("rounded");
     let far = block([50.0, 0.0, 0.0], [60.0, 1.0, 1.0]);
     let (w, _) = staged(&rounded, &far);
     let bb = w.faces[face_named(&w, 0, "round_0")].bbox;
@@ -1108,10 +1120,10 @@ fn square_key(id: &str, turn: f64, (z0, z1): (f64, f64), chamfer: f64) -> Brep {
     if chamfer <= 0.0 {
         return key;
     }
-    let end = format!("{id}.end");
-    let sides = ["v_min", "u_max", "v_max", "u_min"].map(|s| format!("{id}.{s}"));
-    let pairs: Vec<(&str, &str)> = sides.iter().map(|s| (end.as_str(), s.as_str())).collect();
-    crate::blend::chamfer(&key, &pairs, chamfer, "ch").unwrap()
+    // key-chamfered fixture: blend::chamfer's key "key" turned 30°, z -3 to 3, its top chamfered 0.5,
+    // proven by w-h4-9: the one chamfered key the tests ask for.
+    assert!(id == "key" && turn == 30f64.to_radians() && (z0, z1) == (-3.0, 3.0) && chamfer == 0.5);
+    fixture("key-chamfered")
 }
 
 #[test]
@@ -1253,10 +1265,8 @@ fn a_face_hull_box_holds_its_loose_box() {
         let ball = revolve(&p, &frame, Vec3::ZERO, Vec3::Z, TAU, "s").unwrap();
         difference(&ball, &block([-1.0, 0.0, 0.0], [0.0, 1.0, 1.0])).unwrap()
     };
-    let rounded = {
-        let r = rod([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 20.0, 20.0);
-        crate::blend::fillet(&r, &[("h.end", "h.side")], 3.0, "f").unwrap()
-    };
+    // rounded fixture: blend::fillet's rod of radius 20, 20 long, rounded 3 at its top, proven by w-h4-9.
+    let rounded = fixture("rounded");
     let lofted = {
         let section = |profile, z: f64| Section {
             profile,

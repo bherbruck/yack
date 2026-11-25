@@ -1,11 +1,10 @@
 // yack: Where a plane cuts a solid: the cut's outline and its area.
 // Adapted from springrep@a03e8a1 src/measure/section.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from measure/section.rs to boolean/section.rs (M2.1, T10); paths only.
+// Changes: moved from measure/section.rs to boolean/section.rs (M2.1, T10); paths only; then to yack-boolean (M3 W8), paths and visibility only.
 //! Where a plane cuts a solid: the cut's outline and its area.
 
 use crate::{
-    boolean,
-    boolean::half_space,
+    half_space,
     error::{Error, Result},
     geom::{Curve, Surface},
     math::{Point3, Vec3},
@@ -21,7 +20,7 @@ fn caps(s: &Brep, origin: Point3, normal: Vec3) -> Result<(Brep, Vec<FaceId>)> {
     let n = normal
         .unit()
         .ok_or_else(|| Error::InvalidInput("a plane needs a normal".into()))?;
-    let cut = boolean::intersection(s, &half_space(s, origin, n)?)?;
+    let cut = crate::intersection(s, &half_space(s, origin, n)?)?;
     let caps = cut
         .face_ids()
         .filter(|&f| match &cut.face(f).surface {

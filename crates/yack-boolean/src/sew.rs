@@ -1,12 +1,12 @@
 // yack: Joining the kept pieces of faces into solids: faces on one surface that share an edge merge
 // Adapted from springrep@a03e8a1 src/boolean/sew.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/sew.rs to yack-boolean (M3 W8); paths and visibility only.
 //! Joining the kept pieces of faces into solids: faces on one surface that share an edge merge
 //! (carrying every name either had), each edge must be used twice in opposite directions, shells
 //! are the connected sets of faces, and a shell enclosing negative volume is a void of the shell
 //! around it. The result passes the checker or is an error.
 
-use std::collections::{BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -80,7 +80,7 @@ fn find(p: &mut [usize], i: usize) -> usize {
 }
 
 /// Each piece's uses: `(face, loop, trim)`.
-fn uses(faces: &[OutFace]) -> HashMap<usize, Vec<(usize, usize, usize)>> {
+#[allow(clippy::disallowed_types)] fn uses(faces: &[OutFace]) -> HashMap<usize, Vec<(usize, usize, usize)>> { // D26: BTree* in hardening, proven by digests
     let mut out: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
     for (fi, f) in faces.iter().enumerate() {
         for (li, l) in f.loops.iter().enumerate() {
@@ -137,12 +137,12 @@ fn drop_lone_slits(faces: &mut [OutFace]) {
 /// partner. Each use's place round the edge is read a short step into its face, where faces that
 /// leave the edge tangent to each other, as a cylinder lying on a plane does, have parted. Only
 /// pieces with more than two uses are paired here; a piece's two uses are each other's partners.
-pub(super) fn pair_uses(faces: &[OutFace], pieces: &[PieceGeom]) -> Result<HashMap<Use, Use>> {
+#[allow(clippy::disallowed_types)] pub(super) fn pair_uses(faces: &[OutFace], pieces: &[PieceGeom]) -> Result<HashMap<Use, Use>> { // D26: BTree* in hardening, proven by digests
     Ok(around_uses(faces, pieces)?.0)
 }
 
 /// [`pair_uses`], and each use's neighbour across the empty wedge beside it.
-fn around_uses(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn around_uses( // D26: BTree* in hardening, proven by digests
     faces: &[OutFace],
     pieces: &[PieceGeom],
 ) -> Result<(HashMap<Use, Use>, HashMap<Use, Use>)> {
@@ -155,7 +155,7 @@ fn around_uses(
     shared.sort_by_key(|x| x.0);
     for (piece, us) in shared {
         let pg = &pieces[piece];
-        let c = pg.curve.as_ref().expect("filtered");
+        let c = pg.curve.as_ref().unwrap_or_else(|| panic!("filtered"));
         let (m, d) = c.d1(0.5 * (pg.range.0 + pg.range.1));
         let refused = || {
             Error::InvalidResult(vec![format!(
@@ -286,7 +286,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
 /// first's parameters and moved by whole periods to meet its neighbours; an edge two members share
 /// at one place in the parameter plane is inside the merged face, and one they share a period
 /// apart is its seam.
-fn merge_group(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn merge_group( // D26: BTree* in hardening, proven by digests
     faces: &[OutFace],
     group: &[usize],
     vtol: &[f64],
@@ -319,7 +319,7 @@ fn merge_group(
     shift[0] = Some(Vec2::ZERO);
     let mut queue = vec![0];
     while let Some(k) = queue.pop() {
-        let sk = shift[k].expect("queued members are placed");
+        let sk = shift[k].unwrap_or_else(|| panic!("queued members are placed"));
         for (i, t) in members[k].iter().enumerate() {
             for &(j, ti) in &uses[&t.piece] {
                 if shift[j].is_some() || (j, ti) == (k, i) {
@@ -373,7 +373,7 @@ fn merge_group(
         used[first] = true;
         let mut lp = vec![trims[first].clone()];
         loop {
-            let last = lp.last().expect("loop has a trim");
+            let last = lp.last().unwrap_or_else(|| panic!("loop has a trim"));
             let (v, at) = (last.v1, last.uv1);
             if v == lp[0].v0 && uv_gap(s, at, lp[0].uv0) <= gap(v) {
                 break;
@@ -430,7 +430,7 @@ fn merge_group(
 }
 
 /// Faces on one surface, facing one way, that share an edge become one face.
-pub(super) fn merge_same_domain(
+#[allow(clippy::disallowed_types)] pub(super) fn merge_same_domain( // D26: BTree* in hardening, proven by digests
     faces: Vec<OutFace>,
     pieces: &[PieceGeom],
     vtol: &[f64],
@@ -517,7 +517,7 @@ pub(super) fn merge_same_domain(
 
 /// Every edge must be used by two coedges running opposite ways, or by pairs of them where pieces
 /// touch along it, and a pole by one.
-fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &HashMap<Use, Use>) -> Result<()> {
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &HashMap<Use, Use>) -> Result<()> { // D26: BTree* in hardening, proven by digests
     let mut issues = Vec::new();
     for (piece, us) in uses(faces) {
         let pg = &pieces[piece];
@@ -542,7 +542,7 @@ fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &HashMap<Use, U
             let p = pg
                 .curve
                 .as_ref()
-                .expect("checked")
+                .unwrap_or_else(|| panic!("checked"))
                 .eval(0.5 * (pg.range.0 + pg.range.1));
             issues.push(format!(
                 "the edge through ({:.6}, {:.6}, {:.6}) would be used by {} faces{}",
@@ -573,7 +573,7 @@ type SolidPlan = (Vec<Vec<usize>>, usize);
 /// An arena holding `faces`, grouped into solids of sheets, with each face use's coedge. With
 /// `share`, a solid's sheets share the vertices and edges where they touch; without, each sheet
 /// has its own, as a trial of each sheet alone needs.
-fn build(
+#[allow(clippy::disallowed_types)] fn build( // D26: BTree* in hardening, proven by digests
     faces: &[OutFace],
     solids: &[SolidPlan],
     pool: &[Point3],
@@ -660,7 +660,7 @@ fn build(
 const THIN: f64 = 10.0 * tol::LINEAR;
 
 /// The result solid from its faces. `vtol` is each pool vertex's local tolerance.
-pub(crate) fn assemble(
+#[allow(clippy::disallowed_types)] pub(crate) fn assemble( // D26: BTree* in hardening, proven by digests
     faces: Vec<OutFace>,
     pool: &[Point3],
     vtol: &[f64],

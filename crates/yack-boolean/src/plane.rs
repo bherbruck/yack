@@ -1,10 +1,9 @@
 // yack: A solid cut in two by a plane.
 // Adapted from springrep@a03e8a1 src/boolean/plane.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/boolean/plane.rs to yack-boolean (M3 W8); paths and visibility only.
 //! A solid cut in two by a plane.
 
 use crate::{
-    boolean,
     error::{Error, Result},
     math::{Frame, Point3, Vec2, Vec3},
     measure,
@@ -37,13 +36,13 @@ pub fn split(s: &Brep, origin: Point3, normal: Vec3) -> Result<(Brep, Brep)> {
         return Ok((s.clone(), s.clone()));
     }
     let h = half_space(s, origin, normal)?;
-    Ok((boolean::intersection(s, &h)?, boolean::difference(s, &h)?))
+    Ok((crate::intersection(s, &h)?, crate::difference(s, &h)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boolean::section_area;
+    use crate::section_area;
 
     /// A prism on the polygon `pts`, `h` tall, its sides named `e0`, `e1`, … from the first edge.
     fn prism(pts: &[[f64; 2]], h: f64) -> Brep {
