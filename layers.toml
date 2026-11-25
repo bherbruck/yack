@@ -344,6 +344,7 @@ sew = []
 simplify = []
 snap = []
 unify = ["sew"]
+tests = []
 
 [modules.yack-springrep]
 error = []
