@@ -1,14 +1,13 @@
 // yack: Linear solves, root finding and Kronrod rules shared by the geometry and measurement code.
 // Adapted from springrep@a03e8a1 src/numeric.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's numeric.rs (M3 W1', D26); the Gauss-Legendre rules and their
-// quadrature stay in springrep until hardening; paths and visibility only.; the Gauss rules joined in M3 W5.
+// quadrature stay in springrep until hardening; paths and visibility only.; the Gauss rules joined in M3 W5;
+// hardening (w-h1): the Gauss rules are const tables of the same bits, not a OnceLock cache.
 //! Linear solves, root finding and Kronrod rules shared by the geometry and measurement code.
 
 // springrep's solvers index by position; D26's hardening pass moves them onto checked access, as
 // for yack-linalg until M5.
 #![allow(clippy::indexing_slicing)]
-
-use std::sync::OnceLock;
 
 use yack_base::kernel::{Error, Result};
 
@@ -302,75 +301,168 @@ pub fn roots(f: &mut impl FnMut(f64) -> f64, a: f64, b: f64, n: usize) -> Vec<f6
     out
 }
 
-// The Gauss-Legendre rules and their quadrature, from springrep's numeric.rs (M3 W5).
-/// Gauss–Legendre nodes and weights of order `N` on [-1, 1].
-fn legendre_rule(n: usize) -> Vec<(f64, f64)> {
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut x = (std::f64::consts::PI * (i as f64 + 0.75) / (n as f64 + 0.5)).cos();
-        let mut dp = 1.0;
-        for _ in 0..100 {
-            let (mut p0, mut p1) = (1.0, x);
-            for k in 2..=n {
-                let p2 = ((2 * k - 1) as f64 * x * p1 - (k - 1) as f64 * p0) / k as f64;
-                p0 = p1;
-                p1 = p2;
-            }
-            dp = n as f64 * (x * p1 - p0) / (x * x - 1.0);
-            let dx = p1 / dp;
-            x -= dx;
-            if dx.abs() < 1e-16 {
-                break;
-            }
-        }
-        out.push((x, 2.0 / ((1.0 - x * x) * dp * dp)));
-    }
-    out
-}
+// The Gauss-Legendre rules and their quadrature, from springrep's numeric.rs (M3 W5). The tables
+// are springrep's Newton iteration for the Legendre roots (`tests::legendre_rule`), printed with
+// round-trip precision; a test checks them bit for bit.
+/// The 8-point Gauss-Legendre rule on [-1, 1] as `(node, weight)`, largest node first.
+const GAUSS_8: [(f64, f64); 8] = [
+    (0.9602898564975363, 0.10122853629037679),
+    (0.7966664774136268, 0.22238103445337445),
+    (0.525532409916329, 0.3137066458778874),
+    (0.18343464249564978, 0.362683783378362),
+    (-0.18343464249564978, 0.362683783378362),
+    (-0.525532409916329, 0.3137066458778874),
+    (-0.7966664774136268, 0.22238103445337445),
+    (-0.9602898564975363, 0.10122853629037679),
+];
 
+/// The 12-point Gauss-Legendre rule on [-1, 1] as `(node, weight)`, largest node first.
+const GAUSS_12: [(f64, f64); 12] = [
+    (0.9815606342467192, 0.047175336386511835),
+    (0.9041172563704748, 0.10693932599531818),
+    (0.7699026741943047, 0.16007832854334633),
+    (0.5873179542866175, 0.20316742672306584),
+    (0.3678314989981802, 0.23349253653835478),
+    (0.12523340851146894, 0.24914704581340288),
+    (-0.1252334085114689, 0.24914704581340288),
+    (-0.3678314989981802, 0.23349253653835478),
+    (-0.5873179542866175, 0.20316742672306584),
+    (-0.7699026741943047, 0.16007832854334633),
+    (-0.9041172563704748, 0.10693932599531818),
+    (-0.9815606342467192, 0.047175336386511835),
+];
+
+/// The 16-point Gauss-Legendre rule on [-1, 1] as `(node, weight)`, largest node first.
+const GAUSS_16: [(f64, f64); 16] = [
+    (0.9894009349916499, 0.027152459411754058),
+    (0.9445750230732326, 0.062253523938647776),
+    (0.8656312023878318, 0.0951585116824929),
+    (0.755404408355003, 0.12462897125553395),
+    (0.6178762444026438, 0.14959598881657682),
+    (0.45801677765722737, 0.16915651939500256),
+    (0.2816035507792589, 0.1826034150449236),
+    (0.09501250983763744, 0.18945061045506847),
+    (-0.09501250983763744, 0.18945061045506847),
+    (-0.2816035507792589, 0.1826034150449236),
+    (-0.45801677765722737, 0.16915651939500256),
+    (-0.6178762444026438, 0.14959598881657682),
+    (-0.755404408355003, 0.12462897125553395),
+    (-0.8656312023878318, 0.0951585116824929),
+    (-0.9445750230732326, 0.062253523938647776),
+    (-0.9894009349916499, 0.027152459411754058),
+];
+
+/// The 24-point Gauss-Legendre rule on [-1, 1] as `(node, weight)`, largest node first.
+const GAUSS_24: [(f64, f64); 24] = [
+    (0.9951872199970213, 0.012341229799987334),
+    (0.9747285559713095, 0.028531388628933813),
+    (0.9382745520027328, 0.044277438817419676),
+    (0.8864155270044011, 0.05929858491543666),
+    (0.820001985973903, 0.07334648141108027),
+    (0.7401241915785544, 0.08619016153195322),
+    (0.6480936519369755, 0.0976186521041139),
+    (0.5454214713888396, 0.10744427011596562),
+    (0.4337935076260452, 0.11550566805372561),
+    (0.3150426796961634, 0.12167047292780335),
+    (0.1911188674736163, 0.12583745634682839),
+    (0.06405689286260563, 0.12793819534675224),
+    (-0.06405689286260563, 0.12793819534675224),
+    (-0.1911188674736163, 0.12583745634682839),
+    (-0.3150426796961634, 0.12167047292780335),
+    (-0.4337935076260452, 0.11550566805372561),
+    (-0.5454214713888396, 0.10744427011596562),
+    (-0.6480936519369755, 0.0976186521041139),
+    (-0.7401241915785544, 0.08619016153195322),
+    (-0.820001985973903, 0.07334648141108027),
+    (-0.8864155270044011, 0.05929858491543666),
+    (-0.9382745520027328, 0.044277438817419676),
+    (-0.9747285559713095, 0.028531388628933813),
+    (-0.9951872199970213, 0.012341229799987334),
+];
+
+/// The `n`-point Gauss-Legendre rule on [-1, 1] as `(node, weight)` pairs, for `n` of 8, 12 or
+/// 16; any other `n` gives the 24-point rule.
 pub fn gauss(n: usize) -> &'static [(f64, f64)] {
-    // springrep's rule cache (D26): hardening computes the rules per call, measured first.
-    static RULES: [OnceLock<Vec<(f64, f64)>>; 4] = [
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-    ];
-    let slot = match n {
-        8 => 0,
-        12 => 1,
-        16 => 2,
-        _ => 3,
-    };
-    let order = [8, 12, 16, 24][slot];
-    RULES[slot].get_or_init(|| legendre_rule(order))
+    match n {
+        8 => &GAUSS_8,
+        12 => &GAUSS_12,
+        16 => &GAUSS_16,
+        _ => &GAUSS_24,
+    }
 }
 
-/// ∫ f over [a, b] with an `n`-point Gauss rule.
-pub(crate) fn gauss_fixed(f: &mut impl FnMut(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
-    let (m, h) = ((a + b) * 0.5, (b - a) * 0.5);
-    gauss(n).iter().map(|&(x, w)| w * f(m + h * x)).sum::<f64>() * h
+/// ∫ f over [a, b] with the `n`-point rule of [`gauss`].
+pub(crate) fn integrate_fixed(f: &mut impl FnMut(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
+    let (mid, half) = ((a + b) * 0.5, (b - a) * 0.5);
+    gauss(n).iter().map(|&(x, w)| w * f(mid + half * x)).sum::<f64>() * half
 }
 
 /// ∫ f over [a, b], halving until two levels agree to `abs_tol` (spread over the interval).
 pub fn integrate(f: &mut impl FnMut(f64) -> f64, a: f64, b: f64, abs_tol: f64) -> f64 {
-    let whole = gauss_fixed(f, a, b, 16);
-    adapt(f, a, b, whole, abs_tol, 0)
+    let whole = integrate_fixed(f, a, b, 16);
+    integrate_halves(f, a, b, whole, abs_tol, 0)
 }
 
-fn adapt(f: &mut impl FnMut(f64) -> f64, a: f64, b: f64, whole: f64, tol: f64, depth: u32) -> f64 {
-    let m = (a + b) * 0.5;
-    let left = gauss_fixed(f, a, m, 16);
-    let right = gauss_fixed(f, m, b, 16);
+/// ∫ f over [a, b] given `whole`, its one-rule estimate: the two halves' sum when it agrees with
+/// `whole` to `tol` or the depth reaches 24, else each half refined to half the tolerance.
+fn integrate_halves(
+    f: &mut impl FnMut(f64) -> f64,
+    a: f64,
+    b: f64,
+    whole: f64,
+    tol: f64,
+    depth: u32,
+) -> f64 {
+    let mid = (a + b) * 0.5;
+    let left = integrate_fixed(f, a, mid, 16);
+    let right = integrate_fixed(f, mid, b, 16);
     if (left + right - whole).abs() <= tol || depth >= 24 {
         return left + right;
     }
-    adapt(f, a, m, left, tol * 0.5, depth + 1) + adapt(f, m, b, right, tol * 0.5, depth + 1)
+    integrate_halves(f, a, mid, left, tol * 0.5, depth + 1)
+        + integrate_halves(f, mid, b, right, tol * 0.5, depth + 1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gauss-Legendre nodes and weights of order `n` on [-1, 1], by Newton's method on the Legendre
+    /// polynomial: the generator of the const tables.
+    fn legendre_rule(n: usize) -> Vec<(f64, f64)> {
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut x = (std::f64::consts::PI * (i as f64 + 0.75) / (n as f64 + 0.5)).cos();
+            let mut dp = 1.0;
+            for _ in 0..100 {
+                let (mut p0, mut p1) = (1.0, x);
+                for k in 2..=n {
+                    let p2 = ((2 * k - 1) as f64 * x * p1 - (k - 1) as f64 * p0) / k as f64;
+                    p0 = p1;
+                    p1 = p2;
+                }
+                dp = n as f64 * (x * p1 - p0) / (x * x - 1.0);
+                let dx = p1 / dp;
+                x -= dx;
+                if dx.abs() < 1e-16 {
+                    break;
+                }
+            }
+            out.push((x, 2.0 / ((1.0 - x * x) * dp * dp)));
+        }
+        out
+    }
+
+    #[test]
+    fn the_gauss_tables_are_the_generated_rules_bit_for_bit() {
+        for n in [8, 12, 16, 24] {
+            let bits = |rule: &[(f64, f64)]| -> Vec<(u64, u64)> {
+                rule.iter().map(|&(x, w)| (x.to_bits(), w.to_bits())).collect()
+            };
+            assert_eq!(bits(gauss(n)), bits(&legendre_rule(n)), "order {n}");
+        }
+        assert_eq!(gauss(5).len(), 24);
+    }
 
     #[test]
     fn gauss_rules_integrate_polynomials_exactly() {
@@ -378,7 +470,7 @@ mod tests {
             let s: f64 = gauss(n).iter().map(|&(_, w)| w).sum();
             assert!((s - 2.0).abs() < 1e-14, "order {n}");
             let mut f = |x: f64| x.powi(2 * n as i32 - 2);
-            let v = gauss_fixed(&mut f, 0.0, 1.0, n);
+            let v = integrate_fixed(&mut f, 0.0, 1.0, n);
             assert!(
                 (v - 1.0 / (2 * n - 1) as f64).abs() < 1e-14,
                 "order {n}: {v}"

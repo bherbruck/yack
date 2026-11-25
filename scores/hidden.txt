@@ -1,7 +1,6 @@
 # hidden-state sites per temporary crate (gate 8; may only fall)
 yack-cadrs 116
 yack-corpus-fetch 1
-yack-numeric 1
 yack-shim 33
 yack-springrep 4
 yack-topo 1
