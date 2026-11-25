@@ -1,7 +1,7 @@
 # small float literals without `// tol:` per crate (gate 7; may only fall)
 yack-cadrs 1166
 yack-check 5
-yack-geom 47
+yack-geom 1
 yack-intersect 50
 yack-locate 11
 yack-math 6

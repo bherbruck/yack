@@ -37,7 +37,6 @@ crates/yack-cadrs/tests/conformance.rs 4795
 crates/yack-springrep/src/blend.rs 3465
 crates/yack-springrep/src/boolean/mod.rs 2849
 crates/yack-springrep/src/boolean/tests.rs 1771
-crates/yack-geom/src/nurbs.rs 2527
 crates/yack-intersect/src/csi.rs 2540
 crates/yack-measure/src/lib.rs 1562
 crates/yack-springrep/src/step/tests.rs 1964

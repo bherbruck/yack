@@ -713,7 +713,7 @@ impl<'g, 'a> Reader<'g, 'a> {
             })
             .max_by(|x, y| x.0.total_cmp(&y.0))?
             .1;
-        let seam = Curve::Nurbs(Box::new(n.iso_curve(!in_v, at / TAU * period)));
+        let seam = Curve::Nurbs(Box::new(n.iso_curve(!in_v, at / TAU * period).ok()?));
         let on_seam = |raw: &Raw, u: &Use| {
             let q = raw.points[use_start(raw, u)];
             seam.eval(param_of(&seam, q)).dist(q) <= tol::LINEAR

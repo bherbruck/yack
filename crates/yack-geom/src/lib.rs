@@ -1,11 +1,7 @@
 // yack: Curves and surfaces, each with evaluation, derivatives, projection and parameter ranges.
 // Adapted from springrep@a03e8a1 src/geom/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/geom/mod.rs to yack-geom (M3 W3); paths and visibility only.
+// Changes: moved from springrep's src/geom/mod.rs to yack-geom (M3 W3), paths and visibility only; M3 hardening dropped its indexing allow.
 //! Curves and surfaces, each with evaluation, derivatives, projection and parameter ranges.
-
-// springrep's geometry indexes by position; D26's hardening pass moves it onto checked
-// access, as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names geom's code uses.
 use yack_base::kernel::{self as error, Error, Result};
