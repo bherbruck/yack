@@ -2,12 +2,9 @@
 // Adapted from springrep@a03e8a1 src/numeric.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's numeric.rs (M3 W1', D26); the Gauss-Legendre rules and their
 // quadrature stay in springrep until hardening; paths and visibility only.; the Gauss rules joined in M3 W5;
-// hardening (w-h1): the Gauss rules are const tables of the same bits, not a OnceLock cache.
+// hardening (w-h1): the Gauss rules are const tables of the same bits, not a OnceLock cache; the
+// solvers work on row slices with checked access and return errors for short inputs.
 //! Linear solves, root finding and Kronrod rules shared by the geometry and measurement code.
-
-// springrep's solvers index by position; D26's hardening pass moves them onto checked access, as
-// for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 use yack_base::kernel::{Error, Result};
 
@@ -61,6 +58,14 @@ fn row_mut(m: &mut [f64], width: usize, i: usize) -> Option<&mut [f64]> {
     m.get_mut(i * width..(i + 1) * width)
 }
 
+/// Adds `v` to `m[i]`. Every caller's `i` is in range by construction; a debug build checks it.
+fn add_at(m: &mut [f64], i: usize, v: f64) {
+    debug_assert!(i < m.len(), "index {i} is past the {} values", m.len());
+    if let Some(x) = m.get_mut(i) {
+        *x += v;
+    }
+}
+
 /// The error of a system with no usable pivot.
 fn singular() -> Error {
     Error::Numerical("singular linear system".into())
@@ -71,6 +76,11 @@ fn too_short(what: &str, need: usize, got: usize) -> Error {
     Error::InvalidInput(format!("{what} needs {need} values, not {got}"))
 }
 
+/// The error of a right-hand side shorter than `n` rows of `k`.
+fn short_rhs(n: usize, k: usize, got: usize) -> Error {
+    too_short("the right-hand side", n * k, got)
+}
+
 /// Swaps rows `i` and `j` of a row-major matrix `width` values wide.
 fn swap_rows(m: &mut [f64], width: usize, i: usize, j: usize) {
     let (lo, hi) = (i.min(j), i.max(j));
@@ -78,7 +88,8 @@ fn swap_rows(m: &mut [f64], width: usize, i: usize, j: usize) {
         return;
     }
     let (head, tail) = m.split_at_mut(hi * width);
-    if let (Some(a), Some(b)) = (head.chunks_exact_mut(width).nth(lo), tail.chunks_exact_mut(width).next()) {
+    let rows = (head.chunks_exact_mut(width).nth(lo), tail.chunks_exact_mut(width).next());
+    if let (Some(a), Some(b)) = rows {
         a.swap_with_slice(b);
     }
 }
@@ -149,66 +160,86 @@ pub fn solve_dense(mut a: Vec<f64>, mut b: Vec<f64>, n: usize, k: usize) -> Resu
 /// One row of a sparse system: its first column and the values of the columns that follow.
 pub(crate) type SparseRow = (usize, Vec<f64>);
 
+/// A row still being eliminated: where its run of columns starts, the run, and its right-hand
+/// sides.
+struct Pending {
+    start: usize,
+    values: Vec<f64>,
+    rhs: Vec<f64>,
+}
+
+impl Pending {
+    fn lead(&self) -> f64 {
+        self.values.first().copied().unwrap_or(0.0)
+    }
+}
+
 /// Solves `a x = b` where each row of `a` is a short run of columns, by Gaussian elimination with
 /// partial pivoting among the rows that reach each column. Banded rows (B-spline collocation) cost
 /// `O(n w²)` time and `O(n w)` memory for bandwidth `w`; `b` is as in [`solve_dense`].
-pub fn solve_banded(rows: Vec<SparseRow>, mut b: Vec<f64>, k: usize) -> Result<Vec<f64>> {
+pub fn solve_banded(rows: Vec<SparseRow>, b: Vec<f64>, k: usize) -> Result<Vec<f64>> {
     let n = rows.len();
-    let singular = || Error::Numerical("singular linear system".into());
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&r| rows[r].0);
-    let mut rows: Vec<Option<SparseRow>> = rows.into_iter().map(Some).collect();
-    let mut next = 0;
-    let mut active: Vec<usize> = Vec::new();
-    // The pivot row of each column, with its right-hand sides, for back substitution.
-    let mut upper: Vec<(Vec<f64>, Vec<f64>)> = Vec::with_capacity(n);
+    let mut pending = rows
+        .into_iter()
+        .enumerate()
+        .map(|(r, (start, values))| {
+            let rhs = row(&b, k, r).ok_or_else(|| short_rhs(n, k, b.len()))?;
+            Ok(Pending { start, values, rhs: rhs.to_vec() })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // A stable sort: rows starting in one column keep their order.
+    pending.sort_by_key(|p| p.start);
+    let mut pending = pending.into_iter().peekable();
+    let mut active: Vec<Pending> = Vec::new();
+    // The pivot row of each column, for back substitution.
+    let mut pivots: Vec<Pending> = Vec::with_capacity(n);
     for col in 0..n {
-        while next < n && rows[order[next]].as_ref().is_some_and(|r| r.0 <= col) {
-            active.push(order[next]);
-            next += 1;
+        while let Some(p) = pending.next_if(|p| p.start <= col) {
+            active.push(p);
         }
-        let piv = active
+        let pivot = active
             .iter()
             .enumerate()
-            .filter_map(|(i, &r)| {
-                let row = rows[r].as_ref()?;
-                (row.0 == col).then(|| (i, row.1.first().copied().unwrap_or(0.0).abs()))
-            })
+            .filter(|(_, p)| p.start == col)
+            .map(|(i, p)| (i, p.lead().abs()))
             .max_by(|x, y| x.1.total_cmp(&y.1))
-            .filter(|&(_, v)| v >= 1e-300)
+            .filter(|&(_, size)| size >= 1e-300)
             .ok_or_else(singular)?
             .0;
-        let pr = active.swap_remove(piv);
-        let (_, pv) = rows[pr].take().ok_or_else(singular)?;
-        let pb: Vec<f64> = b[pr * k..pr * k + k].to_vec();
-        for &r in &active {
-            let row = rows[r].as_mut().ok_or_else(singular)?;
-            if row.0 != col {
+        let pivot = active.swap_remove(pivot);
+        let lead = pivot.values.first().copied().ok_or_else(singular)?;
+        for p in &mut active {
+            if p.start != col {
                 return Err(singular());
             }
-            let f = row.1.first().copied().unwrap_or(0.0) / pv[0];
-            let len = row.1.len().max(pv.len());
-            let vals: Vec<f64> = (1..len)
-                .map(|j| {
-                    row.1.get(j).copied().unwrap_or(0.0) - f * pv.get(j).copied().unwrap_or(0.0)
-                })
-                .collect();
-            *row = (col + 1, vals);
-            for j in 0..k {
-                b[r * k + j] -= f * pb[j];
+            let f = p.lead() / lead;
+            let at = |v: &[f64], j: usize| v.get(j).copied().unwrap_or(0.0);
+            let len = p.values.len().max(pivot.values.len());
+            p.values = (1..len).map(|j| at(&p.values, j) - f * at(&pivot.values, j)).collect();
+            p.start = col + 1;
+            for (x, &q) in p.rhs.iter_mut().zip(&pivot.rhs) {
+                *x -= f * q;
             }
         }
-        upper.push((pv, pb));
+        pivots.push(pivot);
     }
+    // Back substitution, last column first: each pivot row's run reaches only later columns.
     let mut x = vec![0.0; n * k];
-    for col in (0..n).rev() {
-        let (pv, pb) = &upper[col];
-        for j in 0..k {
-            let mut s = pb[j];
-            for (i, &a) in pv.iter().enumerate().skip(1) {
-                s -= a * x[(col + i) * k + j];
-            }
-            x[col * k + j] = s / pv[0];
+    for (col, pivot) in pivots.iter().enumerate().rev() {
+        let Some((&lead, rest)) = pivot.values.split_first() else {
+            return Err(singular());
+        };
+        if k > 0 && col + 1 + rest.len() > n {
+            return Err(Error::InvalidInput(format!("row {col}'s run passes the last column")));
+        }
+        let (done_and_this, later) = x.split_at_mut((col + 1) * k);
+        let this = row_mut(done_and_this, k, col).ok_or_else(singular)?;
+        for (j, (out, &r)) in this.iter_mut().zip(&pivot.rhs).enumerate() {
+            let s = rest
+                .iter()
+                .zip(later.iter().skip(j).step_by(k))
+                .fold(r, |s, (&a, &y)| s - a * y);
+            *out = s / lead;
         }
     }
     Ok(x)
@@ -220,76 +251,143 @@ pub fn solve_banded(rows: Vec<SparseRow>, mut b: Vec<f64>, k: usize) -> Result<V
 /// round the banded rest, so the cost stays linear in `n`.
 pub fn solve_cyclic(rows: Vec<SparseRow>, b: Vec<f64>, k: usize) -> Result<Vec<f64>> {
     let n = rows.len();
-    let w = rows.iter().map(|r| r.1.len()).max().unwrap_or(0);
-    if n <= 4 * w + 4 {
+    let width = rows.iter().map(|(_, values)| values.len()).max().unwrap_or(0);
+    if n <= 4 * width + 4 {
         let mut a = vec![0.0; n * n];
-        for (r, (lo, vals)) in rows.iter().enumerate() {
-            for (j, v) in vals.iter().enumerate() {
-                a[r * n + (lo + j) % n] += v;
+        for (r, (start, values)) in rows.iter().enumerate() {
+            for (j, &v) in values.iter().enumerate() {
+                add_at(&mut a, r * n + (start + j) % n, v);
             }
         }
         return solve_dense(a, b, n, k);
     }
-    let m = n - w;
-    // The inner rows, with each one's border columns as extra right-hand sides.
-    let kk = k + w;
-    let mut inner = Vec::with_capacity(m);
-    let mut rhs = vec![0.0; m * kk];
-    let mut lower = vec![0.0; w * m];
-    let mut corner = vec![0.0; w * w];
-    for (r, (lo, vals)) in rows.into_iter().enumerate() {
-        let mut band: Vec<(usize, f64)> = Vec::new();
-        for (j, v) in vals.into_iter().enumerate() {
-            let c = (lo + j) % n;
-            match (r < m, c < m) {
-                (true, true) => band.push((c, v)),
-                (true, false) => rhs[r * kk + k + c - m] += v,
-                (false, true) => lower[(r - m) * m + c] += v,
-                (false, false) => corner[(r - m) * w + c - m] += v,
+    if width == 0 {
+        // Every row is empty.
+        return Err(singular());
+    }
+    let Bordered { band_rows, band_rhs, border } = Bordered::split(rows, &b, k, width)?;
+    let wide = k + width;
+    let y = solve_banded(band_rows, band_rhs, wide)?;
+    let border_rhs = b
+        .get(border.inner * k..n * k)
+        .ok_or_else(|| short_rhs(n, k, b.len()))?;
+    let (schur, schur_rhs) = border.schur_complement(border_rhs, &y)?;
+    let border = solve_dense(schur, schur_rhs, width, k)?;
+    // Each inner unknown is its banded solution less its border columns' share of the border's.
+    let mut x = Vec::with_capacity(n * k);
+    for y_row in y.chunks_exact(wide) {
+        let (y_b, y_border) = y_row.split_at(k);
+        x.extend(y_b.iter().enumerate().map(|(j, &yv)| {
+            y_border
+                .iter()
+                .zip(border.iter().skip(j).step_by(k))
+                .fold(yv, |v, (&yq, &bq)| v - yq * bq)
+        }));
+    }
+    x.extend_from_slice(&border);
+    Ok(x)
+}
+
+/// A cyclic system of `n` rows split round its last `width` rows and columns: the inner rows as a
+/// banded system whose right-hand sides are the `k` of `b` followed by the inner rows' values in
+/// the border columns, and the border rows.
+struct Bordered {
+    band_rows: Vec<SparseRow>,
+    band_rhs: Vec<f64>,
+    border: Border,
+}
+
+/// The border rows of a [`Bordered`] system: their values in the `inner` columns (`lower`,
+/// `width × inner`) and in the border columns (`corner`, `width × width`), for `k` right-hand
+/// sides.
+struct Border {
+    k: usize,
+    width: usize,
+    inner: usize,
+    lower: Vec<f64>,
+    corner: Vec<f64>,
+}
+
+impl Bordered {
+    /// Splits `rows`, each a run of columns from its start, wrapping past the last.
+    fn split(rows: Vec<SparseRow>, b: &[f64], k: usize, width: usize) -> Result<Bordered> {
+        let n = rows.len();
+        let inner = n - width;
+        let wide = k + width;
+        let mut system = Bordered {
+            band_rows: Vec::with_capacity(inner),
+            band_rhs: vec![0.0; inner * wide],
+            border: Border {
+                k,
+                width,
+                inner,
+                lower: vec![0.0; width * inner],
+                corner: vec![0.0; width * width],
+            },
+        };
+        for (r, (start, values)) in rows.into_iter().enumerate() {
+            let columns = values.into_iter().enumerate().map(|(j, v)| ((start + j) % n, v));
+            if let Some(border_row) = r.checked_sub(inner) {
+                let border = &mut system.border;
+                let lower_row = row_mut(&mut border.lower, inner, border_row).ok_or_else(singular)?;
+                let corner_row =
+                    row_mut(&mut border.corner, width, border_row).ok_or_else(singular)?;
+                for (c, v) in columns {
+                    match c.checked_sub(inner) {
+                        None => add_at(lower_row, c, v),
+                        Some(q) => add_at(corner_row, q, v),
+                    }
+                }
+                continue;
             }
-        }
-        if r < m {
+            let rhs_row = row_mut(&mut system.band_rhs, wide, r).ok_or_else(singular)?;
+            let (rhs, border_columns) = rhs_row.split_at_mut(k);
+            let mut band: Vec<(usize, f64)> = Vec::new();
+            for (c, v) in columns {
+                match c.checked_sub(inner) {
+                    None => band.push((c, v)),
+                    Some(q) => add_at(border_columns, q, v),
+                }
+            }
             let lo = band.iter().map(|e| e.0).min().unwrap_or(r);
             let hi = band.iter().map(|e| e.0).max().unwrap_or(r);
             let mut run = vec![0.0; hi + 1 - lo];
             for (c, v) in band {
-                run[c - lo] += v;
+                add_at(&mut run, c - lo, v);
             }
-            inner.push((lo, run));
-            rhs[r * kk..r * kk + k].copy_from_slice(&b[r * k..r * k + k]);
+            system.band_rows.push((lo, run));
+            let b_row = row(b, k, r).ok_or_else(|| short_rhs(n, k, b.len()))?;
+            rhs.copy_from_slice(b_row);
         }
+        Ok(system)
     }
-    let y = solve_banded(inner, rhs, kk)?;
-    // The border's Schur complement, corner − lower · y_border, against b_border − lower · y_b.
-    let mut s = corner;
-    let mut sb: Vec<f64> = b[m * k..].to_vec();
-    for r in 0..w {
-        for c in 0..m {
-            let l = lower[r * m + c];
-            if l == 0.0 {
-                continue;
-            }
-            for j in 0..w {
-                s[r * w + j] -= l * y[c * kk + k + j];
-            }
-            for j in 0..k {
-                sb[r * k + j] -= l * y[c * kk + j];
+}
+
+impl Border {
+    /// The border's Schur complement `corner − lower · y_border` and its right-hand side
+    /// `b_border − lower · y_b`, given the banded solution `y` (rows of `k + width`).
+    fn schur_complement(self, border_rhs: &[f64], y: &[f64]) -> Result<(Vec<f64>, Vec<f64>)> {
+        let Border { k, width, inner, lower, corner } = self;
+        let mut schur = corner;
+        let mut schur_rhs = border_rhs.to_vec();
+        for r in 0..width {
+            let lower_row = row(&lower, inner, r).ok_or_else(singular)?;
+            let schur_row = row_mut(&mut schur, width, r).ok_or_else(singular)?;
+            for (&l, y_row) in lower_row.iter().zip(y.chunks_exact(k + width)) {
+                if l == 0.0 {
+                    continue;
+                }
+                let (y_b, y_border) = y_row.split_at(k);
+                for (s, &yv) in schur_row.iter_mut().zip(y_border) {
+                    *s -= l * yv;
+                }
+                for (s, &yv) in row_mut(&mut schur_rhs, k, r).into_iter().flatten().zip(y_b) {
+                    *s -= l * yv;
+                }
             }
         }
+        Ok((schur, schur_rhs))
     }
-    let border = solve_dense(s, sb, w, k)?;
-    let mut x = vec![0.0; n * k];
-    for c in 0..m {
-        for j in 0..k {
-            let mut v = y[c * kk + j];
-            for q in 0..w {
-                v -= y[c * kk + k + q] * border[q * k + j];
-            }
-            x[c * k + j] = v;
-        }
-    }
-    x[m * k..].copy_from_slice(&border);
-    Ok(x)
 }
 
 /// Solves the 2 × 2 system `[a b; c d] x = r`, or `None` when it is singular.
