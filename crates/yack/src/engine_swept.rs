@@ -27,8 +27,14 @@ pub(crate) fn swept(s: &Solid, m: &Motion) -> Result<Solid> {
             },
         },
         MotionKind::Along { .. } | MotionKind::Then(_) | MotionKind::Together(_) => {
-            return Err(Error::new(ErrorKind::Unsupported, op, "this motion is not built natively yet"));
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                op,
+                "this motion is not built natively yet",
+            ));
         }
     };
-    engine::solid(op, yack_swept::swept(s.need(op)?, &motion))
+    // faces the motion makes carry this op's feature (`end`, `side`; `start` if one survives)
+    let feature = engine::feature();
+    engine::made(&feature, op, yack_swept::swept(s.need(op)?, &motion, &feature))
 }
