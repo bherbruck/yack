@@ -320,3 +320,32 @@ fn cadrs_only_ops_report_their_histories() -> Result<()> {
     }
     Ok(())
 }
+
+
+/// The native rungs (M4) under `bakeoff::force(Native)`: each answer they give is held to
+/// invariant 3, which they meet by naming their faces from the start (the M4 acceptance rule).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn native_rungs_name_their_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, force};
+    let b = block(&Frame::WORLD, [10.0, 10.0, 4.0])?;
+    let pin = cylinder(&Frame::WORLD, 2.0, 6.0)?;
+    let ball = sphere(&Frame::WORLD, 1.0)?;
+    let inputs = [("block", &b), ("cylinder", &pin), ("sphere", &ball)];
+    force(Engine::Native);
+    let swept: Vec<(&str, &Solid, Result<Solid>)> = inputs.iter().map(|&(n, s)| (n, s, s.swept(&Motion::slide([5.0, 2.0, 1.0])))).collect();
+    force(Engine::Both);
+    let mut built = 0;
+    for (name, input, made) in swept {
+        match made {
+            Ok(s) => {
+                let found = audit("native swept", &[input], &s);
+                assert!(found.is_empty(), "native swept of a {name}: {found:?}");
+                built += 1;
+            }
+            Err(e) => eprintln!("native swept of a {name}: declined ({:?}: {})", e.kind, e.detail),
+        }
+    }
+    assert!(built > 0, "the native swept rung built none of the slides");
+    Ok(())
+}
