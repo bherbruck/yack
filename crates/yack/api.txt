@@ -18,6 +18,7 @@ yack::bakeoff: enum Engine variant Springrep
 yack::bakeoff: pub enum Engine
 yack::bakeoff: pub fn built_by(s: &Solid) -> &'static str
 yack::bakeoff: pub fn force(e: Engine)
+yack::bakeoff: pub fn force_op(op: &str, e: Engine)
 yack::bakeoff: pub fn forced() -> Engine
 yack::bakeoff: pub fn roundtrip(s: &Solid) -> Vec<String>
 yack::blend: impl Solid { pub fn chamfer(&self, edges: &[EdgeId], distance: f64) -> Result<Solid> }

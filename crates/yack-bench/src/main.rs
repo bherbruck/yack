@@ -10,6 +10,7 @@
 //! yack-bench --strategy CASE  (`<strategy> <built_by>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
 //! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only; springrep, cadrs, native or both)
+//! yack-bench --engine native@swept CASE ...  (the engine for op `swept` only; every other op runs its whole ladder)
 //! ```
 //!
 //! Builds the case `CASE` (`boolean/napkin-ring`) with its program,
@@ -274,17 +275,27 @@ fn roundtrip(_: Option<&str>) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// `--engine springrep|cadrs|native|both` ahead of the usual arguments (bake-off builds only): every op of
-/// the run is forced onto that engine's ladder rung (`yack::bakeoff::force`), on this thread.
+/// `--engine springrep|cadrs|native|both[@OP]` ahead of the usual arguments (bake-off builds only): every op of
+/// the run is forced onto that engine's ladder rung (`yack::bakeoff::force`), on this thread; with
+/// `@OP`, only the op named OP is (`yack::bakeoff::force_op`), every other op running its whole ladder.
 #[cfg(feature = "bakeoff")]
-fn force(name: &str) -> bool {
-    use yack::bakeoff::{Engine, force as set};
-    match name {
-        "springrep" => set(Engine::Springrep),
-        "cadrs" => set(Engine::Cadrs),
-        "native" => set(Engine::Native),
-        "both" => set(Engine::Both),
+fn force(spec: &str) -> bool {
+    use yack::bakeoff::{Engine, force as set, force_op};
+    let (name, op) = match spec.split_once('@') {
+        Some((n, o)) if !o.is_empty() => (n, Some(o)),
+        Some(_) => return false,
+        None => (spec, None),
+    };
+    let e = match name {
+        "springrep" => Engine::Springrep,
+        "cadrs" => Engine::Cadrs,
+        "native" => Engine::Native,
+        "both" => Engine::Both,
         _ => return false,
+    };
+    match op {
+        Some(op) => force_op(op, e),
+        None => set(e),
     }
     true
 }
@@ -299,7 +310,7 @@ fn main() -> ExitCode {
     if args.get(1).map(String::as_str) == Some("--engine") {
         let name = args.get(2).cloned().unwrap_or_default();
         if !force(&name) {
-            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs, native or both");
+            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs, native or both, optionally @OP");
             return ExitCode::from(2);
         }
         args.drain(1..3);

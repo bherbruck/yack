@@ -358,3 +358,22 @@ fn native_rungs_name_their_faces_for_history() -> Result<()> {
     assert!(built > 0, "the native rungs built none of the cases");
     Ok(())
 }
+
+
+/// `force_op` narrows the forced engine to one op: the operands come from the default ladder (a
+/// block, which no native rung builds, still builds), and only `swept` is held to the native rung.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn forcing_one_op_leaves_the_others_on_their_ladders() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    force(Engine::Native);
+    let refused = block(&Frame::WORLD, [2.0, 2.0, 2.0]).is_err();
+    force_op("swept", Engine::Native);
+    let b = block(&Frame::WORLD, [2.0, 2.0, 2.0]);
+    let slid = b.as_ref().ok().map(|b| b.swept(&Motion::slide([3.0, 0.0, 0.0])));
+    force(Engine::Both);
+    assert!(refused, "force(Native) holds every op to its native rungs, so a block is refused");
+    let s = slid.ok_or_else(|| yack::Error::invalid("test", "block", "built on its own ladder"))??;
+    assert_eq!(built_by(&s), "native");
+    Ok(())
+}

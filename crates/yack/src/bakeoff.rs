@@ -4,7 +4,7 @@
 //! feature, which tool crates enable and the published crate never does. The forced engine is
 //! thread-local state: the one exception to "no hidden state", allowed only here (gate-exempt
 //! under this feature).
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use crate::Solid;
 
@@ -17,12 +17,14 @@ pub enum Engine {
     Springrep,
     /// cadrs's rungs only.
     Cadrs,
-    /// yack's own rungs only (the `native` ones: yack-swept's).
+    /// yack's own rungs only (the `native` ones: yack-swept's, yack-blend's).
     Native,
 }
 
 thread_local! {
     static FORCED: Cell<Engine> = const { Cell::new(Engine::Both) };
+    /// The one op the forced engine applies to, if [`force_op`] narrowed it.
+    static ONLY_OP: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// From now on, on this thread, run only `e`'s rungs (`Engine::Both` restores the ladder).
@@ -33,6 +35,17 @@ thread_local! {
 /// case.
 pub fn force(e: Engine) {
     FORCED.with(|f| f.set(e));
+    if e == Engine::Both {
+        ONLY_OP.with(|o| *o.borrow_mut() = None);
+    }
+}
+
+/// From now on, on this thread, run only `e`'s rungs for the op named `op` (`"swept"`,
+/// `"chamfer_angle"`), and every other op's whole ladder: a bake-off of one op whose operands
+/// come from the default ladder, the same for each engine compared. `force(Engine::Both)` undoes it.
+pub fn force_op(op: &str, e: Engine) {
+    ONLY_OP.with(|o| *o.borrow_mut() = Some(op.to_owned()));
+    FORCED.with(|f| f.set(e));
 }
 
 /// The engine forced on this thread.
@@ -40,8 +53,11 @@ pub fn forced() -> Engine {
     FORCED.with(Cell::get)
 }
 
-/// Whether the rung named `name` may run.
-pub(crate) fn allows(name: &str) -> bool {
+/// Whether the rung named `name` of op `op` may run.
+pub(crate) fn allows(op: &str, name: &str) -> bool {
+    if ONLY_OP.with(|o| o.borrow().as_deref().is_some_and(|only| only != op)) {
+        return true;
+    }
     match forced() {
         Engine::Both => true,
         Engine::Springrep => name == "springrep",

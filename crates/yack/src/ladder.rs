@@ -79,7 +79,7 @@ pub(crate) fn ladder(op: &'static str, rungs: &[Rung]) -> Result<Solid> {
     let mut empty: Option<Solid> = None;
     for rung in rungs {
         #[cfg(feature = "bakeoff")]
-        if !crate::bakeoff::allows(rung.name) {
+        if !crate::bakeoff::allows(op, rung.name) {
             declined.push((rung.name, Error::new(ErrorKind::Unsupported, op, format!("bakeoff: {} not forced", rung.name))));
             continue;
         }
@@ -154,7 +154,7 @@ pub(crate) fn first<T>(op: &'static str, rungs: &[Run<T>]) -> Result<T> {
 /// result is not one solid.
 pub(crate) fn allowed(op: &'static str, name: &'static str) -> Result<()> {
     #[cfg(feature = "bakeoff")]
-    if !crate::bakeoff::allows(name) {
+    if !crate::bakeoff::allows(op, name) {
         return Err(Error::new(ErrorKind::Unsupported, op, format!("bakeoff: {name} not forced")));
     }
     let _ = (op, name);
