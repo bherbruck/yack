@@ -1,11 +1,15 @@
 // yack: the names features give faces, and the face-name pairs that pick edges: plain data.
 // Adapted from springrep@a03e8a1 src/topo/names.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from topo/names.rs to names.rs (M2), being plain data topo and profile both use;
-// EdgeName joined it from blend.rs (M2.5, T8); then to yack-topo (M3 W4), paths and visibility only.
+// EdgeName joined it from blend.rs (M2.5, T8); then to yack-topo (M3 W4), paths and visibility only;
+// M3 hardening: the well-known face names grouped together, ahead of the constructors.
+//! The names features give faces ([`FaceName`]) and the pairs of face names that pick the edges a
+//! blend runs along ([`EdgeName`]).
+
 use std::fmt;
 
-/// The name a feature gave a face: `feature.face`. A face can
-/// carry several (see doc/design.md, "History").
+/// The name a feature gave a face: `feature.face`. A face can carry several (see doc/design.md,
+/// "History").
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FaceName {
     pub feature: String,
@@ -14,28 +18,27 @@ pub struct FaceName {
 
 impl FaceName {
     /// The face a sweep or loft starts from: its profile on the sketch plane, or its first section.
-    pub const START: &'static str = "start";
+    pub const START: &str = "start";
     /// The face a sweep or loft ends on.
-    pub const END: &'static str = "end";
+    pub const END: &str = "end";
     /// A circle's one edge, and every side face of a loft.
-    pub const SIDE: &'static str = "side";
-    /// `feature`'s face for each of `names`.
-    pub fn all<'a>(
-        feature: &str,
-        names: impl IntoIterator<Item = &'a String>,
-    ) -> Vec<FaceName> {
-        let names = names.into_iter();
-        names.map(|n| FaceName::new(feature, n.clone())).collect()
-    }
-
+    pub const SIDE: &str = "side";
     /// The faces of the cavity a shell makes.
-    pub const INNER: &'static str = "inner";
+    pub const INNER: &str = "inner";
 
     pub fn new(feature: impl Into<String>, face: impl Into<String>) -> FaceName {
         FaceName {
             feature: feature.into(),
             face: face.into(),
         }
+    }
+
+    /// `feature`'s face for each of `faces`.
+    pub fn all<'a>(feature: &str, faces: impl IntoIterator<Item = &'a String>) -> Vec<FaceName> {
+        faces
+            .into_iter()
+            .map(|face| FaceName::new(feature, face.clone()))
+            .collect()
     }
 }
 

@@ -1,15 +1,20 @@
 // yack: the arena's own entities, lent to the encoder and taken back from it.
 // Adapted from springrep@a03e8a1 src/topo/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: the id check and the arena's assembly split from the encoding (M2.2 T4a), which moved to
-// codec/topo.rs; `Parts` / `Entities` added so the encoder need not see inside `Brep`; then to yack-topo (M3 W4), paths and visibility only.
+// codec/topo.rs; `Parts` / `Entities` added so the encoder need not see inside `Brep`; then to yack-topo (M3 W4), paths and visibility only;
+// M3 hardening: explicit imports instead of a glob; the id check names its entities.
 //! The arena's own entities, as the encoder writes them: everything but the memos, which are what
 //! a process has worked out about the faces, and each edge's uses, which follow from the coedges.
+#![warn(clippy::indexing_slicing)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::memo::Memos;
-use super::*;
+use super::{
+    Brep, Coedge, CoedgeId, Edge, EdgeId, Face, FaceId, Loop, LoopId, Shell, ShellId, Solid,
+    SolidId, Tolerances, Vertex, VertexId,
+};
 
 /// The arena's entities, borrowed.
 pub struct Parts<'a> {
@@ -61,7 +66,7 @@ impl Brep {
     pub fn from_parts(e: Entities) -> Option<Brep> {
         // Memos are what a process has worked out about the faces: they start empty.
         let memos = (0..e.faces.len()).map(|_| Arc::default()).collect();
-        let mut b = Brep {
+        let mut brep = Brep {
             vertices: e.vertices,
             edges: e.edges,
             coedges: e.coedges,
@@ -75,44 +80,36 @@ impl Brep {
             beside: e.beside,
             uses: Vec::new(),
         };
-        if !b.ids_in_range() {
+        if !brep.ids_in_range() {
             return None;
         }
-        b.index_uses();
-        Some(b)
+        brep.index_uses();
+        Some(brep)
     }
 }
 
 impl Brep {
     /// Every id the arena holds names an entity of it.
     fn ids_in_range(&self) -> bool {
-        let v = |id: VertexId| id.index() < self.vertices.len();
-        let e = |id: EdgeId| id.index() < self.edges.len();
-        let c = |id: CoedgeId| id.index() < self.coedges.len();
-        let l = |id: LoopId| id.index() < self.loops.len();
-        let f = |id: FaceId| id.index() < self.faces.len();
-        let sh = |id: ShellId| id.index() < self.shells.len();
-        let so = |id: SolidId| id.index() < self.solids.len();
-        self.partners
-            .iter()
-            .chain(&self.beside)
-            .all(|(&a, &b)| c(a) && c(b))
-            && self.edges.iter().all(|x| v(x.start) && v(x.end))
-            && self.coedges.iter().all(|x| e(x.edge) && l(x.lp))
-            && self
-                .loops
-                .iter()
-                .all(|x| f(x.face) && x.coedges.iter().all(|&i| c(i)))
-            && self
-                .faces
-                .iter()
-                .all(|x| x.loops.iter().all(|&i| l(i)) && x.shell.is_none_or(sh))
-            && self
-                .shells
-                .iter()
-                .all(|x| x.faces.iter().all(|&i| f(i)) && x.solid.is_none_or(so))
-            && self.solids.iter().all(|x| x.shells.iter().all(|&i| sh(i)))
-            && self.tolerances.vertices.keys().all(|&i| v(i))
-            && self.tolerances.edges.keys().all(|&i| e(i))
+        let vertex = |id: VertexId| id.index() < self.vertices.len();
+        let edge = |id: EdgeId| id.index() < self.edges.len();
+        let coedge = |id: CoedgeId| id.index() < self.coedges.len();
+        let lp = |id: LoopId| id.index() < self.loops.len();
+        let face = |id: FaceId| id.index() < self.faces.len();
+        let shell = |id: ShellId| id.index() < self.shells.len();
+        let solid = |id: SolidId| id.index() < self.solids.len();
+        self.partners.iter().chain(&self.beside).all(|(&a, &b)| coedge(a) && coedge(b))
+            && self.edges.iter().all(|e| vertex(e.start) && vertex(e.end))
+            && self.coedges.iter().all(|c| edge(c.edge) && lp(c.lp))
+            && self.loops.iter().all(|l| face(l.face) && l.coedges.iter().all(|&c| coedge(c)))
+            && self.faces.iter().all(|f| {
+                f.loops.iter().all(|&l| lp(l)) && f.shell.is_none_or(shell)
+            })
+            && self.shells.iter().all(|s| {
+                s.faces.iter().all(|&f| face(f)) && s.solid.is_none_or(solid)
+            })
+            && self.solids.iter().all(|s| s.shells.iter().all(|&sh| shell(sh)))
+            && self.tolerances.vertices.keys().all(|&v| vertex(v))
+            && self.tolerances.edges.keys().all(|&e| edge(e))
     }
 }

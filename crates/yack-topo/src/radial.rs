@@ -1,8 +1,13 @@
 // yack: The faces round an edge more than two of them use, where pieces of a solid touch: which pairs
 // Adapted from springrep@a03e8a1 src/topo/radial.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/topo/radial.rs to yack-topo (M3 W4); paths and visibility only.
+// Changes: moved from springrep's src/topo/radial.rs to yack-topo (M3 W4); paths and visibility only;
+// M3 hardening: each side's place round the edge is a named struct, and the walk round the edge
+// pairs neighbours by iterators instead of modular indexing; the same arithmetic in the same order.
 //! The faces round an edge more than two of them use, where pieces of a solid touch: which pairs
 //! bound a wedge of material between them, partners, and which an empty wedge, beside each other.
+#![warn(clippy::indexing_slicing)]
+
+use std::f64::consts::TAU;
 
 use crate::geom::{Curve, Surface};
 use crate::math::{Point3, Vec3};
@@ -19,22 +24,37 @@ pub struct Side<'a> {
     pub travel: Vec3,
 }
 
+/// The chords an edge's length is summed over.
+const LENGTH_CHORDS: usize = 16;
+
 /// An edge's length over `range`, near enough to size a step by: a closed edge's ends meet, so its
 /// chord says nothing.
-pub fn length(c: &Curve, range: (f64, f64)) -> f64 {
-    let n = 16;
-    (0..n)
-        .map(|k| {
-            let at = |k: usize| c.eval(range.0 + (range.1 - range.0) * k as f64 / n as f64);
-            at(k).dist(at(k + 1))
-        })
-        .sum()
+pub fn length(curve: &Curve, (t0, t1): (f64, f64)) -> f64 {
+    let at = |k: usize| curve.eval(t0 + (t1 - t0) * k as f64 / LENGTH_CHORDS as f64);
+    (0..LENGTH_CHORDS).map(|k| at(k).dist(at(k + 1))).sum()
 }
 
-fn outward(s: &Side, p: Point3) -> Vec3 {
-    let uv = s.surface.project(p);
-    let n = s.surface.normal(uv.x, uv.y);
-    if s.reversed { -n } else { n }
+/// The side's outward normal at the surface point nearest `p`.
+fn outward(side: &Side, p: Point3) -> Vec3 {
+    let uv = side.surface.project(p);
+    let normal = side.surface.normal(uv.x, uv.y);
+    if side.reversed { -normal } else { normal }
+}
+
+/// Where one side's face lies round the edge.
+#[derive(Clone, Copy)]
+struct Placed {
+    /// Its angle about the edge, from the first side's.
+    angle: f64,
+    /// Whether its material lies ahead of it, turning the way the angle grows.
+    ahead: bool,
+    /// Its index into the sides.
+    side: usize,
+}
+
+/// Each element with the one after it, the last with the first.
+fn round_pairs<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    items.iter().zip(items.iter().cycle().skip(1))
 }
 
 /// The `sides` round the edge through `m`, running along unit `t` and `len` long, ordered round it:
@@ -46,47 +66,53 @@ fn outward(s: &Side, p: Point3) -> Vec3 {
 pub fn round(m: Point3, t: Vec3, len: f64, sides: &[Side]) -> Option<(Pairs, Pairs)> {
     // A step within the tolerance reads only rounding, however short the edge.
     let step = 1e-3 * len.clamp(1e3 * tol::LINEAR, 1.0);
-    let mut around: Vec<(f64, bool, usize)> = Vec::with_capacity(sides.len());
+    let mut around: Vec<Placed> = Vec::with_capacity(sides.len());
     let mut axes: Option<(Vec3, Vec3)> = None;
-    for (i, s) in sides.iter().enumerate() {
+    for (index, side) in sides.iter().enumerate() {
         // A loop keeps its face's material on its left, seen from outside.
-        let into = outward(s, m).cross(s.travel).unit()?;
-        let uv = s.surface.project(m + into * step);
-        let q = s.surface.eval(uv.x, uv.y);
-        let w = q - m;
-        let w = (w - t * w.dot(t)).unit()?;
-        let (a, b) = *axes.get_or_insert((w, t.cross(w)));
-        let angle = w.dot(b).atan2(w.dot(a));
-        // Whether the face's material lies ahead of it, turning the way the angle grows.
-        let ahead = (-outward(s, q)).dot(t.cross(w)) > 0.0;
-        around.push((angle, ahead, i));
+        let into = outward(side, m).cross(side.travel).unit()?;
+        let uv = side.surface.project(m + into * step);
+        let stepped = side.surface.eval(uv.x, uv.y);
+        let offset = stepped - m;
+        let across = (offset - t * offset.dot(t)).unit()?;
+        let (a, b) = *axes.get_or_insert((across, t.cross(across)));
+        around.push(Placed {
+            angle: across.dot(b).atan2(across.dot(a)),
+            ahead: (-outward(side, stepped)).dot(t.cross(across)) > 0.0,
+            side: index,
+        });
     }
-    around.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let k = around.len();
+    around.sort_by(|x, y| x.angle.total_cmp(&y.angle));
     // Level: the two stepped points within the tolerance of each other.
     let level = |x: f64, y: f64| {
-        let d = (x - y).rem_euclid(std::f64::consts::TAU);
-        d.min(std::f64::consts::TAU - d) * step <= tol::LINEAR
+        let d = (x - y).rem_euclid(TAU);
+        d.min(TAU - d) * step <= tol::LINEAR
     };
-    for i in 0..k {
-        let (j, l) = ((i + 1) % k, (i + 2) % k);
-        if around[i].1 == around[j].1
-            && around[j].1 != around[l].1
-            && level(around[j].0, around[l].0)
-        {
+    // Where a side is followed by one of its own kind and then, level with that one, one of the
+    // other kind, the level two swap: material and space alternate.
+    let count = around.len();
+    for i in 0..count {
+        let (j, l) = ((i + 1) % count, (i + 2) % count);
+        let (Some(&first), Some(&second), Some(&third)) =
+            (around.get(i), around.get(j), around.get(l))
+        else {
+            continue;
+        };
+        let alternates = second.ahead != third.ahead && level(second.angle, third.angle);
+        if first.ahead == second.ahead && alternates {
             around.swap(j, l);
         }
     }
     let (mut partners, mut beside) = (Vec::new(), Vec::new());
-    for i in 0..k {
-        let j = (i + 1) % k;
-        if around[i].1 == around[j].1 {
+    for (here, next) in round_pairs(&around) {
+        if here.ahead == next.ahead {
             return None;
         }
-        if around[i].1 {
-            partners.push((around[i].2, around[j].2));
+        let pair = (here.side, next.side);
+        if here.ahead {
+            partners.push(pair);
         } else {
-            beside.push((around[i].2, around[j].2));
+            beside.push(pair);
         }
     }
     Some((partners, beside))

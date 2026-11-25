@@ -1,12 +1,17 @@
 // yack: A solid moved by a similarity: a uniform scale times a rotation or a reflection, then a
 // Adapted from springrep@a03e8a1 src/topo/similar.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/topo/similar.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
+// Changes: moved from springrep's src/topo/similar.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9);
+// M3 hardening: a coedge's end is read by its own function and a failed read is an error, not a
+// panic; per-face and per-edge factors are collected, not indexed; the scale matrix is one function.
 //! A solid moved by a similarity: a uniform scale times a rotation or a reflection, then a
 //! translation. Frames stay right-handed, which the analytic surfaces' normals rely on, so where a
 //! reflection or a scale changes a surface's or curve's parameters, the parameter curves on it
 //! change with them.
+#![warn(clippy::indexing_slicing)]
 
-use super::{Brep, PCurve, pcurve::fitted_mapped};
+use std::sync::Arc;
+
+use super::{Brep, CoedgeId, PCurve, pcurve::fitted_mapped};
 use crate::{
     Error, Result,
     geom::{Circle, Cone, Curve, Cylinder, Ellipse, Line, Plane, Sphere, Surface, Torus},
@@ -14,6 +19,7 @@ use crate::{
     math::{Frame, Transform, Vec2, Vec3},
 };
 
+/// The matrix `r` applied to `v`.
 fn apply(r: &[[f64; 3]; 3], v: Vec3) -> Vec3 {
     Vec3::new(
         r[0][0] * v.x + r[0][1] * v.y + r[0][2] * v.z,
@@ -22,6 +28,7 @@ fn apply(r: &[[f64; 3]; 3], v: Vec3) -> Vec3 {
     )
 }
 
+/// The determinant of `r`.
 fn det(r: &[[f64; 3]; 3]) -> f64 {
     r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1])
         - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
@@ -53,10 +60,7 @@ fn mirrored_z(f: &Frame, r: &[[f64; 3]; 3]) -> Frame {
 
 /// `c` reflected by `r`, its parameters kept.
 fn mirror_curve(c: &Curve, r: &[[f64; 3]; 3]) -> Curve {
-    let t = Transform {
-        r: *r,
-        t: Vec3::ZERO,
-    };
+    let t = Transform { r: *r, t: Vec3::ZERO };
     match c {
         Curve::Line(l) => Curve::Line(Line {
             origin: apply(r, l.origin),
@@ -83,10 +87,7 @@ fn mirror_curve(c: &Curve, r: &[[f64; 3]; 3]) -> Curve {
 
 /// `s` reflected by `r`, and whether its `u` now runs the other way.
 fn mirror_surface(s: &Surface, r: &[[f64; 3]; 3]) -> (Surface, bool) {
-    let t = Transform {
-        r: *r,
-        t: Vec3::ZERO,
-    };
+    let t = Transform { r: *r, t: Vec3::ZERO };
     match s {
         Surface::Plane(p) => (
             Surface::Plane(Plane {
@@ -150,6 +151,12 @@ fn mirror_surface(s: &Surface, r: &[[f64; 3]; 3]) -> (Surface, bool) {
     }
 }
 
+/// The uniform scale by `s` about the origin.
+fn scaling(s: f64) -> Transform {
+    Transform { r: [[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s]], t: Vec3::ZERO }
+}
+
+/// `f` with its origin scaled by `s` about the world's; its axes stay unit.
 fn scaled_frame(f: &Frame, s: f64) -> Frame {
     Frame {
         origin: f.origin * s,
@@ -159,10 +166,7 @@ fn scaled_frame(f: &Frame, s: f64) -> Frame {
 
 /// `c` scaled by `s` about the origin, and the factor its parameter grows by.
 fn scale_curve(c: &Curve, s: f64) -> (Curve, f64) {
-    let t = Transform {
-        r: [[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s]],
-        t: Vec3::ZERO,
-    };
+    let t = scaling(s);
     match c {
         // Measured by length along a unit direction.
         Curve::Line(l) => (
@@ -200,10 +204,7 @@ fn scale_curve(c: &Curve, s: f64) -> (Curve, f64) {
 
 /// `f` scaled by `s` about the origin, and the factors its two parameters grow by.
 fn scale_surface(f: &Surface, s: f64) -> (Surface, Vec2) {
-    let t = Transform {
-        r: [[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s]],
-        t: Vec3::ZERO,
-    };
+    let t = scaling(s);
     match f {
         Surface::Plane(p) => (
             Surface::Plane(Plane {
@@ -288,9 +289,7 @@ impl Brep {
         let d = det(&m);
         let s = d.abs().cbrt();
         if !(s.is_finite() && s > 0.0) {
-            return Err(Error::InvalidInput(
-                "a transform that flattens the solid".into(),
-            ));
+            return Err(Error::InvalidInput("a transform that flattens the solid".into()));
         }
         let Some(q) = crate::math::nearest_orthogonal(&m.map(|row| row.map(|x| x / s))) else {
             return Err(Error::InvalidInput(
@@ -298,12 +297,9 @@ impl Brep {
             ));
         };
         if d < 0.0 {
-            self.mirror(&q);
+            self.mirror(&q)?;
         } else {
-            self.transform(&Transform {
-                r: q,
-                t: Vec3::ZERO,
-            });
+            self.transform(&Transform { r: q, t: Vec3::ZERO });
         }
         if (s - 1.0).abs() > 0.0 {
             self.scale(s);
@@ -312,26 +308,26 @@ impl Brep {
         Ok(())
     }
 
+    /// Where coedge `c` ends in its face's parameter plane, followed along from its start: a
+    /// parameter curve continues from its seed, and its end read alone could land a period away.
+    fn coedge_end_uv(&self, c: CoedgeId) -> Result<Vec2> {
+        let coedge = self.coedge(c);
+        let (t0, t1) = self.edge(coedge.edge).range;
+        let (from, to) = if coedge.reversed { (t1, t0) } else { (t0, t1) };
+        let ts: Vec<f64> = (0..=32).map(|k| from + (to - from) * k as f64 / 32.0).collect();
+        let uvs = self.coedge_uvs(c, &ts);
+        uvs.last().copied().ok_or_else(|| Error::Numerical("a coedge with no samples".into()))
+    }
+
     /// Reflects the arena by the orthogonal `r` of determinant −1. Every loop turns round, as a
     /// reflection reverses its sense about the face; a face's natural normal follows its new
-    /// surface, so it is turned over where that surface keeps its parameters.
-    #[allow(clippy::panic)] fn mirror(&mut self, r: &[[f64; 3]; 3]) {
+    /// surface, so it is turned over where that surface keeps its parameters. The arena is
+    /// unchanged where a coedge's end cannot be read.
+    fn mirror(&mut self, r: &[[f64; 3]; 3]) -> Result<()> {
         // Where a loop turns round, each coedge starts at its old end.
-        let ends: Vec<Vec2> = (0..self.coedges.len())
-            .map(|i| {
-                let c = super::CoedgeId::at(i);
-                let e = &self.edges[self.coedges[i].edge.index()];
-                // Followed along from its start: a parameter curve continues from its seed, and
-                // its end read alone could land a period away.
-                let (t0, t1) = if self.coedges[i].reversed {
-                    (e.range.1, e.range.0)
-                } else {
-                    e.range
-                };
-                let ts: Vec<f64> = (0..=32).map(|k| t0 + (t1 - t0) * k as f64 / 32.0).collect();
-                *self.coedge_uvs(c, &ts).last().unwrap_or_else(|| panic!("samples"))
-            })
-            .collect();
+        let ends: Vec<Vec2> =
+            self.coedge_ids().map(|c| self.coedge_end_uv(c)).collect::<Result<_>>()?;
+        let faces: Vec<usize> = self.coedge_ids().map(|c| self.coedge_face(c).index()).collect();
         for v in &mut self.vertices {
             v.point = apply(r, v.point);
         }
@@ -342,32 +338,34 @@ impl Brep {
         }
         // Where u runs the other way, the period it does so over: u becomes the period less u,
         // the same reflection of the angle kept in the period's range.
-        let mut turned: Vec<Option<f64>> = vec![None; self.faces.len()];
-        for (i, f) in self.faces.iter_mut().enumerate() {
-            let (surface, flips_u) = mirror_surface(&f.surface, r);
-            turned[i] = flips_u.then(|| surface.u_period().unwrap_or(0.0));
-            f.surface = surface;
-            // A surface that keeps its parameters has its natural normal reflected and turned
-            // over; one whose u runs the other way has it reflected only.
-            if !flips_u {
-                f.reversed = !f.reversed;
-            }
-        }
+        let turned: Vec<Option<f64>> = self
+            .faces
+            .iter_mut()
+            .map(|f| {
+                let (surface, flips_u) = mirror_surface(&f.surface, r);
+                let period = flips_u.then(|| surface.u_period().unwrap_or(0.0));
+                f.surface = surface;
+                // A surface that keeps its parameters has its natural normal reflected and turned
+                // over; one whose u runs the other way has it reflected only.
+                if !flips_u {
+                    f.reversed = !f.reversed;
+                }
+                period
+            })
+            .collect();
         let at = |uv: Vec2, on: Option<f64>| on.map_or(uv, |p| Vec2::new(p - uv.x, uv.y));
         let along = |d: Vec2, on: Option<f64>| on.map_or(d, |_| Vec2::new(-d.x, d.y));
-        for (i, c) in self.coedges.iter_mut().enumerate() {
-            let on = turned[self.loops[c.lp.index()].face.index()];
+        for ((c, &end), face) in self.coedges.iter_mut().zip(&ends).zip(faces) {
+            // Every coedge's face is one of the arena's, so its entry is there.
+            let on = turned.get(face).copied().flatten();
             c.pcurve = match &c.pcurve {
-                PCurve::Affine { origin, dir } => PCurve::Affine {
-                    origin: at(*origin, on),
-                    dir: along(*dir, on),
-                },
-                PCurve::Projected { .. } => PCurve::Projected {
-                    seed: at(ends[i], on),
-                },
+                PCurve::Affine { origin, dir } => {
+                    PCurve::Affine { origin: at(*origin, on), dir: along(*dir, on) }
+                }
+                PCurve::Projected { .. } => PCurve::Projected { seed: at(end, on) },
                 PCurve::Fitted { curve } => match fitted_mapped(curve, |uv| at(uv, on), 1.0) {
                     Some(curve) => PCurve::Fitted { curve: Box::new(curve) },
-                    None => PCurve::Projected { seed: at(ends[i], on) },
+                    None => PCurve::Projected { seed: at(end, on) },
                 },
             };
             c.reversed = !c.reversed;
@@ -375,9 +373,8 @@ impl Brep {
         for l in &mut self.loops {
             l.coedges.reverse();
         }
-        for m in &mut self.memos.0 {
-            *m = std::sync::Arc::default();
-        }
+        self.forget_all();
+        Ok(())
     }
 
     /// Scales the arena by `s` about the origin.
@@ -385,39 +382,46 @@ impl Brep {
         for v in &mut self.vertices {
             v.point = v.point * s;
         }
-        let mut grows = vec![1.0; self.edges.len()];
-        for (i, e) in self.edges.iter_mut().enumerate() {
-            if let Some(c) = &e.curve {
+        // The factor each edge's parameter grows by.
+        let grows: Vec<f64> = self
+            .edges
+            .iter_mut()
+            .map(|e| {
+                let Some(c) = &e.curve else { return 1.0 };
                 let (curve, k) = scale_curve(c, s);
                 e.curve = Some(curve);
                 e.range = (e.range.0 * k, e.range.1 * k);
-                grows[i] = k;
-            }
-        }
-        let mut params = vec![Vec2::new(1.0, 1.0); self.faces.len()];
-        for (i, f) in self.faces.iter_mut().enumerate() {
-            let (surface, k) = scale_surface(&f.surface, s);
-            f.surface = surface;
-            params[i] = k;
-        }
-        for c in &mut self.coedges {
-            let k = params[self.loops[c.lp.index()].face.index()];
+                k
+            })
+            .collect();
+        // The factors each face's two parameters grow by.
+        let params: Vec<Vec2> = self
+            .faces
+            .iter_mut()
+            .map(|f| {
+                let (surface, k) = scale_surface(&f.surface, s);
+                f.surface = surface;
+                k
+            })
+            .collect();
+        let faces: Vec<usize> = self.coedge_ids().map(|c| self.coedge_face(c).index()).collect();
+        for (c, face) in self.coedges.iter_mut().zip(faces) {
+            // Every coedge's face and edge are the arena's, so their entries are there.
+            let k = params.get(face).copied().unwrap_or(Vec2::new(1.0, 1.0));
+            let grow = grows.get(c.edge.index()).copied().unwrap_or(1.0);
             let by = |uv: Vec2| Vec2::new(uv.x * k.x, uv.y * k.y);
             c.pcurve = match &c.pcurve {
-                PCurve::Affine { origin, dir } => PCurve::Affine {
-                    origin: by(*origin),
-                    dir: by(*dir) / grows[c.edge.index()],
-                },
-                PCurve::Projected { seed } => PCurve::Projected { seed: by(*seed) },
-                PCurve::Fitted { curve } => {
-                    match fitted_mapped(curve, by, grows[c.edge.index()]) {
-                        Some(curve) => PCurve::Fitted { curve: Box::new(curve) },
-                        None => {
-                            let p = curve.eval(curve.domain().0);
-                            PCurve::Projected { seed: by(Vec2::new(p.x, p.y)) }
-                        }
-                    }
+                PCurve::Affine { origin, dir } => {
+                    PCurve::Affine { origin: by(*origin), dir: by(*dir) / grow }
                 }
+                PCurve::Projected { seed } => PCurve::Projected { seed: by(*seed) },
+                PCurve::Fitted { curve } => match fitted_mapped(curve, by, grow) {
+                    Some(curve) => PCurve::Fitted { curve: Box::new(curve) },
+                    None => {
+                        let p = curve.eval(curve.domain().0);
+                        PCurve::Projected { seed: by(Vec2::new(p.x, p.y)) }
+                    }
+                },
             };
         }
         for t in self.tolerances.vertices.values_mut() {
@@ -426,8 +430,13 @@ impl Brep {
         for t in self.tolerances.edges.values_mut() {
             *t *= s;
         }
+        self.forget_all();
+    }
+
+    /// Drops every face's memo: the arena's geometry has changed throughout.
+    fn forget_all(&mut self) {
         for m in &mut self.memos.0 {
-            *m = std::sync::Arc::default();
+            *m = Arc::default();
         }
     }
 }

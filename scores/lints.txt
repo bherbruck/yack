@@ -8,4 +8,4 @@ yack-mesh 13
 yack-profile 3
 yack-shim 1
 yack-springrep 123
-yack-topo 2
+yack-topo 1

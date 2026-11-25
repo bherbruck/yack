@@ -1,8 +1,13 @@
-// yack: springrep module src/topo/pcurve.rs
+// yack: where a coedge runs in its face's parameter plane, and projection onto a surface at its poles.
 // Adapted from springrep@a03e8a1 src/topo/pcurve.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the Fitted pcurve (M1.15: a face's own parameters, for surfaces that fold); then to yack-topo (M3 W4), paths and visibility only.
+// Changes: the Fitted pcurve (M1.15: a face's own parameters, for surfaces that fold); then to yack-topo (M3 W4), paths and visibility only;
+// M3 hardening: the free parameter at a pole is an enum, not a flag.
+//! Where a coedge runs in its face's parameter plane ([`PCurve`]), and how an edge's points
+//! project onto its face's surface, at a pole too, where one parameter is free.
+#![warn(clippy::indexing_slicing)]
+
 use crate::{
-    geom::{Curve, NurbsCurve, Surface},
+    geom::{Curve, NurbsCurve, NurbsSurface, Surface},
     math::{Point3, Vec2, Vec3},
     tol,
 };
@@ -79,9 +84,9 @@ pub fn project_on(s: &Surface, curve: &Curve, t: f64, toward: f64, hint: Vec2) -
     let away = dp * (toward - t).signum();
     // The way the curve bends: its second derivative less its part along the curve.
     let bend = dp.unit().map(|d| ddp - d * ddp.dot(d));
-    match pole_param(s, p, uv, away, bend, hint, false) {
+    match pole_param(s, p, uv, away, bend, hint, Free::U) {
         Some(u) => Vec2::new(u, uv.y),
-        None => match pole_param(s, p, uv, away, None, hint, true) {
+        None => match pole_param(s, p, uv, away, None, hint, Free::V) {
             Some(v) => Vec2::new(uv.x, v),
             None => uv,
         },
@@ -117,10 +122,17 @@ pub(crate) fn follow(s: &Surface, curve: &Curve, (t0, t1): (f64, f64), hint: Vec
     follow(s, curve, (mid, t1), h)
 }
 
-/// At a pole of `s` where `u` (or, with `in_v`, `v`) is free, the value of it at which the
-/// surface leaves the pole along `away`; `None` away from such a pole. A curve leaving along the
-/// surface's axis, as every curve through the pole of a torus whose tube touches its axis does,
-/// leaves at the angle it bends toward, `bend`.
+/// The parameter that is free at a pole: every value of it there is the same point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Free {
+    U,
+    V,
+}
+
+/// At a pole of `s` where parameter `free` is free, the value of it at which the surface leaves
+/// the pole along `away`; `None` away from such a pole. A curve leaving along the surface's axis,
+/// as every curve through the pole of a torus whose tube touches its axis does, leaves at the
+/// angle it bends toward, `bend`.
 fn pole_param(
     s: &Surface,
     p: Point3,
@@ -128,37 +140,46 @@ fn pole_param(
     away: Vec3,
     bend: Option<Vec3>,
     hint: Vec2,
-    in_v: bool,
+    free: Free,
 ) -> Option<f64> {
     let (_, su, sv) = s.d1(uv.x, uv.y);
     let d = away.unit_or_zero();
-    if (if in_v { sv } else { su }).norm() > tol::LINEAR || d.norm() == 0.0 {
+    let along_free = match free {
+        Free::U => su,
+        Free::V => sv,
+    };
+    if along_free.norm() > tol::LINEAR || d.norm() == 0.0 {
         return None;
     }
-    let (x, period, near) = if in_v {
-        let v = leaving_v(s, uv.x, d).unwrap_or_else(|| s.project(p + d * 1e-3).y);
-        (v, s.v_period(), hint.y)
-    } else {
-        // Round a pole of an analytic surface any step along a direction in the tangent plane has
-        // the same angle about it; a spline's pole need not be round, and a point beside it
-        // projects onto a line leaving it at another angle.
-        let u = match s {
-            Surface::Nurbs(n) => leaving_u(n, uv.y, d),
-            _ => None,
-        };
-        let axis = match s {
-            Surface::Sphere(x) => Some(x.frame.z),
-            Surface::Cone(x) => Some(x.frame.z),
-            Surface::Torus(x) => Some(x.frame.z),
-            _ => None,
-        };
-        let across = |v: Vec3, z: Vec3| v - z * v.dot(z);
-        let step = match (axis, bend) {
-            (Some(z), Some(k)) if across(d, z).norm() <= 1e-6 => across(k, z).unit().unwrap_or(d),
-            _ => d,
-        };
-        let u = u.unwrap_or_else(|| s.project(p + step * 1e-3).x);
-        (u, s.u_period(), hint.x)
+    let (x, period, near) = match free {
+        Free::V => {
+            let v = leaving_v(s, uv.x, d).unwrap_or_else(|| s.project(p + d * 1e-3).y);
+            (v, s.v_period(), hint.y)
+        }
+        Free::U => {
+            // Round a pole of an analytic surface any step along a direction in the tangent plane
+            // has the same angle about it; a spline's pole need not be round, and a point beside
+            // it projects onto a line leaving it at another angle.
+            let u = match s {
+                Surface::Nurbs(n) => leaving_u(n, uv.y, d),
+                _ => None,
+            };
+            let axis = match s {
+                Surface::Sphere(x) => Some(x.frame.z),
+                Surface::Cone(x) => Some(x.frame.z),
+                Surface::Torus(x) => Some(x.frame.z),
+                _ => None,
+            };
+            let across = |v: Vec3, z: Vec3| v - z * v.dot(z);
+            let step = match (axis, bend) {
+                (Some(z), Some(k)) if across(d, z).norm() <= 1e-6 => {
+                    across(k, z).unit().unwrap_or(d)
+                }
+                _ => d,
+            };
+            let u = u.unwrap_or_else(|| s.project(p + step * 1e-3).x);
+            (u, s.u_period(), hint.x)
+        }
     };
     Some(match period {
         Some(per) => x + ((near - x) / per).round() * per,
@@ -185,7 +206,7 @@ fn leaving_v(s: &Surface, u0: f64, away: Vec3) -> Option<f64> {
 
 /// At a pole of `n` along the line `v = v0`, where `u` is free, the `u` whose `v`-line leaves the
 /// pole along `away`, by the surface's own derivative.
-fn leaving_u(n: &crate::geom::NurbsSurface, v0: f64, away: Vec3) -> Option<f64> {
+fn leaving_u(n: &NurbsSurface, v0: f64, away: Vec3) -> Option<f64> {
     let ((lo, hi), (v_lo, v_hi)) = n.domain();
     let inward = if v0 > 0.5 * (v_lo + v_hi) { -1.0 } else { 1.0 };
     let leaving = |u: f64| (n.d1(u, v0).2 * inward).unit();
@@ -320,7 +341,7 @@ mod tests {
         }
         let u_knots = vec![0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0];
         let v_knots = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0];
-        let skin = crate::geom::NurbsSurface::new((2, 2), (u_knots, v_knots), (9, 5), ctrl, Some(weights)).unwrap();
+        let skin = NurbsSurface::new((2, 2), (u_knots, v_knots), (9, 5), ctrl, Some(weights)).unwrap();
         let s = &Surface::Nurbs(Box::new(skin));
         let Surface::Nurbs(n) = s else {
             panic!("a stretched ball's skin is a spline")

@@ -1,9 +1,13 @@
 // yack: A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 // Adapted from springrep@a03e8a1 src/boolean/domain.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from boolean/domain.rs to locate/domain.rs (M2.1, T1), then to topo/domain.rs
-// (M2, measure and locate both use it); paths only; then to yack-topo (M3 W4), paths and visibility only.
+// (M2, measure and locate both use it); paths only; then to yack-topo (M3 W4), paths and visibility only;
+// M3 hardening: chords, their middles and the segment grid's cells are walked by iterators and
+// checked access instead of indexing; a polygon's edges and a polyline's middle by slice patterns;
+// the same arithmetic in the same order.
 //! A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 //! images), point-in-face classification by an exact winding number, and interior points.
+#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::TAU;
 use std::rc::Rc;
@@ -127,7 +131,8 @@ impl Trim {
     /// The parameter-plane point halfway along, reached in small steps so a periodic parameter
     /// cannot jump half a period.
     pub fn mid_uv(&self, s: &Surface) -> Vec2 {
-        self.polyline(s, 16)[8]
+        // A 16-step polyline has 17 points, the ninth halfway.
+        self.polyline(s, 16).get(8).copied().unwrap_or(self.uv0)
     }
 
     pub fn reversed(&self) -> Trim {
@@ -255,13 +260,22 @@ impl SegmentGrid<'_> {
             let (x1, y1) = grid.cell_of(Vec2::new(a.x.max(b.x), a.y.max(b.y)));
             for y in y0..=y1 {
                 for x in x0..=x1 {
-                    grid.cells[y * nx + x].push(i as u32);
+                    if let Some(cell) = grid.cells.get_mut(y * nx + x) {
+                        cell.push(i as u32);
+                    }
                 }
             }
         }
         grid
     }
 
+    /// The segments listed in cell `(x, y)`, each with its ends.
+    fn segments_in(&self, x: usize, y: usize) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
+        let listed = self.cells.get(y * self.nx + x).into_iter().flatten();
+        listed.filter_map(|&i| self.segs.get(i as usize).copied())
+    }
+
+    /// The cell `p` falls in, clamped to the grid.
     fn cell_of(&self, p: Vec2) -> (usize, usize) {
         let at = |v: f64, n: usize| (v / self.cell).clamp(0.0, (n - 1) as f64) as usize;
         (at(p.x - self.lo.x, self.nx), at(p.y - self.lo.y, self.ny))
@@ -284,8 +298,7 @@ impl SegmentGrid<'_> {
                     if x.abs_diff(cx).max(y.abs_diff(cy)) != r {
                         continue;
                     }
-                    for &i in &self.cells[y * self.nx + x] {
-                        let (a, b) = self.segs[i as usize];
+                    for (a, b) in self.segments_in(x, y) {
                         best = best.min(segment_distance(p, a, b));
                     }
                 }
@@ -311,15 +324,23 @@ fn chords(tr: &Trim, samples: &[Vec2]) -> Vec<Vec2> {
 /// Where the trim itself passes at the middle of each of its [`chords`]: how far each chord
 /// stands off its arc, which does not turn on the point a winding is asked about.
 fn chord_mids(s: &Surface, tr: &Trim, samples: &[Vec2]) -> Vec<Vec2> {
-    let pts = chords(tr, samples);
-    let n = pts.len() - 1;
-    (0..n)
-        .map(|i| {
-            let ta = tr.param(i as f64 / n as f64);
-            let tb = tr.param((i + 1) as f64 / n as f64);
-            tr.uv(s, 0.5 * (ta + tb), (pts[i] + pts[i + 1]) * 0.5)
-        })
+    chord_spans(tr, &chords(tr, samples))
+        .map(|((ta, a), (tb, b))| tr.uv(s, 0.5 * (ta + tb), (a + b) * 0.5))
         .collect()
+}
+
+/// Each chord between consecutive points `pts` of a trim's image, with the trim parameters at
+/// its ends: the points are evenly spaced in the parameter.
+fn chord_spans<'a>(
+    tr: &'a Trim,
+    pts: &'a [Vec2],
+) -> impl Iterator<Item = ((f64, Vec2), (f64, Vec2))> + 'a {
+    let n = pts.len().saturating_sub(1);
+    pts.iter().zip(pts.iter().skip(1)).enumerate().map(move |(i, (&a, &b))| {
+        let ta = tr.param(i as f64 / n as f64);
+        let tb = tr.param((i + 1) as f64 / n as f64);
+        ((ta, a), (tb, b))
+    })
 }
 
 /// The angle the trim sweeps as seen from `q`, exactly: each chord stands in for its arc only once
@@ -351,14 +372,9 @@ fn trim_angle(s: &Surface, tr: &Trim, samples: &[Vec2], mids: &[Vec2], q: Vec2) 
         half((ta, a), (tm, m)) + half((tm, m), (tb, b))
     }
     let pts = chords(tr, samples);
-    let n = pts.len() - 1;
-    let mut sum = 0.0;
-    for i in 0..n {
-        let ta = tr.param(i as f64 / n as f64);
-        let tb = tr.param((i + 1) as f64 / n as f64);
-        sum += rec(s, tr, q, (ta, pts[i]), (tb, pts[i + 1]), mids[i], 0);
-    }
-    sum
+    chord_spans(tr, &pts)
+        .zip(mids)
+        .fold(0.0, |sum, ((a, b), &m)| sum + rec(s, tr, q, a, b, m, 0))
 }
 
 /// What part of a face's boundary a point lies on.
@@ -465,8 +481,10 @@ impl Domain {
             .fold(tol::LINEAR, |a, &b| a.max(b))
     }
 
+    /// The local tolerance of trim `k` of loop `l`.
     fn trim_tol(&self, l: usize, k: usize) -> f64 {
-        self.tols.as_ref().map_or(tol::LINEAR, |t| t[l][k])
+        let listed = self.tols.as_ref().and_then(|t| t.get(l)?.get(k).copied());
+        listed.unwrap_or(tol::LINEAR)
     }
 
     pub fn samples(&self) -> &[Vec<Vec<Vec2>>] {
@@ -577,18 +595,19 @@ impl Domain {
                 )
             })
             .collect();
+        let others = || {
+            let loops = self.loops.iter().zip(&self.samples).zip(&reach).enumerate();
+            loops.filter(move |&(l, _)| l != skip)
+        };
         self.images(uv).into_iter().any(|q| {
-            let total: f64 = (0..self.loops.len())
-                .filter(|&l| l != skip)
-                .filter(|&l| {
-                    let (lo, hi) = reach[l];
+            let total: f64 = others()
+                .filter(|&(_, (_, &(lo, hi)))| {
                     q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y
                 })
-                .flat_map(|l| {
-                    self.loops[l]
-                        .iter()
-                        .zip(&self.samples[l])
-                        .zip(&self.mids()[l])
+                .flat_map(|(l, ((trims, samples), _))| {
+                    // The chord middles are worked out only once a loop can wind round `q`.
+                    let mids = self.mids().get(l).into_iter().flatten();
+                    trims.iter().zip(samples).zip(mids)
                 })
                 .map(|((tr, pl), mids)| trim_angle(&self.surface, tr, pl, mids, q))
                 .sum();
@@ -724,7 +743,9 @@ impl Domain {
                         UvMap::Projected | UvMap::Fitted(_) => per_trim,
                     };
                     let pl = tr.polyline(&self.surface, n);
-                    pts.extend_from_slice(&pl[..pl.len() - 1]);
+                    if let Some((_, all_but_last)) = pl.split_last() {
+                        pts.extend_from_slice(all_but_last);
+                    }
                 }
                 pts
             })
@@ -748,7 +769,7 @@ impl Domain {
         let scaled = |p: Vec2| Vec2::new(p.x * sc.x, p.y * sc.y);
         let segs: Vec<(Vec2, Vec2)> = polys
             .iter()
-            .flat_map(|poly| (0..poly.len()).map(move |i| (poly[i], poly[(i + 1) % poly.len()])))
+            .flat_map(|poly| poly.iter().copied().zip(poly.iter().copied().cycle().skip(1)))
             .collect();
         let lengths: Vec<(Vec2, Vec2)> =
             segs.iter().map(|&(a, b)| (scaled(a), scaled(b))).collect();
@@ -777,15 +798,13 @@ impl Domain {
                     }
                 }
                 xs.sort_by(f64::total_cmp);
-                for w in xs.chunks(2) {
-                    if w.len() == 2 {
-                        let m = 0.5 * (w[0] + w[1]);
-                        cands.push(if axis == 0 {
-                            Vec2::new(m, level)
-                        } else {
-                            Vec2::new(level, m)
-                        });
-                    }
+                // Crossings pair off, entering and leaving the face; an odd one out is dropped.
+                let (pairs, _) = xs.as_chunks::<2>();
+                for &[enter, leave] in pairs {
+                    let m = 0.5 * (enter + leave);
+                    let candidate =
+                        if axis == 0 { Vec2::new(m, level) } else { Vec2::new(level, m) };
+                    cands.push(candidate);
                 }
             }
         }
@@ -807,8 +826,9 @@ impl Domain {
         let extent = ((self.hi.x - self.lo.x) * sc.x).hypot((self.hi.y - self.lo.y) * sc.y);
         let mut best: Option<(f64, Vec2)> = None;
         for tr in self.trims() {
+            // A 16-step polyline's middle point and its neighbours.
             let pl = tr.polyline(&self.surface, 16);
-            let (m, a, b) = (pl[8], pl[7], pl[9]);
+            let Some(&[a, m, b]) = pl.get(7..10) else { continue };
             let t = Vec2::new((b.x - a.x) * sc.x, (b.y - a.y) * sc.y);
             let n = t.norm();
             if n <= 0.0 {
@@ -857,10 +877,7 @@ impl Domain {
 
 /// The signed area of a closed polygon, positive counter-clockwise.
 pub fn polygon_area(p: &[Vec2]) -> f64 {
-    (0..p.len())
-        .map(|i| p[i].cross(p[(i + 1) % p.len()]))
-        .sum::<f64>()
-        * 0.5
+    p.iter().zip(p.iter().cycle().skip(1)).map(|(a, &b)| a.cross(b)).sum::<f64>() * 0.5
 }
 
 /// An angle wrapped into [0, 2π).
