@@ -1,6 +1,8 @@
 // yack: Where a ray crosses a solid's faces, from the exact geometry.
 // Adapted from springrep@a03e8a1 src/rays.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: meshes nothing (M2): `Rays::from_tessellation` takes the mesh; mesh::rays makes it; then to yack-locate (M3 W5), paths and visibility only.
+// Changes: meshes nothing (M2): `Rays::from_tessellation` takes the mesh; mesh::rays makes it; then to
+// yack-locate (M3 W5), paths and visibility only; hardening (w-h1): a bad mesh is an error, and
+// triangles, domains and runs of hits are read with checked access.
 //! Where a ray crosses a solid's faces, from the exact geometry.
 //!
 //! [`Rays`] meshes the arena once. A ray's candidate faces are those with a mesh triangle within
@@ -176,7 +178,10 @@ impl<'a> Rays<'a> {
         let (a, z) = (o + d * s0, o + d * s1);
         let mut stretches: BTreeMap<FaceId, Vec<(f64, f64)>> = BTreeMap::new();
         for &k in &near {
-            let (f, tri) = &self.tris[k];
+            // The tree names triangles by their place in `tris`.
+            let kept = self.tris.get(k);
+            debug_assert!(kept.is_some(), "the tree's triangle {k} is past those kept");
+            let Some((f, tri)) = kept else { continue };
             if segment_triangle(a, z, tri).0 > pad {
                 continue;
             }
@@ -211,7 +216,10 @@ impl<'a> Rays<'a> {
                         continue;
                     }
                     let q = o + d * t;
-                    let dom = &self.domains[f.index()];
+                    // A domain was made for every face of the arena, in order.
+                    let dom = self.domains.get(f.index());
+                    debug_assert!(dom.is_some(), "face {} has no domain", f.index());
+                    let Some(dom) = dom else { continue };
                     let (uv, on_edge) = match dom.locate(q) {
                         Where::Outside => continue,
                         Where::Inside(uv) => (uv, false),
@@ -237,32 +245,35 @@ impl<'a> Rays<'a> {
     /// is where the surface's normal turns square to the ray, which bisection finds exactly.
     fn touches(&self, hits: Vec<Hit>, o: Point3, d: Vec3) -> Vec<Hit> {
         let mut out: Vec<Hit> = Vec::with_capacity(hits.len());
-        let mut i = 0;
-        while i < hits.len() {
-            let h = hits[i];
+        let mut rest = hits.as_slice();
+        while let Some(&h) = rest.first() {
             let s = &self.b.face(h.face).surface;
             let foot = |t: f64| {
                 let p = o + d * t;
                 let uv = s.project(p);
                 (uv, s.eval(uv.x, uv.y).dist(p))
             };
-            let mut j = i;
-            while j + 1 < hits.len()
-                && hits[j + 1].face == h.face
-                && foot(0.5 * (hits[j].t + hits[j + 1].t)).1 <= ON
-            {
-                j += 1;
-            }
-            if j == i {
+            // The run: `h` and each next hit on its face that the ray reaches without leaving
+            // the surface between.
+            let len = 1 + rest
+                .windows(2)
+                .take_while(|pair| match pair {
+                    [x, y] => y.face == h.face && foot(0.5 * (x.t + y.t)).1 <= ON,
+                    _ => false,
+                })
+                .count();
+            let (run, after) = rest.split_at(len);
+            rest = after;
+            let [.., last] = run else { continue };
+            if run.len() == 1 {
                 out.push(h);
-                i += 1;
                 continue;
             }
             let square = |t: f64| {
                 let (uv, _) = foot(t);
                 s.normal(uv.x, uv.y).dot(d)
             };
-            let (mut lo, mut hi) = (hits[i].t, hits[j].t);
+            let (mut lo, mut hi) = (h.t, last.t);
             if square(lo).signum() != square(hi).signum() {
                 for _ in 0..100 {
                     let mid = 0.5 * (lo + hi);
@@ -281,9 +292,8 @@ impl<'a> Rays<'a> {
                 point: o + d * t,
                 face: h.face,
                 normal: if self.b.face(h.face).reversed { -n } else { n },
-                on_edge: hits[i..=j].iter().any(|x| x.on_edge),
+                on_edge: run.iter().any(|x| x.on_edge),
             });
-            i = j + 1;
         }
         out
     }

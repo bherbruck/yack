@@ -1,6 +1,7 @@
 // yack: Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 // Adapted from springrep@a03e8a1 src/boolean/classify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from boolean/classify.rs to locate/classify.rs (M2.1, T1); paths only; then to yack-locate (M3 W5), paths and visibility only.
+// Changes: moved from boolean/classify.rs to locate/classify.rs (M2.1, T1); paths only; then to yack-locate (M3 W5), paths and visibility only;
+// hardening (w-h1): per-axis work runs over the three axes' values, not positions.
 //! Whether a point lies inside a solid, by the parity of a ray's crossings of its exact faces. A
 //! ray that passes through an edge, grazes a surface or starts on a face is ambiguous and the next
 //! direction is tried. A piece of face whose point lies on the solid's boundary, touching it, is
@@ -35,18 +36,29 @@ pub(crate) const DIRECTIONS: [[f64; 3]; 9] = [
     [-0.3517, 0.1491, -0.9241],
 ];
 
+/// Each axis's `(point, step, box low, box high)`: the per-axis view the box tests below take.
+fn axes(p: Point3, d: Vec3, bb: &Aabb) -> [(f64, f64, f64, f64); 3] {
+    [
+        (p.x, d.x, bb.min.x, bb.max.x),
+        (p.y, d.y, bb.min.y, bb.max.y),
+        (p.z, d.z, bb.min.z, bb.max.z),
+    ]
+}
+
+/// The span of the ray `p + t·d` inside `bb`, padded by a millionth of its size, when the ray
+/// meets it ahead of `p`.
 fn ray_box(p: Point3, d: Vec3, bb: &Aabb) -> Option<(f64, f64)> {
     let pad = 1e-6 * (1.0 + bb.diagonal());
     let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
-    for k in 0..3 {
-        let (mn, mx) = (bb.min[k] - pad, bb.max[k] + pad);
-        if d[k].abs() < 1e-300 {
-            if p[k] < mn || p[k] > mx {
+    for (pk, dk, min, max) in axes(p, d, bb) {
+        let (mn, mx) = (min - pad, max + pad);
+        if dk.abs() < 1e-300 {
+            if pk < mn || pk > mx {
                 return None;
             }
             continue;
         }
-        let (a, b) = ((mn - p[k]) / d[k], (mx - p[k]) / d[k]);
+        let (a, b) = ((mn - pk) / dk, (mx - pk) / dk);
         lo = lo.max(a.min(b));
         hi = hi.min(a.max(b));
     }
@@ -102,7 +114,10 @@ pub fn touching(surface: &Surface, faces: &[(&Domain, Aabb)], p: Point3) -> Opti
     let mut on_face = Vec::new();
     let mut on_edge = Vec::new();
     for (dom, bb) in faces {
-        if !(0..3).all(|k| p[k] >= bb.min[k] - tol::LINEAR && p[k] <= bb.max[k] + tol::LINEAR) {
+        let near_box = axes(p, Vec3::ZERO, bb)
+            .iter()
+            .all(|&(pk, _, min, max)| pk >= min - tol::LINEAR && pk <= max + tol::LINEAR);
+        if !near_box {
             continue;
         }
         match dom.locate(p) {

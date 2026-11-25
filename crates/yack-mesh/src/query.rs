@@ -50,7 +50,7 @@ pub fn rays(b: &Brep) -> Result<Rays<'_>> {
 /// The side of `b` that `sel` names, over `b`'s mesh.
 fn side<'b>(b: &'b Brep, sel: &Selection) -> Result<Side<'b>> {
     let (m, opt) = mesh_for(b)?;
-    Ok(Side::from_tessellation(b, sel, &m.positions, &m.triangles, &m.faces, &opt))
+    Side::from_tessellation(b, sel, &m.positions, &m.triangles, &m.faces, &opt)
 }
 
 /// The closest distance between selection `sa` of `a` and `sb` of `b`, and a point of each at it.

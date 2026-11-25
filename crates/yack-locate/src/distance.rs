@@ -1,7 +1,9 @@
 // yack: The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 // Adapted from springrep@a03e8a1 src/distance.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: meshes nothing (M2): sides are made from a tessellation mesh::query makes; `closest`
-// and Nearest's constructors moved there; then to yack-locate (M3 W5), paths and visibility only.
+// and Nearest's constructors moved there; then to yack-locate (M3 W5), paths and visibility only;
+// hardening (w-h1): a bad mesh is an error, and the Newton search and its Cholesky solve run over
+// their variables with checked access rather than positions.
 //! The closest distance between two sets of faces, edges and vertices, from the exact geometry.
 //!
 //! Both sides are meshed, and the closest pair of mesh pieces gives the distance to within the two
@@ -129,7 +131,8 @@ pub struct Side<'a> {
 
 impl<'a> Side<'a> {
     /// The side `sel` names, from a tessellation of `b` made within `opt`: the triangles
-    /// `positions` and `triangles` give, `faces` naming each face's run of them.
+    /// `positions` and `triangles` give, `faces` naming each face's run of them; an error when a
+    /// run passes the last triangle or a triangle names a corner past `positions`.
     pub fn from_tessellation(
         b: &'a Brep,
         sel: &Selection,
@@ -137,7 +140,7 @@ impl<'a> Side<'a> {
         triangles: &[[u32; 3]],
         faces_of: &[(FaceId, std::ops::Range<usize>)],
         opt: &MeshOptions,
-    ) -> Side<'a> {
+    ) -> Result<Side<'a>> {
         let mut faces = sel.faces.clone();
         for &s in &sel.solids {
             faces.extend(b.solid_faces(s));
@@ -159,7 +162,14 @@ impl<'a> Side<'a> {
         vertices.sort();
         vertices.dedup();
 
-        let tri = |t: &[u32; 3]| t.map(|i| positions[i as usize]);
+        let corner = |i: u32| {
+            positions.get(i as usize).copied().ok_or_else(|| {
+                crate::Error::InvalidInput(format!(
+                    "a triangle's corner index {i} is past the mesh's {} positions",
+                    positions.len()
+                ))
+            })
+        };
         let wanted: BTreeMap<FaceId, ()> = faces.iter().map(|&f| (f, ())).collect();
         let solid_faces: BTreeMap<FaceId, ()> = sel
             .solids
@@ -169,10 +179,17 @@ impl<'a> Side<'a> {
             .collect();
         let mut pieces = Vec::new();
         for (f, range) in faces_of {
-            for t in &triangles[range.clone()] {
-                if wanted.contains_key(f) {
-                    pieces.push(Piece::Tri(*f, tri(t)));
-                }
+            let run = triangles.get(range.clone()).ok_or_else(|| {
+                crate::Error::InvalidInput(format!(
+                    "a face's triangles {range:?} pass the mesh's {} triangles",
+                    triangles.len()
+                ))
+            })?;
+            if !wanted.contains_key(f) {
+                continue;
+            }
+            for &[i, j, k] in run {
+                pieces.push(Piece::Tri(*f, [corner(i)?, corner(j)?, corner(k)?]));
             }
         }
         for &e in &edges {
@@ -180,20 +197,22 @@ impl<'a> Side<'a> {
             let Some(c) = &edge.curve else { continue };
             let (t0, t1) = edge.range;
             let ts = crate::geom::edge_params(c, t0, t1, opt);
-            for w in ts.windows(2) {
-                pieces.push(Piece::Seg(e, [c.eval(w[0]), c.eval(w[1])]));
+            for pair in ts.windows(2) {
+                if let &[t0, t1] = pair {
+                    pieces.push(Piece::Seg(e, [c.eval(t0), c.eval(t1)]));
+                }
             }
         }
         for &v in &vertices {
             pieces.push(Piece::Pt(v, b.vertex(v).point));
         }
-        Side {
+        Ok(Side {
             b,
             vertices,
             pieces,
             solid_faces: solid_faces.into_keys().collect(),
             deflection: opt.linear,
-        }
+        })
     }
 
     /// The exact geometry an entity lies on.
@@ -232,8 +251,14 @@ impl Side<'_> {
         };
         let (outer, within) = (boxed(&self.pieces), boxed(&inner.pieces));
         let pad = self.deflection + inner.deflection;
-        if (0..3).any(|k| within.min[k] < outer.min[k] - pad || within.max[k] > outer.max[k] + pad)
-        {
+        let axes = |b: &Aabb| [b.min.to_array(), b.max.to_array()];
+        let ([wmin, wmax], [omin, omax]) = (axes(&within), axes(&outer));
+        let sticks_out = wmin
+            .iter()
+            .zip(wmax)
+            .zip(omin.iter().zip(omax))
+            .any(|((&wl, wh), (&ol, oh))| wl < ol - pad || wh > oh + pad);
+        if sticks_out {
             return None;
         }
         let pad = Vec3::new(tol::LINEAR, tol::LINEAR, tol::LINEAR);
@@ -284,18 +309,19 @@ impl Geo<'_> {
         }
     }
 
-    fn eval(&self, x: &[f64]) -> Jet {
+    /// The point at parameters `[u, v]` (a curve takes `u`, a point neither), with its
+    /// derivatives.
+    fn eval(&self, [u, v]: [f64; 2]) -> Jet {
         let z = Vec3::ZERO;
         match *self {
             Geo::Point(p) => (p, [z; 2], [[z; 2]; 2]),
             Geo::Curve(c, ..) => {
-                let (p, d, dd) = c.d2(x[0]);
+                let (p, d, dd) = c.d2(u);
                 (p, [d, z], [[dd, z], [z, z]])
             }
             // The surface gives first derivatives; the second come from their central differences,
             // which only steer the search: the gradient it stops on is exact.
             Geo::Surface(s) => {
-                let (u, v) = (x[0], x[1]);
                 let (p, su, sv) = s.d1(u, v);
                 let (hu, hv) = (1e-6 * (1.0 + u.abs()), 1e-6 * (1.0 + v.abs()));
                 let (_, su1, sv1) = s.d1(u + hu, v);
@@ -310,14 +336,13 @@ impl Geo<'_> {
         }
     }
 
-    /// Keeps a curve's parameter in its range.
     /// A curve's parameter kept in its edge's range: held at an end, or, on an edge that closes
     /// on itself, carried round to the other.
-    fn clamp(&self, x: &mut [f64]) {
+    fn clamp(&self, [t, _]: &mut [f64; 2]) {
         if let Geo::Curve(_, lo, hi) = *self {
-            x[0] = match self.closes() {
-                Some(period) => lo + (x[0] - lo).rem_euclid(period),
-                None => x[0].clamp(lo, hi),
+            *t = match self.closes() {
+                Some(period) => lo + (*t - lo).rem_euclid(period),
+                None => t.clamp(lo, hi),
             };
         }
     }
@@ -349,52 +374,67 @@ impl Geo<'_> {
 fn descend(a: Geo, b: Geo, sa: [f64; 2], sb: [f64; 2]) -> (Point3, Point3, [f64; 4]) {
     let (da, db) = (a.dim(), b.dim());
     let n = da + db;
-    let mut z = [sa[0], sa[1], sb[0], sb[1]];
-    let split = |z: &[f64; 4]| ([z[0], z[1]], [z[2], z[3]]);
+    let [sa0, sa1] = sa;
+    let [sb0, sb1] = sb;
+    let mut z = [sa0, sa1, sb0, sb1];
+    let split = |&[a0, a1, b0, b1]: &[f64; 4]| ([a0, a1], [b0, b1]);
     let value = |z: &[f64; 4]| {
         let (xa, xb) = split(z);
-        let (p, ..) = a.eval(&xa);
-        let (q, ..) = b.eval(&xb);
+        let (p, ..) = a.eval(xa);
+        let (q, ..) = b.eval(xb);
         let r = p - q;
         0.5 * r.dot(r)
     };
-    // Variables in order: a's first `da`, then b's first `db`, at their slots in `z`.
-    let slot = |i: usize| if i < da { i } else { 2 + i - da };
+    // The variables, in order: a's first `da` slots of `z`, then b's first `db` from slot 2.
+    let is_variable = |slot: usize| slot < da || (2..2 + db).contains(&slot);
     let mut damp = 0.0;
     for _ in 0..200 {
         let (xa, xb) = split(&z);
-        let (p, pd, pdd) = a.eval(&xa);
-        let (q, qd, qdd) = b.eval(&xb);
+        let (p, pd, pdd) = a.eval(xa);
+        let (q, qd, qdd) = b.eval(xb);
         let r = p - q;
         let f = 0.5 * r.dot(r);
-        let col = |i: usize| if i < da { pd[i] } else { -qd[i - da] };
+        // Each variable's derivative of `r`: a's, then b's negated.
+        let mut columns = [Vec3::ZERO; 4];
+        let derivatives = pd.iter().take(da).copied().chain(qd.iter().take(db).map(|&d| -d));
+        for (column, d) in columns.iter_mut().zip(derivatives) {
+            *column = d;
+        }
+        // `r` against each pair of one side's second derivatives; zero across the sides.
+        let mut second = [[0.0; 4]; 4];
+        for (row, pdd_row) in second.iter_mut().zip(&pdd).take(da) {
+            for (cell, &dd) in row.iter_mut().zip(pdd_row).take(da) {
+                *cell = r.dot(dd);
+            }
+        }
+        for (row, qdd_row) in second.iter_mut().skip(da).zip(&qdd).take(db) {
+            for (cell, &dd) in row.iter_mut().skip(da).zip(qdd_row).take(db) {
+                *cell = -r.dot(dd);
+            }
+        }
         let mut g = [0.0; 4];
         let mut h = [[0.0; 4]; 4];
-        for i in 0..n {
-            g[i] = r.dot(col(i));
-            for j in 0..n {
-                let second = match (i < da, j < da) {
-                    (true, true) => r.dot(pdd[i][j]),
-                    (false, false) => -r.dot(qdd[i - da][j - da]),
-                    _ => 0.0,
-                };
-                h[i][j] = col(i).dot(col(j)) + second;
+        let rows = g.iter_mut().zip(h.iter_mut()).zip(columns).zip(second);
+        for (((gi, h_row), ci), second_row) in rows.take(n) {
+            *gi = r.dot(ci);
+            for ((hij, cj), sij) in h_row.iter_mut().zip(columns).zip(second_row).take(n) {
+                *hij = ci.dot(cj) + sij;
             }
         }
         // A curve parameter held at an end of its range by a gradient pushing past it stays.
         let mut free = [true; 4];
-        for (i, f) in free.iter_mut().enumerate().take(n) {
+        let variables = z.iter().enumerate().filter(|&(slot, _)| is_variable(slot));
+        for (i, ((fi, &gi), (_, &x))) in free.iter_mut().zip(&g).zip(variables).enumerate() {
             let geo = if i < da { a } else { b };
             if let Geo::Curve(_, lo, hi) = geo
                 && geo.closes().is_none()
+                && ((x <= lo && gi > 0.0) || (x >= hi && gi < 0.0))
             {
-                let x = z[slot(i)];
-                if (x <= lo && g[i] > 0.0) || (x >= hi && g[i] < 0.0) {
-                    *f = false;
-                }
+                *fi = false;
             }
         }
-        let scale = (0..n).map(|i| h[i][i].abs()).fold(1e-300, f64::max);
+        let diagonal = h.iter().enumerate().take(n).filter_map(|(i, row)| row.get(i));
+        let scale = diagonal.map(|hii| hii.abs()).fold(1e-300, f64::max);
         let mut improved = false;
         for _ in 0..30 {
             let Some(step) = solve(&h, &g, &free, n, damp * scale) else {
@@ -402,15 +442,17 @@ fn descend(a: Geo, b: Geo, sa: [f64; 2], sb: [f64; 2]) -> (Point3, Point3, [f64;
                 continue;
             };
             let mut next = z;
-            for i in 0..n {
-                next[slot(i)] -= step[i];
+            let slots = next.iter_mut().enumerate().filter(|(slot, _)| is_variable(*slot));
+            for ((_, x), dx) in slots.zip(step) {
+                *x -= dx;
             }
             let (mut na, mut nb) = split(&next);
             a.clamp(&mut na);
             b.clamp(&mut nb);
-            let next = [na[0], na[1], nb[0], nb[1]];
+            let ([na0, na1], [nb0, nb1]) = (na, nb);
+            let next = [na0, na1, nb0, nb1];
             if value(&next) < f {
-                let moved = (0..4).map(|k| (next[k] - z[k]).abs()).fold(0.0, f64::max);
+                let moved = next.iter().zip(&z).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
                 z = next;
                 damp *= 0.1;
                 improved = moved > 1e-15 * (1.0 + z.iter().fold(0.0f64, |m, x| m.max(x.abs())));
@@ -423,12 +465,24 @@ fn descend(a: Geo, b: Geo, sa: [f64; 2], sb: [f64; 2]) -> (Point3, Point3, [f64;
         }
     }
     let (xa, xb) = split(&z);
-    (a.eval(&xa).0, b.eval(&xb).0, z)
+    (a.eval(xa).0, b.eval(xb).0, z)
+}
+
+/// The transpose of a 4 × 4 matrix.
+fn transpose(m: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
+    let mut t = [[0.0; 4]; 4];
+    for (i, row) in m.iter().enumerate() {
+        for (t_row, &v) in t.iter_mut().zip(row) {
+            if let Some(cell) = t_row.get_mut(i) {
+                *cell = v;
+            }
+        }
+    }
+    t
 }
 
 /// `(H + λ·I)⁻¹ g` over the free variables, by Cholesky; `None` where that is not positive
 /// definite, which more damping cures.
-#[allow(clippy::needless_range_loop)]
 fn solve(
     h: &[[f64; 4]; 4],
     g: &[f64; 4],
@@ -436,47 +490,63 @@ fn solve(
     n: usize,
     lambda: f64,
 ) -> Option<[f64; 4]> {
-    let idx: Vec<usize> = (0..n).filter(|&i| free[i]).collect();
-    let m = idx.len();
+    // The system over the free variables, packed into the first `m` rows and columns.
+    let is_free = |&(_, &f): &(usize, &bool)| f;
+    let kept: Vec<usize> =
+        free.iter().enumerate().take(n).filter(is_free).map(|(i, _)| i).collect();
+    let m = kept.len();
     let mut out = [0.0; 4];
     if m == 0 {
         return Some(out);
     }
+    let mut a = [[0.0; 4]; 4];
+    let mut rhs = [0.0; 4];
+    for ((a_row, r), &i) in a.iter_mut().zip(rhs.iter_mut()).zip(&kept) {
+        let (h_row, &gi) = h.get(i).zip(g.get(i))?;
+        *r = gi;
+        for (cell, &j) in a_row.iter_mut().zip(&kept) {
+            *cell = *h_row.get(j)?;
+        }
+    }
+    // L Lᵀ = A + λ·I, row by row: each entry less its row's and column's earlier products.
     let mut l = [[0.0; 4]; 4];
-    for i in 0..m {
-        for j in 0..=i {
-            let mut s = h[idx[i]][idx[j]] + if i == j { lambda } else { 0.0 };
-            for k in 0..j {
-                s -= l[i][k] * l[j][k];
-            }
-            if i == j {
-                if s <= 0.0 || !s.is_finite() {
-                    return None;
-                }
-                l[i][i] = s.sqrt();
-            } else {
-                l[i][j] = s / l[j][j];
-            }
+    for (i, a_row) in a.iter().enumerate().take(m) {
+        let (done, rest) = l.split_at_mut(i);
+        let l_row = rest.first_mut()?;
+        for (j, (l_j, &aij)) in done.iter().zip(a_row).enumerate() {
+            let (before, at) = l_row.split_at_mut(j);
+            let s = before.iter().zip(l_j).fold(aij + 0.0, |s, (x, y)| s - x * y);
+            *at.first_mut()? = s / l_j.get(j)?;
         }
+        let (before, at) = l_row.split_at_mut(i);
+        let s = before.iter().fold(a_row.get(i)? + lambda, |s, x| s - x * x);
+        if s <= 0.0 || !s.is_finite() {
+            return None;
+        }
+        *at.first_mut()? = s.sqrt();
     }
+    // L y = rhs, first row first.
     let mut y = [0.0; 4];
-    for i in 0..m {
-        let mut s = g[idx[i]];
-        for k in 0..i {
-            s -= l[i][k] * y[k];
-        }
-        y[i] = s / l[i][i];
+    for (i, (l_row, &ri)) in l.iter().zip(&rhs).enumerate().take(m) {
+        let (before, at) = y.split_at_mut(i);
+        let s = l_row.iter().zip(before.iter()).fold(ri, |s, (x, yk)| s - x * yk);
+        *at.first_mut()? = s / l_row.get(i)?;
     }
+    // Lᵀ x = y, last row first: row i of Lᵀ is column i of L.
+    let lt = transpose(&l);
     let mut x = [0.0; 4];
-    for i in (0..m).rev() {
-        let mut s = y[i];
-        for k in i + 1..m {
-            s -= l[k][i] * x[k];
-        }
-        x[i] = s / l[i][i];
+    for (i, (lt_row, &yi)) in lt.iter().zip(&y).enumerate().take(m).rev() {
+        let (at, after) = x.split_at_mut(i + 1);
+        let s = lt_row
+            .iter()
+            .skip(i + 1)
+            .zip(after.iter())
+            .take(m - i - 1)
+            .fold(yi, |s, (lki, xk)| s - lki * xk);
+        *at.last_mut()? = s / lt_row.get(i)?;
     }
-    for i in 0..m {
-        out[idx[i]] = x[i];
+    for (&i, &xi) in kept.iter().zip(&x) {
+        *out.get_mut(i)? = xi;
     }
     Some(out)
 }
@@ -500,12 +570,12 @@ fn piece_distance(a: &Piece, b: &Piece) -> (f64, Point3, Point3) {
         (Piece::Tri(..), Piece::Seg(..)) => flip(piece_distance(b, a)),
         (Piece::Tri(_, s), Piece::Tri(_, t)) => {
             let mut best = (f64::INFINITY, s[0], t[0]);
-            for k in 0..3 {
-                let x = segment_triangle(s[k], s[(k + 1) % 3], t);
+            for ((s0, s1), (t0, t1)) in sides(s).into_iter().zip(sides(t)) {
+                let x = segment_triangle(s0, s1, t);
                 if x.0 < best.0 {
                     best = x;
                 }
-                let y = flip(segment_triangle(t[k], t[(k + 1) % 3], s));
+                let y = flip(segment_triangle(t0, t1, s));
                 if y.0 < best.0 {
                     best = y;
                 }
@@ -515,10 +585,18 @@ fn piece_distance(a: &Piece, b: &Piece) -> (f64, Point3, Point3) {
     }
 }
 
+/// The three sides of triangle `t`, each from a corner to the next.
+fn sides(t: &[Point3; 3]) -> [(Point3, Point3); 3] {
+    let [a, b, c] = *t;
+    [(a, b), (b, c), (c, a)]
+}
+
+/// A pair of closest points the other way round.
 fn flip((d, p, q): (f64, Point3, Point3)) -> (f64, Point3, Point3) {
     (d, q, p)
 }
 
+/// Keeps `c` when it is nearer than the answer so far.
 fn offer(answer: &mut Option<Closest>, c: Closest) {
     if answer.is_none_or(|a| c.distance < a.distance) {
         *answer = Some(c);
@@ -559,21 +637,27 @@ impl<'a> Nearest<'a> {
 pub fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     let (a, b) = (side_a.b, side_b.b);
     let (pa, pb) = (&side_a.pieces, &side_b.pieces);
-    if pa.is_empty() || pb.is_empty() {
+    let (Some(first_a), Some(first_b)) = (pa.first(), pb.first()) else {
         return Err(crate::Error::InvalidInput(
             "a distance needs something on each side".into(),
         ));
-    }
+    };
     let tree = Bvh::of_boxes(pb.iter().map(Piece::bbox).collect());
     let boxes: Vec<Aabb> = pa.iter().map(Piece::bbox).collect();
+    // The tree names b's pieces by their place in `pb`.
+    let piece_b = |j: usize| {
+        let piece = pb.get(j);
+        debug_assert!(piece.is_some(), "the tree's piece {j} is past b's pieces");
+        piece
+    };
 
     // The closest pair of pieces, each query widened by the best so far.
-    let mut best = piece_distance(&pa[0], &pb[0]).0;
+    let mut best = piece_distance(first_a, first_b).0;
     let mut hits = Vec::new();
-    for (i, x) in pa.iter().enumerate() {
-        tree.within(&boxes[i], best, &mut hits);
-        for &j in &hits {
-            best = best.min(piece_distance(x, &pb[j]).0);
+    for (x, bx) in pa.iter().zip(&boxes) {
+        tree.within(bx, best, &mut hits);
+        for y in hits.iter().filter_map(|&j| piece_b(j)) {
+            best = best.min(piece_distance(x, y).0);
         }
     }
     // Every pair the exact minimum could lie between.
@@ -583,12 +667,12 @@ pub fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     // Nearest first, so the closest pair of pieces always seeds its entities: on parts smaller
     // than the meshes' deflection every pair lies within reach and spread of every other.
     let mut near_pairs = Vec::new();
-    for (i, x) in pa.iter().enumerate() {
-        tree.within(&boxes[i], reach, &mut hits);
-        for &j in &hits {
-            let (d, p, q) = piece_distance(x, &pb[j]);
+    for (x, bx) in pa.iter().zip(&boxes) {
+        tree.within(bx, reach, &mut hits);
+        for y in hits.iter().filter_map(|&j| piece_b(j)) {
+            let (d, p, q) = piece_distance(x, y);
             if d <= reach {
-                near_pairs.push((d, (x.entity(), pb[j].entity()), p, q));
+                near_pairs.push((d, (x.entity(), y.entity()), p, q));
             }
         }
     }
@@ -655,7 +739,7 @@ pub fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     let mut answer = match answer {
         Some(c) => c,
         None => {
-            let (_, x, y) = piece_distance(&pa[0], &pb[0]);
+            let (_, x, y) = piece_distance(first_a, first_b);
             Closest {
                 distance: x.dist(y),
                 on_a: x,

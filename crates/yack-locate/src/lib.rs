@@ -5,10 +5,6 @@
 //! into the boolean.
 
 
-// springrep's locate indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names locate's code uses.
 use yack_base::kernel::Error;
 use yack_base::kernel as error;
@@ -24,6 +20,7 @@ pub mod classify;
 
 use crate::{geom::Surface, intersect::ssi::same_domain, topo::domain::Domain};
 
+/// Whether `s` is a plane, cylinder, cone, sphere or torus, which [`same_domain`] decides exactly.
 fn analytic(s: &Surface) -> bool {
     matches!(
         s,
