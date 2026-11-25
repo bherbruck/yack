@@ -7,7 +7,6 @@
 // the same arithmetic in the same order.
 //! A face's trimmed domain: its loops as trims (directed curve pieces with their parameter-plane
 //! images), point-in-face classification by an exact winding number, and interior points.
-#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::TAU;
 use std::rc::Rc;

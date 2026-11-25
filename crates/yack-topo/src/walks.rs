@@ -5,7 +5,6 @@
 // parameter runs the arena's sampling shares live here.
 //! Walks of the arena that the checker, measures, booleans and the STEP writer share: evenly
 //! spaced parameters along a coedge, and the fans of faces round each vertex.
-#![warn(clippy::indexing_slicing)]
 
 use std::collections::{BTreeMap, BTreeSet};
 

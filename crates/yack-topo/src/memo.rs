@@ -1,12 +1,16 @@
 // yack: springrep module src/topo/memo.rs
 // Adapted from springrep@a03e8a1 src/topo/memo.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: typed memo slots (MemoSlot, M2.2 T3) replace the boolean's own field, so topo names no
-// higher layer's type; then to yack-topo (M3 W4), paths and visibility only.
+// higher layer's type; then to yack-topo (M3 W4), paths and visibility only; M3 hardening: a memo
+// is known by its address, held by a Weak while another memo lists it as apart, instead of by an
+// id from a process-wide counter (D27).
+//! What the checker, measures and booleans work out about a face's geometry ([`FaceMemo`]), kept
+//! while that geometry is unchanged and shared by faces of the same geometry.
+
 use std::any::{Any, TypeId};
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeMap, HashSet}; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::math::{Aabb, Point3, Vec2, Vec3};
 
@@ -15,8 +19,6 @@ use crate::math::{Aabb, Point3, Vec2, Vec3};
 /// a part built by many features measures and samples each face once rather than once a feature.
 #[derive(Debug)]
 pub struct FaceMemo {
-    /// Names this memo, and so one face's geometry, for as long as the process runs.
-    pub id: u64,
     pub volume: OnceLock<FaceVolume>,
     /// Each coedge's edge range and sense, loop by loop, of the first face the memo was handed
     /// on from: what is kept here by a coedge's place holds only for a face laid out the same.
@@ -37,15 +39,15 @@ pub struct FaceMemo {
     /// The face's share of the arena's loose box (the measures' `loose_bbox`).
     pub loose_box: OnceLock<Aabb>,
     /// The memos of faces the checker found this one does not meet away from their shared edges
-    /// and vertices.
-    #[allow(clippy::disallowed_types)] pub apart: Mutex<HashSet<u64>>, // D26: BTree* in hardening, proven by digests
+    /// and vertices, by [`address`]. Each entry's Weak keeps its memo's allocation, and so its
+    /// address, from being reused while it is listed. Only ever looked up, never iterated:
+    /// addresses differ from run to run.
+    apart: Mutex<BTreeMap<usize, Weak<FaceMemo>>>,
 }
 
 impl Default for FaceMemo {
-    #[allow(clippy::disallowed_types)] fn default() -> FaceMemo { // D26: BTree* in hardening, proven by digests
-        static NEXT: AtomicU64 = AtomicU64::new(0);
+    fn default() -> FaceMemo {
         FaceMemo {
-            id: NEXT.fetch_add(1, Ordering::Relaxed),
             volume: OnceLock::new(),
             #[cfg(debug_assertions)]
             layout: OnceLock::new(),
@@ -55,7 +57,7 @@ impl Default for FaceMemo {
             clean: OnceLock::new(),
             slots: Slots::default(),
             loose_box: OnceLock::new(),
-            apart: Mutex::new(HashSet::new()),
+            apart: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -92,6 +94,27 @@ impl FaceMemo {
     fn slot_any(&self, k: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
         self.slots.0.lock().ok()?.get(&k).cloned()
     }
+
+    /// Lists `other` as a memo whose face this one's does not meet away from what they share.
+    pub(crate) fn note_apart(&self, other: &Arc<FaceMemo>) {
+        if let Ok(mut apart) = self.apart.lock() {
+            // Dead entries go at each power-of-two length: amortised, and the list stays bounded.
+            if apart.len().is_power_of_two() {
+                apart.retain(|_, memo| memo.strong_count() > 0);
+            }
+            apart.insert(address(other), Arc::downgrade(other));
+        }
+    }
+
+    /// Whether `other` is listed as apart from this memo.
+    pub(crate) fn is_apart(&self, other: &FaceMemo) -> bool {
+        self.apart.lock().is_ok_and(|apart| apart.contains_key(&address(other)))
+    }
+}
+
+/// A memo's address: while a memo lives, or another lists it as apart, no other memo has it.
+fn address(memo: &FaceMemo) -> usize {
+    std::ptr::from_ref(memo).addr()
 }
 
 /// What a face's exact integrals depend on besides its geometry, compared bit for bit.

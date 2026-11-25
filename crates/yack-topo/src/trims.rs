@@ -6,7 +6,6 @@
 // match, and the domain's trims take their ends by slice pattern; no indexing.
 //! A face's trimmed domain outside any boolean, its trims numbered by the arena's vertices, and the
 //! trim of one coedge.
-#![warn(clippy::indexing_slicing)]
 
 use std::rc::Rc;
 

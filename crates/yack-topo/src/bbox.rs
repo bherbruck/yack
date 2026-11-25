@@ -7,7 +7,6 @@
 // one function; outlines walk their edges by iterators; no indexing.
 //! Boxes round a face (its loose box, kept on its memo, and its hull box) and round an arena, with the
 //! parameter-plane outlines, winding test and stationary-point search they are found by.
-#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::PI;
 

@@ -1,6 +1,7 @@
 // yack: The validity checker: a solid is valid when its shells are closed oriented 2-manifolds, every
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/check.rs to yack-check (M3 W6); paths and visibility only.
+// Changes: moved from springrep's src/check.rs to yack-check (M3 W6); paths and visibility only;
+// M3 hardening (w-h3): face pairs found apart are kept by Brep::mark_apart / known_apart.
 //! The validity checker: a solid is valid when its shells are closed oriented 2-manifolds, every
 //! edge lies on both its faces within tolerance, and each loop closes in its face's parameters.
 
@@ -27,7 +28,7 @@ use crate::{
     geom::{Curve, Surface, distance_to},
     math::{Aabb, Point3, Vec2, Vec3},
     topo::{
-        Brep, CoedgeId, EdgeId, FaceId, FaceMemo, ShellId, SolidId, VertexId, coedge_params,
+        Brep, CoedgeId, EdgeId, FaceId, ShellId, SolidId, VertexId, coedge_params,
         fans_at_vertices,
     },
 };
@@ -869,14 +870,6 @@ impl PairCache {
         .values()
         .flat_map(|fs| fs.iter().flat_map(|&x| fs.iter().map(move |&y| (x, y))))
         .collect();
-    let apart = |ma: &FaceMemo, mb: &FaceMemo| {
-        for (m, other) in [(ma, mb.id), (mb, ma.id)] {
-            if let Ok(mut s) = m.apart.lock() {
-                s.insert(other);
-            }
-        }
-    };
-
     let mut out = Vec::new();
     for (k, &i) in order.iter().enumerate() {
         for &j in &order[k + 1..] {
@@ -890,12 +883,11 @@ impl PairCache {
             {
                 continue;
             }
-            let (ma, mb) = (b.memo(fa), b.memo(fb));
             if sides.is_some_and(|s| s[fa.index()].is_some() && s[fa.index()] == s[fb.index()]) {
-                apart(ma, mb);
+                b.mark_apart(fa, fb);
                 continue;
             }
-            if ma.apart.lock().is_ok_and(|s| s.contains(&mb.id)) {
+            if b.known_apart(fa, fb) {
                 continue;
             }
             // Where either face's box is clear of the other's surface, they cannot meet.
@@ -903,7 +895,7 @@ impl PairCache {
             if (analytic(sb) && clear_of(&boxes[i], sb))
                 || (analytic(sa) && clear_of(&boxes[j], sa))
             {
-                apart(ma, mb);
+                b.mark_apart(fa, fb);
                 continue;
             }
             let mut hit = None;
@@ -933,7 +925,7 @@ impl PairCache {
             }
             match hit {
                 Some(at) => out.push(Crossing { a: fa, b: fb, at }),
-                None => apart(ma, mb),
+                None => b.mark_apart(fa, fb),
             }
         }
     }

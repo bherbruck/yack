@@ -7,7 +7,6 @@
 //! translation. Frames stay right-handed, which the analytic surfaces' normals rely on, so where a
 //! reflection or a scale changes a surface's or curve's parameters, the parameter curves on it
 //! change with them.
-#![warn(clippy::indexing_slicing)]
 
 use std::sync::Arc;
 

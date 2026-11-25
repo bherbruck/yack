@@ -5,7 +5,6 @@
 // pairs neighbours by iterators instead of modular indexing; the same arithmetic in the same order.
 //! The faces round an edge more than two of them use, where pieces of a solid touch: which pairs
 //! bound a wedge of material between them, partners, and which an empty wedge, beside each other.
-#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::TAU;
 

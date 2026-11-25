@@ -4,7 +4,6 @@
 // M3 hardening: the free parameter at a pole is an enum, not a flag.
 //! Where a coedge runs in its face's parameter plane ([`PCurve`]), and how an edge's points
 //! project onto its face's surface, at a pole too, where one parameter is free.
-#![warn(clippy::indexing_slicing)]
 
 use crate::{
     geom::{Curve, NurbsCurve, NurbsSurface, Surface},

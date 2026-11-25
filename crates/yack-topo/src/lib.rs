@@ -1,13 +1,11 @@
 // yack: The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 // Adapted from springrep@a03e8a1 src/topo/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/topo/mod.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9).
+// Changes: moved from springrep's src/topo/mod.rs to yack-topo (M3 W4); `.expect`/`.unwrap` as counted `panic!`s (gate 9);
+// M3 hardening: every look-up by id goes through `entity`/`entity_mut`, the arena's one indexing
+// contract; a coedge's dense samples come from walks::densified; no other indexing; faces found
+// apart are marked on their memos through the arena.
 //! The topology arena: solids of shells of faces bounded by loops of coedges, each the use of an
 //! edge by one face. Every entity lives in one [`Brep`] and is referred to by a typed id.
-
-
-// springrep's topo indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names topo's code uses.
 use yack_base::kernel::Error;
@@ -42,6 +40,8 @@ pub use pcurve::PCurve;
 pub use trims::{coedge_trim_with, coedge_uv_at, face_domain};
 pub use walks::{coedge_params, fans_at_vertices};
 pub use pcurve::project_on;
+
+use walks::densified;
 
 use crate::{
     geom::{Curve, Surface},
@@ -83,6 +83,20 @@ id!(LoopId);
 id!(FaceId);
 id!(ShellId);
 id!(SolidId);
+
+/// The entity at `index` in one of an arena's lists. Every id is minted by the arena whose entity
+/// it names, and [`Brep::from_parts`] checks the ids it is handed, so an index past the end is a
+/// caller's bug (an id of another arena): the arena's one look-up that panics.
+#[allow(clippy::indexing_slicing)]
+fn entity<T>(items: &[T], index: usize) -> &T {
+    &items[index]
+}
+
+/// [`entity`], mutably.
+#[allow(clippy::indexing_slicing)]
+fn entity_mut<T>(items: &mut [T], index: usize) -> &mut T {
+    &mut items[index]
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Vertex {
@@ -180,6 +194,56 @@ pub struct Brep {
     uses: Vec<Vec<CoedgeId>>,
 }
 
+/// The steps along `curve` from `t0` to `t1` that can never skip a turn of it round `surface`,
+/// whose periodic parameters it continues from `seed`, given that `gaps` steps are asked for.
+fn turn_steps(
+    surface: &Surface,
+    curve: &Curve,
+    seed: Vec2,
+    (t0, t1): (f64, f64),
+    gaps: usize,
+) -> usize {
+    // A turn is at least the surface's circumference, so steps an eighth of that along the
+    // curve can never skip one; finer samples cannot tell, as their remainders alias alike.
+    let mut length = 0.0;
+    let mut prev = curve.eval(t0);
+    for k in 1..=256 {
+        let p = curve.eval(t0 + (t1 - t0) * k as f64 / 256.0);
+        length += p.dist(prev);
+        prev = p;
+    }
+    let (_, su, sv) = surface.d1(seed.x, seed.y);
+    let around = [(surface.u_period(), su), (surface.v_period(), sv)]
+        .iter()
+        .filter_map(|&(p, d)| p.map(|p| p * d.norm()))
+        .filter(|&c| c > 1e-9)
+        .fold(f64::INFINITY, f64::min);
+    let steps = if around.is_finite() { (8.0 * length / around).ceil() as usize } else { 0 };
+    if steps < gaps {
+        return steps;
+    }
+    // That counts the turns a curve of this length could make. Where it asks for steps, how fast
+    // the curve does turn says how many it needs: an edge along a cylinder's axis turns not at
+    // all, however thin the cylinder, and one a tolerance thick would otherwise take millions.
+    let n = 32;
+    let mut turns = 0.0;
+    for k in 0..n {
+        let (p, dp) = curve.d1(t0 + (t1 - t0) * (k as f64 + 0.5) / n as f64);
+        let uv = surface.project(p);
+        let (_, su, sv) = surface.d1(uv.x, uv.y);
+        let rate = [(surface.u_period(), su), (surface.v_period(), sv)]
+            .iter()
+            .filter_map(|&(per, d)| per.map(|per| (per * d.norm(), d)))
+            .filter(|&(c, _)| c > 1e-9)
+            .map(|(c, d)| dp.dot(d).abs() / (d.norm() * c))
+            .fold(0.0, f64::max);
+        turns += rate * (t1 - t0).abs() / n as f64;
+    }
+    // Sixteen steps a turn, twice what the bound above takes, for the rate between samples.
+    let needed = (16.0 * turns).ceil();
+    if needed.is_finite() { steps.min(needed as usize) } else { steps }
+}
+
 /// Each vertex and each edge with a local tolerance, with it.
 pub type Tolerant = (Vec<(VertexId, f64)>, Vec<(EdgeId, f64)>);
 
@@ -198,8 +262,9 @@ impl Brep {
     }
 
     pub fn add_vertex(&mut self, point: Point3) -> VertexId {
+        let id = VertexId::at(self.vertices.len());
         self.vertices.push(Vertex { point });
-        VertexId::at(self.vertices.len() - 1)
+        id
     }
 
     pub fn add_edge(
@@ -209,25 +274,19 @@ impl Brep {
         start: VertexId,
         end: VertexId,
     ) -> EdgeId {
-        self.edges.push(Edge {
-            curve: Some(curve),
-            range,
-            start,
-            end,
-        });
-        self.uses.push(Vec::new());
-        EdgeId::at(self.edges.len() - 1)
+        self.push_edge(Edge { curve: Some(curve), range, start, end })
     }
 
     pub fn add_degenerate_edge(&mut self, vertex: VertexId, range: (f64, f64)) -> EdgeId {
-        self.edges.push(Edge {
-            curve: None,
-            range,
-            start: vertex,
-            end: vertex,
-        });
+        self.push_edge(Edge { curve: None, range, start: vertex, end: vertex })
+    }
+
+    /// Adds `edge`, used by no coedge yet.
+    fn push_edge(&mut self, edge: Edge) -> EdgeId {
+        let id = EdgeId::at(self.edges.len());
+        self.edges.push(edge);
         self.uses.push(Vec::new());
-        EdgeId::at(self.edges.len() - 1)
+        id
     }
 
     pub fn add_face(
@@ -236,6 +295,7 @@ impl Brep {
         reversed: bool,
         names: impl IntoIterator<Item = FaceName>,
     ) -> FaceId {
+        let id = FaceId::at(self.faces.len());
         self.faces.push(Face {
             surface,
             reversed,
@@ -244,34 +304,28 @@ impl Brep {
             shell: None,
         });
         self.memos.0.push(Arc::default());
-        FaceId::at(self.faces.len() - 1)
+        id
     }
 
     pub fn add_loop(&mut self, face: FaceId, coedges: Vec<CoedgeSpec>) -> LoopId {
         let lp = LoopId::at(self.loops.len());
         let mut ids = Vec::with_capacity(coedges.len());
-        for c in coedges {
-            let edge = c.edge;
-            self.coedges.push(Coedge {
-                edge,
-                reversed: c.reversed,
-                pcurve: c.pcurve,
-                lp,
-            });
-            let id = CoedgeId::at(self.coedges.len() - 1);
-            self.uses[edge.index()].push(id);
+        for CoedgeSpec { edge, reversed, pcurve } in coedges {
+            let id = CoedgeId::at(self.coedges.len());
+            self.coedges.push(Coedge { edge, reversed, pcurve, lp });
+            entity_mut(&mut self.uses, edge.index()).push(id);
             ids.push(id);
         }
         self.loops.push(Loop { coedges: ids, face });
-        self.faces[face.index()].loops.push(lp);
-        self.memos.0[face.index()] = Arc::default();
+        entity_mut(&mut self.faces, face.index()).loops.push(lp);
+        self.forget(face);
         lp
     }
 
     pub fn add_shell(&mut self, faces: Vec<FaceId>) -> ShellId {
         let id = ShellId::at(self.shells.len());
         for &f in &faces {
-            self.faces[f.index()].shell = Some(id);
+            entity_mut(&mut self.faces, f.index()).shell = Some(id);
         }
         self.shells.push(Shell { faces, solid: None });
         id
@@ -286,7 +340,7 @@ impl Brep {
     pub fn add_solid_of(&mut self, shells: Vec<ShellId>, outer: usize) -> SolidId {
         let id = SolidId::at(self.solids.len());
         for &s in &shells {
-            self.shells[s.index()].solid = Some(id);
+            entity_mut(&mut self.shells, s.index()).solid = Some(id);
         }
         self.solids.push(Solid { shells, outer });
         id
@@ -310,34 +364,35 @@ impl Brep {
     /// faces use, its partner, the two faces bounding the empty space outside them both; on one
     /// more use, the neighbour the other way round from its partner.
     pub fn beside(&self, c: CoedgeId) -> Option<CoedgeId> {
-        let us = &self.uses[self.coedges[c.index()].edge.index()];
-        match us.len() {
-            2 => us.iter().copied().find(|&o| o != c),
-            n if n > 2 => self.beside.get(&c).copied(),
-            _ => None,
-        }
+        self.across(c, &self.beside)
     }
 
     /// The coedges using edge `e`.
     pub fn edge_uses(&self, e: EdgeId) -> &[CoedgeId] {
-        &self.uses[e.index()]
+        entity(&self.uses, e.index())
+    }
+
+    /// The coedge across coedge `c`'s edge from it: the edge's other use where two faces use it,
+    /// the one `more` names where more do, none where fewer do.
+    fn across(&self, c: CoedgeId, more: &BTreeMap<CoedgeId, CoedgeId>) -> Option<CoedgeId> {
+        let uses = self.edge_uses(self.coedge(c).edge);
+        match uses.len() {
+            2 => uses.iter().copied().find(|&other| other != c),
+            n if n > 2 => more.get(&c).copied(),
+            _ => None,
+        }
     }
 
     /// The coedge across the wedge of material coedge `c`'s face bounds at its edge: the edge's
     /// other use where two faces use it, the paired one where more do. `None` on a pole, and on an
     /// edge of more uses left unpaired.
     pub fn partner(&self, c: CoedgeId) -> Option<CoedgeId> {
-        let us = &self.uses[self.coedges[c.index()].edge.index()];
-        match us.len() {
-            2 => us.iter().copied().find(|&o| o != c),
-            n if n > 2 => self.partners.get(&c).copied(),
-            _ => None,
-        }
+        self.across(c, &self.partners)
     }
 
     /// The edges more than two faces use: where pieces of a solid touch.
     pub fn radial_edges(&self) -> impl Iterator<Item = EdgeId> + '_ {
-        self.edge_ids().filter(|&e| self.uses[e.index()].len() > 2)
+        self.edge_ids().filter(|&e| self.edge_uses(e).len() > 2)
     }
 
     /// Pairs the coedges of every edge more than two faces use that are not paired yet, from the
@@ -345,80 +400,90 @@ impl Brep {
     pub fn pair_radial(&mut self) {
         let edges: Vec<EdgeId> = self.radial_edges().collect();
         for e in edges {
-            let us = self.uses[e.index()].clone();
-            if us.iter().all(|c| self.partners.contains_key(c)) {
+            let uses = self.edge_uses(e).to_vec();
+            if uses.iter().all(|c| self.partners.contains_key(c)) {
                 continue;
             }
-            let edge = &self.edges[e.index()];
-            let Some(curve) = &edge.curve else { continue };
-            let (m, d) = curve.d1(0.5 * (edge.range.0 + edge.range.1));
-            let Some(t) = d.unit() else { continue };
-            let len = crate::radial::length(curve, edge.range);
-            let sides: Vec<radial::Side> = us
-                .iter()
-                .map(|&c| {
-                    let face = &self.faces[self.coedge_face(c).index()];
-                    radial::Side {
-                        surface: &face.surface,
-                        reversed: face.reversed,
-                        travel: if self.coedges[c.index()].reversed {
-                            -t
-                        } else {
-                            t
-                        },
-                    }
-                })
-                .collect();
-            let Some((pairs, beside)) = radial::round(m, t, len, &sides) else {
-                continue;
-            };
+            let Some((pairs, beside)) = self.radial_order(e, &uses) else { continue };
+            let use_of = |i: usize| uses.get(i).copied();
             for (i, j) in pairs {
-                self.pair(us[i], us[j]);
+                if let (Some(a), Some(b)) = (use_of(i), use_of(j)) {
+                    self.pair(a, b);
+                }
             }
             for (i, j) in beside {
-                self.set_beside(us[i], us[j]);
+                if let (Some(a), Some(b)) = (use_of(i), use_of(j)) {
+                    self.set_beside(a, b);
+                }
             }
         }
+    }
+
+    /// The partner pairs and the pairs beside each other round edge `e`, from its faces' geometry
+    /// at its middle, as indices into its `uses`; `None` for a pole, an edge with no direction
+    /// there, or faces that do not alternate round it.
+    fn radial_order(&self, e: EdgeId, uses: &[CoedgeId]) -> Option<(radial::Pairs, radial::Pairs)> {
+        let edge = self.edge(e);
+        let curve = edge.curve.as_ref()?;
+        let (middle, d) = curve.d1(0.5 * (edge.range.0 + edge.range.1));
+        let t = d.unit()?;
+        let len = radial::length(curve, edge.range);
+        let sides: Vec<radial::Side> = uses
+            .iter()
+            .map(|&c| {
+                let face = self.face(self.coedge_face(c));
+                let travel = if self.coedge(c).reversed { -t } else { t };
+                radial::Side { surface: &face.surface, reversed: face.reversed, travel }
+            })
+            .collect();
+        radial::round(middle, t, len, &sides)
     }
 
     /// Every edge's coedges, worked out again from the coedges.
     pub(crate) fn index_uses(&mut self) {
         self.uses = vec![Vec::new(); self.edges.len()];
         for (i, c) in self.coedges.iter().enumerate() {
-            self.uses[c.edge.index()].push(CoedgeId::at(i));
+            entity_mut(&mut self.uses, c.edge.index()).push(CoedgeId::at(i));
         }
     }
 
     pub fn vertex(&self, id: VertexId) -> &Vertex {
-        &self.vertices[id.index()]
+        entity(&self.vertices, id.index())
     }
 
     pub fn edge(&self, id: EdgeId) -> &Edge {
-        &self.edges[id.index()]
+        entity(&self.edges, id.index())
     }
 
     pub fn coedge(&self, id: CoedgeId) -> &Coedge {
-        &self.coedges[id.index()]
+        entity(&self.coedges, id.index())
     }
 
     pub fn lp(&self, id: LoopId) -> &Loop {
-        &self.loops[id.index()]
+        entity(&self.loops, id.index())
     }
 
     /// Whether loop `id` is a single point inside its face: one coedge of a degenerate edge, where
     /// the solid touches itself there or another piece of it touches the face.
     pub fn is_vertex_loop(&self, id: LoopId) -> bool {
-        let cs = &self.lp(id).coedges;
-        cs.len() == 1 && self.edge(self.coedge(cs[0]).edge).is_degenerate()
+        match self.lp(id).coedges.as_slice() {
+            &[only] => self.edge(self.coedge(only).edge).is_degenerate(),
+            _ => false,
+        }
     }
 
     pub fn face(&self, id: FaceId) -> &Face {
-        &self.faces[id.index()]
+        entity(&self.faces, id.index())
     }
 
     pub fn face_mut(&mut self, id: FaceId) -> &mut Face {
-        self.memos.0[id.index()] = Arc::default();
-        &mut self.faces[id.index()]
+        self.forget(id);
+        entity_mut(&mut self.faces, id.index())
+    }
+
+    /// Drops what has been worked out about face `id`'s geometry.
+    fn forget(&mut self, id: FaceId) {
+        *entity_mut(&mut self.memos.0, id.index()) = Arc::default();
     }
 
     /// Replaces every name of every face by what `names_for` gives for it: no names to drop it,
@@ -434,24 +499,24 @@ impl Brep {
 
     /// Renames a face, keeping what has been worked out about its geometry.
     pub fn set_face_names(&mut self, id: FaceId, names: BTreeSet<FaceName>) {
-        self.faces[id.index()].names = names;
+        entity_mut(&mut self.faces, id.index()).names = names;
     }
 
     pub fn memo(&self, id: FaceId) -> &FaceMemo {
-        &self.memos.0[id.index()]
+        entity::<Arc<FaceMemo>>(&self.memos.0, id.index())
     }
 
     pub fn shared_memo(&self, id: FaceId) -> Arc<FaceMemo> {
         #[cfg(debug_assertions)]
         self.memo(id).layout.get_or_init(|| self.layout(id));
-        self.memos.0[id.index()].clone()
+        Arc::clone(entity(&self.memos.0, id.index()))
     }
 
     /// Gives face `id` the memo of a face with exactly its geometry, its loops and coedges in the
     /// same order on edges of the same ranges: the memo keeps some of what it holds by a
     /// coedge's place, and an edge's parameters with it.
     pub fn share_memo(&mut self, id: FaceId, memo: Arc<FaceMemo>) {
-        self.memos.0[id.index()] = memo;
+        *entity_mut(&mut self.memos.0, id.index()) = memo;
         #[cfg(debug_assertions)]
         if let Some(was) = self.memo(id).layout.get() {
             debug_assert!(
@@ -460,6 +525,19 @@ impl Brep {
                 id.index()
             );
         }
+    }
+
+    /// Records that faces `a` and `b` meet nowhere but at the edges and vertices they share, on
+    /// their memos: it holds for as long as both faces keep their geometry.
+    pub fn mark_apart(&self, a: FaceId, b: FaceId) {
+        let (memo_a, memo_b) = (entity(&self.memos.0, a.index()), entity(&self.memos.0, b.index()));
+        memo_a.note_apart(memo_b);
+        memo_b.note_apart(memo_a);
+    }
+
+    /// Whether faces `a` and `b`, or faces of the same geometry, were marked apart.
+    pub fn known_apart(&self, a: FaceId, b: FaceId) -> bool {
+        self.memo(a).is_apart(self.memo(b))
     }
 
     #[cfg(debug_assertions)]
@@ -474,11 +552,11 @@ impl Brep {
     }
 
     pub fn shell(&self, id: ShellId) -> &Shell {
-        &self.shells[id.index()]
+        entity(&self.shells, id.index())
     }
 
     pub fn solid(&self, id: SolidId) -> &Solid {
-        &self.solids[id.index()]
+        entity(&self.solids, id.index())
     }
 
     pub fn vertex_ids(&self) -> impl Iterator<Item = VertexId> + use<> {
@@ -561,10 +639,10 @@ impl Brep {
             .coedges
             .iter()
             .filter(|c| uses(self, c.edge))
-            .map(|c| self.loops[c.lp.index()].face)
+            .map(|c| self.lp(c.lp).face)
             .collect();
         for f in faces {
-            self.memos.0[f.index()] = Arc::default();
+            self.forget(f);
         }
     }
 
@@ -622,84 +700,29 @@ impl Brep {
     /// The coedge's parameter-plane points at edge parameters `ts`, given in the coedge's own
     /// direction (descending when it is reversed).
     pub fn coedge_uvs(&self, c: CoedgeId, ts: &[f64]) -> Vec<Vec2> {
-        let co = self.coedge(c);
+        let coedge = self.coedge(c);
         let surface = &self.face(self.coedge_face(c)).surface;
         let periodic = surface.u_period().is_some() || surface.v_period().is_some();
         if !periodic
             || ts.len() < 2
-            || matches!(co.pcurve, PCurve::Affine { .. } | PCurve::Fitted { .. })
+            || matches!(coedge.pcurve, PCurve::Affine { .. } | PCurve::Fitted { .. })
         {
             return self.coedge_uvs_at(c, ts);
         }
-        // An edge winding round its surface several times (a thread's helix) can turn more than
-        // a period between the points asked for, and continuation then reads a turn as none. A
-        // turn is at least the surface's circumference, so steps an eighth of that along the
-        // curve can never skip one; finer samples cannot tell, as their remainders alias alike.
-        let (Some(curve), PCurve::Projected { seed }) = (&self.edge(co.edge).curve, &co.pcurve)
+        let (Some(curve), PCurve::Projected { seed }, &[t0, .., t1]) =
+            (&self.edge(coedge.edge).curve, &coedge.pcurve, ts)
         else {
             return self.coedge_uvs_at(c, ts);
         };
-        let (t0, t1) = (ts[0], ts[ts.len() - 1]);
-        let mut length = 0.0;
-        let mut prev = curve.eval(t0);
-        for k in 1..=256 {
-            let p = curve.eval(t0 + (t1 - t0) * k as f64 / 256.0);
-            length += p.dist(prev);
-            prev = p;
-        }
-        let (_, su, sv) = surface.d1(seed.x, seed.y);
-        let around = [(surface.u_period(), su), (surface.v_period(), sv)]
-            .iter()
-            .filter_map(|&(p, d)| p.map(|p| p * d.norm()))
-            .filter(|&c| c > 1e-9)
-            .fold(f64::INFINITY, f64::min);
-        let steps = if around.is_finite() {
-            (8.0 * length / around).ceil() as usize
-        } else {
-            0
-        };
-        // That counts the turns a curve of this length could make. Where it asks for steps, how
-        // fast the curve does turn says how many it needs: an edge along a cylinder's axis turns
-        // not at all, however thin the cylinder, and one a tolerance thick would otherwise take
-        // millions.
-        let steps = if steps >= ts.len() - 1 {
-            let n = 32;
-            let mut turns = 0.0;
-            for k in 0..n {
-                let (p, dp) = curve.d1(t0 + (t1 - t0) * (k as f64 + 0.5) / n as f64);
-                let uv = surface.project(p);
-                let (_, su, sv) = surface.d1(uv.x, uv.y);
-                let rate = [(surface.u_period(), su), (surface.v_period(), sv)]
-                    .iter()
-                    .filter_map(|&(per, d)| per.map(|per| (per * d.norm(), d)))
-                    .filter(|&(c, _)| c > 1e-9)
-                    .map(|(c, d)| dp.dot(d).abs() / (d.norm() * c))
-                    .fold(0.0, f64::max);
-                turns += rate * (t1 - t0).abs() / n as f64;
-            }
-            // Sixteen steps a turn, twice what the bound above takes, for the rate between samples.
-            let needed = (16.0 * turns).ceil();
-            if needed.is_finite() {
-                steps.min(needed as usize)
-            } else {
-                steps
-            }
-        } else {
-            steps
-        };
+        // An edge winding round its surface several times (a thread's helix) can turn more than
+        // a period between the points asked for, and continuation then reads a turn as none.
+        let steps = turn_steps(surface, curve, *seed, (t0, t1), ts.len() - 1);
         let per = (steps / (ts.len() - 1) + 1).min(4096);
         if per <= 1 {
             return self.coedge_uvs_at(c, ts);
         }
-        let mut dense = Vec::with_capacity((ts.len() - 1) * per + 1);
-        for w in ts.windows(2) {
-            for k in 0..per {
-                dense.push(w[0] + (w[1] - w[0]) * k as f64 / per as f64);
-            }
-        }
-        dense.push(t1);
-        let uvs = self.coedge_uvs_at(c, &dense);
-        (0..ts.len()).map(|i| uvs[i * per]).collect()
+        let uvs = self.coedge_uvs_at(c, &densified(ts, per));
+        uvs.into_iter().step_by(per).collect()
     }
 
     /// [`Brep::coedge_uvs`] continued from each point asked for to the next.

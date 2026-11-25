@@ -5,7 +5,6 @@
 // M3 hardening: explicit imports instead of a glob; the id check names its entities.
 //! The arena's own entities, as the encoder writes them: everything but the memos, which are what
 //! a process has worked out about the faces, and each edge's uses, which follow from the coedges.
-#![warn(clippy::indexing_slicing)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
