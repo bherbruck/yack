@@ -3,9 +3,11 @@
 // Changes: moved from mesh/bvh.rs to math/bvh.rs (M2); `Bvh::new` takes the triangles' positions and
 // indices rather than a mesh; moved to yack_math::kernel::bvh (M3 W2', D26); paths and visibility only;
 // hardening (w-h1): the four box queries share one walk, nodes and runs are read with checked
-// access, and `Bvh::new` asserts its corner indices.
+// access, and `Bvh::new` refuses a corner index past its positions.
 //! A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 //! segments and triangles: the search structures the thin-place probe, distances and rays share.
+
+use yack_base::kernel::{Result, invalid};
 
 use super::{Aabb, Point3, Transform, Vec3};
 
@@ -27,33 +29,24 @@ enum Node {
 const LEAF_SIZE: usize = 4;
 
 impl Bvh {
-    /// The hierarchy over the boxes of `triangles`, each three indices into `positions`.
-    ///
-    /// # Panics
-    ///
-    /// When a corner index is past the end of `positions`. A mesh's triangles index its own
-    /// positions, so such an index is the caller's bug, never a refusal (a contract panic, counted
-    /// in scores/lints.txt; the firewall reports it as `Internal`).
-    pub fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Bvh {
-        let boxes = triangles
-            .iter()
-            .map(|corners| {
-                let mut b = Aabb::EMPTY;
-                for &i in corners {
-                    let corner = positions.get(i as usize);
-                    assert!(
-                        corner.is_some(),
-                        "Bvh::new: corner index {i} is past the {} positions",
+    /// The hierarchy over the boxes of `triangles`, each three indices into `positions`, or an
+    /// error when a corner index is past the end of `positions`.
+    pub fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Result<Bvh> {
+        let mut boxes = Vec::with_capacity(triangles.len());
+        for corners in triangles {
+            let mut b = Aabb::EMPTY;
+            for &i in corners {
+                let Some(&p) = positions.get(i as usize) else {
+                    return invalid(format!(
+                        "a triangle's corner index {i} is past the mesh's {} positions",
                         positions.len()
-                    );
-                    if let Some(&p) = corner {
-                        b.add(p);
-                    }
-                }
-                b
-            })
-            .collect();
-        Bvh::of_boxes(boxes)
+                    ));
+                };
+                b.add(p);
+            }
+            boxes.push(b);
+        }
+        Ok(Bvh::of_boxes(boxes))
     }
 
     /// The hierarchy over `boxes`, whose indices a query returns.

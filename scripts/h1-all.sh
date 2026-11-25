@@ -6,7 +6,9 @@
 set -u
 PFP=$1; shift; tag=h1; R=/home/brenn/github/yack-ref/bin
 L=/home/brenn/github/yack/swarm/DIGEST.lock
-until mkdir $L 2>/dev/null; do sleep 10; done
+# QUEUE (BRIEF): while swarm/DIGEST.next exists and does not name w-h1, leave the lock alone.
+N=/home/brenn/github/yack/swarm/DIGEST.next
+until { [ ! -e $N ] || grep -q "w-h1" $N; } && mkdir $L 2>/dev/null; do sleep 10; done
 echo "w-h1 record + $# checks since $(date '+%F %T')" > $L/owner
 trap 'rm -rf $L' EXIT; trap 'exit 130' INT TERM HUP
 D=/home/brenn/github/yack-ref/tmp/$tag-digests-$PFP; rm -rf $D; mkdir -p $D

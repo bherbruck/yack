@@ -67,42 +67,58 @@ pub struct Rays<'a> {
 
 impl<'a> Rays<'a> {
     /// The caster over `b`'s faces, from a tessellation of them within `deflection`: the triangles
-    /// `positions` and `triangles` give, `faces` naming each face's run of them.
-    #[allow(clippy::panic)] pub fn from_tessellation(
+    /// `positions` and `triangles` give, `faces` naming each face's run of them; an error when a
+    /// triangle names a corner past `positions`, a run passes the last triangle, or a triangle lies
+    /// in no face's run.
+    pub fn from_tessellation(
         b: &'a Brep,
         positions: &[Point3],
         triangles: &[[u32; 3]],
         faces: &[(FaceId, std::ops::Range<usize>)],
         deflection: f64,
-    ) -> Rays<'a> {
-        let tree = Bvh::new(positions, triangles);
+    ) -> Result<Rays<'a>> {
+        let tree = Bvh::new(positions, triangles)?;
         let mut face_of = vec![None; triangles.len()];
-        for (f, range) in faces {
-            for k in range.clone() {
-                face_of[k] = Some(*f);
-            }
+        for (f, range) in faces.iter().filter(|(_, range)| !range.is_empty()) {
+            let Some(run) = face_of.get_mut(range.clone()) else {
+                return Err(Error::InvalidInput(format!(
+                    "a face's triangles {range:?} pass the mesh's {} triangles",
+                    triangles.len()
+                )));
+            };
+            run.fill(Some(*f));
         }
+        let corner = |i: u32| {
+            positions.get(i as usize).copied().ok_or_else(|| {
+                Error::InvalidInput(format!(
+                    "a triangle's corner index {i} is past the mesh's {} positions",
+                    positions.len()
+                ))
+            })
+        };
         let tris = triangles
             .iter()
             .zip(face_of)
             // The tree names triangles by index, so each keeps its place.
-            .map(|(t, f)| {
-                let f = f.unwrap_or_else(|| panic!("every mesh triangle lies in its face's range"));
-                (f, t.map(|i| positions[i as usize]))
+            .map(|(&[i, j, k], f)| {
+                let f = f.ok_or_else(|| {
+                    Error::InvalidInput("a mesh triangle lies in no face's run".into())
+                })?;
+                Ok((f, [corner(i)?, corner(j)?, corner(k)?]))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let mut reach = Aabb::EMPTY;
         for &q in positions {
             reach.add(q);
         }
-        Rays {
+        Ok(Rays {
             b,
             tris,
             tree,
             deflection,
             domains: b.face_ids().map(|f| face_domain(b, f)).collect(),
             reach,
-        }
+        })
     }
 
     /// Whether a solid of the arena holds `p`, by the parity of a ray's crossings of its faces: a

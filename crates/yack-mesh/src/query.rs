@@ -44,7 +44,7 @@ const MESHES: [MeshOptions; 3] = [
 /// The ray caster over `b`'s faces.
 pub fn rays(b: &Brep) -> Result<Rays<'_>> {
     let (m, opt) = mesh_for(b)?;
-    Ok(Rays::from_tessellation(b, &m.positions, &m.triangles, &m.faces, opt.linear))
+    Rays::from_tessellation(b, &m.positions, &m.triangles, &m.faces, opt.linear)
 }
 
 /// The side of `b` that `sel` names, over `b`'s mesh.

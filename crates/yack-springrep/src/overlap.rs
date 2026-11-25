@@ -79,7 +79,7 @@ impl Body {
         for opt in MESHES {
             match tessellate(&brep, &opt) {
                 Ok(mesh) => {
-                    let bvh = Bvh::new(&mesh.positions, &mesh.triangles);
+                    let bvh = Bvh::new(&mesh.positions, &mesh.triangles)?;
                     let mut bbox = Aabb::EMPTY;
                     for p in &mesh.positions {
                         bbox.add(*p);
@@ -107,7 +107,7 @@ impl Body {
 
     /// Several bodies as one that moves whole, each kept a solid of its own: a host with the
     /// inserts pressed into it needs no union to be tried against others.
-    pub fn joined(parts: &[&Body]) -> Body {
+    pub fn joined(parts: &[&Body]) -> Result<Body> {
         let mut brep = Brep::default();
         let mut mesh = Mesh::default();
         let mut part = Vec::new();
@@ -125,8 +125,8 @@ impl Body {
             bbox.union(&b.bbox);
             deflection = deflection.max(b.deflection);
         }
-        Body {
-            bvh: Bvh::new(&mesh.positions, &mesh.triangles),
+        Ok(Body {
+            bvh: Bvh::new(&mesh.positions, &mesh.triangles)?,
             brep,
             mesh,
             part,
@@ -134,12 +134,12 @@ impl Body {
             deflection,
             bbox,
             volume: std::sync::OnceLock::new(),
-        }
+        })
     }
 
     /// A copy placed by the rigid motion `t`: its mesh moved with it rather than meshed again,
     /// within the same deflection of the moved solid, as a rigid motion keeps every distance.
-    pub fn moved(&self, t: &Transform) -> Body {
+    pub fn moved(&self, t: &Transform) -> Result<Body> {
         let mut brep = self.brep.clone();
         brep.transform(t);
         let mut mesh = self.mesh.clone();
@@ -154,8 +154,8 @@ impl Body {
         if let Some(&v) = self.volume.get() {
             let _ = volume.set(v);
         }
-        Body {
-            bvh: Bvh::new(&mesh.positions, &mesh.triangles),
+        Ok(Body {
+            bvh: Bvh::new(&mesh.positions, &mesh.triangles)?,
             brep,
             mesh,
             part: self.part.clone(),
@@ -163,7 +163,7 @@ impl Body {
             deflection: self.deflection,
             bbox,
             volume,
-        }
+        })
     }
 
     /// The mesh's corners, in the body's frame.
@@ -1001,7 +1001,7 @@ mod tests {
         let pocket = crate::primitive::cylinder(&mouth, 2.0, 3.0, "h").unwrap();
         let plate = Body::new(crate::boolean::difference(&plate, &pocket).unwrap()).unwrap();
         let insert = Body::new(crate::primitive::cylinder(&mouth, 2.0, 2.0, "i").unwrap()).unwrap();
-        let both = Body::joined(&[&plate, &insert]);
+        let both = Body::joined(&[&plate, &insert]).unwrap();
         let above = block([-1.0, -1.0, 7.0], [1.0, 1.0, 8.0]);
         let t = swept_contact(&both, &above, Vec3::Z, &Sweep::default()).unwrap();
         assert!((t - 3.0).abs() < 1e-9, "{t}");
@@ -1059,14 +1059,15 @@ mod tests {
         // 2 mm on, after 3.
         let cube = block([0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
         let wall = block([5.0, -3.0, -1.0], [6.0, 3.0, 3.0]);
-        let slid = cube.moved(&Transform::translation(Vec3::new(1.0, 0.0, 0.0)));
+        let slid = cube.moved(&Transform::translation(Vec3::new(1.0, 0.0, 0.0))).unwrap();
         assert_eq!(slid.points().len(), cube.points().len());
         let t = swept_contact(&slid, &wall, Vec3::X, &Sweep::default()).unwrap();
         assert!((t - 2.0).abs() < 1e-9, "{t}");
         let turned = cube.moved(
             &Transform::rotation(Vec3::ZERO, Vec3::Z, std::f64::consts::FRAC_PI_2)
                 .then(&Transform::translation(Vec3::new(2.0, 0.0, 0.0))),
-        );
+        )
+        .unwrap();
         let t = swept_contact(&turned, &wall, Vec3::X, &Sweep::default()).unwrap();
         assert!((t - 3.0).abs() < 1e-9, "{t}");
     }
