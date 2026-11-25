@@ -298,3 +298,56 @@ impl<'a> Rays<'a> {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invalid_input(r: Result<Rays<'_>>) -> String {
+        match r {
+            Err(Error::InvalidInput(m)) => m,
+            Err(e) => panic!("expected InvalidInput, got {e}"),
+            Ok(_) => panic!("expected InvalidInput, got a caster"),
+        }
+    }
+
+    const CORNERS: [Point3; 3] = [Vec3::ZERO, Vec3::X, Vec3::Y];
+
+    #[test]
+    fn a_corner_past_the_positions_is_invalid_input() {
+        let b = Brep::new();
+        let m = invalid_input(Rays::from_tessellation(&b, &CORNERS, &[[0, 1, 3]], &[], 0.1));
+        assert!(m.contains("corner index 3"), "{m}");
+    }
+
+    #[test]
+    fn a_face_run_past_the_triangles_is_invalid_input() {
+        let b = Brep::new();
+        let faces = [(FaceId::from_raw(0), 0..2)];
+        let m = invalid_input(Rays::from_tessellation(&b, &CORNERS, &[[0, 1, 2]], &faces, 0.1));
+        assert!(m.contains("pass the mesh's 1 triangles"), "{m}");
+    }
+
+    #[test]
+    fn a_triangle_in_no_face_run_is_invalid_input() {
+        let b = Brep::new();
+        let faces = [(FaceId::from_raw(0), 0..1)];
+        let tris = [[0, 1, 2], [2, 1, 0]];
+        let m = invalid_input(Rays::from_tessellation(&b, &CORNERS, &tris, &faces, 0.1));
+        assert!(m.contains("no face's run"), "{m}");
+    }
+
+    #[test]
+    fn an_empty_arena_holds_nothing() {
+        let b = Brep::new();
+        let Ok(rays) = Rays::from_tessellation(&b, &[], &[], &[], 0.1) else {
+            panic!("an empty mesh is a valid caster");
+        };
+        assert_eq!(rays.side(Vec3::new(1.0, 2.0, 3.0)), Side::Outside);
+        assert!(rays.cast(Vec3::ZERO, Vec3::X, (0.0, 10.0)).unwrap().is_empty());
+        assert!(matches!(
+            rays.cast(Vec3::ZERO, Vec3::ZERO, (0.0, 1.0)),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+}

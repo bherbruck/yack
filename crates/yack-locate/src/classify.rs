@@ -237,3 +237,38 @@ pub fn contains(faces: &[(&Domain, Aabb)], p: Point3) -> Option<bool> {
         .into_iter()
         .find_map(|(_, d)| crossings(faces, p, d).map(|n| n % 2 == 1))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit_box() -> Aabb {
+        Aabb { min: Vec3::ZERO, max: Vec3::new(1.0, 1.0, 1.0) }
+    }
+
+    #[test]
+    fn a_ray_through_a_box_spans_its_slabs() {
+        let (lo, hi) = ray_box(Vec3::new(-1.0, 0.5, 0.5), Vec3::X, &unit_box()).unwrap();
+        let pad = 1e-6 * (1.0 + 3f64.sqrt());
+        assert!((lo - (1.0 - pad)).abs() < 1e-15 && (hi - (2.0 + pad)).abs() < 1e-15, "{lo} {hi}");
+    }
+
+    #[test]
+    fn a_ray_beside_or_behind_a_box_misses_it() {
+        assert_eq!(ray_box(Vec3::new(-1.0, 2.0, 0.5), Vec3::X, &unit_box()), None);
+        assert_eq!(ray_box(Vec3::new(3.0, 0.5, 0.5), Vec3::X, &unit_box()), None);
+    }
+
+    #[test]
+    fn a_ray_from_inside_a_box_starts_behind_its_point() {
+        let (lo, hi) = ray_box(Vec3::new(0.5, 0.5, 0.5), Vec3::Z, &unit_box()).unwrap();
+        assert!(lo < 0.0 && hi > 0.5, "{lo} {hi}");
+    }
+
+    #[test]
+    fn no_faces_hold_nothing() {
+        assert_eq!(contains(&[], Vec3::new(0.5, 0.5, 0.5)), Some(false));
+        let plane = Surface::Plane(crate::geom::Plane { frame: crate::math::Frame::WORLD });
+        assert_eq!(touching(&plane, &[], Vec3::ZERO), None);
+    }
+}

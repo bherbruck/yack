@@ -759,3 +759,113 @@ pub fn between(side_a: &Side, side_b: &Side) -> Result<Closest> {
     }
     Ok(answer)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        geom::{Line, Plane},
+        math::Frame,
+    };
+
+    /// A 4 × 4 matrix with `rows` in its top left corner.
+    fn padded(rows: &[&[f64]]) -> [[f64; 4]; 4] {
+        let mut m = [[0.0; 4]; 4];
+        for (i, row) in rows.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                m[i][j] = v;
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn solve_matches_the_closed_form_inverse() {
+        // [4 1; 1 3]⁻¹ [1 2] = [1 7] / 11.
+        let h = padded(&[&[4.0, 1.0], &[1.0, 3.0]]);
+        let x = solve(&h, &[1.0, 2.0, 0.0, 0.0], &[true; 4], 2, 0.0).unwrap();
+        assert!((x[0] - 1.0 / 11.0).abs() < 1e-14 && (x[1] - 7.0 / 11.0).abs() < 1e-14, "{x:?}");
+        assert_eq!(&x[2..], &[0.0, 0.0]);
+    }
+
+    #[test]
+    fn solve_leaves_a_pinned_variable_and_damps() {
+        let h = padded(&[&[4.0, 1.0], &[1.0, 3.0]]);
+        let x = solve(&h, &[1.0, 2.0, 0.0, 0.0], &[true, false, true, true], 2, 0.0).unwrap();
+        assert_eq!(x, [0.25, 0.0, 0.0, 0.0]);
+        let x = solve(&padded(&[&[1.0]]), &[3.0, 0.0, 0.0, 0.0], &[true; 4], 1, 1.0).unwrap();
+        assert!((x[0] - 1.5).abs() < 1e-15, "{x:?}");
+        assert_eq!(solve(&h, &[1.0; 4], &[false; 4], 2, 0.0), Some([0.0; 4]));
+    }
+
+    #[test]
+    fn solve_refuses_what_is_not_positive_definite() {
+        assert_eq!(solve(&padded(&[&[-1.0]]), &[1.0, 0.0, 0.0, 0.0], &[true; 4], 1, 0.0), None);
+        let h = padded(&[&[1.0, 2.0], &[2.0, 1.0]]);
+        assert_eq!(solve(&h, &[1.0, 1.0, 0.0, 0.0], &[true; 4], 2, 0.0), None);
+    }
+
+    #[test]
+    fn descend_drops_a_point_onto_a_line() {
+        let line = Curve::Line(Line { origin: Vec3::ZERO, dir: Vec3::X });
+        let p = Vec3::new(3.0, 4.0, 0.0);
+        let (on_line, at_p, _) = descend(Geo::Curve(&line, 0.0, 10.0), Geo::Point(p), [0.0; 2], [0.0; 2]);
+        assert!(on_line.dist(Vec3::new(3.0, 0.0, 0.0)) < 1e-12, "{on_line:?}");
+        assert_eq!(at_p, p);
+        // Held at the end of the edge's range when the foot lies past it.
+        let (end, ..) = descend(Geo::Curve(&line, 0.0, 2.0), Geo::Point(p), [0.0; 2], [0.0; 2]);
+        assert!(end.dist(Vec3::new(2.0, 0.0, 0.0)) < 1e-12, "{end:?}");
+    }
+
+    #[test]
+    fn descend_drops_a_point_onto_a_plane() {
+        let plane = Surface::Plane(Plane { frame: Frame::WORLD });
+        let p = Vec3::new(1.0, -2.0, 5.0);
+        let (foot, ..) = descend(Geo::Surface(&plane), Geo::Point(p), [0.0; 2], [0.0; 2]);
+        assert!(foot.dist(Vec3::new(1.0, -2.0, 0.0)) < 1e-12, "{foot:?}");
+    }
+
+    #[test]
+    fn triangles_one_above_the_other_are_their_gap_apart() {
+        let f = FaceId::from_raw(0);
+        let low = Piece::Tri(f, [Vec3::ZERO, Vec3::X, Vec3::Y]);
+        let high = Piece::Tri(f, [Vec3::new(0.2, 0.2, 1.5), Vec3::new(2.0, 0.2, 1.5), Vec3::new(0.2, 2.0, 1.5)]);
+        let (d, p, q) = piece_distance(&low, &high);
+        assert!((d - 1.5).abs() < 1e-12 && (p.dist(q) - 1.5).abs() < 1e-12, "{d}");
+        let v = Piece::Pt(VertexId::from_raw(0), Vec3::new(0.25, 0.25, -2.0));
+        assert!((piece_distance(&v, &low).0 - 2.0).abs() < 1e-12);
+        assert!((piece_distance(&low, &v).0 - 2.0).abs() < 1e-12);
+    }
+
+    fn invalid_input(r: Result<Side<'_>>) -> String {
+        match r {
+            Err(crate::Error::InvalidInput(m)) => m,
+            Err(e) => panic!("expected InvalidInput, got {e}"),
+            Ok(_) => panic!("expected InvalidInput, got a side"),
+        }
+    }
+
+    #[test]
+    fn a_bad_mesh_is_invalid_input_for_a_side() {
+        let mut b = Brep::new();
+        let f = b.add_face(Surface::Plane(Plane { frame: Frame::WORLD }), false, []);
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y];
+        let opt = MeshOptions::within(0.1);
+        let sel = Selection::face(f);
+        let m = invalid_input(Side::from_tessellation(&b, &sel, &corners, &[[0, 1, 2]], &[(f, 0..3)], &opt));
+        assert!(m.contains("pass the mesh's 1 triangles"), "{m}");
+        let m = invalid_input(Side::from_tessellation(&b, &sel, &corners, &[[0, 1, 7]], &[(f, 0..1)], &opt));
+        assert!(m.contains("corner index 7"), "{m}");
+        // A face not selected still needs a run inside the mesh, but not good corners.
+        let none = Selection::default();
+        assert!(Side::from_tessellation(&b, &none, &corners, &[[0, 1, 7]], &[(f, 0..1)], &opt).is_ok());
+    }
+
+    #[test]
+    fn a_distance_needs_something_on_each_side() {
+        let b = Brep::new();
+        let opt = MeshOptions::within(0.1);
+        let side = Side::from_tessellation(&b, &Selection::default(), &[], &[], &[], &opt).unwrap();
+        assert!(matches!(between(&side, &side), Err(crate::Error::InvalidInput(_))));
+    }
+}

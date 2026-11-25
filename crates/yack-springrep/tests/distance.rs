@@ -1,6 +1,6 @@
 // yack: Closest distances against closed forms: between bodies, faces, edges and vertices.
 // Adapted from springrep@a03e8a1 tests/distance.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: crate paths springrep:: -> yack_springrep::; this header added.
+// Changes: crate paths springrep:: -> yack_springrep::; this header added; w-h1: a point by a rod.
 //! Closest distances against closed forms: between bodies, faces, edges and vertices.
 
 use std::f64::consts::{PI, TAU};
@@ -351,4 +351,16 @@ fn the_face_at_a_point_just_inside_a_holes_rim_is_the_holes_wall() {
         assert_eq!(plate.face(face).surface.kind(), "plane", "at {turn}");
         assert!(d < 1e-9, "at {turn}: {d}");
     }
+}
+
+/// A rod of radius 2 along z from 0 to 10: a point beside it is its distance from the axis less
+/// the radius away, one over a cap its height above the cap, and one inside no distance away.
+#[test]
+fn a_point_by_a_rod_is_as_far_as_its_side_or_cap() {
+    let frame = Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap();
+    let rod = extrude(&Profile::circle(Vec2::ZERO, 4.0), &frame, 10.0, "rod").unwrap();
+    let near = yack_springrep::mesh::nearest_solid(&rod).unwrap();
+    assert_distance(near.to(Vec3::new(3.0, 4.0, 5.0)).unwrap(), 5.0 - 2.0);
+    assert_distance(near.to(Vec3::new(0.5, -0.5, 13.0)).unwrap(), 3.0);
+    assert_distance(near.to(Vec3::new(0.5, 0.5, 5.0)).unwrap(), 0.0);
 }

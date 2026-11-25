@@ -1,6 +1,6 @@
 // yack: Rays against faces, against closed forms: where they cross, how often, and the normal there.
 // Adapted from springrep@a03e8a1 tests/rays.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: crate paths springrep:: -> yack_springrep::; this header added.
+// Changes: crate paths springrep:: -> yack_springrep::; this header added; w-h1: a point's side of a box.
 //! Rays against faces, against closed forms: where they cross, how often, and the normal there.
 
 use std::f64::consts::{PI, TAU};
@@ -10,7 +10,7 @@ use yack_springrep::{
     geom::Curve,
     math::{Frame, Point3, Vec2, Vec3},
     profile::{NamedSegment, PointsInterp, Profile, ProfileLoop, Segment},
-    rays::Hit,
+    rays::{Hit, Side},
     sweep::{extrude, revolve},
     topo::Brep,
 };
@@ -316,4 +316,14 @@ fn a_ray_just_inside_a_curved_rim_crosses_both_ends() {
     let o = Vec3::new(r * a.cos(), r * a.sin(), -5.0);
     let hits = cast(&disc, o, Vec3::Z, FAR);
     assert_ts(&hits, &[5.0, 9.0]);
+}
+
+/// A point inside a box, one outside it and one on a face: the side the rays give each.
+#[test]
+fn a_point_is_inside_outside_or_on_a_box() {
+    let b = block([0.0; 3], [2.0; 3]);
+    let rays = yack_springrep::mesh::rays(&b).unwrap();
+    assert_eq!(rays.side(Vec3::new(1.0, 0.7, 1.3)), Side::Inside);
+    assert_eq!(rays.side(Vec3::new(3.0, 0.7, 1.3)), Side::Outside);
+    assert_eq!(rays.side(Vec3::new(2.0, 0.7, 1.3)), Side::On);
 }
