@@ -333,6 +333,7 @@ build = []
 loft = []
 sweep = ["loft"]
 primitive = ["loft", "sweep"]
+ruled = ["loft"]
 
 [modules.yack-boolean]
 arrange = []
