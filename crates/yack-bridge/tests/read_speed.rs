@@ -12,10 +12,10 @@ fn read_our_written_files() {
     for p in paths {
         let text = std::fs::read(&p).unwrap();
         let t = std::time::Instant::now();
-        let r = yack_springrep::step::read_part(&text, "r");
+        let r = yack_step::read_part(&text, "r");
         let secs = t.elapsed().as_secs_f64();
         match r {
-            Ok(b) => eprintln!("{}: {secs:.2} s, volume {}, area {}", p.display(), yack_springrep::measure::volume(&b), yack_springrep::measure::area(&b)),
+            Ok(b) => eprintln!("{}: {secs:.2} s, volume {}, area {}", p.display(), yack_measure::volume(&b), yack_measure::area(&b)),
             Err(e) => eprintln!("{}: {secs:.2} s, refused: {e}", p.display()),
         }
     }

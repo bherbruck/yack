@@ -1,11 +1,10 @@
 // yack: probe for conformance B38 projections-ae6d1b45b7175f55 (hidden lines of a sphere): springrep's
 // drawing of the sphere and of its union with itself, each vertex's distance from the exact outline.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::print_stderr)]
-use yack_springrep::{
-    boolean, draw,
-    math::{Frame, Vec3},
-    primitive,
-};
+use yack_boolean as boolean;
+use yack_view::draw;
+use yack_math::kernel::{Frame, Vec3};
+use yack_build::primitive;
 
 #[test]
 #[ignore = "probe: conformance projections-ae6d1b45b7175f55 (B38, hidden lines of a sphere), under diagnosis by w-m11"]

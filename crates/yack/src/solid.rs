@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::engine::{self, Brep};
 use crate::engine_cadrs::{CadrsRef, Held};
 use crate::{EdgeId, Error, ErrorKind, FaceId, Result, Tag, VertexId};
-use yack_springrep::topo::FaceName;
+use yack_topo::FaceName;
 
 /// A solid: an immutable, checked B-rep value, cheap to clone and share between threads.
 ///
@@ -219,7 +219,7 @@ impl Solid {
     pub fn digest(&self) -> [u8; 32] {
         match &self.0.body {
             Body::Empty => [0; 32],
-            Body::Springrep(b) => engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(b.as_ref()))),
+            Body::Springrep(b) => engine::digest(&yack_codec::to_bytes(core::slice::from_ref(b.as_ref()))),
             Body::Cadrs(h) => crate::engine_cadrs::held_digest(h, true),
         }
     }
@@ -335,12 +335,12 @@ impl Solid {
         };
         let feature = self.0.feature.as_deref().unwrap_or("");
         let h = match (forms, result) {
-            (Some(forms), Some(result)) => yack_springrep::topo::history::derive(&forms, result, feature, &edges),
+            (Some(forms), Some(result)) => yack_topo::history::derive(&forms, result, feature, &edges),
             // a cadrs-held solid among them: from the face names alone
             _ => {
                 let names: Vec<Vec<std::collections::BTreeSet<FaceName>>> = inputs.iter().map(|s| s.face_names()).collect();
                 let refs: Vec<&[std::collections::BTreeSet<FaceName>]> = names.iter().map(Vec::as_slice).collect();
-                yack_springrep::topo::history::derive_names(&refs, &self.face_names(), feature, &edges)
+                yack_topo::history::derive_names(&refs, &self.face_names(), feature, &edges)
             }
         };
         let h = crate::history::carried(&h, &self, inputs);
@@ -371,7 +371,7 @@ impl Solid {
     pub(crate) fn with_read_history(self) -> Solid {
         match self.body() {
             Body::Springrep(b) => {
-                let h = crate::history::carried(&yack_springrep::topo::history::read(b), &self, &[]);
+                let h = crate::history::carried(&yack_topo::history::read(b), &self, &[]);
                 self.with_carried(h)
             }
             _ => self,
@@ -506,7 +506,7 @@ impl Solid {
         }));
         match self.brep() {
             Some(b) => {
-                let h = crate::history::carried(&yack_springrep::topo::history::identity(b), &named, &[self]);
+                let h = crate::history::carried(&yack_topo::history::identity(b), &named, &[self]);
                 named.with_carried(h)
             }
             None => named,
@@ -559,12 +559,14 @@ fn rename_held(h: &mut Held, from: &str, to: &str) {
 /// The digest of `b`'s topology and geometry alone, its face names stripped.
 fn bare_digest(b: &Brep) -> [u8; 32] {
     let mut bare = b.clone();
-    bare.rename_faces(|_| None::<yack_springrep::topo::FaceName>);
-    engine::digest(&yack_springrep::codec::to_bytes(core::slice::from_ref(&bare)))
+    bare.rename_faces(|_| None::<yack_topo::FaceName>);
+    engine::digest(&yack_codec::to_bytes(core::slice::from_ref(&bare)))
 }
 
 /// The engine's id types, named once.
 pub(crate) mod engine_ids {
-    pub(crate) use yack_springrep::topo::{EdgeId as Edge, FaceId as Face, VertexId as Vertex};
+    pub(crate) use yack_topo::EdgeId as Edge;
+    pub(crate) use yack_topo::FaceId as Face;
+    pub(crate) use yack_topo::VertexId as Vertex;
 }
 

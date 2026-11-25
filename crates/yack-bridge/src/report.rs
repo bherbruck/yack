@@ -1,13 +1,11 @@
 // yack: the M1.9 exit check: one solid carried springrep → cadrs → springrep and compared (MAPPING.md §5).
 use yack_cadrs::PointClass;
 use yack_cadrs::native::{Body, CheckLevel, P3, classify, mass};
-use yack_springrep::{
-    check,
-    math::Vec3,
-    measure,
-    rays::Side,
-    topo::Brep,
-};
+use yack_check as check;
+use yack_math::kernel::Vec3;
+use yack_measure as measure;
+use yack_locate::rays::Side;
+use yack_topo::Brep;
 
 use crate::{to_cadrs, to_springrep};
 
@@ -168,7 +166,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
     // Creases: at each edge's midpoint, springrep's normal is None where the faces meet at an
     // angle; the body brought back must agree edge for edge.
     let (os, ob) = (measure::Outlines::new(s), measure::Outlines::new(&back));
-    let within = 10.0 * yack_springrep::tol::LINEAR;
+    let within = 10.0 * yack_tol::LINEAR;
     for (e, g) in s.edge_ids().zip(back.edge_ids()) {
         let edge = s.edge(e);
         let Some(curve) = &edge.curve else { continue };
@@ -189,7 +187,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
             ));
         }
     }
-    match (yack_springrep::mesh::rays(s), yack_springrep::mesh::rays(&back)) {
+    match (yack_mesh::rays(s), yack_mesh::rays(&back)) {
         (Ok(rs), Ok(rb)) => {
             let polys: Vec<_> = body.faces().iter().map(|f| classify::face_polygons(&body, f)).collect();
             for p in samples(s) {
@@ -198,7 +196,7 @@ pub fn round_trip(s: &Brep) -> RoundTrip {
                 if got != want {
                     say(format!("classify: back {got:?} vs {want:?} at ({}, {}, {})", p.x, p.y, p.z));
                 }
-                let c = classify::classify_point(&body, &polys, &P3::new(p.x, p.y, p.z), yack_springrep::tol::LINEAR);
+                let c = classify::classify_point(&body, &polys, &P3::new(p.x, p.y, p.z), yack_tol::LINEAR);
                 if !class_matches(want, c) {
                     say(format!("cadrs-classify: cadrs {c:?} vs {want:?} at ({}, {}, {})", p.x, p.y, p.z));
                 }

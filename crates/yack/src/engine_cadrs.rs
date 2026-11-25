@@ -13,7 +13,7 @@ use yack_cadrs::facade::motion as cmotion;
 use yack_cadrs::yack_glue::{self, Made, Move};
 use yack_cadrs::facade::names::{self as cnames, FaceRole, Wall};
 use yack_cadrs::{BodyId, BoolOp, DefaultKernel, History, InputFace, KernelError, Origin};
-use yack_springrep::topo::FaceName;
+use yack_topo::FaceName;
 
 use crate::engine::{self, Brep};
 use crate::{Error, ErrorKind, FrameLaw, Motion, Result, Solid, Stage};
@@ -173,11 +173,11 @@ fn result(op: &'static str, feature: &str, session: &Arc<Mutex<DefaultKernel>>, 
         // Decided to the agreement alone (an exact volume took 81% of bench ring's 36 s); the area,
         // exact, only describes a refusal.
         match &mass {
-            Some(m) if !yack_springrep::measure::volume_agrees(&b, m.volume, yack_bridge::CADRS_AGREE) => Err(format!(
+            Some(m) if !yack_measure::volume_agrees(&b, m.volume, yack_bridge::CADRS_AGREE) => Err(format!(
                 "the carried body's volume is not within {} of cadrs's {} (its area {}; cadrs's {})",
                 yack_bridge::CADRS_AGREE,
                 m.volume,
-                yack_springrep::measure::area(&b),
+                yack_measure::area(&b),
                 m.surface_area
             )),
             _ => Ok((b, edges)),
@@ -349,7 +349,7 @@ pub(crate) fn boolean(op: &'static str, how: BoolOp, a: &Solid, tools: &[&Solid]
     if matches!(how, BoolOp::Intersect)
         && out.is_empty()
         && let (Some(x), Some(y)) = (a.brep(), tools.first().and_then(|t| t.brep()))
-        && yack_springrep::facade::api::boxes_overlap(x, y)
+        && yack_measure::guard::boxes_overlap(x, y)
     {
         return Err(Error::failed(op, Stage::Classify, "cadrs declines: an empty intersection of solids whose boxes overlap"));
     }

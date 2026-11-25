@@ -4,7 +4,7 @@ use yack_cadrs::{DefaultKernel, Kernel};
 
 /// How far, relative, a cadrs re-read's volume and area may be from the solid's. cadrs's reader,
 /// like springrep's, sews and fits what it reads, so it is a measuring proxy, not an exact one: the
-/// same bound as springrep's backstop (`yack_springrep::facade::exchange::WRITTEN_AGREES`), a decade
+/// same bound as springrep's backstop (`yack_step::exchange::WRITTEN_AGREES`), a decade
 /// above a healing reader's noise; the faults it guards against are percent-sized.
 pub const CADRS_WRITTEN_AGREES: f64 = 1e-5; // tol: a healing reader as a measuring proxy
 

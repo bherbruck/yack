@@ -1,7 +1,7 @@
 // yack: small public value types: planes, rays, ids, tags and query results.
 use core::fmt;
 
-use yack_springrep::facade::api;
+
 
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
@@ -421,7 +421,7 @@ impl FaceRef<'_> {
     /// (Its example is on [`FaceRef`].)
     pub fn area(&self) -> f64 {
         *self.area.get_or_init(|| match self.at {
-            FaceAt::Springrep(b, f) => yack_springrep::measure::face_area(b, f),
+            FaceAt::Springrep(b, f) => yack_measure::face_area(b, f),
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::area", h, f).map_or(f64::NAN, |x| x.area),
         })
     }
@@ -430,7 +430,7 @@ impl FaceRef<'_> {
     /// (Its example is on [`FaceRef`].)
     pub fn centroid(&self) -> Point3 {
         *self.centroid.get_or_init(|| match self.at {
-            FaceAt::Springrep(b, f) => engine::point(yack_springrep::measure::face_centroid(b, f)),
+            FaceAt::Springrep(b, f) => engine::point(yack_measure::face_centroid(b, f)),
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::centroid", h, f)
                 .map_or(Point3::new(f64::NAN, f64::NAN, f64::NAN), |x| x.centroid),
         })
@@ -441,7 +441,7 @@ impl FaceRef<'_> {
     pub fn bbox(&self) -> Aabb {
         *self.bbox.get_or_init(|| match self.at {
             FaceAt::Springrep(b, f) => {
-                let bb = yack_springrep::measure::face_bbox(b, f);
+                let bb = yack_measure::face_bbox(b, f);
                 Aabb::new(engine::point(bb.min), engine::point(bb.max))
             }
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_facts("FaceRef::bbox", h, f).map_or(
@@ -482,7 +482,7 @@ impl FaceRef<'_> {
     /// ```
     pub fn normal_at(&self, p: impl Into<Point3>) -> Option<Vec3> {
         match self.at {
-            FaceAt::Springrep(b, f) => api::face_normal_at(b, f, engine::p3(p.into())).map(engine::vec),
+            FaceAt::Springrep(b, f) => yack_topo::local::face_normal_at(b, f, engine::p3(p.into())).map(engine::vec),
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_normal_at(h, f, p.into()),
         }
     }
@@ -498,7 +498,7 @@ impl FaceRef<'_> {
     pub fn closest(&self, p: impl Into<Point3>) -> Result<Point3> {
         match self.at {
             FaceAt::Springrep(b, f) => {
-                api::face_closest(b, f, engine::p3(p.into())).map(engine::point).map_err(|e| engine::error("FaceRef::closest", e))
+                yack_mesh::pick::face_closest(b, f, engine::p3(p.into())).map(engine::point).map_err(|e| engine::error("FaceRef::closest", e))
             }
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_closest(h, f, p.into()),
         }
@@ -515,7 +515,7 @@ impl FaceRef<'_> {
     /// ```
     pub fn sample(&self, nu: usize, nv: usize) -> Vec<Vec<Point3>> {
         match self.at {
-            FaceAt::Springrep(b, f) => api::face_grid(b, f, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect(),
+            FaceAt::Springrep(b, f) => yack_measure::guard::face_grid(b, f, nu, nv).into_iter().map(|r| r.into_iter().map(engine::point).collect()).collect(),
             FaceAt::Cadrs(h, f) => crate::engine_cadrs::held_face_grid(h, f, nu, nv),
         }
     }
@@ -618,7 +618,7 @@ impl EdgeRef<'_> {
     /// ```
     pub fn point(&self, t: f64) -> Point3 {
         match self.at {
-            EdgeAt::Springrep(b, e) => api::edge_point(b, e, t).map_or(self.ends[0], engine::point),
+            EdgeAt::Springrep(b, e) => yack_topo::local::edge_point(b, e, t).map_or(self.ends[0], engine::point),
             EdgeAt::Cadrs(h, e) => crate::engine_cadrs::held_edge_point(h, e, t).unwrap_or(self.ends[0]),
         }
     }
@@ -634,7 +634,7 @@ impl EdgeRef<'_> {
     /// ```
     pub fn points(&self, n: usize) -> Vec<Point3> {
         match self.at {
-            EdgeAt::Springrep(b, e) => api::edge_points(b, e, n).into_iter().map(engine::point).collect(),
+            EdgeAt::Springrep(b, e) => yack_topo::local::edge_points(b, e, n).into_iter().map(engine::point).collect(),
             EdgeAt::Cadrs(h, e) => crate::engine_cadrs::held_edge_points(h, e, n),
         }
     }

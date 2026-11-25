@@ -1,12 +1,11 @@
 // yack: routing to the temporary springrep engine (PLAN §3.2, M1.2): type conversions and error
 // mapping only. No arithmetic here (gate 13); anything computed goes through yack-math.
-use yack_springrep as sr;
 
-use sr::math::{Vec2 as SrVec2, Vec3 as SrVec3};
+use yack_math::kernel::{Vec2 as SrVec2, Vec3 as SrVec3};
 
 use crate::{Error, ErrorKind, Frame, Point2, Point3, Profile, Result, Segment, Solid, Spline3, Stage, Vec3};
 
-pub(crate) use sr::topo::Brep;
+pub(crate) use yack_topo::Brep;
 
 /// The feature name an operation builds its new faces under; [`made`] records it on the result
 /// (made deterministic there) so `Solid::named` can find exactly those faces.
@@ -27,13 +26,13 @@ pub(crate) fn p3(p: Point3) -> SrVec3 {
 }
 
 /// A loop's segments as springrep's (unscaled).
-pub(crate) fn loop_segments(op: &'static str, l: &crate::Loop) -> Result<Vec<sr::profile::Segment>> {
+pub(crate) fn loop_segments(op: &'static str, l: &crate::Loop) -> Result<Vec<yack_profile::Segment>> {
     l.segments().iter().map(|s| segment(op, s, None)).collect()
 }
 
 /// springrep's lines, arcs and circles (a rounded or offset loop) as yack's segments.
-pub(crate) fn segments_back(op: &'static str, segs: Vec<sr::profile::Segment>) -> Result<Vec<Segment>> {
-    use sr::profile::Segment as S;
+pub(crate) fn segments_back(op: &'static str, segs: Vec<yack_profile::Segment>) -> Result<Vec<Segment>> {
+    use yack_profile::Segment as S;
     let pt = |v: SrVec2| Point2::new(v.x, v.y);
     segs.into_iter()
         .map(|s| match s {
@@ -64,34 +63,34 @@ pub(crate) fn vec(v: SrVec3) -> Vec3 {
 /// The same frame in springrep's terms.
 /// Built as springrep's own adapter builds it (`Frame::new(origin, z, x)`: z made unit, x squared
 /// against it, y = z × x), so a near-degenerate case reads the frame to the last bit alike.
-pub(crate) fn frame(f: &Frame) -> sr::math::Frame {
-    let copied = sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.y().vec()), z: v3(f.z().vec()) };
-    sr::math::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
+pub(crate) fn frame(f: &Frame) -> yack_math::kernel::Frame {
+    let copied = yack_math::kernel::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.y().vec()), z: v3(f.z().vec()) };
+    yack_math::kernel::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
 }
 
 /// The frame's xz plane as a sketch frame (x along the frame's x, sketch y along the frame's z),
 /// so a profile drawn in it revolves about the frame's z.
-pub(crate) fn meridian(f: &Frame) -> sr::math::Frame {
-    let copied = sr::math::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.z().vec()), z: v3(-f.y().vec()) };
-    sr::math::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
+pub(crate) fn meridian(f: &Frame) -> yack_math::kernel::Frame {
+    let copied = yack_math::kernel::Frame { origin: p3(f.origin()), x: v3(f.x().vec()), y: v3(f.z().vec()), z: v3(-f.y().vec()) };
+    yack_math::kernel::Frame::new(copied.origin, copied.z, copied.x).unwrap_or(copied)
 }
 
 /// springrep's refusal as yack's error, from `op`: `Invalid` only where the input breaks a stated
-/// requirement of the op ([`sr::facade::api::breaks_requirement`]); springrep's other "invalid"
+/// requirement of the op ([`yack_edit::requirement::breaks_requirement`]); springrep's other "invalid"
 /// refusals are its own limits ("an offset closes a torus to nothing", an extrusion of zero inside
 /// a face deletion) and come out `Failed`, so another engine may try.
-pub(crate) fn error(op: &'static str, e: sr::Error) -> Error {
+pub(crate) fn error(op: &'static str, e: yack_base::kernel::Error) -> Error {
     let detail = e.to_string();
     let invalid = |stage| Error { kind: ErrorKind::Invalid, op, arg: None, stage: Some(stage), detail: detail.clone() };
     match &e {
-        sr::Error::InvalidInput(_) if sr::facade::api::breaks_requirement(op, &detail) => invalid(Stage::Validate),
-        sr::Error::InvalidResult(_) if sr::facade::api::breaks_requirement(op, &detail) => invalid(Stage::Check),
+        yack_base::kernel::Error::InvalidInput(_) if yack_edit::requirement::breaks_requirement(op, &detail) => invalid(Stage::Validate),
+        yack_base::kernel::Error::InvalidResult(_) if yack_edit::requirement::breaks_requirement(op, &detail) => invalid(Stage::Check),
         // springrep could not build a request that breaks no requirement: a failure, not a refusal
         // of the request (so it still counts as a refusal where one is due)
-        sr::Error::InvalidInput(_) => Error::failed(op, Stage::Validate, detail),
-        sr::Error::Unsupported(_) => Error::new(ErrorKind::Unsupported, op, detail),
-        sr::Error::Numerical(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: None, detail },
-        sr::Error::InvalidResult(_) => Error::failed(op, Stage::Check, detail),
+        yack_base::kernel::Error::InvalidInput(_) => Error::failed(op, Stage::Validate, detail),
+        yack_base::kernel::Error::Unsupported(_) => Error::new(ErrorKind::Unsupported, op, detail),
+        yack_base::kernel::Error::Numerical(_) => Error { kind: ErrorKind::Failed, op, arg: None, stage: None, detail },
+        yack_base::kernel::Error::InvalidResult(_) => Error::failed(op, Stage::Check, detail),
     }
 }
 
@@ -104,7 +103,7 @@ pub(crate) const BLOCK_SIDES: &[(&str, &str)] =
 
 /// A springrep result whose new faces carry `feature`, with that feature's face names renamed by
 /// `names` (engine names to yack's role vocabulary, see [`role`]).
-pub(crate) fn made_as(feature: &str, op: &'static str, names: &[(&str, &str)], r: sr::Result<Brep>) -> Result<Solid> {
+pub(crate) fn made_as(feature: &str, op: &'static str, names: &[(&str, &str)], r: yack_base::kernel::Result<Brep>) -> Result<Solid> {
     made(
         feature,
         op,
@@ -152,14 +151,14 @@ pub(crate) fn is_internal_feature(name: &str) -> bool {
 }
 
 /// A springrep result whose new faces carry `feature`, as a solid that remembers it.
-pub(crate) fn made(feature: &str, op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
+pub(crate) fn made(feature: &str, op: &'static str, r: yack_base::kernel::Result<Brep>) -> Result<Solid> {
     r.map(|b| Solid::from_springrep(b).with_feature(feature)).map_err(|e| error(op, e))
 }
 
 /// A springrep result whose new faces the engine named under its own fixed feature `engine_name`
 /// (`edit::offset`'s "offset", `edit::shell`'s "shell"): those are renamed to the op's own,
 /// content-derived feature, so `named`, `faces_tagged` and roles work as for every other op.
-pub(crate) fn made_from(engine_name: &str, op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
+pub(crate) fn made_from(engine_name: &str, op: &'static str, r: yack_base::kernel::Result<Brep>) -> Result<Solid> {
     let r = r.map(|mut b| {
         b.rename_faces(|n| {
             let mut n = n.clone();
@@ -174,7 +173,7 @@ pub(crate) fn made_from(engine_name: &str, op: &'static str, r: sr::Result<Brep>
 }
 
 /// A springrep result as a solid.
-pub(crate) fn solid(op: &'static str, r: sr::Result<Brep>) -> Result<Solid> {
+pub(crate) fn solid(op: &'static str, r: yack_base::kernel::Result<Brep>) -> Result<Solid> {
     r.map(Solid::from_springrep).map_err(|e| error(op, e))
 }
 
@@ -187,8 +186,8 @@ fn at(p: Point2, scale: Option<f64>) -> SrVec2 {
     p2(scale.map_or(p, |s| yack_math::scale2(p, s)))
 }
 
-fn segment(op: &'static str, s: &Segment, scale: Option<f64>) -> Result<sr::profile::Segment> {
-    use sr::profile::Segment as S;
+fn segment(op: &'static str, s: &Segment, scale: Option<f64>) -> Result<yack_profile::Segment> {
+    use yack_profile::Segment as S;
     let len = |l: f64| scale.map_or(l, |s| yack_math::scale_length(l, s));
     let ctrl3 = |ctrl: &[Point2]| -> Vec<SrVec3> {
         ctrl.iter().map(|&c| at(c, scale)).map(|c| SrVec3::new(c.x, c.y, 0.0)).collect()
@@ -213,11 +212,11 @@ fn segment(op: &'static str, s: &Segment, scale: Option<f64>) -> Result<sr::prof
         Segment::Nurbs { weights: Some(_), .. } => return Err(unsupported(op, "a rational NURBS segment")),
         Segment::Nurbs { degree, knots, ctrl, weights: None } => {
             let degree = usize::try_from(*degree).unwrap_or(usize::MAX);
-            let curve = sr::geom::BSpline::new(degree, knots.clone(), ctrl3(ctrl)).map_err(|e| error(op, e))?;
+            let curve = yack_geom::BSpline::new(degree, knots.clone(), ctrl3(ctrl)).map_err(|e| error(op, e))?;
             S::Spline { curve, reversed: false }
         }
         Segment::PeriodicSpline { degree: 3, knots, ctrl } => {
-            let curve = sr::geom::BSpline::periodic_cubic(knots.clone(), ctrl3(ctrl)).map_err(|e| error(op, e))?;
+            let curve = yack_geom::BSpline::periodic_cubic(knots.clone(), ctrl3(ctrl)).map_err(|e| error(op, e))?;
             S::Spline { curve, reversed: false }
         }
         Segment::PeriodicSpline { .. } => return Err(unsupported(op, "a periodic spline of degree other than 3")),
@@ -243,7 +242,7 @@ pub(crate) fn segment_parts(p: &Profile) -> Vec<String> {
 
 /// A yack profile as springrep's, each segment named by its label or by its place in the profile
 /// (numbered through every loop, so a hole's faces never share an outline's names).
-pub(crate) fn profile(op: &'static str, p: &Profile, scale: Option<f64>) -> Result<sr::profile::Profile> {
+pub(crate) fn profile(op: &'static str, p: &Profile, scale: Option<f64>) -> Result<yack_profile::Profile> {
     let mut n = 0usize;
     let mut loops = Vec::new();
     for l in core::iter::once(p.outer()).chain(p.holes()) {
@@ -254,21 +253,21 @@ pub(crate) fn profile(op: &'static str, p: &Profile, scale: Option<f64>) -> Resu
                 None => format!("{SEGMENT}s{n}"),
             };
             n = n.saturating_add(1);
-            segments.push(sr::profile::NamedSegment::new(segment(op, s, scale)?, name));
+            segments.push(yack_profile::NamedSegment::new(segment(op, s, scale)?, name));
         }
-        loops.push(sr::profile::ProfileLoop { segments });
+        loops.push(yack_profile::ProfileLoop { segments });
     }
-    Ok(sr::profile::Profile { loops })
+    Ok(yack_profile::Profile { loops })
 }
 
 /// A yack spline as a springrep curve, its control points carried through `place`, and the
 /// curve's parameter domain.
-pub(crate) fn spline(op: &'static str, s: &Spline3, place: impl Fn(Point3) -> Point3) -> Result<(sr::geom::Curve, (f64, f64))> {
+pub(crate) fn spline(op: &'static str, s: &Spline3, place: impl Fn(Point3) -> Point3) -> Result<(yack_geom::Curve, (f64, f64))> {
     let degree = usize::try_from(s.degree()).unwrap_or(usize::MAX);
     let ctrl = s.ctrl().iter().map(|&c| p3(place(c))).collect();
-    let b = sr::geom::BSpline::new(degree, s.knots().to_vec(), ctrl).map_err(|e| error(op, e))?;
+    let b = yack_geom::BSpline::new(degree, s.knots().to_vec(), ctrl).map_err(|e| error(op, e))?;
     let domain = b.domain();
-    Ok((sr::geom::Curve::BSpline(b), domain))
+    Ok((yack_geom::Curve::BSpline(b), domain))
 }
 
 /// A 32-byte digest of `bytes`: four FNV-1a lanes with different seeds.

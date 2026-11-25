@@ -8,11 +8,9 @@ use yack_cadrs::native::{
     NurbsSurface as CNurbsSurface, P3, Shell as CShell, Solid as CSolid, Surface as CSurface, V3, Vertex as CVertex,
 };
 use yack_cadrs::native::{math::P2, nurbs::H};
-use yack_springrep::{
-    geom::{Curve as SCurve, Surface as SSurface},
-    math::{Frame as SFrame, Vec2, Vec3},
-    topo::{Brep, CoedgeId, FaceName, PCurve},
-};
+use yack_geom::{Curve as SCurve, Surface as SSurface};
+use yack_math::kernel::{Frame as SFrame, Vec2, Vec3};
+use yack_topo::{Brep, CoedgeId, FaceName, PCurve};
 
 use crate::{Error, Result};
 
@@ -152,7 +150,7 @@ fn clamp(mut n: CNurbsCurve) -> Result<CNurbsCurve> {
 /// `knot(i + n) = knot(i) + period`, control points repeating every `n`) wraps its parameter;
 /// cadrs's does not, so it is unrolled over exactly the spans `range` covers: the same curve,
 /// knots and control points, shifted by whole periods.
-fn bspline(b: &yack_springrep::geom::BSpline, range: (f64, f64)) -> Result<CCurve> {
+fn bspline(b: &yack_geom::BSpline, range: (f64, f64)) -> Result<CCurve> {
     let (p, knots, ctrl) = (b.degree(), b.knots(), b.control_points());
     let Some(period) = b.period() else {
         return nurbs_curve(p, knots, ctrl, None);
@@ -283,7 +281,7 @@ fn fresh_pcurve(surf: &CSurface, edge: &CEdge, near: Option<P2>) -> Result<(CCur
 fn remapped_pcurve(
     b: &Brep,
     c: CoedgeId,
-    el: &yack_springrep::geom::Ellipse,
+    el: &yack_geom::Ellipse,
     surf: &CSurface,
     edge: &CEdge,
 ) -> Result<(CCurve, f64)> {

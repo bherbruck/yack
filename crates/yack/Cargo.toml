@@ -11,12 +11,27 @@ publish = true
 [dependencies]
 yack-base = { path = "../yack-base" }
 yack-blend = { path = "../yack-blend" }
+yack-boolean = { path = "../yack-boolean" }
 yack-bridge = { path = "../yack-bridge" }
+yack-build = { path = "../yack-build" }
 yack-cadrs = { path = "../yack-cadrs" }
+yack-check = { path = "../yack-check" }
+yack-codec = { path = "../yack-codec" }
+yack-edit = { path = "../yack-edit" }
+yack-geom = { path = "../yack-geom" }
+yack-locate = { path = "../yack-locate" }
 yack-math = { path = "../yack-math" }
-yack-springrep = { path = "../yack-springrep" }
+yack-measure = { path = "../yack-measure" }
+yack-mesh = { path = "../yack-mesh" }
+yack-profile = { path = "../yack-profile" }
+yack-step = { path = "../yack-step" }
 yack-swept = { path = "../yack-swept" }
 yack-tol = { path = "../yack-tol" }
+yack-topo = { path = "../yack-topo" }
+yack-view = { path = "../yack-view" }
+
+[dev-dependencies]
+yack-intersect = { path = "../yack-intersect" }
 
 [features]
 # Tool-only (yack-bench, yack-conformance): force one engine per run for the M1.10 bake-off, and

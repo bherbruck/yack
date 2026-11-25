@@ -239,7 +239,7 @@ impl Loop {
     pub fn rounded(&self, radius: f64) -> Result<Loop> {
         let op = "Loop::rounded";
         let segs = crate::engine::loop_segments(op, self)?;
-        let out = yack_springrep::facade::loops::round_loop(&segs, radius).map_err(|e| crate::engine::error(op, e))?;
+        let out = yack_profile::loops::round_loop(&segs, radius).map_err(|e| crate::engine::error(op, e))?;
         Loop::new(crate::engine::segments_back(op, out)?)
     }
 
@@ -259,7 +259,7 @@ impl Loop {
     pub fn offset(&self, distance: f64) -> Result<Loop> {
         let op = "Loop::offset";
         let segs = crate::engine::loop_segments(op, self)?;
-        let out = yack_springrep::facade::loops::offset_loop(&segs, distance).map_err(|e| crate::engine::error(op, e))?;
+        let out = yack_profile::loops::offset_loop(&segs, distance).map_err(|e| crate::engine::error(op, e))?;
         Loop::new(crate::engine::segments_back(op, out)?)
     }
 
@@ -347,7 +347,7 @@ impl Loop {
     pub fn through(points: &[[f64; 2]]) -> Result<Loop> {
         let op = "Loop::through";
         let (knots, ctrl) =
-            yack_springrep::facade::api::periodic_through(points).map_err(|e| crate::engine::error(op, e))?;
+            yack_geom::periodic_through(points).map_err(|e| crate::engine::error(op, e))?;
         let ctrl = ctrl.into_iter().map(Point2::from).collect();
         Loop::labelled(op, vec![Segment::PeriodicSpline { degree: 3, knots, ctrl }], vec![None])
     }

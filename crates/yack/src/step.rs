@@ -1,7 +1,7 @@
 // yack: `yack::step`, STEP exchange routed to the engine (M1.5, w-m11-springrep). Reading runs
 // behind the panic firewall: a file is untrusted input.
 //! STEP exchange (AP214, exact B-rep; never faceted).
-use yack_springrep::facade::exchange as sr;
+use yack_step::exchange as sr;
 
 use crate::{Error, Result, Solid, Stage, engine, engine_cadrs, firewall, ladder};
 

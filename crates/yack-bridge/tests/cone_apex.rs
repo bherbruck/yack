@@ -3,14 +3,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use yack_cadrs::native::Body;
 use yack_cadrs::{DefaultKernel, Kernel, yack_glue};
-use yack_springrep::math::{Frame, Vec3};
+use yack_math::kernel::{Frame, Vec3};
 
 #[test]
 #[ignore = "open: cadrs still sweeps the bridged pointed cone only as a mesh (w-m11, cone apex-first work)"]
 fn a_bridged_pointed_cone_sweeps_as_cadrs_own() {
     let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
     let base = Frame::new(Vec3::new(5.0 * c, 0.0, 5.0 * s), Vec3::new(-c, 0.0, -s), Vec3::new(0.0, 1.0, 0.0)).unwrap();
-    let spike = yack_springrep::primitive::cone(&base, 7.0 * 25f64.to_radians().tan(), 0.0, 7.0, "k").unwrap();
+    let spike = yack_build::primitive::cone(&base, 7.0 * 25f64.to_radians().tan(), 0.0, 7.0, "k").unwrap();
     let mut k = DefaultKernel::new();
     let body = yack_bridge::to_cadrs(&spike).unwrap().0;
     dump("bridged", &body);
@@ -27,7 +27,7 @@ fn a_bridged_pointed_cone_sweeps_as_cadrs_own() {
     dump("cadrs's own", &k.get(own).unwrap());
     let id = k.insert(body);
     let m = k.mass_properties(id).unwrap();
-    assert!((m.volume - yack_springrep::measure::volume(&spike)).abs() < 1e-9 * m.volume, "{} vs springrep's", m.volume);
+    assert!((m.volume - yack_measure::volume(&spike)).abs() < 1e-9 * m.volume, "{} vs springrep's", m.volume);
     let turn = yack_glue::Move::Turn { point: [0.0; 3], axis: [0.0, 0.0, 1.0], angle: 150f64.to_radians() };
     let swept = yack_glue::swept(&mut k, id, &turn).unwrap().0;
     let v = k.mass_properties(swept).unwrap().volume;

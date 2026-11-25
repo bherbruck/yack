@@ -1,7 +1,7 @@
 // yack: edits on `Solid` (signed distances: positive grows), routed to springrep's `edit` through
 // its facade glue (M1.4). `swept` stays a stub: springrep has no swept-solid operation.
 use yack_cadrs::yack_glue as glue;
-use yack_springrep::facade::{api, edit as sr};
+use yack_edit::glue as sr;
 
 use crate::{engine_cadrs, firewall, ladder};
 use crate::solid::engine_ids;
@@ -59,7 +59,7 @@ impl Solid {
                 &|| {
                     let b = self.need(op)?;
                     let out = engine::made_from("offset", op, sr::offset(b, distance))?;
-                    if api::radius_collapses(b, None, distance, false) {
+                    if yack_topo::local::radius_collapses(b, None, distance, false) {
                         return guard(out, "a round face would collapse at this distance (a hole closing, a rod vanishing)");
                     }
                     Ok(out)
@@ -92,7 +92,7 @@ impl Solid {
                 op,
                 &|| {
                     let out = engine::made(engine::PROVISIONAL, op, sr::offset_faces_named(self.need(op)?, &f, distance, engine::PROVISIONAL))?;
-                    if api::radius_collapses(self.need(op)?, Some(&f), distance, false) {
+                    if yack_topo::local::radius_collapses(self.need(op)?, Some(&f), distance, false) {
                         return guard(out, "a round face would collapse at this distance");
                     }
                     Ok(out)
@@ -162,7 +162,7 @@ impl Solid {
                 &|| {
                     let b = self.need(op)?;
                     let out = engine::made(engine::PROVISIONAL, op, sr::delete_faces_named(b, &f, engine::PROVISIONAL))?;
-                    if out.brep().is_some_and(|o| api::same_shape(b, o)) {
+                    if out.brep().is_some_and(|o| yack_measure::guard::same_shape(b, o)) {
                         return refuse(out, op, "the faces' gap was not closed: the result is the solid unchanged");
                     }
                     Ok(out)
@@ -170,7 +170,7 @@ impl Solid {
                 &|| {
                     let out = engine_cadrs::op(op, self, |k, id| glue::delete_faces(k, id, &ix))?;
                     match (self.brep(), out.brep()) {
-                        (Some(b), Some(o)) if api::same_shape(b, o) => {
+                        (Some(b), Some(o)) if yack_measure::guard::same_shape(b, o) => {
                             Err(Error::failed(op, crate::Stage::Validate, "cadrs declines: the result is the solid unchanged"))
                         }
                         _ => Ok(out),
@@ -235,7 +235,7 @@ impl Solid {
                 op,
                 &|| {
                     let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, engine::PROVISIONAL))?;
-                    if !api::rims_square(self.need(op)?, &f) {
+                    if !yack_topo::local::rims_square(self.need(op)?, &f) {
                         return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
                         );
                     }
@@ -271,11 +271,11 @@ impl Solid {
                     // the stated requirement (a shell's walls must not meet), checked before springrep
                     // tries to build: Invalid, so it vetoes a cadrs build too; the two checks after
                     // the build are springrep's limits, a decline
-                    if api::walls_cross(b, &f, thickness) {
+                    if yack_measure::guard::walls_cross(b, &f, thickness) {
                         return Err(Error::invalid(op, "thickness", "the walls would meet: thicker than half the part"));
                     }
                     let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
-                    if api::radius_collapses(b, None, thickness, true) || api::open_at_concave_edge(b, &f) {
+                    if yack_topo::local::radius_collapses(b, None, thickness, true) || yack_topo::local::open_at_concave_edge(b, &f) {
                         return refuse(out, op, "a round face of radius under the thickness would close, or an open face meets a concave edge");
                     }
                     Ok(out)
@@ -308,7 +308,7 @@ impl Solid {
                 op,
                 &|| {
                     let out = engine::made_from("shell", op, sr::shell_outward(self.need(op)?, &f, thickness))?;
-                    if api::radius_collapses(self.need(op)?, None, thickness, false) || api::open_at_concave_edge(self.need(op)?, &f) {
+                    if yack_topo::local::radius_collapses(self.need(op)?, None, thickness, false) || yack_topo::local::open_at_concave_edge(self.need(op)?, &f) {
                         return refuse(out, op, "a hole of radius under the thickness would close, or an open face meets a concave edge");
                     }
                     Ok(out)

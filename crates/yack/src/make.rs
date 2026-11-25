@@ -5,7 +5,10 @@
 //! Each constructor places its shape in an explicit [`Frame`]; a profile is drawn in the frame's
 //! xy plane unless the function says otherwise.
 
-use yack_springrep::{boolean as sr_boolean, loft as sr_loft, primitive, sweep};
+use yack_boolean as sr_boolean;
+use yack_build::loft as sr_loft;
+use yack_build::primitive;
+use yack_build::sweep;
 
 use std::collections::BTreeSet;
 
@@ -31,7 +34,7 @@ pub fn block(frame: &Frame, size: [f64; 3]) -> Result<Solid> {
     firewall::op("block", &[], || {
         ladder::two("block", &|| {
         let feature = engine::feature();
-        engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_springrep::math::Vec3::from_array(size), &feature))
+        engine::made_as(&feature, "block", engine::BLOCK_SIDES, primitive::block(&engine::frame(frame), yack_math::kernel::Vec3::from_array(size), &feature))
     }, &|| engine_cadrs::primitive("block", frame, yack_cadrs::yack_glue::Prim::Block { size }))
     })
 }

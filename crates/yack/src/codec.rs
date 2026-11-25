@@ -15,8 +15,8 @@ use crate::{Error, ErrorKind, Result, Solid, firewall};
 /// ```
 pub fn encode(s: &Solid) -> Result<Vec<u8>> {
     Ok(match s.form("codec::encode")? {
-        None => yack_springrep::codec::to_bytes(&[]),
-        Some(b) => yack_springrep::codec::to_bytes(core::slice::from_ref(b)),
+        None => yack_codec::to_bytes(&[]),
+        Some(b) => yack_codec::to_bytes(core::slice::from_ref(b)),
     })
 }
 /// The solid encoded in `b`.
@@ -30,7 +30,7 @@ pub fn encode(s: &Solid) -> Result<Vec<u8>> {
 pub fn decode(b: &[u8]) -> Result<Solid> {
     let op = "codec::decode";
     firewall::read(op, || {
-        let parts = yack_springrep::codec::from_bytes(b).ok_or_else(|| Error::invalid(op, "b", "not a yack codec stream"))?;
+        let parts = yack_codec::from_bytes(b).ok_or_else(|| Error::invalid(op, "b", "not a yack codec stream"))?;
         let mut parts = parts.into_iter();
         match (parts.next(), parts.next()) {
             (None, _) => Ok(Solid::empty()),

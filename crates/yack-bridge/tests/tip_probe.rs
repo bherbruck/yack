@@ -2,13 +2,11 @@
 // carried back by to_springrep, pass the classify self-check? (printed to the scratchpad)
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use yack_cadrs::{BoolOp, DefaultKernel, Kernel};
-use yack_springrep::{
-    boolean,
-    math::{Frame, Vec2, Vec3},
-    measure,
-    profile::{NamedSegment, Profile, ProfileLoop, Segment},
-    sweep::revolve,
-};
+use yack_boolean as boolean;
+use yack_math::kernel::{Frame, Vec2, Vec3};
+use yack_measure as measure;
+use yack_profile::{NamedSegment, Profile, ProfileLoop, Segment};
+use yack_build::sweep::revolve;
 
 #[test]
 fn paraboloid_tip_comes_back() {
@@ -16,7 +14,7 @@ fn paraboloid_tip_comes_back() {
         // The parabola x² = 8z as its quadratic Bézier (weight 1: the conic's apex is its middle pole).
         NamedSegment::new(
             Segment::Spline {
-                curve: yack_springrep::geom::BSpline::new(
+                curve: yack_geom::BSpline::new(
                     2,
                     vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
                     vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0), Vec3::new(8.0, 8.0, 0.0)],
@@ -31,7 +29,7 @@ fn paraboloid_tip_comes_back() {
     ];
     let meridian = Frame::new(Vec3::ZERO, -Vec3::Y, Vec3::X).unwrap();
     let par = revolve(&Profile { loops: vec![ProfileLoop { segments: segs }] }, &meridian, Vec3::ZERO, Vec3::Z, std::f64::consts::TAU, "p").unwrap();
-    let blk = yack_springrep::primitive::block(&Frame::new(Vec3::new(-9.0, -9.0, -1.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(18.0, 18.0, 1.0001), "b").unwrap();
+    let blk = yack_build::primitive::block(&Frame::new(Vec3::new(-9.0, -9.0, -1.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(18.0, 18.0, 1.0001), "b").unwrap();
     let mut lines = vec![];
     let sr = boolean::intersection(&par, &blk);
     lines.push(format!("springrep intersection: {}", match &sr { Ok(b) => format!("volume {} solids {}", measure::volume(b), b.solid_ids().count()), Err(e) => e.to_string() }));
@@ -55,7 +53,7 @@ fn small_and_pointed_cadrs_bodies_cross_or_are_held() {
     let segs = vec![
         NamedSegment::new(
             Segment::Spline {
-                curve: yack_springrep::geom::BSpline::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0), Vec3::new(8.0, 8.0, 0.0)]).unwrap(),
+                curve: yack_geom::BSpline::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0), Vec3::new(8.0, 8.0, 0.0)]).unwrap(),
                 reversed: false,
             },
             "s0",
@@ -65,7 +63,7 @@ fn small_and_pointed_cadrs_bodies_cross_or_are_held() {
     ];
     let meridian = Frame::new(Vec3::ZERO, -Vec3::Y, Vec3::X).unwrap();
     let par = revolve(&Profile { loops: vec![ProfileLoop { segments: segs }] }, &meridian, Vec3::ZERO, Vec3::Z, std::f64::consts::TAU, "p").unwrap();
-    let blk = yack_springrep::primitive::block(&Frame::new(Vec3::new(-9.0, -9.0, -1.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(18.0, 18.0, 1.0001), "b").unwrap();
+    let blk = yack_build::primitive::block(&Frame::new(Vec3::new(-9.0, -9.0, -1.0), Vec3::Z, Vec3::X).unwrap(), Vec3::new(18.0, 18.0, 1.0001), "b").unwrap();
     let (a, b) = (k.insert(yack_bridge::to_cadrs(&par).unwrap().0), k.insert(yack_bridge::to_cadrs(&blk).unwrap().0));
     let tip = k.boolean(BoolOp::Intersect, a, &[b]).unwrap().first().unwrap();
     // The lemon: the arc about (−3, 0) of radius 5 from (0, −4) to (0, 4), and the axis.

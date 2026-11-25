@@ -1,5 +1,5 @@
 // yack: booleans and plane splits on `Solid`, routed to springrep (PLAN §4.3, M1.3).
-use yack_springrep::boolean as sr;
+use yack_boolean as sr;
 
 use crate::engine::{self, Brep};
 use crate::{engine_cadrs, firewall, ladder};
@@ -47,7 +47,7 @@ impl Solid {
                     &|| {
                         let (a, b) = (self.need("intersection")?, other.need("intersection")?);
                         let out = engine::solid("intersection", sr::intersection(a, b))?;
-                        if out.is_empty() && yack_springrep::facade::api::boxes_overlap(a, b) {
+                        if out.is_empty() && yack_measure::guard::boxes_overlap(a, b) {
                             return Ok(out.suspect("an empty intersection of solids whose boxes overlap (a sliver it may have lost)"));
                         }
                         Ok(out)
@@ -195,7 +195,7 @@ impl Solid {
             ladder::allowed(op, "springrep")?;
             let (front, back) = sr::split(b, engine::p3(o), engine::v3(n)).map_err(|e| engine::error(op, e))?;
             let (front, back) = (Solid::from_springrep(front), Solid::from_springrep(back));
-            let doubted = (front.is_empty() || back.is_empty()) && yack_springrep::facade::api::plane_cuts(b, engine::p3(o), engine::v3(n));
+            let doubted = (front.is_empty() || back.is_empty()) && yack_measure::guard::plane_cuts(b, engine::p3(o), engine::v3(n));
             Ok((Split { front, back }, doubted))
         };
         let cadrs = || -> Result<Split> {

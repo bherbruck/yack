@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use yack_cadrs::{DefaultKernel, Kernel, Pick, Primitive, ShellSpec};
 use yack_cadrs::native::{Body, P3, V3};
-use yack_springrep::math::{Frame, Vec3};
+use yack_math::kernel::{Frame, Vec3};
 
 fn describe(b: &Body) -> String {
     b.faces()
@@ -16,8 +16,8 @@ fn describe(b: &Body) -> String {
 
 #[test]
 fn frustum_shell_bridged_vs_native() {
-    let sr = yack_springrep::primitive::cone(&Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(), 6.0, 3.0, 4.0, "k").unwrap();
-    let top_sr = yack_springrep::measure::face_at(&sr, Vec3::new(1.0, 1.0, 4.0)).unwrap().0.index();
+    let sr = yack_build::primitive::cone(&Frame::new(Vec3::ZERO, Vec3::Z, Vec3::X).unwrap(), 6.0, 3.0, 4.0, "k").unwrap();
+    let top_sr = yack_measure::face_at(&sr, Vec3::new(1.0, 1.0, 4.0)).unwrap().0.index();
     let (body, _) = yack_bridge::to_cadrs(&sr).unwrap();
     let mut k = DefaultKernel::new();
     let bridged = k.insert(body.clone());

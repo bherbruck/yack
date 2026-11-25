@@ -1,13 +1,12 @@
 // yack: probe for conformance part-brackets-gusset-bf80d64fac83e0fb (B14: volume 0.689 mm³ over the
 // exact 5548.3915786): each op of the case done in springrep, its volume after every step.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::print_stderr)]
-use yack_springrep::{
-    boolean, measure,
-    math::{Frame, Vec2, Vec3},
-    primitive,
-    profile::{NamedSegment, Profile, ProfileLoop, Segment},
-    sweep,
-};
+use yack_boolean as boolean;
+use yack_measure as measure;
+use yack_math::kernel::{Frame, Vec2, Vec3};
+use yack_build::primitive;
+use yack_profile::{NamedSegment, Profile, ProfileLoop, Segment};
+use yack_build::sweep;
 
 fn poly(pts: &[[f64; 2]]) -> Profile {
     let n = pts.len();

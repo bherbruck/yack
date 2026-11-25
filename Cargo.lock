@@ -123,12 +123,25 @@ version = "0.0.0"
 dependencies = [
  "yack-base",
  "yack-blend",
+ "yack-boolean",
  "yack-bridge",
+ "yack-build",
  "yack-cadrs",
+ "yack-check",
+ "yack-codec",
+ "yack-edit",
+ "yack-geom",
+ "yack-intersect",
+ "yack-locate",
  "yack-math",
- "yack-springrep",
+ "yack-measure",
+ "yack-mesh",
+ "yack-profile",
+ "yack-step",
  "yack-swept",
  "yack-tol",
+ "yack-topo",
+ "yack-view",
 ]
 
 [[package]]
@@ -194,12 +207,22 @@ name = "yack-bridge"
 version = "0.0.0"
 dependencies = [
  "yack-base",
+ "yack-blend",
+ "yack-boolean",
+ "yack-build",
  "yack-cadrs",
  "yack-check",
+ "yack-edit",
  "yack-geom",
+ "yack-locate",
  "yack-math",
- "yack-springrep",
+ "yack-measure",
+ "yack-mesh",
+ "yack-profile",
+ "yack-step",
+ "yack-tol",
  "yack-topo",
+ "yack-view",
 ]
 
 [[package]]
@@ -395,33 +418,6 @@ name = "yack-shim"
 version = "0.0.0"
 dependencies = [
  "yack-linalg",
-]
-
-[[package]]
-name = "yack-springrep"
-version = "1.0.1"
-dependencies = [
- "yack-base",
- "yack-blend",
- "yack-boolean",
- "yack-build",
- "yack-check",
- "yack-codec",
- "yack-edit",
- "yack-geom",
- "yack-intersect",
- "yack-locate",
- "yack-math",
- "yack-measure",
- "yack-mesh",
- "yack-numeric",
- "yack-p21",
- "yack-profile",
- "yack-step",
- "yack-tol",
- "yack-topo",
- "yack-tweak",
- "yack-view",
 ]
 
 [[package]]

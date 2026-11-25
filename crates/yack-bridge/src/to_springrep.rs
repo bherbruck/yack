@@ -4,14 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use yack_cadrs::native::pcurve::closed_periods;
 use yack_cadrs::native::{Body, Curve as CCurve, Frame as CFrame, NurbsCurve as CNurbsCurve, P3, Surface as CSurface, V3};
 use crate::builder::Builder;
-use yack_springrep::{
-    geom::{
-        BSpline, Circle, Cone, Curve as SCurve, Cylinder, Ellipse, Extrusion, Line, NurbsCurve as SNurbsCurve,
-        NurbsSurface as SNurbsSurface, Plane, Revolution, Sphere, Surface as SSurface, Torus,
-    },
-    math::{Frame as SFrame, Vec2, Vec3},
-    topo::{Brep, CoedgeSpec, EdgeId, FaceName, LoopId, PCurve, VertexId},
-};
+use yack_geom::{BSpline, Circle, Cone, Curve as SCurve, Cylinder, Ellipse, Extrusion, Line, NurbsCurve as SNurbsCurve, NurbsSurface as SNurbsSurface, Plane, Revolution, Sphere, Surface as SSurface, Torus};
+use yack_math::kernel::{Frame as SFrame, Vec2, Vec3};
+use yack_topo::{Brep, CoedgeSpec, EdgeId, FaceName, LoopId, PCurve, VertexId};
 
 use crate::{Error, Result};
 
@@ -101,7 +96,7 @@ fn frame(f: &CFrame) -> SFrame {
 fn nurbs_curve(n: &CNurbsCurve) -> Result<SCurve> {
     let ctrl: Vec<Vec3> = n.cps.iter().map(|h| Vec3::new(h.x / h.w, h.y / h.w, h.z / h.w)).collect();
     let rational = n.cps.iter().any(|h| (h.w - 1.0).abs() > UNIT_WEIGHT);
-    let reject = |e: yack_springrep::Error| Error::Rejected(vec![e.to_string()]);
+    let reject = |e: yack_base::kernel::Error| Error::Rejected(vec![e.to_string()]);
     if rational || n.degree > BSPLINE_MAX_DEGREE {
         let w = rational.then(|| n.cps.iter().map(|h| h.w).collect());
         Ok(SCurve::Nurbs(Box::new(SNurbsCurve::new(n.degree, n.knots.clone(), ctrl, w).map_err(reject)?)))
@@ -216,7 +211,7 @@ fn same_measure(body: &Body, back: &Brep) -> Result<()> {
     let cv = yack_cadrs::native::mass::body_volume(body);
     // To a thousandth of the agreement asked, not to the last digits (a swept spline body's exact
     // volume took most of a minute: bench swept/ring-carried-along-a-spline).
-    let sv = yack_springrep::measure::volume_to(back, MEASURE_AGREES * 1e-3); // tol: a thousandth of the guard
+    let sv = yack_measure::volume_to(back, MEASURE_AGREES * 1e-3); // tol: a thousandth of the guard
     if (sv - cv).abs() / cv.abs().max(1.0) <= MEASURE_AGREES {
         Ok(())
     } else {
@@ -430,7 +425,7 @@ fn carried(body: &Body, names: &[BTreeSet<FaceName>], fitted: bool) -> Result<(B
     };
     let map = edges.iter().map(|e| e.map(EdgeId::index)).collect();
     let b = bb.finish().map_err(|e| match e {
-        yack_springrep::Error::InvalidResult(mut issues) => {
+        yack_base::kernel::Error::InvalidResult(mut issues) => {
             // What the refused faces were in cadrs, to say what to fix.
             let named: BTreeSet<usize> = issues
                 .iter()
@@ -477,7 +472,7 @@ fn pole_pcurves(body: &Body, bb: &Builder, loops: &Loops) -> BTreeMap<(usize, us
                 };
                 // Sampled along the whole coedge, as springrep's checker reads its ends: a periodic
                 // projection follows its branch from the start.
-                let end_of = |c: yack_springrep::topo::CoedgeId, start: bool| {
+                let end_of = |c: yack_topo::CoedgeId, start: bool| {
                     let (t0, t1) = b.edge(b.coedge(c).edge).range;
                     let (a, z) = if b.coedge(c).reversed { (t1, t0) } else { (t0, t1) };
                     let ts: Vec<f64> = (0..=END_SAMPLES).map(|i| if i == END_SAMPLES { z } else { a + (z - a) * i as f64 / END_SAMPLES as f64 }).collect();

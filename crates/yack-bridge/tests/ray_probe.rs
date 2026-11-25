@@ -1,11 +1,9 @@
 // yack: probe for conformance B26 "4 crossings against 2" (circle-contact-fcb3423424f28443,
 // booleans/touching/sphere-in-a-torus-hole): the failing ray cast on each boolean, every hit listed.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::print_stderr)]
-use yack_springrep::{
-    boolean,
-    math::{Frame, Vec3},
-    primitive,
-};
+use yack_boolean as boolean;
+use yack_math::kernel::{Frame, Vec3};
+use yack_build::primitive;
 
 #[test]
 #[ignore = "evidence: conformance circle-contact-fcb3423424f28443 expects 2 crossings; the bodies are 1.3e-5 mm apart, so 4 (swarm/done/w-m11-conformance-reference-issues.md)"]
@@ -28,7 +26,7 @@ fn sphere_in_a_torus_hole_ray() {
     ] {
         match r {
             Ok(s) => {
-                let hits = yack_springrep::mesh::rays(&s).unwrap().cast(o, d, (0.0, 1e9)).unwrap();
+                let hits = yack_mesh::rays(&s).unwrap().cast(o, d, (0.0, 1e9)).unwrap();
                 eprintln!("{name}: {} solids, {} faces, {} hits", s.solid_ids().count(), s.face_ids().count(), hits.len());
                 for h in &hits {
                     eprintln!("   t {:.12} face {} on_edge {} normal·d {:.3e}", h.t, h.face.index(), h.on_edge, h.normal.dot(d));

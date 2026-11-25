@@ -10,13 +10,25 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-yack-springrep = { path = "../yack-springrep" }
 yack-cadrs = { path = "../yack-cadrs" }
 yack-base = { path = "../yack-base" }
 yack-check = { path = "../yack-check" }
 yack-geom = { path = "../yack-geom" }
 yack-math = { path = "../yack-math" }
 yack-topo = { path = "../yack-topo" }
+yack-locate = { path = "../yack-locate" }
+yack-measure = { path = "../yack-measure" }
+yack-mesh = { path = "../yack-mesh" }
+yack-tol = { path = "../yack-tol" }
+
+[dev-dependencies]
+yack-blend = { path = "../yack-blend" }
+yack-boolean = { path = "../yack-boolean" }
+yack-build = { path = "../yack-build" }
+yack-edit = { path = "../yack-edit" }
+yack-profile = { path = "../yack-profile" }
+yack-step = { path = "../yack-step" }
+yack-view = { path = "../yack-view" }
 
 [lints]
 workspace = true

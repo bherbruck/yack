@@ -1,5 +1,5 @@
 // yack: `History`, what an operation did to its operands' faces (PLAN §4.1, M4.11): carried from the engine, never computed here.
-use yack_springrep::topo::history as sr;
+use yack_topo::history as sr;
 
 use std::collections::BTreeSet;
 

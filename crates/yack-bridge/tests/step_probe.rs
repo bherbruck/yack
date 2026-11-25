@@ -23,14 +23,14 @@ fn ring_hole_step_both_writers() {
         Ok(b) => {
             lines.push(format!(
                 "springrep in memory: volume {} area {}",
-                yack_springrep::measure::volume(&b),
-                yack_springrep::measure::area(&b)
+                yack_measure::volume(&b),
+                yack_measure::area(&b)
             ));
-            std::fs::write(format!("{OUT}/ring-springrep.step"), yack_springrep::step::write(&b, "ring").unwrap()).unwrap();
+            std::fs::write(format!("{OUT}/ring-springrep.step"), yack_step::write(&b, "ring").unwrap()).unwrap();
             // And springrep reading its own file back.
             let text = std::fs::read(format!("{OUT}/ring-springrep.step")).unwrap();
-            match yack_springrep::step::read_part(&text, "r") {
-                Ok(r) => lines.push(format!("springrep re-read: volume {}", yack_springrep::measure::volume(&r))),
+            match yack_step::read_part(&text, "r") {
+                Ok(r) => lines.push(format!("springrep re-read: volume {}", yack_measure::volume(&r))),
                 Err(e) => lines.push(format!("springrep re-read: {e}")),
             }
         }
@@ -43,11 +43,11 @@ fn ring_hole_step_both_writers() {
 /// carried back and written by springrep.
 #[test]
 fn ring_hole_step_ladder_path() {
-    use yack_springrep::math::{Frame, Vec3};
+    use yack_math::kernel::{Frame, Vec3};
     let (s, c) = (65f64.to_radians().sin(), 65f64.to_radians().cos());
     let f = Frame::new(Vec3::new(0.0, 0.0, 4.0), Vec3::new(s, 0.0, c), Vec3::new(c, 0.0, -s)).unwrap();
-    let torus = yack_springrep::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
-    let block = yack_springrep::primitive::block(
+    let torus = yack_build::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
+    let block = yack_build::primitive::block(
         &Frame::new(Vec3::new(-8.0, -8.0, -8.0), Vec3::Z, Vec3::X).unwrap(),
         Vec3::new(16.0, 16.0, 8.0),
         "b",
@@ -64,8 +64,8 @@ fn ring_hole_step_ladder_path() {
     let mut lines = vec![format!("cadrs in memory: volume {} area {} edges {}", m.volume, m.surface_area, body.edges().len())];
     match yack_bridge::to_springrep(&body, &[]) {
         Ok(b) => {
-            lines.push(format!("springrep in memory: volume {} edges {}", yack_springrep::measure::volume(&b), b.edge_ids().count()));
-            std::fs::write(format!("{OUT}/ring2-springrep.step"), yack_springrep::step::write(&b, "ring").unwrap()).unwrap();
+            lines.push(format!("springrep in memory: volume {} edges {}", yack_measure::volume(&b), b.edge_ids().count()));
+            std::fs::write(format!("{OUT}/ring2-springrep.step"), yack_step::write(&b, "ring").unwrap()).unwrap();
         }
         Err(e) => lines.push(format!("to_springrep: {e}")),
     }
@@ -76,12 +76,12 @@ fn ring_hole_step_ladder_path() {
 /// (`Frame::from_z`): does the seam's place decide the STEP?
 #[test]
 fn ring_hole_step_ladder_path_native_seam() {
-    use yack_springrep::math::{Frame, Vec3};
+    use yack_math::kernel::{Frame, Vec3};
     let (s, c) = (65f64.to_radians().sin(), 65f64.to_radians().cos());
     let cf = yack_cadrs::native::Frame::from_z(P3::new(0.0, 0.0, 4.0), yack_cadrs::native::V3::new(s, 0.0, c));
     let f = Frame::new(Vec3::new(0.0, 0.0, 4.0), Vec3::new(s, 0.0, c), Vec3::new(cf.x.x, cf.x.y, cf.x.z)).unwrap();
-    let torus = yack_springrep::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
-    let block = yack_springrep::primitive::block(
+    let torus = yack_build::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
+    let block = yack_build::primitive::block(
         &Frame::new(Vec3::new(-8.0, -8.0, -8.0), Vec3::Z, Vec3::X).unwrap(),
         Vec3::new(16.0, 16.0, 8.0),
         "b",
@@ -106,7 +106,7 @@ fn time_the_backstop_re_reads() {
     let Ok(text) = std::fs::read_to_string(format!("{OUT}/stepperf/ft.step")) else { return };
     let mut lines = Vec::new();
     let t = Instant::now();
-    let s = yack_springrep::facade::exchange::check_written(&text, 1.0, 1.0);
+    let s = yack_step::exchange::check_written(&text, 1.0, 1.0);
     lines.push(format!("springrep re-read: {:.1} s, {:?}", t.elapsed().as_secs_f64(), s.map_err(|e| e.chars().take(120).collect::<String>())));
     let t = Instant::now();
     let c = yack_bridge::check_written_cadrs(&text, 1.0, 1.0);
@@ -129,7 +129,7 @@ fn the_cadrs_re_read_catches_the_ring_pushed_fault() {
         let r = yack_bridge::check_written_cadrs(&text, v, a);
         lines.push(format!("{name}: cadrs {:.2} s, {:?}", t.elapsed().as_secs_f64(), r.map_err(|e| e.chars().take(140).collect::<String>())));
         let t = Instant::now();
-        let r = yack_springrep::facade::exchange::check_written(&text, v, a);
+        let r = yack_step::exchange::check_written(&text, v, a);
         lines.push(format!("{name}: springrep {:.2} s, {:?}", t.elapsed().as_secs_f64(), r.map_err(|e| e.chars().take(140).collect::<String>())));
     }
     std::fs::write(format!("{OUT}/stepperf/ring-catch.txt"), lines.join("\n")).unwrap();

@@ -1,12 +1,10 @@
 // yack: round trips springrep → cadrs → springrep on one solid of each surface and curve kind (MAPPING.md §5).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 use yack_bridge::round_trip;
-use yack_springrep::{
-    boolean,
-    math::{Frame, Vec3},
-    primitive,
-    topo::Brep,
-};
+use yack_boolean as boolean;
+use yack_math::kernel::{Frame, Vec3};
+use yack_build::primitive;
+use yack_topo::Brep;
 
 fn check(name: &str, s: &Brep) {
     let r = round_trip(s);
@@ -47,7 +45,7 @@ fn cross_drilled() {
 /// Diagnostic: every coedge's uv samples, original vs round-tripped (printed, never failing).
 #[test]
 fn cross_drilled_pcurves_diagnostic() {
-    use yack_springrep::topo::PCurve;
+    use yack_topo::PCurve;
     let block = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
     let rod = primitive::cylinder(&at(5.0, 5.0, -1.0), 2.0, 12.0, "c").unwrap();
     let side = primitive::cylinder(&Frame::new(Vec3::new(-1.0, 5.0, 5.0), Vec3::X, Vec3::Y).unwrap(), 3.0, 12.0, "x").unwrap();
@@ -74,7 +72,7 @@ fn cross_drilled_pcurves_diagnostic() {
     }
     for (f, g) in s.face_ids().zip(back.face_ids()) {
         let (lf, lg) = (&s.face(f).loops, &back.face(g).loops);
-        let cs = |b: &Brep, l: &[yack_springrep::topo::LoopId]| l.iter().map(|&x| b.lp(x).coedges.iter().map(|c| c.index()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let cs = |b: &Brep, l: &[yack_topo::LoopId]| l.iter().map(|&x| b.lp(x).coedges.iter().map(|c| c.index()).collect::<Vec<_>>()).collect::<Vec<_>>();
         if cs(&s, lf) != cs(&back, lg) || s.face(f).reversed != back.face(g).reversed {
             out.push(format!("FAILED-DIAG face {} loops {:?} vs {:?} rev {}/{}", f.index(), cs(&s, lf), cs(&back, lg), s.face(f).reversed, back.face(g).reversed));
         }
@@ -101,7 +99,7 @@ fn an_unused_cadrs_edge_is_dropped_and_mapped() {
     assert!(yack_bridge::to_springrep(&body, &names).is_err());
     let (back, map) = yack_bridge::to_springrep_mapped(&body, &names).unwrap();
     assert_eq!(map[k], None);
-    assert!(yack_springrep::check::check(&back).is_empty());
+    assert!(yack_check::check(&back).is_empty());
     for (i, m) in map.iter().enumerate() {
         let Some(j) = *m else { continue };
         let ce = &body.edges[i];
@@ -122,7 +120,7 @@ fn a_cadrs_box_keeps_its_creases() {
     let id = k.primitive(&Primitive::Box { min: P3::new(0.0, 0.0, 0.0), max: P3::new(10.0, 20.0, 30.0) }).unwrap().first().unwrap();
     let body = (**k.get(id).unwrap()).clone();
     let back = yack_bridge::to_springrep(&body, &[]).unwrap();
-    let outlines = yack_springrep::measure::Outlines::new(&back);
+    let outlines = yack_measure::Outlines::new(&back);
     let mut bad = Vec::new();
     for e in back.edge_ids() {
         let edge = back.edge(e);
@@ -148,8 +146,8 @@ fn a_cadrs_box_rounded_on_every_edge_carries_back() {
     let body = (**k.get(r).unwrap()).clone();
     let cadrs_volume = k.mass_properties(r).unwrap().volume;
     let back = yack_bridge::to_springrep(&body, &[]).unwrap_or_else(|e| panic!("\nFAILED box-all-edges: {e}"));
-    assert!(yack_springrep::check::check(&back).is_empty());
-    let v = yack_springrep::measure::volume(&back);
+    assert!(yack_check::check(&back).is_empty());
+    let v = yack_measure::volume(&back);
     assert!((v - cadrs_volume).abs() <= 1e-6 * v, "\nFAILED box-all-edges volume {v} vs cadrs {cadrs_volume}");
     let r = yack_bridge::round_trip(&back);
     assert!(r.ok(), "\nFAILED box-all-edges round trip: {}", r.problems.join("\nFAILED   "));
@@ -158,8 +156,8 @@ fn a_cadrs_box_rounded_on_every_edge_carries_back() {
 /// The elliptic cylinder x²/25 + y²/9 ≤ 1, 0 ≤ z ≤ 10, from four conic arcs: its ellipse arcs go
 /// to cadrs as rational B-splines (cadrs's form), and the round trip holds.
 fn elliptic_cylinder() -> Brep {
-    use yack_springrep::math::Vec2;
-    use yack_springrep::profile::{NamedSegment, Profile, ProfileLoop, Segment};
+    use yack_math::kernel::Vec2;
+    use yack_profile::{NamedSegment, Profile, ProfileLoop, Segment};
     let w = 0.5f64.sqrt();
     let p = Vec2::new;
     let pts = [
@@ -173,7 +171,7 @@ fn elliptic_cylinder() -> Brep {
         .enumerate()
         .map(|(i, &(a, apex, b))| NamedSegment::new(Segment::conic(a, apex, b, w).unwrap(), format!("s{i}")))
         .collect();
-    yack_springrep::sweep::extrude(&Profile { loops: vec![ProfileLoop { segments }] }, &Frame::WORLD, 10.0, "e").unwrap()
+    yack_build::sweep::extrude(&Profile { loops: vec![ProfileLoop { segments }] }, &Frame::WORLD, 10.0, "e").unwrap()
 }
 
 #[test]
@@ -215,14 +213,14 @@ fn a_cadrs_edge_off_its_faces_is_carried_with_its_gap_or_refused() {
         b
     };
     let near = yack_bridge::to_springrep(&moved(1.9e-5), &[]).unwrap_or_else(|e| panic!("\nFAILED 1.9e-5: {e}"));
-    assert!(yack_springrep::check::check(&near).is_empty(), "\nFAILED 1.9e-5 check: {:?}", yack_springrep::check::check(&near));
+    assert!(yack_check::check(&near).is_empty(), "\nFAILED 1.9e-5 check: {:?}", yack_check::check(&near));
     assert!(yack_bridge::to_springrep(&moved(2e-4), &[]).is_err(), "\nFAILED 2e-4 was carried");
 }
 
 /// The STEP-write backstop: a written block reads back as itself; told another volume, it refuses.
 #[test]
 fn a_written_step_is_checked_by_reading_it_back() {
-    use yack_springrep::facade::exchange::{check_written, write_step};
+    use yack_step::exchange::{check_written, write_step};
     let b = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap();
     let text = write_step(&b).unwrap();
     assert!(check_written(&text, 6000.0, 2200.0).is_ok());
@@ -260,7 +258,7 @@ fn time_of_the_self_check() {
 /// The STEP readers' mesh report: an exact block is not a mesh; a file naming a faceted B-rep is.
 #[test]
 fn step_readers_report_a_mesh() {
-    use yack_springrep::facade::exchange::{read_step_report, write_step};
+    use yack_step::exchange::{read_step_report, write_step};
     let b = primitive::block(&at(0.0, 0.0, 0.0), Vec3::new(10.0, 20.0, 30.0), "b").unwrap();
     let text = write_step(&b).unwrap();
     assert!(!read_step_report(&text).unwrap().1);
@@ -294,7 +292,7 @@ fn a_swung_ring_crosses_whole_or_not_at_all() {
     let body = (**k.get(swept).unwrap()).clone();
     match yack_bridge::to_springrep(&body, &[]) {
         Ok(b) => {
-            let got = yack_springrep::measure::volume(&b);
+            let got = yack_measure::volume(&b);
             assert!((got - want).abs() < 1e-5 * want, "\nFAILED carried {got} of {want}");
         }
         Err(e) => {
@@ -317,7 +315,7 @@ fn a_bridged_swung_ring_crosses_whole_or_not_at_all() {
     let body = (**k.get(swept).unwrap()).clone();
     let r = yack_bridge::to_springrep(&body, &[]);
     let line = match &r {
-        Ok(b) => format!("cadrs {want}, carried {}", yack_springrep::measure::volume(b)),
+        Ok(b) => format!("cadrs {want}, carried {}", yack_measure::volume(b)),
         Err(e) => format!("cadrs {want}, refused: {e}"),
     };
     let faces: Vec<String> = body.faces().iter().map(|f| format!("{:?}/{} loops", f.surf.kind(), f.loops.len())).collect();
@@ -327,7 +325,7 @@ fn a_bridged_swung_ring_crosses_whole_or_not_at_all() {
     );
     assert!((want - 761.09945990667).abs() < 1e-6 * want, "\nFAILED cadrs swing {want}");
     if let Ok(b) = r {
-        let got = yack_springrep::measure::volume(&b);
+        let got = yack_measure::volume(&b);
         assert!((got - want).abs() < 1e-5 * want, "\nFAILED carried {got} of {want}");
     }
 }

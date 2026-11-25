@@ -2,12 +2,10 @@
 // shear, 5 of 1024 points placed differently): springrep's classification of mapped points against
 // the exact classification of their preimages in the cone.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::print_stderr)]
-use yack_springrep::{
-    facade::edit,
-    math::{Frame, Vec3},
-    primitive,
-    rays::Side,
-};
+use yack_edit::glue as edit;
+use yack_math::kernel::{Frame, Vec3};
+use yack_build::primitive;
+use yack_locate::rays::Side;
 
 #[test]
 #[ignore = "probe: conformance stretches-369ef83ce9d5f331 (B32, sheared cone), under diagnosis by w-m11"]
@@ -37,7 +35,7 @@ fn sheared_cone_classification() {
         let margin = (rad - (a * a + b * b).sqrt()).min(c).min(h - c);
         (margin > 0.0, margin)
     };
-    let rays = yack_springrep::mesh::rays(&mapped).unwrap();
+    let rays = yack_mesh::rays(&mapped).unwrap();
     let n = 16;
     let (mut wrong, mut total) = (0, 0);
     for i in 0..n {
@@ -80,7 +78,7 @@ fn sheared_cone_one_point() {
     for f in mapped.face_ids() {
         eprintln!("  face {} {}", f.index(), mapped.face(f).surface.kind());
     }
-    let rays = yack_springrep::mesh::rays(&mapped).unwrap();
+    let rays = yack_mesh::rays(&mapped).unwrap();
     // Exactly inside (preimage margin +0.099), placed Outside.
     let p = Vec3::new(36.53894920997076, 22.626132672803138, -19.18988598536717);
     eprintln!("side {:?}", rays.side(p));
@@ -96,7 +94,9 @@ fn sheared_cone_one_point() {
 #[test]
 #[ignore = "probe: conformance stretches-369ef83ce9d5f331, mesh and exact crossing behind one misplaced point (w-m11)"]
 fn sheared_cone_mesh_and_exact_crossing() {
-    use yack_springrep::{check, measure, mesh};
+    use yack_check as check;
+    use yack_measure as measure;
+    use yack_mesh as mesh;
     let o = Vec3::new(-0.1369187722614813, -0.1927317277546228, 9.496120663976027);
     let x = Vec3::new(0.9862312463263244, 0.0011868763560915257, 0.16536783270678776);
     let z = Vec3::new(0.1653720918704991, -0.007078186740360178, -0.9862058459078631);

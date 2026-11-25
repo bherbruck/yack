@@ -1,6 +1,6 @@
 // yack: fillets and chamfers on `Solid`, one method per protocol function, routed to springrep
 // (PLAN §4.3, D4, M1.3).
-use yack_springrep::blend as sr;
+use yack_blend as sr;
 
 use crate::engine;
 use crate::{engine_cadrs, firewall, ladder};
@@ -18,7 +18,7 @@ fn over_blend(op: &'static str, input: &Solid, edges: &[u64], part: &str, size: 
         .filter_map(|id| input.edge(id).ok().map(|r| r.midpoint()))
         .collect();
     let strays = match (out.brep(), out.feature_name()) {
-        (Some(b), Some(f)) => yack_springrep::facade::api::blend_strays(b, f, part, &near.iter().map(|&p| engine::p3(p)).collect::<Vec<_>>(), yack_math::scale_length(size, 2.0)),
+        (Some(b), Some(f)) => yack_mesh::pick::blend_strays(b, f, part, &near.iter().map(|&p| engine::p3(p)).collect::<Vec<_>>(), yack_math::scale_length(size, 2.0)),
         _ => false,
     };
     if strays {

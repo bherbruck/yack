@@ -4,8 +4,8 @@
 use yack_cadrs::native::Body;
 use yack_cadrs::facade::profile::{Place, Seg};
 use yack_cadrs::{DefaultKernel, Kernel, yack_glue};
-use yack_springrep::math::{Frame, Vec2, Vec3};
-use yack_springrep::profile::{NamedSegment, Profile, ProfileLoop, Segment};
+use yack_math::kernel::{Frame, Vec2, Vec3};
+use yack_profile::{NamedSegment, Profile, ProfileLoop, Segment};
 
 /// Where the probes write (outside the builder's trimmed log).
 fn dump(lines: &[String]) {
@@ -50,7 +50,7 @@ fn measure(k: &DefaultKernel, id: yack_cadrs::BodyId) -> String {
 fn ring_slid_down() {
     let (s, c) = (65f64.to_radians().sin(), 65f64.to_radians().cos());
     let f = Frame::new(Vec3::new(0.0, 0.0, 4.0), Vec3::new(s, 0.0, c), Vec3::new(c, 0.0, -s)).unwrap();
-    let sr = yack_springrep::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
+    let sr = yack_build::primitive::torus(&f, 3.0, 1.0, "t").unwrap();
     let mut k = DefaultKernel::new();
     let bridged = k.insert(yack_bridge::to_cadrs(&sr).unwrap().0);
     let native = yack_glue::torus(&mut k, [0.0, 0.0, 4.0], [s, 0.0, c], 3.0, 1.0).unwrap().0;
@@ -110,7 +110,7 @@ fn elliptic_cylinder_offset() {
     let pts = [(p(5.0, 0.0), p(5.0, 3.0), p(0.0, 3.0)), (p(0.0, 3.0), p(-5.0, 3.0), p(-5.0, 0.0)), (p(-5.0, 0.0), p(-5.0, -3.0), p(0.0, -3.0)), (p(0.0, -3.0), p(5.0, -3.0), p(5.0, 0.0))];
     let segments = pts.iter().enumerate().map(|(i, &(a, apex, b))| NamedSegment::new(Segment::conic(a, apex, b, w).unwrap(), format!("s{i}"))).collect();
     let profile = Profile { loops: vec![ProfileLoop { segments }] };
-    let sr = yack_springrep::sweep::extrude(&profile, &Frame::WORLD, 10.0, "e").unwrap();
+    let sr = yack_build::sweep::extrude(&profile, &Frame::WORLD, 10.0, "e").unwrap();
     let mut k = DefaultKernel::new();
     let body = yack_bridge::to_cadrs(&sr).unwrap().0;
     let bridged = k.insert(body.clone());

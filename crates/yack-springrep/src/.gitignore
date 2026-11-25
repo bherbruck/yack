@@ -1,2 +1,0 @@
-# The repository ignores build/ directories; this one is the feature-builder module.
-!build/

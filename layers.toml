@@ -213,14 +213,6 @@ deps = ["yack-boolean", "yack-locate", "yack-measure", "yack-mesh", "yack-inters
 license = "MIT OR Apache-2.0"
 
 # ---- temporary engines (PLAN §3.2) ----
-[crate.yack-springrep]
-layer = 11
-kind = "temporary"
-owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh", "yack-build", "yack-tweak", "yack-boolean", "yack-blend", "yack-edit", "yack-step", "yack-view"]
-delete_by = "M3"
-license = "MIT OR Apache-2.0"
-
 [crate.yack-shim]
 layer = 8
 kind = "temporary"
@@ -241,7 +233,7 @@ license = "MIT OR Apache-2.0"
 layer = 12
 kind = "temporary"
 owner = "lead"
-deps = ["yack-springrep", "yack-cadrs", "yack-topo", "yack-geom", "yack-math", "yack-check", "yack-base"]
+deps = ["yack-cadrs", "yack-base", "yack-check", "yack-geom", "yack-locate", "yack-math", "yack-measure", "yack-mesh", "yack-tol", "yack-topo", "yack-blend", "yack-boolean", "yack-build", "yack-edit", "yack-profile", "yack-step", "yack-view"]
 delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
@@ -250,7 +242,7 @@ license = "MIT OR Apache-2.0"
 layer = 13
 kind = "public"
 owner = "api-owner"
-deps = ["*kernel", "yack-springrep", "yack-cadrs", "yack-bridge"]
+deps = ["*kernel", "yack-cadrs", "yack-bridge"]
 license = "MIT OR Apache-2.0"
 
 # ---- tools (outside the kernel DAG; never a dependency of a kernel crate) ----
@@ -309,10 +301,7 @@ delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
 # ---- module maps (PLAN §6.6 gate 5; `cargo xtask modgraph --crate <c>`) ----
-# [modules.<crate>]: top-level module = [top-level modules it may name]. yack-springrep's map is
-# the M2 target (PLAN §3.4, T1-T12): each module maps to the crate it becomes (§3.1) and may name
-# the modules of that crate's allow-list, plus siblings bound for the same crate. `pick` is
-# dissolved (T8) and has no entry; `facade` is yack's glue and may name everything.
+# [modules.<crate>]: top-level module = [top-level modules it may name].
 [modules.yack-geom]
 chord = []
 curve = []
@@ -368,36 +357,6 @@ tests = []
 topology = ["geometry", "part21"]
 write = []
 
-[modules.yack-springrep]
-error = []
-tol = []
-names = []
-numeric = ["error", "tol"]
-math = ["error", "tol", "numeric"]
-geom = ["error", "tol", "numeric", "math"]
-profile = ["error", "tol", "numeric", "math", "geom", "names"]
-topo = ["error", "tol", "numeric", "math", "geom", "names"]
-intersect = ["error", "tol", "numeric", "math", "geom"]
-locate = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "rays", "distance"]
-rays = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "distance"]
-distance = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays"]
-measure = ["error", "tol", "numeric", "math", "geom", "topo", "intersect"]
-codec = ["error", "math", "geom", "topo"]
-check = ["error", "tol", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure"]
-mesh = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays", "distance"]
-tweak = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "check"]
-primitive = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "sweep", "loft"]
-sweep = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "primitive", "loft"]
-loft = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "primitive", "sweep"]
-boolean = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "mesh", "tweak", "primitive", "sweep", "loft"]
-blend = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "tweak", "primitive", "sweep", "loft", "boolean", "build"]
-edit = ["error", "tol", "numeric", "math", "geom", "profile", "topo", "intersect", "locate", "rays", "distance", "measure", "check", "tweak", "primitive", "sweep", "loft", "boolean", "blend", "build"]
-build = ["error", "tol", "numeric", "math", "geom", "topo", "check"]
-step = ["error", "tol", "numeric", "math", "geom", "topo", "check", "mesh", "boolean", "build"]
-draw = ["error", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "overlap", "probe"]
-overlap = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "draw", "probe"]
-probe = ["error", "tol", "numeric", "math", "geom", "topo", "intersect", "locate", "rays", "distance", "measure", "mesh", "boolean", "draw", "overlap"]
-facade = []
 [modules.yack]
 engine = []
 firewall = []

@@ -1,6 +1,12 @@
 // yack: queries on `Solid`, routed to springrep. They cannot fail on a valid solid unless they
 // take a tolerance or build geometry.
-use yack_springrep::{check, distance, draw, measure, mesh, overlap, rays};
+use yack_check as check;
+use yack_locate::distance;
+use yack_view::draw;
+use yack_measure as measure;
+use yack_mesh as mesh;
+use yack_view::overlap;
+use yack_locate::rays;
 
 use crate::{engine, engine_cadrs, firewall, ladder};
 use crate::solid::Body;
@@ -8,7 +14,7 @@ use crate::{
     Aabb, Display, DisplayFace, Drawing, Closest, Interference, NearestFace, Issue, Mesh, Plane, Point3, Ray, Result, Side, Solid, Vec3,
 };
 
-fn sr_points<P: Into<Point3> + Copy>(points: &[P]) -> impl Iterator<Item = yack_springrep::math::Vec3> + '_ {
+fn sr_points<P: Into<Point3> + Copy>(points: &[P]) -> impl Iterator<Item = yack_math::kernel::Vec3> + '_ {
     points.iter().map(|&p| engine::p3(p.into()))
 }
 
@@ -241,7 +247,7 @@ impl Solid {
         let p = p.into();
         let b = self.form(op)?.ok_or_else(|| crate::Error::not_found(op, "self", "the solid is empty"))?;
         firewall::run(op, || {
-            let (f, d) = yack_springrep::facade::api::nearest_face(b, engine::p3(p))
+            let (f, d) = yack_mesh::pick::nearest_face(b, engine::p3(p))
                 .map_err(|e| engine::error(op, e))?
                 .ok_or_else(|| crate::Error::not_found(op, "p", "the solid has no faces"))?;
             Ok(NearestFace { face: self.face_id(f), distance: d })
@@ -300,7 +306,7 @@ impl Solid {
     /// ```
     pub fn section_area(&self, plane: &Plane) -> Result<f64> {
         let Some(b) = self.form("section_area")? else { return Ok(0.0) };
-        yack_springrep::boolean::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
+        yack_boolean::section_area(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()))
             .map_err(|e| engine::error("section_area", e))
     }
 
@@ -321,7 +327,7 @@ impl Solid {
             return Err(crate::Error::invalid("section", "tolerance", format!("tolerance {tolerance} mm is not positive")));
         }
         let Some(b) = self.form("section")? else { return Ok(Vec::new()) };
-        let curves = yack_springrep::boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), tolerance)
+        let curves = yack_boolean::section(b, engine::p3(plane.origin()), engine::v3(plane.normal().vec()), tolerance)
             .map_err(|e| engine::error("section", e))?;
         Ok(curves.into_iter().map(|c| c.iter().chain(c.first()).map(|&p| engine::point(p)).collect()).collect())
     }
@@ -351,7 +357,7 @@ impl Solid {
         }
         let springrep = || -> Result<Drawing> {
             let drawn = draw::hidden_lines(self.need(op)?, engine::v3(d), tolerance).map_err(|e| engine::error(op, e))?;
-            let flat = |lines: Vec<Vec<yack_springrep::math::Vec3>>| {
+            let flat = |lines: Vec<Vec<yack_math::kernel::Vec3>>| {
                 lines.into_iter().map(|l| l.into_iter().map(|p| yack_math::view_point(engine::point(p), u, v)).collect()).collect()
             };
             Ok(Drawing { visible: flat(drawn.visible), hidden: flat(drawn.hidden) })

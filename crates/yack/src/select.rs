@@ -1,7 +1,8 @@
 // yack: selection and topology walks on `Solid` (PLAN §4.2 rule 6), routed to springrep.
 use std::collections::BTreeSet;
 
-use yack_springrep::{facade::api, geom, measure};
+use yack_geom as geom;
+use yack_measure as measure;
 
 use crate::engine::{self, Brep};
 use crate::solid::engine_ids;
@@ -10,7 +11,7 @@ use crate::{
 };
 
 /// The tags and roles a face's names give it (internal feature names left out).
-fn tags_roles(names: &BTreeSet<yack_springrep::topo::FaceName>) -> (Vec<Tag>, Vec<(Tag, Role)>) {
+fn tags_roles(names: &BTreeSet<yack_topo::FaceName>) -> (Vec<Tag>, Vec<(Tag, Role)>) {
     let tags: BTreeSet<&str> = names.iter().map(|n| n.feature.as_str()).filter(|t| !engine::is_internal_feature(t)).collect();
     let roles = names
         .iter()
@@ -70,7 +71,7 @@ fn picked<T>(op: &'static str, what: &str, p: Point3, found: crate::engine_cadrs
 
 fn face_ref<'a>(s: &Solid, b: &'a Brep, f: engine_ids::Face) -> FaceRef<'a> {
     let face = b.face(f);
-    let outward = |z: yack_springrep::math::Vec3| if face.reversed { engine::vec(-z) } else { engine::vec(z) };
+    let outward = |z: yack_math::kernel::Vec3| if face.reversed { engine::vec(-z) } else { engine::vec(z) };
     let (kind, normal) = match &face.surface {
         geom::Surface::Plane(p) => {
             let n = outward(p.frame.z);
@@ -112,7 +113,7 @@ fn edge_ref<'a>(s: &Solid, b: &'a Brep, e: engine_ids::Edge) -> Option<EdgeRef<'
         id: s.edge_id(e),
         kind,
         ends,
-        convex: api::convexity(b, e),
+        convex: yack_topo::local::convexity(b, e),
         length: measure::edge_length(b, e),
         midpoint: mid,
         uses: b.edge_uses(e).len(),
@@ -192,13 +193,13 @@ impl Solid {
             return picked(op, "face", p, found, |i| FaceId::new(self.stamp(), u32::try_from(i).unwrap_or(u32::MAX)));
         }
         let found = match self.form(op)? {
-            None => api::Pick::None,
-            Some(b) => api::face_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+            None => yack_mesh::pick::Pick::None,
+            Some(b) => yack_mesh::pick::face_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };
         match found {
-            api::Pick::One(x) => Ok(self.face_id(x)),
-            api::Pick::None => Err(Error::not_found(op, "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
-            api::Pick::Ambiguous(n) => Err(Error::ambiguous(
+            yack_mesh::pick::Pick::One(x) => Ok(self.face_id(x)),
+            yack_mesh::pick::Pick::None => Err(Error::not_found(op, "p", format!("no face passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            yack_mesh::pick::Pick::Ambiguous(n) => Err(Error::ambiguous(
                 op,
                 "p",
                 format!("{n} faces lie within tol::PICK of ({}, {}, {}) at distances that differ by less than tol::PICK", p.x, p.y, p.z),
@@ -224,13 +225,13 @@ impl Solid {
             return picked(op, "edge", p, found, |i| EdgeId::new(self.stamp(), u32::try_from(i).unwrap_or(u32::MAX)));
         }
         let found = match self.form(op)? {
-            None => api::Pick::None,
-            Some(b) => api::edge_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
+            None => yack_mesh::pick::Pick::None,
+            Some(b) => yack_mesh::pick::edge_within(b, engine::p3(p), yack_tol::PICK).map_err(|e| engine::error(op, e))?,
         };
         match found {
-            api::Pick::One(x) => Ok(self.edge_id(x)),
-            api::Pick::None => Err(Error::not_found(op, "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
-            api::Pick::Ambiguous(n) => Err(Error::ambiguous(
+            yack_mesh::pick::Pick::One(x) => Ok(self.edge_id(x)),
+            yack_mesh::pick::Pick::None => Err(Error::not_found(op, "p", format!("no edge passes within tol::PICK of ({}, {}, {})", p.x, p.y, p.z))),
+            yack_mesh::pick::Pick::Ambiguous(n) => Err(Error::ambiguous(
                 op,
                 "p",
                 format!("{n} edges lie within tol::PICK of ({}, {}, {}) at distances that differ by less than tol::PICK", p.x, p.y, p.z),
@@ -281,7 +282,7 @@ impl Solid {
     }
 
     /// The faces one of whose names `pick` takes (from the names alone: a cadrs-held solid too).
-    fn named_faces(&self, pick: impl Fn(&yack_springrep::topo::FaceName) -> bool) -> Vec<FaceId> {
+    fn named_faces(&self, pick: impl Fn(&yack_topo::FaceName) -> bool) -> Vec<FaceId> {
         self.face_names()
             .iter()
             .enumerate()
