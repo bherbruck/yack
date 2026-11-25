@@ -39,6 +39,8 @@ fp() { echo "$(git rev-parse --short HEAD)+$( { git diff; git status --short --u
 FC="crates/yack crates/yack-springrep crates/yack-cadrs crates/yack-bridge crates/yack-shim crates/yack-math crates/yack-bench"
 EXCL=(":!crates/yack-springrep"); for f in "${EXT[@]}"; do EXCL+=(":!$f"); done
 others() { { git diff -- $FC "${EXCL[@]}"; git status --short --untracked-files=all -- $FC "${EXCL[@]}"; } | md5sum | cut -c1-8; }
+# whether layers.toml's row for crate $1 says kind = "temporary"
+temporary() { awk -v c="[crate.$1]" '$0 == c { on = 1; next } /^\[/ { on = 0 } on && /^kind *= *"temporary"/ { t = 1 } END { exit !t }' $Y/layers.toml; }
 build() { cargo build -p xtask && cargo build --release -p yack-conformance -p yack-bench; }
 snap() { mkdir -p $R/$1 && cp bin/release/yack-conformance bin/release/yack-bench bin/debug/xtask $R/$1/; }
 
@@ -101,9 +103,12 @@ for pkg in $(for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crat
   cargo test -p $pkg --no-run || { echo "$TAG $pkg does not compile"; restore; exit 1; }
 done
 for pkg in $(for f in "${EXT[@]}"; do case $f in crates/yack-springrep/*) ;; crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
-  # a shipping crate must be clippy-clean under -D warnings (the springrep ratchet above stays a count)
+  # a shipping crate must be clippy-clean under -D warnings (the springrep ratchet above stays a count);
+  # a temporary crate (layers.toml kind = "temporary": shim, cadrs, bridge, ...) is exempt (BRIEF, lead W10),
+  # and --no-deps keeps a temporary dependency's lints from failing a kernel crate
+  if temporary $pkg; then echo "$TAG clippy: $pkg is temporary, skipped"; continue; fi
   # the full output goes to swarm/res/ (the builder's log keeps only the tail), so every site is named
-  cargo clippy -p $pkg --all-targets -- -D warnings >/dev/null 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg (all sites: swarm/res/$tag-clippy-$pkg.txt)"; cargo clippy -p $pkg --all-targets -- -D warnings > $Y/swarm/res/$tag-clippy-$pkg.txt 2>&1; grep -A3 '^error' $Y/swarm/res/$tag-clippy-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
+  cargo clippy -p $pkg --all-targets --no-deps -- -D warnings >/dev/null 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg (all sites: swarm/res/$tag-clippy-$pkg.txt)"; cargo clippy -p $pkg --all-targets --no-deps -- -D warnings > $Y/swarm/res/$tag-clippy-$pkg.txt 2>&1; grep -A3 '^error' $Y/swarm/res/$tag-clippy-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
 done
 L2=$(lints); echo "$TAG clippy warnings after: $L2"
 [ "$L2" -le "$L1" ] || { echo "$TAG clippy warnings rose $L1 -> $L2"; restore; exit 1; }
