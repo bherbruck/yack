@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Brep, EdgeId, Face, FaceId, FaceName, VertexId};
+use crate::math::Aabb;
 
 /// How a result face came about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,6 +173,23 @@ pub fn read(result: &Brep) -> History {
     History { operands: 0, faces, deleted: Vec::new() }
 }
 
+/// Of the operand faces `cands`, the ones whose box holds result face `r`'s box (within the
+/// tolerance): a piece of a face lies within it, so this settles a name several operand faces
+/// carry on one surface (a face split earlier, a coplanar pair) wherever their boxes differ.
+fn inside(inputs: &[&Brep], result: &Brep, r: FaceId, cands: &[(u8, FaceId)]) -> Vec<(u8, FaceId)> {
+    let held = crate::bbox::face_bbox(result, r);
+    let e = crate::tol::LINEAR;
+    let holds = |o: &Aabb| {
+        (o.min.x - e <= held.min.x && o.min.y - e <= held.min.y && o.min.z - e <= held.min.z)
+            && (held.max.x <= o.max.x + e && held.max.y <= o.max.y + e && held.max.z <= o.max.z + e)
+    };
+    cands
+        .iter()
+        .copied()
+        .filter(|&(k, f)| inputs.get(usize::from(k)).filter(|b| face(b, f).is_some()).is_some_and(|b| holds(&crate::bbox::face_bbox(b, f))))
+        .collect()
+}
+
 /// Each operand with its index, up to `u8::MAX` operands.
 fn numbered<'a>(inputs: &'a [&'a Brep]) -> impl Iterator<Item = (u8, &'a Brep)> + 'a {
     inputs.iter().enumerate().filter_map(|(k, b)| Some((u8::try_from(k).ok()?, *b)))
@@ -220,11 +238,12 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str, edges: &[EdgeId]) 
             let pick: Vec<(u8, FaceId)> = if cands.len() == 1 {
                 cands.clone()
             } else {
-                cands
+                let same: Vec<(u8, FaceId)> = cands
                     .iter()
                     .copied()
                     .filter(|&(k, f)| inputs.get(usize::from(k)).and_then(|b| face(b, f)).is_some_and(|x| x.surface == this.surface))
-                    .collect()
+                    .collect();
+                if same.len() == 1 { same } else { inside(inputs, result, r, if same.is_empty() { cands } else { &same }) }
             };
             if let [one] = pick.as_slice() {
                 from.insert(*one);
