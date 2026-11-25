@@ -202,14 +202,14 @@ license = "MIT OR Apache-2.0"
 layer = 10
 kind = "kernel"
 owner = "lead"
-deps = ["yack-p21", "yack-heal", "yack-boolean", "yack-check", "yack-mesh", "yack-topo", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base", "yack-build", "yack-codec", "yack-measure"]
+deps = ["yack-p21", "yack-heal", "yack-boolean", "yack-check", "yack-mesh", "yack-topo", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base", "yack-build", "yack-codec", "yack-measure", "yack-profile"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-view]
 layer = 10
 kind = "kernel"
 owner = "lead"
-deps = ["yack-boolean", "yack-locate", "yack-measure", "yack-mesh", "yack-intersect", "yack-topo", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base", "yack-build"]
+deps = ["yack-boolean", "yack-locate", "yack-measure", "yack-mesh", "yack-intersect", "yack-topo", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base", "yack-build", "yack-profile"]
 license = "MIT OR Apache-2.0"
 
 # ---- temporary engines (PLAN §3.2) ----
@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 11
 kind = "temporary"
 owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh", "yack-build", "yack-tweak", "yack-boolean", "yack-blend", "yack-edit"]
+deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh", "yack-build", "yack-tweak", "yack-boolean", "yack-blend", "yack-edit", "yack-step", "yack-view"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 
@@ -355,6 +355,7 @@ corner = ["run"]
 rolling = ["run"]
 sew = ["run"]
 saddle = ["run", "corner", "saddle_patch"]
+chamfer_angle = []
 
 [modules.yack-springrep]
 error = []
