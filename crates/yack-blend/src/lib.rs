@@ -50,7 +50,10 @@ use yack_tol as tol;
 use yack_topo as topo;
 #[cfg(test)]
 use yack_mesh as mesh;
+mod chamfer_angle;
 pub mod shaped;
+
+pub use chamfer_angle::chamfer_angle;
 
 pub use shaped::{
     chamfer_distances, fillet_conic, fillet_faces, fillet_g2, fillet_radii, fillet_setback,
