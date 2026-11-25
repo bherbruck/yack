@@ -150,7 +150,7 @@ license = "MIT OR Apache-2.0"
 layer = 7
 kind = "kernel"
 owner = "lead"
-deps = ["yack-topo", "yack-intersect", "yack-locate", "yack-check", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
+deps = ["yack-topo", "yack-intersect", "yack-locate", "yack-codec", "yack-measure", "yack-check", "yack-geom", "yack-math", "yack-numeric", "yack-tol", "yack-base"]
 license = "MIT OR Apache-2.0"
 
 [crate.yack-heal]
@@ -217,7 +217,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "temporary"
 owner = "lead"
-deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh"]
+deps = ["yack-p21", "yack-base", "yack-numeric", "yack-tol", "yack-math", "yack-geom", "yack-topo", "yack-profile", "yack-intersect", "yack-locate", "yack-measure", "yack-codec", "yack-check", "yack-mesh", "yack-build", "yack-tweak"]
 delete_by = "M3"
 license = "MIT OR Apache-2.0"
 
@@ -327,6 +327,12 @@ csi = ["hulls"]
 contact = ["hulls", "csi"]
 march = ["hulls", "csi"]
 ssi = ["hulls", "csi", "march"]
+
+[modules.yack-build]
+build = []
+loft = []
+sweep = ["loft"]
+primitive = ["loft", "sweep"]
 
 [modules.yack-springrep]
 error = []
