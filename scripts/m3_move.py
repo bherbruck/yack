@@ -163,6 +163,7 @@ def split_tests(path, modpath, forbidden, dest_name, dest_doc, transform=None, p
     if still_forbidden:
         raise SystemExit(f"{path}: a staying test still uses {sorted(still_forbidden)}")
     used = idents(moved_text)
+    used -= set(use_names(moved_text, modpath))  # a body's own `use` lines import those already
     private = sorted(n for n in used if own.get(n, ("", ""))[0] == "private" and n not in moving)
     if private:
         raise SystemExit(f"{path}: moved tests reach private items {private}")
@@ -335,7 +336,8 @@ def unit_edges(src):
     edges = {u: set() for u in units}
     for u in units:
         root = os.path.join(src, u + ".rs")
-        files = [(root, 0)] + [(p, 1) for p in rs_files(os.path.join(src, u))]
+        # a `tests.rs` is a `#[cfg(test)] mod tests;` file: test code, which the module graph ignores
+        files = [(root, 0)] + [(p, 1) for p in rs_files(os.path.join(src, u)) if os.path.basename(p) != "tests.rs"]
         for p, depth in files:
             if not os.path.exists(p):
                 continue
@@ -578,23 +580,30 @@ def test_reach_guard(crates_texts, made_pub, test_texts, aliases):
 
 def public_paths(files):
     """{module path tuple: names reachable there from outside} for a moved crate's files {rel: text}:
-    the root's pub items and `pub use` names, and each `pub mod`'s file likewise."""
+    the root's pub items and `pub use` names (an `as` name for a renamed one), and, down every
+    `pub mod`, that module's likewise."""
     def pub_names(t):
         t = live_text(t)
-        # an item may carry its allow on its own line (`#[allow(..)] pub fn ..`, W3-W6's per-item allows)
+        # an item may carry its allow on its own line (`#[allow(..)] pub fn ..`, W3-W7's per-item allows)
         names = set(re.findall(r"(?m)^\s*(?:#\[[^\]]*\]\s*)*pub\s+(?:(?:const|unsafe)\s+)*(?:fn|struct|enum|const|static|type|trait|mod)\s+(\w+)", t))
-        for u in re.findall(r"(?m)^\s*pub\s+use\s+([^;]+);", t):
-            u = re.sub(r"\s+", "", u)
-            if "{" in u:
-                names |= {x.split("as")[-1] for x in re.findall(r"[\w]+(?:as\w+)?", u.split("{", 1)[1])}
-            else:
-                names.add(u.split("::")[-1])
+        for u in re.findall(r"(?m)^\s*(?:#\[[^\]]*\]\s*)*pub\s+use\s+([^;]+);", t):
+            body = u.split("{", 1)[1].rsplit("}", 1)[0] if "{" in u else u.rsplit("::", 1)[-1]
+            for part in body.split(","):
+                part = part.strip()
+                if part:
+                    names.add(part.split(" as ")[-1].strip().split("::")[-1])
         return names
-    out = {(): pub_names(files["lib.rs"])}
-    for m in re.findall(r"(?m)^\s*pub\s+mod\s+(\w+)\s*;", live_text(files["lib.rs"])):
-        for cand in (f"{m}.rs", f"{m}/mod.rs"):
-            if cand in files:
-                out[(m,)] = pub_names(files[cand])
+    out = {}
+
+    def walk(path, rel):
+        t = files[rel]
+        out[path] = pub_names(t)
+        base = "" if rel == "lib.rs" else (rel[:-len("mod.rs")] if rel.endswith("mod.rs") else rel[:-3] + "/")
+        for m in re.findall(r"(?m)^\s*(?:#\[[^\]]*\]\s*)*pub\s+mod\s+(\w+)\s*;", live_text(t)):
+            for cand in (f"{base}{m}.rs", f"{base}{m}/mod.rs"):
+                if cand in files:
+                    walk(path + (m,), cand)
+    walk((), "lib.rs")
     return out
 
 
@@ -608,8 +617,9 @@ def path_guard(crates_files, test_texts, aliases):
         for t in test_texts:
             t = re.sub(r"//[^\n]*", "", t)
             for a in aliases[krate]:
+                a, _, prefix = a.partition(":")
                 for m in re.finditer(r"\b" + a + r"((?:::\w+)+)(?:::\{([^}]*)\})?", t):
-                    segs = m.group(1).strip(":").split("::")
+                    segs = ([prefix] if prefix else []) + m.group(1).strip(":").split("::")
                     leaves = [x.strip() for x in m.group(2).split(",") if x.strip()] if m.group(2) else [segs.pop()]
                     for leaf in leaves:
                         leaf = leaf.split("::")[0]

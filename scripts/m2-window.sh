@@ -2,14 +2,18 @@
 # M2 pure-move window, run by the builder as one request: pre build + copy, apply the move, post build,
 # tests compile, clippy, copy. On any failure after the apply it restores exactly the files the apply
 # touched (in yack-springrep's src/ and tests/, and any --external file), never anything else.
-# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--touches FILE...] [--external FILE...]
+# usage: bash scripts/m2-window.sh TAG APPLY.py TEST_FILTER [--touches FILE...] [--dirty-ok FILE...] [--external FILE...]
 set -u
 TAG=$1; APPLY=$2; FILTER=$3; shift 3; tag=$(echo $TAG | tr A-Z a-z)
 # --touches FILE...: the springrep files the move edits, when other springrep files hold another
 # worker's uncommitted work (lead's ruling for T7); only these must be clean, and the guard over the
 # untouched springrep files still catches any save into the others mid-window
 EXT=(); APPLY_ARGS=(); ONLY=()
-if [ "${1:-}" = "--touches" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--external" ]; do ONLY+=("$1"); shift; done; fi
+if [ "${1:-}" = "--touches" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--external" ] && [ "$1" != "--dirty-ok" ]; do ONLY+=("$1"); shift; done; fi
+# --dirty-ok FILE...: externals another worker holds uncommitted hunks in (lead's ruling, W7): they may
+# be dirty at the start; the backup keeps their hunks, so a restore puts them back as they were
+DIRTY_OK=()
+if [ "${1:-}" = "--dirty-ok" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--external" ]; do DIRTY_OK+=("$1"); shift; done; fi
 if [ "${1:-}" = "--external" ]; then shift; EXT=("$@"); APPLY_ARGS=(--with-external "$@"); fi
 Y=/home/brenn/github/yack; R=/home/brenn/github/yack-ref/bin; SR=$Y/crates/yack-springrep
 cd $Y
@@ -25,7 +29,9 @@ others() { { git diff -- $FC "${EXCL[@]}"; git status --short --untracked-files=
 build() { cargo build -p xtask && cargo build --release -p yack-conformance -p yack-bench; }
 snap() { mkdir -p $R/$1 && cp bin/release/yack-conformance bin/release/yack-bench bin/debug/xtask $R/$1/; }
 
-if [ ${#ONLY[@]} -gt 0 ]; then dirty=$(git status --short -- "${ONLY[@]}" "${EXT[@]}"); else dirty=$(git status --short -- crates/yack-springrep "${EXT[@]}"); fi
+CHECK=(); for f in "${EXT[@]}"; do case " ${DIRTY_OK[*]} " in *" $f "*) ;; *) CHECK+=("$f");; esac; done
+if [ ${#ONLY[@]} -gt 0 ]; then dirty=$(git status --short -- "${ONLY[@]}" "${CHECK[@]}"); else dirty=$(git status --short -- crates/yack-springrep "${CHECK[@]}"); fi
+for f in "${DIRTY_OK[@]}"; do echo "$TAG dirty-ok $f pre-hash $(md5sum < $f | cut -c1-8)"; done
 if [ -n "$dirty" ]; then echo "$TAG ABORT: files the move touches have uncommitted changes:"; echo "$dirty"; exit 1; fi
 # yack-springrep's own files outside the move: hashed at the start, and again at the end over every file
 # the apply did not touch, so another worker's save into the crate mid-window is caught too
@@ -65,7 +71,9 @@ python3 $APPLY $SR "${APPLY_ARGS[@]}"; ARC=$?; TOUCHED=$(touched); echo "$TAG to
 [ $ARC -eq 0 ] || { restore; exit 1; }
 build || { echo "$TAG post build failed"; restore; exit 1; }
 QFP=$(fp)  # after the post build: the name records the tree that was built
-cargo test -p yack-springrep --no-run || { echo "$TAG springrep tests do not compile"; restore; exit 1; }
+# full output kept in swarm/res/ (the builder's log keeps only the tail): every diagnostic's site
+cargo test -p yack-springrep --no-run > $Y/swarm/res/$tag-springrep-tests.txt 2>&1 || { echo "$TAG springrep tests do not compile (all of it: swarm/res/$tag-springrep-tests.txt)"; grep -A3 '^error\|^warning' $Y/swarm/res/$tag-springrep-tests.txt | grep -- '-->' | head -40; restore; exit 1; }
+grep -A3 '^warning' $Y/swarm/res/$tag-springrep-tests.txt | grep -- '-->' | sort -u | head -20
 for pkg in $(for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done | sort -u); do
   # (a workspace file such as layers.toml has no crate: the gate checks it)
   cargo test -p $pkg --no-run || { echo "$TAG $pkg does not compile"; restore; exit 1; }

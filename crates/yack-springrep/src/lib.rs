@@ -11,7 +11,7 @@
 
 pub mod blend;
 pub mod boolean;
-pub mod build;
+pub use yack_build::build;
 pub use yack_check as check;
 pub use yack_codec as codec;
 pub use yack_locate::distance;
@@ -23,22 +23,24 @@ use yack_base::kernel as error;
 pub use yack_geom as geom;
 pub(crate) use yack_intersect as intersect;
 pub(crate) use yack_locate as locate;
-pub mod loft;
+pub use yack_build::loft;
+#[cfg(test)]
+mod moved_tests;
 pub use yack_math::kernel as math;
 pub use yack_measure as measure;
 pub use yack_mesh as mesh;
 pub use yack_topo::names;
 use yack_numeric as numeric;
 pub mod overlap;
-pub mod primitive;
+pub use yack_build::primitive;
 pub mod probe;
 pub use yack_profile as profile;
 pub use yack_locate::rays;
 pub mod step;
-pub mod sweep;
+pub use yack_build::sweep;
 pub use yack_tol as tol;
 pub use yack_topo as topo;
-pub(crate) mod tweak;
+pub(crate) use yack_tweak as tweak;
 
 pub use error::{Error, Result};
 
