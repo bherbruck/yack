@@ -1,6 +1,6 @@
 // yack: Whether two placed solids share material, and how much: interference for an assembly sweep.
 // Adapted from springrep@a03e8a1 src/overlap.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/overlap.rs to yack-view (M3 W9d); paths and visibility only.
 //! Whether two placed solids share material, and how much: interference for an assembly sweep.
 //!
 //! Each solid is meshed once, with a bounding volume hierarchy over its triangles. A mesh lies
@@ -68,7 +68,7 @@ pub struct Body {
 }
 
 impl Body {
-    pub fn new(brep: Brep) -> Result<Body> {
+    #[allow(clippy::panic)] pub fn new(brep: Brep) -> Result<Body> {
         // Every placed copy of the body inherits the spline surfaces' seeds and polynomials.
         for f in brep.face_ids() {
             if let crate::geom::Surface::Nurbs(n) = &brep.face(f).surface {
@@ -98,7 +98,7 @@ impl Body {
                 Err(e) => last = Some(e),
             }
         }
-        Err(last.expect("MESHES is not empty"))
+        Err(last.unwrap_or_else(|| panic!("MESHES is not empty")))
     }
 
     pub fn brep(&self) -> &Brep {

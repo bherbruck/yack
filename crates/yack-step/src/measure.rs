@@ -18,11 +18,15 @@
 //!
 //! Volumes add over every face of every solid; a void's faces count reversed.
 
+mod bspline;
+mod geom;
+mod read;
+
 use yack_base::{Error, ErrorKind, Result};
 use yack_math::{Point3, Vec3};
 
-use crate::geom::{Curve, Surface};
-use crate::read::{self, Face, OP, Use, bad};
+use crate::measure::geom::{Curve, Surface};
+use crate::measure::read::{Face, OP, Use, bad};
 
 /// The measure of one face.
 #[derive(Clone, Copy, Debug, PartialEq)]

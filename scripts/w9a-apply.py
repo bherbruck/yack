@@ -120,6 +120,9 @@ for line in rd(os.path.join(ws, "swarm", "res", "w9-sites-blend.txt")).split("\n
 
 
 def convert_panics(t, s_rel):
+    # a `tests.rs` is a `#[cfg(test)] mod tests;` file: test code throughout, where expect stays
+    if os.path.basename(s_rel) == "tests.rs":
+        return t, 0
     sites = SITES.get(s_rel, [])
     lines = t.split("\n")
     live = live_text(t)
@@ -232,7 +235,15 @@ k = next(i for i, l in enumerate(lines) if l.strip() and not l.startswith("//"))
 head = ["", "// springrep's blend code indexes by position; D26's hardening pass moves it onto checked access,",
         "// as for yack-linalg until M5.", "#![allow(clippy::indexing_slicing)]", "",
         "// springrep's foundation modules (D26), under the names the moved code uses."]
-head += [ALIASES[n] for n in sorted(reached & set(ALIASES))]
+# a name the root's own `use` lines import already (edit's `use crate::{error::{Error, Result}}`, W9b-1)
+# gets no alias line: the submodules' `crate::Result` reaches that import
+root_uses = " ".join(re.findall(r"(?ms)^use [^;]*;", "\n".join(lines[k:])))
+# only what a path names below a module (`error::{Error, Result}`, `x::Y`): a bare entry of
+# `use crate::{tol, ..}` is an alias the head supplies
+imported = set(re.findall(r"(?<!crate)(?<!self)(?<!super)::\s*([A-Za-z_]\w*)", root_uses))
+for g in re.findall(r"::\s*\{([^{}]*)\}", root_uses):
+    imported |= set(re.findall(r"[A-Za-z_]\w*", g))
+head += [ALIASES[n] for n in sorted((reached & set(ALIASES)) - imported)]
 head += ["#[cfg(test)]\n" + ALIASES[n] for n in sorted(test_only & set(ALIASES))]
 mv["lib.rs"] = "\n".join(lines[:k] + head) + "\n" + drop_root_aliases("\n".join(lines[k:]))
 unknown = reached_all - set(ALIASES) - own - root_items

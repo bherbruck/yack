@@ -412,9 +412,11 @@ dependencies = [
  "yack-numeric",
  "yack-p21",
  "yack-profile",
+ "yack-step",
  "yack-tol",
  "yack-topo",
  "yack-tweak",
+ "yack-view",
 ]
 
 [[package]]
@@ -422,9 +424,18 @@ name = "yack-step"
 version = "0.0.0"
 dependencies = [
  "yack-base",
+ "yack-boolean",
+ "yack-build",
+ "yack-check",
+ "yack-codec",
+ "yack-geom",
  "yack-math",
+ "yack-measure",
+ "yack-numeric",
  "yack-p21",
+ "yack-profile",
  "yack-tol",
+ "yack-topo",
 ]
 
 [[package]]
@@ -470,6 +481,24 @@ dependencies = [
  "yack-math",
  "yack-measure",
  "yack-numeric",
+ "yack-tol",
+ "yack-topo",
+]
+
+[[package]]
+name = "yack-view"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-boolean",
+ "yack-build",
+ "yack-geom",
+ "yack-locate",
+ "yack-math",
+ "yack-measure",
+ "yack-mesh",
+ "yack-numeric",
+ "yack-profile",
  "yack-tol",
  "yack-topo",
 ]

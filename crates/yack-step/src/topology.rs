@@ -1,6 +1,6 @@
 // yack: STEP B-rep topology into a kernel solid: vertices and edges shared across faces, each face's
 // Adapted from springrep@a03e8a1 src/step/topology.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: the raw builder moved to build/raw.rs (M2 T5); the file side stays here.
+// Changes: the raw builder moved to build/raw.rs (M2 T5); the file side stays here; then to yack-step (M3 W9c), paths and visibility only.
 //! STEP B-rep topology into a kernel solid: vertices and edges shared across faces, each face's
 //! loops given pcurves that close in its parameter plane, with the seams and poles the kernel's
 //! representation needs (doc/design.md, "Representation").
@@ -8,7 +8,7 @@
 //! A solid is read in three passes: the file's topology into [`Raw`], [`crate::build::heal`] where the
 //! file's geometry disagrees with itself by more than the kernel tolerance, then the arena.
 
-use std::collections::HashMap;
+#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
 
 use super::geometry::Geometry;
 use yack_p21::Param;
@@ -32,7 +32,7 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
 }
 
 /// `raw` without the edges split in two after they were read, which no face uses any more.
-fn without_split(mut raw: Raw, splits: &HashMap<usize, [usize; 2]>) -> Raw {
+#[allow(clippy::disallowed_types)] fn without_split(mut raw: Raw, splits: &HashMap<usize, [usize; 2]>) -> Raw { // D26: BTree* in hardening, proven by digests
     if splits.is_empty() {
         return raw;
     }
@@ -59,7 +59,7 @@ fn without_split(mut raw: Raw, splits: &HashMap<usize, [usize; 2]>) -> Raw {
 /// touches itself is written, as STEP's manifold solids require, with each side of the contact
 /// given its own vertices and edges; two vertices of one valid solid are never that close, so
 /// coincident ones are such a contact, and joining them gives it back.
-fn join_contacts(mut raw: Raw) -> Raw {
+#[allow(clippy::disallowed_types)] fn join_contacts(mut raw: Raw) -> Raw { // D26: BTree* in hardening, proven by digests
     let n = raw.points.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn root(p: &mut [usize], mut i: usize) -> usize {
@@ -199,7 +199,7 @@ fn use_start(raw: &Raw, u: &Use) -> usize {
 }
 
 /// Reads one solid's topology, sharing vertices and edges between its faces.
-struct Reader<'g, 'a> {
+#[allow(clippy::disallowed_types)] struct Reader<'g, 'a> { // D26: BTree* in hardening, proven by digests
     geo: &'g mut Geometry<'a>,
     raw: Raw,
     vertices: HashMap<u64, usize>,
@@ -1012,7 +1012,7 @@ pub(super) type ReadSolid = (Brep, Vec<(u64, String)>, Option<heal::Healed>);
 /// Builds the solid of a `MANIFOLD_SOLID_BREP` or `BREP_WITH_VOIDS`, healed where its geometry
 /// disagrees with itself, and checked. Returns the solid, its faces' STEP ids and names in order,
 /// and how far healing moved its geometry.
-pub(super) fn solid(geo: &mut Geometry, id: u64) -> Result<ReadSolid> {
+#[allow(clippy::disallowed_types)] pub(super) fn solid(geo: &mut Geometry, id: u64) -> Result<ReadSolid> { // D26: BTree* in hardening, proven by digests
     if geo
         .file
         .get(id)
@@ -1086,7 +1086,7 @@ pub(super) fn solid(geo: &mut Geometry, id: u64) -> Result<ReadSolid> {
 /// An AP242 `TESSELLATED_SOLID`: each triangle of its `TRIANGULATED_FACE`s and
 /// `COMPLEX_TRIANGULATED_FACE`s a plane face, the triangles sharing the edges between their
 /// corners. The triangles run counter-clockwise seen from outside, as the schema has them.
-fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] fn tessellated(geo: &mut Geometry, id: u64) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     let unit = geo.length_unit();
     let Some(solid) = geo
         .file
@@ -1210,7 +1210,7 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
 /// vertices within `tolerance` of each other become one, edges that then share their ends and lie
 /// together become one, faces are turned so each shared edge runs opposite ways in its two faces,
 /// and the solid is healed onto its faces' surfaces as a read one is.
-pub(super) fn sew(geo: &mut Geometry, tolerance: f64) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] pub(super) fn sew(geo: &mut Geometry, tolerance: f64) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     let shells: Vec<u64> = part21::entities(geo.file)
         .filter(|(_, e)| matches!(part21::kind(e), "OPEN_SHELL" | "CLOSED_SHELL"))
         .map(|(id, _)| id)

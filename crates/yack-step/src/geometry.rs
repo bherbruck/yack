@@ -1,9 +1,9 @@
 // yack: STEP geometry entities into kernel curves, surfaces and placements, in millimetres.
 // Adapted from springrep@a03e8a1 src/step/geometry.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/step/geometry.rs to yack-step (M3 W9c); paths and visibility only.
 //! STEP geometry entities into kernel curves, surfaces and placements, in millimetres.
 
-use std::collections::{HashMap, HashSet};
+#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
 
 use yack_p21::{Entity, File, Param};
 
@@ -107,7 +107,7 @@ impl Placing {
 }
 
 /// Converts the geometry of one file, caching each entity's result.
-pub(super) struct Geometry<'a> {
+#[allow(clippy::disallowed_types)] pub(super) struct Geometry<'a> { // D26: BTree* in hardening, proven by digests
     pub file: &'a File,
     units: Units,
     points: HashMap<u64, Point3>,
@@ -119,7 +119,7 @@ pub(super) struct Geometry<'a> {
     open: HashSet<u64>,
 }
 
-impl<'a> Geometry<'a> {
+#[allow(clippy::disallowed_types)] impl<'a> Geometry<'a> { // D26: BTree* in hardening, proven by digests
     pub(super) fn new(file: &'a File) -> Geometry<'a> {
         Geometry {
             file,

@@ -17,8 +17,8 @@ use yack_math::{Point3, Vec3};
 
 use yack_base::Result;
 
-use crate::bspline;
-use crate::read::bad;
+use crate::measure::bspline;
+use crate::measure::read::bad;
 
 /// A right-handed frame: origin and unit axes.
 #[derive(Clone, Copy, Debug, PartialEq)]

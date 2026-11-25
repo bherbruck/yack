@@ -1,14 +1,14 @@
 // yack: springrep module src/step/tests.rs
 // Adapted from springrep@a03e8a1 src/step/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: this header added; modified: one regression test for read.rs's traversal cap.
+// Changes: this header added; modified: one regression test for read.rs's traversal cap; then to yack-step (M3 W9c), paths and visibility only.
 use std::f64::consts::{PI, TAU};
 
 use super::{read, write};
+use yack_measure as measure;
 use crate::{
     boolean, check,
     geom::{Circle, Cone, Curve, Line, Ruled, Surface},
     math::{Frame, Vec2, Vec3},
-    measure,
     profile::{NamedSegment, PointsInterp, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
     topo::Brep,
@@ -803,7 +803,7 @@ fn gaps_wider_than_the_file_states_are_kept_and_counted() {
 /// `b` written as another system's STEP with its first straight edge's curve bent into a spline
 /// through its two vertices whose middle lies `d` off the edge, along the unit vector (1, 1, 1)
 /// leaves across it.
-fn with_edge_bent(b: &Brep, d: f64) -> String {
+#[allow(clippy::disallowed_types)] fn with_edge_bent(b: &Brep, d: f64) -> String { // D26: BTree* in hardening, proven by digests
     let text = write(b, "b").unwrap().replace("'springrep'", "'other'");
     let ents: std::collections::HashMap<&str, &str> =
         text.lines().filter_map(|l| l.split_once('=')).collect();

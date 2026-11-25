@@ -9,10 +9,21 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+yack-boolean = { path = "../yack-boolean" }
+yack-build = { path = "../yack-build" }
+yack-check = { path = "../yack-check" }
+yack-geom = { path = "../yack-geom" }
+yack-numeric = { path = "../yack-numeric" }
+yack-topo = { path = "../yack-topo" }
 yack-base = { path = "../yack-base" }
 yack-math = { path = "../yack-math" }
 yack-p21 = { path = "../yack-p21" }
 yack-tol = { path = "../yack-tol" }
+
+[dev-dependencies]
+yack-codec = { path = "../yack-codec" }
+yack-measure = { path = "../yack-measure" }
+yack-profile = { path = "../yack-profile" }
 
 [lints]
 workspace = true

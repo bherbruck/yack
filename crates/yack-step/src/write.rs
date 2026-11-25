@@ -1,10 +1,10 @@
 // yack: Writing solids as a STEP AP214 file: one part whose advanced B-rep holds every solid of the
 // Adapted from springrep@a03e8a1 src/step/write.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/step/write.rs to yack-step (M3 W9c); paths and visibility only.
 //! Writing solids as a STEP AP214 file: one part whose advanced B-rep holds every solid of the
 //! arena, each face named by the names it carries.
 
-use std::collections::HashMap;
+#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::fmt::Write as _;
 
@@ -68,7 +68,7 @@ struct Spline {
     weights: Option<Vec<f64>>,
 }
 
-pub(super) struct Writer {
+#[allow(clippy::disallowed_types)] pub(super) struct Writer { // D26: BTree* in hardening, proven by digests
     pub(super) out: String,
     next: usize,
     points: HashMap<[u64; 3], usize>,
@@ -99,7 +99,7 @@ fn key(p: Vec3) -> [u64; 3] {
     [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]
 }
 
-impl Writer {
+#[allow(clippy::disallowed_types)] impl Writer { // D26: BTree* in hardening, proven by digests
     pub(super) fn new() -> Writer {
         Writer {
             out: String::new(),
@@ -460,7 +460,7 @@ impl Writer {
     }
 
     /// The edge coedge `co` uses, as the one it and its partner share.
-    fn edge(&mut self, b: &Brep, co: CoedgeId) -> Result<usize> {
+    #[allow(clippy::panic)] fn edge(&mut self, b: &Brep, co: CoedgeId) -> Result<usize> {
         let e = b.coedge(co).edge;
         let mate = b.partner(co).unwrap_or(co);
         let first = co.min(mate);
@@ -471,10 +471,10 @@ impl Writer {
         let curve = edge
             .curve
             .as_ref()
-            .expect("degenerate edges are not written");
+            .unwrap_or_else(|| panic!("degenerate edges are not written"));
         // `first` arrives at its end, and the coedge before it in its loop at its start.
         let cs = &b.lp(b.coedge(first).lp).coedges;
-        let k = cs.iter().position(|&c| c == first).expect("in its loop");
+        let k = cs.iter().position(|&c| c == first).unwrap_or_else(|| panic!("in its loop"));
         let before = cs[(k + cs.len() - 1) % cs.len()];
         let (at_start, at_end) = if b.coedge(first).reversed {
             (first, before)
@@ -512,7 +512,7 @@ impl Writer {
     }
 
     /// A face; `void` writes it as part of a void's shell, which STEP stores turned inside out.
-    fn face(&mut self, b: &Brep, f: FaceId, void: bool) -> Result<usize> {
+    #[allow(clippy::panic)] fn face(&mut self, b: &Brep, f: FaceId, void: bool) -> Result<usize> {
         let face = b.face(f);
         let mut bounds = Vec::new();
         for (i, &lp) in face.loops.iter().enumerate() {
@@ -535,7 +535,7 @@ impl Writer {
                         opened.insert(c);
                         stack.push(Vec::new());
                     } else if stack.len() > 1 {
-                        let inner = stack.pop().expect("more than one");
+                        let inner = stack.pop().unwrap_or_else(|| panic!("more than one"));
                         if !inner.is_empty() {
                             parts.push((false, inner));
                         }
@@ -545,7 +545,7 @@ impl Writer {
                 let e = self.edge(b, c)?;
                 let o = if co.reversed { ".F." } else { ".T." };
                 let oe = self.add(format!("ORIENTED_EDGE('',*,*,#{e},{o})"));
-                stack.last_mut().expect("never empty").push(oe);
+                stack.last_mut().unwrap_or_else(|| panic!("never empty")).push(oe);
             }
             for rest in stack.into_iter().rev() {
                 if !rest.is_empty() {

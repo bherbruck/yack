@@ -1,6 +1,6 @@
 // yack: Thin places in a valid solid, for design hygiene: faces narrower than a size, and material or
 // Adapted from springrep@a03e8a1 src/probe.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/probe.rs to yack-view (M3 W9d); paths and visibility only.
 //! Thin places in a valid solid, for design hygiene: faces narrower than a size, and material or
 //! empty space thinner than one between faces that face each other. A valid solid can still hold
 //! a 0.1 µm sliver or a hairline gap with real wall area when the design states two values a hair
@@ -140,7 +140,7 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
 /// space. Each mesh triangle's centroid is moved onto its face's exact surface and a ray cast both
 /// ways along the exact normal; a crossing of another face's triangle that faces it is measured
 /// again between the exact surfaces. The mesh's chord error widens the search, never the verdict.
-pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
+#[allow(clippy::panic)] pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
     let mut last = None;
     let mut mesh = None;
     for opt in MESHES {
@@ -153,7 +153,7 @@ pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
         }
     }
     let Some((mesh, chord)) = mesh else {
-        return Err(last.expect("a mesh was tried"));
+        return Err(last.unwrap_or_else(|| panic!("a mesh was tried")));
     };
     let mut face_of = Vec::with_capacity(mesh.triangles.len());
     for (f, r) in &mesh.faces {

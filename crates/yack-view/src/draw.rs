@@ -1,6 +1,6 @@
 // yack: Hidden-line drawings: a solid's edges and the outlines of its curved faces seen along a
 // Adapted from springrep@a03e8a1 src/draw.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/draw.rs to yack-view (M3 W9d); paths and visibility only.
 //! Hidden-line drawings: a solid's edges and the outlines of its curved faces seen along a
 //! direction, each cut into the stretches the viewer sees and those the solid hides.
 //!
