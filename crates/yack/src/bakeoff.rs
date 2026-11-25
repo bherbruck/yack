@@ -17,6 +17,8 @@ pub enum Engine {
     Springrep,
     /// cadrs's rungs only.
     Cadrs,
+    /// yack's own rungs only (the `native` ones: yack-swept's).
+    Native,
 }
 
 thread_local! {
@@ -44,6 +46,7 @@ pub(crate) fn allows(name: &str) -> bool {
         Engine::Both => true,
         Engine::Springrep => name == "springrep",
         Engine::Cadrs => name == "cadrs",
+        Engine::Native => name == "native",
     }
 }
 

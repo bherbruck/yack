@@ -126,6 +126,7 @@ dependencies = [
  "yack-cadrs",
  "yack-math",
  "yack-springrep",
+ "yack-swept",
  "yack-tol",
 ]
 
@@ -391,8 +392,13 @@ name = "yack-swept"
 version = "0.0.0"
 dependencies = [
  "yack-base",
+ "yack-boolean",
+ "yack-build",
  "yack-check",
+ "yack-geom",
  "yack-math",
+ "yack-measure",
+ "yack-tol",
  "yack-topo",
 ]
 

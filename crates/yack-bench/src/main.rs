@@ -9,7 +9,7 @@
 //! yack-bench --digests [PREFIX]  (each case whose id starts with PREFIX: `<id> <digest hex>` or `<id> refused`)
 //! yack-bench --strategy CASE  (`<strategy> <built_by>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
-//! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only)
+//! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only; springrep, cadrs, native or both)
 //! ```
 //!
 //! Builds the case `CASE` (`boolean/napkin-ring`) with its program,
@@ -274,7 +274,7 @@ fn roundtrip(_: Option<&str>) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// `--engine springrep|cadrs|both` ahead of the usual arguments (bake-off builds only): every op of
+/// `--engine springrep|cadrs|native|both` ahead of the usual arguments (bake-off builds only): every op of
 /// the run is forced onto that engine's ladder rung (`yack::bakeoff::force`), on this thread.
 #[cfg(feature = "bakeoff")]
 fn force(name: &str) -> bool {
@@ -282,6 +282,7 @@ fn force(name: &str) -> bool {
     match name {
         "springrep" => set(Engine::Springrep),
         "cadrs" => set(Engine::Cadrs),
+        "native" => set(Engine::Native),
         "both" => set(Engine::Both),
         _ => return false,
     }
@@ -298,7 +299,7 @@ fn main() -> ExitCode {
     if args.get(1).map(String::as_str) == Some("--engine") {
         let name = args.get(2).cloned().unwrap_or_default();
         if !force(&name) {
-            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs or both");
+            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs, native or both");
             return ExitCode::from(2);
         }
         args.drain(1..3);

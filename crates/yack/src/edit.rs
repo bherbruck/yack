@@ -435,7 +435,14 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        ladder::ladder("swept", &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }])
+        // yack-swept's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it
+        ladder::ladder(
+            "swept",
+            &[
+                ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) },
+                ladder::Rung { name: "native", run: &|| crate::engine_swept::swept(self, motion) },
+            ],
+        )
     }
 
     /// The image under a similarity (rigid, uniform scale, mirror): a [`Similarity`], or a

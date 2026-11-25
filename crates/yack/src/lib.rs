@@ -39,6 +39,7 @@ pub mod codec;
 mod edit;
 mod engine;
 mod engine_cadrs;
+mod engine_swept;
 mod firewall;
 mod history;
 mod input;
