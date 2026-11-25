@@ -427,7 +427,15 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        firewall::op(op, &[self], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }]))
+        firewall::op(op, &[self], || self.swept_unrecorded(motion))
+    }
+
+    /// [`swept`](Solid::swept) without its history, for an operation that calls it on the way.
+    pub(crate) fn swept_unrecorded(&self, motion: &Motion) -> Result<Solid> {
+        if self.is_empty() {
+            return Ok(Solid::empty());
+        }
+        ladder::ladder("swept", &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) }])
     }
 
     /// The image under a similarity (rigid, uniform scale, mirror): a [`Similarity`], or a
@@ -447,11 +455,18 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        let m: Similarity = m.into();
+        firewall::moved(op, self, || self.transform_unrecorded(m.into()))
+    }
+
+    /// [`transform`](Solid::transform) without its history, for an operation that calls it on the
+    /// way.
+    pub(crate) fn transform_unrecorded(&self, m: Similarity) -> Result<Solid> {
+        let op = "transform";
+        if self.is_empty() {
+            return Ok(Solid::empty());
+        }
         let rows = m.rows();
-        firewall::op(op, &[self], || {
-            ladder::two(op, &|| engine::solid(op, sr::transform(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
-        })
+        ladder::two(op, &|| engine::solid(op, sr::transform(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
     }
 
     /// The image under an invertible affine map (protocol `affine`).
@@ -469,7 +484,7 @@ impl Solid {
             return Ok(Solid::empty());
         }
         let rows = m.rows();
-        firewall::op(op, &[self], || {
+        firewall::moved(op, self, || {
             ladder::two(op, &|| engine::solid(op, sr::affine(self.need(op)?, rows)), &|| engine_cadrs::op(op, self, |k, id| glue::transform(k, id, rows)))
         })
     }

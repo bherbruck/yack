@@ -88,10 +88,9 @@ fn every_op_has_a_history_and_its_findings_are_reported() -> Result<()> {
         let refs: Vec<&Solid> = inputs.iter().collect();
         let found = audit(op, &refs, &result);
         for f in &found {
-            eprintln!("invariant 3 (warning): {f}");
+            eprintln!("invariant 3 (warning, {}): {f}", result.strategy());
         }
-        // shell's cavity and offset's rounds do not yet say what they offset (step 2's rest)
-        if !["shell", "offset"].contains(&op) {
+        {
             assert!(found.is_empty(), "{op}: {found:?}");
         }
         total += found.len();
@@ -160,5 +159,104 @@ fn a_step_file_read_back_numbers_its_faces() -> Result<()> {
     let h = read.history();
     let n: Vec<u32> = h.rows().filter_map(|(_, _, o)| match o { [FaceOrigin::Read { face }] => Some(*face), _ => None }).collect();
     assert_eq!(n, (0..6).collect::<Vec<u32>>());
+    Ok(())
+}
+
+/// A seeded xorshift: the same chains every run.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(n).unwrap_or(1)).unwrap_or(0)
+    }
+    fn unit(&mut self) -> f64 {
+        f64::from(u32::try_from(self.next() >> 40).unwrap_or(0)) / f64::from(1u32 << 24)
+    }
+}
+
+/// One step of a chain on `s`: a blend, a boolean with a fresh tool, or a move; `None` when the
+/// step does not apply (the chain then tries another).
+fn step(r: &mut Rng, s: &Solid) -> Option<(&'static str, Solid, Option<Solid>)> {
+    let edges = s.edges();
+    match r.below(5) {
+        0 => s.fillet(&[*edges.get(r.below(edges.len()))?], 0.3).ok().map(|x| ("fillet", x, None)),
+        1 => s.chamfer(&[*edges.get(r.below(edges.len()))?], 0.3).ok().map(|x| ("chamfer", x, None)),
+        2 => {
+            let tool = block(&Frame::at([2.0 + 6.0 * r.unit(), 2.0 + 6.0 * r.unit(), 2.0 + 4.0 * r.unit()]), [3.0, 3.0, 3.0]).ok()?;
+            s.union(&tool).ok().map(|x| ("union", x, Some(tool)))
+        }
+        3 => {
+            let tool = cylinder(&Frame::at([2.0 + 6.0 * r.unit(), 2.0 + 6.0 * r.unit(), -1.0]), 0.5 + r.unit(), 12.0).ok()?;
+            s.difference(&tool).ok().map(|x| ("difference", x, Some(tool)))
+        }
+        _ => s.transform(Rigid::translation([r.unit(), r.unit(), 0.0])).ok().map(|x| ("transform", x, None)),
+    }
+}
+
+/// M4.11's property: over seeded 5-op chains, every step's history passes invariant 3 (as far as
+/// the audit holds it), the composed history names only faces of the chain's own inputs, and
+/// composing is associative.
+#[test]
+fn composed_histories_over_five_op_chains_reach_back_to_the_inputs() -> Result<()> {
+    let mut warnings = 0;
+    for seed in 1..=40u64 {
+        let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ seed);
+        let start = block(&Frame::WORLD, [10.0, 10.0, 8.0])?;
+        let mut inputs: Vec<FaceId> = start.faces();
+        let mut s = start;
+        let mut hs = Vec::new();
+        let mut tries = 0;
+        while hs.len() < 5 && tries < 40 {
+            tries += 1;
+            let Some((op, next, tool)) = step(&mut r, &s) else { continue };
+            let mut ops = vec![&s];
+            ops.extend(tool.as_ref());
+            // invariant 3 warns until the lead enforces it (PLAN §6.2)
+            for f in audit(op, &ops, &next) {
+                eprintln!("invariant 3 (warning), seed {seed} ({}): {f}", next.strategy());
+                warnings += 1;
+            }
+            if let Some(t) = &tool {
+                inputs.extend(t.faces());
+            }
+            hs.push(next.history().clone());
+            s = next;
+        }
+        assert_eq!(hs.len(), 5, "seed {seed}: the chain stalled");
+        let whole = hs.iter().skip(1).fold(hs.first().cloned().unwrap_or_default(), |earlier, later| later.compose(0, &earlier));
+        for (f, _, origins) in whole.rows() {
+            for o in origins {
+                if let FaceOrigin::Operand { face, .. } | FaceOrigin::Offset { face, .. } = o {
+                    assert!(inputs.contains(face), "seed {seed}: {f} comes from {face}, not a face of the chain's inputs");
+                }
+            }
+        }
+        for w in hs.windows(3) {
+            let [a, b, c] = w else { continue };
+            let (left, right) = (c.compose(0, &b.compose(0, a)), c.compose(0, b).compose(0, a));
+            for ((f, x, o), (_, y, p)) in left.rows().zip(right.rows()) {
+                assert_eq!((x, o), (y, p), "seed {seed}: {f} composes differently");
+            }
+            assert_eq!(left.deleted(), right.deleted(), "seed {seed}: deleted faces compose differently");
+            assert_eq!(left, right, "seed {seed}: compose is not associative");
+        }
+    }
+    eprintln!("invariant 3 over the chains: {warnings} warnings");
+    Ok(())
+}
+
+#[test]
+fn an_extrusion_below_its_plane_is_made_from_nothing_like_one_above() -> Result<()> {
+    let rect = Profile::new(Loop::polygon(&[[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 2.0]])?, vec![])?;
+    let down = extrude(&Frame::WORLD, &rect, -4.0)?;
+    let h = down.history();
+    assert_eq!(h.operands(), 0);
+    assert!(audit("extrude down", &[], &down).is_empty());
+    assert!(h.rows().all(|(_, c, o)| c == Change::Generated && matches!(o, [FaceOrigin::Segment { .. }])));
     Ok(())
 }

@@ -347,6 +347,25 @@ impl Solid {
         self.with_carried(h)
     }
 
+    /// The same solid with the history of a map of `input` that moved every face and kept their
+    /// order: face `i` from `input`'s face `i`, modified. Kept only where the faces' names show the
+    /// order held (else read off the names as any operation's).
+    pub(crate) fn with_moved_history(self, input: &Solid) -> Solid {
+        let names = self.face_names();
+        if names.is_empty() || names != input.face_names() {
+            return self.with_history(&[input]);
+        }
+        let faces = (0..names.len())
+            .filter_map(|i| u32::try_from(i).ok())
+            .map(|i| {
+                let from = crate::FaceOrigin::Operand { operand: 0, face: FaceId::new(input.stamp(), i) };
+                (FaceId::new(self.stamp(), i), crate::Change::Modified, vec![from])
+            })
+            .collect();
+        let h = crate::History::from_rows(1, faces, Vec::new());
+        self.with_carried(h)
+    }
+
     /// The same solid with the history of a read (a file's or an encoding's): every face new, the
     /// `n`-th face read.
     pub(crate) fn with_read_history(self) -> Solid {
@@ -357,6 +376,13 @@ impl Solid {
             }
             _ => self,
         }
+    }
+
+    /// The same solid with its history taken back through `inner`'s, the solid its operation took
+    /// as operand 0 on the way (see [`History::compose`](crate::History::compose)).
+    pub(crate) fn through(self, inner: &Solid) -> Solid {
+        let h = self.history().compose(0, inner.history());
+        self.with_carried(h)
     }
 
     /// The same solid holding history `h` (a shared one left as it is).

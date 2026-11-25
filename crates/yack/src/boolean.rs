@@ -69,17 +69,21 @@ impl Solid {
     /// # Ok::<(), yack::Error>(())
     /// ```
     pub fn difference(&self, tool: &Solid) -> Result<Solid> {
-        firewall::op("difference", &[self, tool], || {
-            match (self.is_empty(), tool.is_empty()) {
-                (true, _) => Ok(Solid::empty()),
-                (_, true) => Ok(self.clone()),
-                _ => ladder::two(
-                    "difference",
-                    &|| engine::solid("difference", sr::difference(self.need("difference")?, tool.need("difference")?)),
-                    &|| engine_cadrs::boolean("difference", BoolOp::Subtract, self, &[tool]),
-                ),
-            }
-        })
+        firewall::op("difference", &[self, tool], || self.difference_unrecorded(tool))
+    }
+
+    /// [`difference`](Solid::difference) without its history, for an operation that calls it on
+    /// the way to its own answer (whose history it then gives).
+    fn difference_unrecorded(&self, tool: &Solid) -> Result<Solid> {
+        match (self.is_empty(), tool.is_empty()) {
+            (true, _) => Ok(Solid::empty()),
+            (_, true) => Ok(self.clone()),
+            _ => ladder::two(
+                "difference",
+                &|| engine::solid("difference", sr::difference(self.need("difference")?, tool.need("difference")?)),
+                &|| engine_cadrs::boolean("difference", BoolOp::Subtract, self, &[tool]),
+            ),
+        }
     }
 
     /// The union of all `solids` (empty for none).
@@ -168,7 +172,7 @@ impl Solid {
                 &[
                     ladder::Rung { name: "cadrs", run: &|| engine_cadrs::cut_swept(self, tool, motion) },
                     // swept is cadrs-only, so the fallback needs cadrs too
-                    ladder::Rung { name: "cadrs", run: &|| self.difference(&tool.swept(motion)?) },
+                    ladder::Rung { name: "cadrs", run: &|| self.difference_unrecorded(&tool.swept_unrecorded(motion)?) },
                 ],
             )
         })

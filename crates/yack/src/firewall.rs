@@ -34,3 +34,9 @@ pub(crate) fn blend(op: &'static str, input: &crate::Solid, edges: &[crate::Edge
 pub(crate) fn read(op: &'static str, f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
     run(op, || f().map(crate::Solid::with_read_history))
 }
+
+/// [`op`] for a map of `input` that moves every face and keeps them in order (a transform): each
+/// face of its answer is the same-numbered face of `input`, modified.
+pub(crate) fn moved(op: &'static str, input: &crate::Solid, f: impl FnOnce() -> Result<crate::Solid>) -> Result<crate::Solid> {
+    run(op, || f().map(|s| s.with_moved_history(input)))
+}

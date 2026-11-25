@@ -56,6 +56,7 @@ yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64,
 yack::edit: impl Solid { pub fn transform(&self, m: impl Into<Similarity>) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
 yack::history: impl History { pub fn change(&self, f: FaceId) -> Option<Change> }
+yack::history: impl History { pub fn compose(&self, operand: u8, earlier: &History) -> History }
 yack::history: impl History { pub fn deleted(&self) -> &[FaceId] }
 yack::history: impl History { pub fn descendants(&self, face: FaceId) -> Vec<FaceId> }
 yack::history: impl History { pub fn operands(&self) -> u8 }

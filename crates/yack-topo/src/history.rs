@@ -68,8 +68,21 @@ type Row = (FaceId, Vec<FaceOrigin>, BTreeSet<(u8, FaceId)>);
 
 /// The origin a name of the operation's own `feature` gives a new face, if the name says one: a
 /// blend's `round_<k>` / `bevel_<k>` is the operation's `k`-th edge of operand 0 (`edges`).
-fn generated(name: &FaceName, edges: &[EdgeId]) -> Option<FaceOrigin> {
+fn generated(name: &FaceName, edges: &[EdgeId], operand: Option<&Brep>) -> Option<FaceOrigin> {
     let part = name.face.as_str();
+    // what a shell's cavity face offsets and what an offset's round or corner patch grows from,
+    // named by id in operand 0 (`inner_f<k>`, `round_e<k>`, `corner_v<k>`): only an id it has
+    let id = |prefix: &str| part.strip_prefix(prefix).and_then(|k| k.parse::<u32>().ok());
+    let has = |n: usize, k: u32| usize::try_from(k).is_ok_and(|k| k < n);
+    if let (Some(k), Some(b)) = (id("inner_f"), operand) {
+        return has(b.faces.len(), k).then(|| FaceOrigin::Offset { operand: 0, face: FaceId::from_raw(k) });
+    }
+    if let (Some(k), Some(b)) = (id("round_e"), operand) {
+        return has(b.edges.len(), k).then(|| FaceOrigin::Edge { operand: 0, edge: EdgeId::from_raw(k) });
+    }
+    if let (Some(k), Some(b)) = (id("corner_v"), operand) {
+        return has(b.vertices.len(), k).then(|| FaceOrigin::Vertex { operand: 0, vertex: VertexId::from_raw(k) });
+    }
     let blend = part.strip_prefix("round_").or_else(|| part.strip_prefix("bevel_"));
     if let Some(k) = blend.and_then(|k| k.parse::<usize>().ok()) {
         return edges.get(k).map(|&edge| FaceOrigin::Edge { operand: 0, edge });
@@ -78,9 +91,10 @@ fn generated(name: &FaceName, edges: &[EdgeId]) -> Option<FaceOrigin> {
         "" => None,
         FaceName::START => Some(FaceOrigin::Segment { label: part.to_string(), end: Some(CapEnd::Start) }),
         FaceName::END => Some(FaceOrigin::Segment { label: part.to_string(), end: Some(CapEnd::End) }),
-        // a blend corner's vertex comes from its neighbours' edges (`corners`); a shell's cavity
-        // and an offset's rounds do not yet say what they offset
+        // a blend corner's vertex comes from its neighbours' edges (`corners`); a cavity face's
+        // and an offset round's source come with their `inner_f` / `round_e` names
         FaceName::INNER | "corner" => None,
+        _ if part.starts_with("inner_f") || part.starts_with("corner_v") || part.starts_with("round_e") => None,
         _ if blend.is_some() => None,
         _ => match part.strip_prefix("face_").and_then(|n| n.parse::<u32>().ok()) {
             Some(face) => Some(FaceOrigin::Read { face }),
@@ -199,7 +213,7 @@ pub fn derive(inputs: &[&Brep], result: &Brep, feature: &str, edges: &[EdgeId]) 
         let mut made: Vec<FaceOrigin> = Vec::new();
         for n in &this.names {
             if n.feature == feature {
-                made.extend(generated(n, edges));
+                made.extend(generated(n, edges, inputs.first().copied()));
                 continue;
             }
             let Some(cands) = carriers.get(n) else { continue };
@@ -283,7 +297,7 @@ pub fn derive_names(inputs: &[&[BTreeSet<FaceName>]], result: &[BTreeSet<FaceNam
         let mut made: Vec<FaceOrigin> = Vec::new();
         for n in names {
             if n.feature == feature {
-                made.extend(generated(n, edges));
+                made.extend(generated(n, edges, None));
             } else if let Some([one]) = carriers.get(n).map(Vec::as_slice) {
                 from.insert(*one);
             }
@@ -399,5 +413,19 @@ mod tests {
         assert!(h.faces[..6].iter().all(|(_, c, o)| *c == Change::Modified && o.len() == 1));
         assert_eq!(h.faces[6].2, vec![FaceOrigin::Edge { operand: 0, edge }]);
         assert!(h.deleted.is_empty());
+    }
+
+    #[test]
+    fn source_id_names_give_offset_edge_and_vertex_origins_only_for_ids_the_operand_has() {
+        let b = cube("a");
+        let mut out = b.clone();
+        for (f, name) in [(0, "inner_f2"), (1, "round_e999"), (2, "corner_v0")] {
+            out.faces[f].names = [FaceName::new("new", name)].into_iter().collect();
+        }
+        let h = derive(&[&b], &out, "new", &[]);
+        assert_eq!(h.faces[0].2, vec![FaceOrigin::Offset { operand: 0, face: FaceId::from_raw(2) }]);
+        // the cube built here has no edges: an edge id it does not have gives no origin
+        assert!(h.faces[1].2.is_empty());
+        assert!(h.faces[2].2.is_empty());
     }
 }

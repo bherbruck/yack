@@ -647,10 +647,12 @@ pub fn empty() -> Solid {
     Solid::empty()
 }
 
-/// An extrusion to the other side of the frame's plane: `positive`'s mirror image in that plane.
+/// An extrusion to the other side of the frame's plane: `positive`'s mirror image in that plane,
+/// its history `positive`'s (each face the mirror of the same-numbered face).
 fn reversed(op: &'static str, frame: &Frame, positive: Result<Solid>) -> Result<Solid> {
     let m = crate::Similarity::mirror(frame.origin(), frame.z()).map_err(|e| Error { op, ..e })?;
-    positive?.transform(m)
+    let positive = positive?;
+    firewall::run(op, || positive.transform_unrecorded(m).map(|s| s.with_moved_history(&positive).through(&positive)))
 }
 
 /// One cadrs rung behind the firewall: the constructors only cadrs builds.
