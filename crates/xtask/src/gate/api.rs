@@ -130,6 +130,10 @@ struct Walk<'a> {
     srcs: &'a [Src],
     out: Surface,
     seen: BTreeSet<String>,
+    /// `pub` items of private modules that a crate-local `pub use` makes public: (module, name).
+    reexported: BTreeSet<(String, String)>,
+    /// Crate-local `pub use` leaves met on the way: (module the path names, item).
+    local: BTreeSet<(String, String)>,
 }
 
 impl Walk<'_> {
@@ -204,7 +208,8 @@ impl Walk<'_> {
             } else {
                 item_end(toks, k).min(last).max(k)
             };
-            let shown = public && vis == Vis::Pub;
+            let name = toks.get(k + 1).and_then(Token::ident).unwrap_or_default();
+            let shown = vis == Vis::Pub && (public || self.reexported.contains(&(mp.to_string(), name.to_string())));
             let at = format!("{}:{}", s.path, toks.get(item_start).map(|t| t.line).unwrap_or_default());
             if test {
                 k = end + 1;
@@ -242,6 +247,7 @@ impl Walk<'_> {
                         self.line(mp, &strip_attrs(toks, item_start, end));
                     }
                     self.reexports(toks, k + 1, end, &at);
+                    self.local_uses(toks, k + 1, end, mp);
                 }
                 "struct" | "union" if shown => self.structure(toks, item_start, end, mp),
                 "enum" if shown => {
@@ -333,7 +339,7 @@ impl Walk<'_> {
             return;
         }
         let close = matching(toks, open);
-        let mut inner = Walk { srcs: self.srcs, out: Surface::default(), seen: BTreeSet::new() };
+        let mut inner = Walk { srcs: self.srcs, out: Surface::default(), seen: BTreeSet::new(), reexported: BTreeSet::new(), local: BTreeSet::new() };
         let prefix = format!("{mp}: {} {{", norm(&head));
         inner.items(s, open + 1, close, &prefix, true, "", false);
         for l in inner.out.lines {
@@ -342,6 +348,40 @@ impl Walk<'_> {
             self.lines_push(format!("{l} }}"));
         }
         self.out.hidden.extend(inner.out.hidden);
+    }
+
+    /// Records the leaves of a crate-local `pub use <path>;` in module `mp` (`crate::`, `self::` or
+    /// a child module's path; one level of braces), as (the module they are in, item).
+    fn local_uses(&mut self, toks: &[Token], a: usize, end: usize, mp: &str) {
+        let body = slice(toks, a, end);
+        let mut module: Vec<String> = Vec::new();
+        let mut i = 0;
+        while let Some(t) = body.get(i) {
+            let Some(id) = t.ident() else { break };
+            if !body.get(i + 1).is_some_and(|n| n.is_punct("::")) {
+                break;
+            }
+            module.push(id.to_string());
+            i += 2;
+        }
+        let root = mp.split("::").next().unwrap_or(mp).to_string();
+        let base = match module.first().map(String::as_str) {
+            None => return,
+            Some(first) if first.starts_with("yack_") || first == "std" || first == "core" || first == "super" => return,
+            Some("crate") => std::iter::once(root).chain(module.iter().skip(1).cloned()).collect::<Vec<_>>().join("::"),
+            Some("self") => std::iter::once(mp.to_string()).chain(module.iter().skip(1).cloned()).collect::<Vec<_>>().join("::"),
+            Some(_) => std::iter::once(mp.to_string()).chain(module.iter().cloned()).collect::<Vec<_>>().join("::"),
+        };
+        let rest = body.get(i..).unwrap_or_default();
+        for (j, t) in rest.iter().enumerate() {
+            let Some(name) = t.ident() else { continue };
+            let next = rest.get(j + 1);
+            let leaf = next.is_none_or(|n| n.is_punct(",") || n.is_punct("}") || n.is_punct(";") || n.is_ident("as"));
+            let renamed_to = j > 0 && rest.get(j - 1).is_some_and(|p| p.is_ident("as"));
+            if leaf && !renamed_to {
+                self.local.insert((base.clone(), name.to_string()));
+            }
+        }
     }
 
     /// Records the leaves of `use <path>;` when the path starts in a `yack_*` crate.
@@ -370,8 +410,13 @@ impl Walk<'_> {
 pub fn surface(ctx: &Ctx) -> Option<Surface> {
     let p = ctx.tree.package("yack")?;
     let srcs = ctx.srcs.get("yack")?;
-    let mut w = Walk { srcs, out: Surface::default(), seen: BTreeSet::new() };
-    w.file(&format!("{}/src/lib.rs", p.dir), "yack", true);
+    let lib = format!("{}/src/lib.rs", p.dir);
+    // first the crate-local re-exports, then the surface with the private modules' items they
+    // make public (their enums' variants and structs' fields included)
+    let mut first = Walk { srcs, out: Surface::default(), seen: BTreeSet::new(), reexported: BTreeSet::new(), local: BTreeSet::new() };
+    first.file(&lib, "yack", true);
+    let mut w = Walk { srcs, out: Surface::default(), seen: BTreeSet::new(), reexported: first.local, local: BTreeSet::new() };
+    w.file(&lib, "yack", true);
     Some(w.out)
 }
 
@@ -491,7 +536,7 @@ mod tests {
         let ctx = ctx_of(
             "// yack: x\npub const VERSION: &str = env!(\"X\");\npub struct S { pub a: Vec<u8>, b: u8 }\n\
              pub enum E { A, B(u8) }\nimpl S { pub fn new(x: &'static str) -> Result<S, E> { todo!() } fn hid() {} }\n\
-             mod private { pub fn f() {} }\npub use yack_math::{Point3, Vec3 as V};\n#[cfg(test)]\nmod tests { pub fn t() {} }\n",
+             mod private { pub fn f() {} pub enum P { X, Y } }\npub use private::P;\npub use yack_math::{Point3, Vec3 as V};\n#[cfg(test)]\nmod tests { pub fn t() {} }\n",
         );
         let s = surface(&ctx).unwrap();
         let lines: Vec<_> = s.lines.iter().cloned().collect();
@@ -503,6 +548,10 @@ mod tests {
                 "yack: pub enum E",
                 "yack: pub struct S { pub a: Vec<u8>, .. }",
                 "yack: pub use yack_math::{Point3, Vec3 as V}",
+                "yack: pub use private::P",
+                "yack::private: pub enum P",
+                "yack::private: enum P variant X",
+                "yack::private: enum P variant Y",
                 "yack: enum E variant A",
                 "yack: enum E variant B(u8)",
             ]

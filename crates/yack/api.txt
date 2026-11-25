@@ -55,6 +55,21 @@ yack::edit: impl Solid { pub fn swept(&self, motion: &Motion) -> Result<Solid> }
 yack::edit: impl Solid { pub fn thicken(&self, faces: &[FaceId], thickness: f64, join: Join) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform(&self, m: impl Into<Similarity>) -> Result<Solid> }
 yack::edit: impl Solid { pub fn transform_affine(&self, m: &Affine) -> Result<Solid> }
+yack::history: enum CapEnd variant End
+yack::history: enum CapEnd variant Start
+yack::history: enum Change variant Generated
+yack::history: enum Change variant Kept
+yack::history: enum Change variant Merged
+yack::history: enum Change variant Modified
+yack::history: enum Change variant Split
+yack::history: enum FaceOrigin variant Edge { operand: u8, edge: EdgeId, }
+yack::history: enum FaceOrigin variant IntermediateEdge { edge: EdgeId, }
+yack::history: enum FaceOrigin variant IntermediateVertex { vertex: VertexId, }
+yack::history: enum FaceOrigin variant Offset { operand: u8, face: FaceId, }
+yack::history: enum FaceOrigin variant Operand { operand: u8, face: FaceId, }
+yack::history: enum FaceOrigin variant Read { face: u32, }
+yack::history: enum FaceOrigin variant Segment { label: Tag, end: Option<CapEnd>, }
+yack::history: enum FaceOrigin variant Vertex { operand: u8, vertex: VertexId, }
 yack::history: impl History { pub fn change(&self, f: FaceId) -> Option<Change> }
 yack::history: impl History { pub fn compose(&self, operand: u8, earlier: &History) -> History }
 yack::history: impl History { pub fn deleted(&self) -> &[FaceId] }
@@ -62,6 +77,25 @@ yack::history: impl History { pub fn descendants(&self, face: FaceId) -> Vec<Fac
 yack::history: impl History { pub fn operands(&self) -> u8 }
 yack::history: impl History { pub fn origins(&self, f: FaceId) -> &[FaceOrigin] }
 yack::history: impl History { pub fn rows(&self) -> impl Iterator<Item = (FaceId, Change, &[FaceOrigin])> + '_ }
+yack::history: pub enum CapEnd
+yack::history: pub enum Change
+yack::history: pub enum FaceOrigin
+yack::history: pub struct History { .. }
+yack::input: enum FrameLaw variant Fixed
+yack::input: enum FrameLaw variant RotationMinimising
+yack::input: enum FrameLaw variant Toward(Vec3)
+yack::input: enum Patch variant Bezier { ctrl: Vec<Vec<Point3>>, }
+yack::input: enum Patch variant Bspline { degree: [u32; 2], knots: [Vec<f64>; 2], ctrl: Vec<Vec<Point3>>, weights: Option<Vec<Vec<f64>>>, }
+yack::input: enum Patch variant Fill { boundary: Vec<Spline3>, }
+yack::input: enum Patch variant PlanarFill { boundary: Vec<Spline3>, }
+yack::input: enum PathPiece variant Arc { radius: f64, angle: Angle, }
+yack::input: enum PathPiece variant Line { length: f64, }
+yack::input: enum Segment variant Arc { center: Point2, radius: f64, start: Angle, sweep: Angle, }
+yack::input: enum Segment variant Blend { a: Point2, apex: Point2, b: Point2, order: u32, weight: f64, }
+yack::input: enum Segment variant Conic { a: Point2, apex: Point2, b: Point2, weight: f64, }
+yack::input: enum Segment variant Line { a: Point2, b: Point2, }
+yack::input: enum Segment variant Nurbs { degree: u32, knots: Vec<f64>, ctrl: Vec<Point2>, weights: Option<Vec<f64>>, }
+yack::input: enum Segment variant PeriodicSpline { degree: u32, knots: Vec<f64>, ctrl: Vec<Point2>, }
 yack::input: impl Lead { pub fn per_radian(mm: f64) -> Lead }
 yack::input: impl Lead { pub fn per_turn(mm: f64) -> Lead }
 yack::input: impl Lead { pub fn polynomial(coefficients: Vec<f64>) -> Lead }
@@ -111,6 +145,17 @@ yack::input: impl Toolpath { pub fn motion(&self) -> Motion }
 yack::input: impl Toolpath { pub fn slide(mut self, by: impl Into<Vec3>) -> Toolpath }
 yack::input: impl Toolpath { pub fn starting_at(p: impl Into<Point3>) -> Toolpath }
 yack::input: impl Toolpath { pub fn turn(mut self, axis_point: impl Into<Point3>, axis: impl Into<Vec3>, by: Angle) -> Result<Toolpath> }
+yack::input: pub enum FrameLaw
+yack::input: pub enum Patch
+yack::input: pub enum PathPiece
+yack::input: pub enum Segment
+yack::input: pub struct Lead(..)
+yack::input: pub struct Loop { .. }
+yack::input: pub struct Motion(..)
+yack::input: pub struct Pen { .. }
+yack::input: pub struct Profile { .. }
+yack::input: pub struct Spline3 { .. }
+yack::input: pub struct Toolpath { .. }
 yack::make: enum Cutter variant Ball
 yack::make: enum Cutter variant BullNose { corner_radius: f64, }
 yack::make: enum Cutter variant Drill { point_angle: Angle, }
@@ -192,11 +237,36 @@ yack::solid: impl Solid { pub fn named(&self, tag: impl Into<Tag>) -> Solid }
 yack::solid: impl Solid { pub fn strategy(&self) -> &'static str }
 yack::solid: impl Solid { pub fn tag(&self) -> Option<&Tag> }
 yack::solid: impl core::fmt::Debug for Solid
+yack::solid: pub struct Solid(..)
 yack::step: pub fn read(text: &str) -> Result<Solid>
 yack::step: pub fn sew(text: &str, tolerance: f64) -> Result<Solid>
 yack::step: pub fn write(s: &Solid) -> Result<String>
 yack::tol: pub const LINEAR: f64
 yack::tol: pub const PICK: f64
+yack::values: enum CurveKind variant Circle { radius: f64, axis: Vec3, }
+yack::values: enum CurveKind variant Ellipse
+yack::values: enum CurveKind variant Line { direction: Vec3, }
+yack::values: enum CurveKind variant Spline
+yack::values: enum Join variant Round
+yack::values: enum Join variant Sharp
+yack::values: enum Role variant Bevel(u32)
+yack::values: enum Role variant Corner
+yack::values: enum Role variant End
+yack::values: enum Role variant Inner
+yack::values: enum Role variant Round(u32)
+yack::values: enum Role variant Side(Tag)
+yack::values: enum Role variant Skin
+yack::values: enum Role variant Start
+yack::values: enum Side variant In
+yack::values: enum Side variant On
+yack::values: enum Side variant Out
+yack::values: enum SurfaceKind variant Cone
+yack::values: enum SurfaceKind variant Cylinder { axis: Vec3, radius: f64, }
+yack::values: enum SurfaceKind variant Plane { normal: Vec3, }
+yack::values: enum SurfaceKind variant Sphere { radius: f64, }
+yack::values: enum SurfaceKind variant Spline
+yack::values: enum SurfaceKind variant Swept
+yack::values: enum SurfaceKind variant Torus
 yack::values: impl EdgeRef<'_> { pub fn convex(&self) -> Option<bool> }
 yack::values: impl EdgeRef<'_> { pub fn ends(&self) -> [Point3; 2] }
 yack::values: impl EdgeRef<'_> { pub fn id(&self) -> EdgeId }
@@ -235,3 +305,23 @@ yack::values: impl VertexRef { pub fn point(&self) -> Point3 }
 yack::values: impl core::fmt::Debug for EdgeRef<'_>
 yack::values: impl core::fmt::Debug for FaceRef<'_>
 yack::values: impl fmt::Display for Tag
+yack::values: pub enum CurveKind
+yack::values: pub enum Join
+yack::values: pub enum Role
+yack::values: pub enum Side
+yack::values: pub enum SurfaceKind
+yack::values: pub struct Closest { pub distance: f64, pub on_self: Point3, pub on_other: Point3 }
+yack::values: pub struct Display { pub faces: Vec<DisplayFace>, pub edges: Vec<Vec<Point3>> }
+yack::values: pub struct DisplayFace { pub positions: Vec<Point3>, pub normals: Vec<Vec3>, pub triangles: Vec<[u32; 3]> }
+yack::values: pub struct Drawing { pub visible: Vec<Vec<Point2>>, pub hidden: Vec<Vec<Point2>> }
+yack::values: pub struct EdgeRef<'a> { .. }
+yack::values: pub struct FaceRef<'a> { .. }
+yack::values: pub struct Interference { pub volume: f64, pub gap: f64 }
+yack::values: pub struct Issue { pub code: &'static str, pub detail: String }
+yack::values: pub struct Mesh { pub positions: Vec<Point3>, pub triangles: Vec<[u32; 3]> }
+yack::values: pub struct NearestFace { pub face: FaceId, pub distance: f64 }
+yack::values: pub struct Plane { .. }
+yack::values: pub struct Ray { .. }
+yack::values: pub struct Split { pub front: Solid, pub back: Solid }
+yack::values: pub struct Tag(..)
+yack::values: pub struct VertexRef { .. }
