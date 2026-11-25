@@ -50,51 +50,97 @@ pub const KRONROD_7: [(f64, f64, f64); 4] = [
     (0.0, 0.450_916_538_658_474_14, 0.888_888_888_888_889),
 ];
 
+/// The `i`th row of a row-major matrix `width` values wide, or `None` past its end. A zero width
+/// gives every row empty.
+fn row(m: &[f64], width: usize, i: usize) -> Option<&[f64]> {
+    m.get(i * width..(i + 1) * width)
+}
+
+/// [`row`], mutably.
+fn row_mut(m: &mut [f64], width: usize, i: usize) -> Option<&mut [f64]> {
+    m.get_mut(i * width..(i + 1) * width)
+}
+
+/// The error of a system with no usable pivot.
+fn singular() -> Error {
+    Error::Numerical("singular linear system".into())
+}
+
+/// The error of an input slice shorter than the system needs.
+fn too_short(what: &str, need: usize, got: usize) -> Error {
+    Error::InvalidInput(format!("{what} needs {need} values, not {got}"))
+}
+
+/// Swaps rows `i` and `j` of a row-major matrix `width` values wide.
+fn swap_rows(m: &mut [f64], width: usize, i: usize, j: usize) {
+    let (lo, hi) = (i.min(j), i.max(j));
+    if lo == hi || width == 0 {
+        return;
+    }
+    let (head, tail) = m.split_at_mut(hi * width);
+    if let (Some(a), Some(b)) = (head.chunks_exact_mut(width).nth(lo), tail.chunks_exact_mut(width).next()) {
+        a.swap_with_slice(b);
+    }
+}
+
 /// Solves `a x = b` by Gaussian elimination with partial pivoting. `a` is row-major `n × n`, and
 /// `b` holds `k` right-hand sides as `n` rows of `k`.
-pub fn solve_dense(
-    mut a: Vec<f64>,
-    mut b: Vec<f64>,
-    n: usize,
-    k: usize,
-) -> Result<Vec<f64>> {
+pub fn solve_dense(mut a: Vec<f64>, mut b: Vec<f64>, n: usize, k: usize) -> Result<Vec<f64>> {
+    let (a_len, b_len) = (a.len(), b.len());
+    let matrix = a.get_mut(..n * n).ok_or_else(|| too_short("the matrix", n * n, a_len))?;
+    let rhs = b.get_mut(..n * k).ok_or_else(|| too_short("the right-hand side", n * k, b_len))?;
+    // Forward elimination: below each pivot, every row loses its multiple of the pivot row.
     for col in 0..n {
-        let piv = (col..n)
-            .max_by(|&i, &j| a[i * n + col].abs().total_cmp(&a[j * n + col].abs()))
-            .unwrap_or(col);
-        if a[piv * n + col].abs() < 1e-300 {
-            return Err(Error::Numerical("singular linear system".into()));
+        let (pivot, size) = matrix
+            .chunks_exact(n)
+            .enumerate()
+            .skip(col)
+            .filter_map(|(r, values)| Some((r, values.get(col)?.abs())))
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+            .ok_or_else(singular)?;
+        if size < 1e-300 {
+            return Err(singular());
         }
-        if piv != col {
-            for j in 0..n {
-                a.swap(piv * n + j, col * n + j);
-            }
-            for j in 0..k {
-                b.swap(piv * k + j, col * k + j);
-            }
-        }
-        let d = a[col * n + col];
-        for row in col + 1..n {
-            let f = a[row * n + col] / d;
+        swap_rows(matrix, n, pivot, col);
+        swap_rows(rhs, k, pivot, col);
+        let (above, below) = matrix.split_at_mut((col + 1) * n);
+        let (rhs_above, rhs_below) = rhs.split_at_mut((col + 1) * k);
+        let pivot_row = row(above, n, col).ok_or_else(singular)?;
+        let pivot_rhs = row(rhs_above, k, col).ok_or_else(singular)?;
+        let Some((&lead, pivot_rest)) = pivot_row.split_at(col).1.split_first() else {
+            return Err(singular());
+        };
+        for (r, values) in below.chunks_exact_mut(n).enumerate() {
+            let Some((first, rest)) = values.split_at_mut(col).1.split_first_mut() else {
+                continue;
+            };
+            let f = *first / lead;
             if f == 0.0 {
                 continue;
             }
-            for j in col..n {
-                a[row * n + j] -= f * a[col * n + j];
+            *first -= f * lead;
+            for (x, &p) in rest.iter_mut().zip(pivot_rest) {
+                *x -= f * p;
             }
-            for j in 0..k {
-                b[row * k + j] -= f * b[col * k + j];
+            for (x, &p) in row_mut(rhs_below, k, r).into_iter().flatten().zip(pivot_rhs) {
+                *x -= f * p;
             }
         }
     }
+    // Back substitution, last row first.
     for col in (0..n).rev() {
-        let d = a[col * n + col];
-        for j in 0..k {
-            let mut s = b[col * k + j];
-            for i in col + 1..n {
-                s -= a[col * n + i] * b[i * k + j];
-            }
-            b[col * k + j] = s / d;
+        let values = row(matrix, n, col).ok_or_else(singular)?;
+        let Some((&lead, rest)) = values.split_at(col).1.split_first() else {
+            return Err(singular());
+        };
+        let (done_and_this, later) = rhs.split_at_mut((col + 1) * k);
+        let this = row_mut(done_and_this, k, col).ok_or_else(singular)?;
+        for (j, x) in this.iter_mut().enumerate() {
+            let s = rest
+                .iter()
+                .zip(later.iter().skip(j).step_by(k))
+                .fold(*x, |s, (&a, &y)| s - a * y);
+            *x = s / lead;
         }
     }
     Ok(b)
