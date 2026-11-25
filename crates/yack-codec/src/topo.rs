@@ -2,10 +2,12 @@
 // Adapted from springrep@a03e8a1 src/topo/codec.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: face memos are no longer encoded (M2.2 T4b); moved from topo/codec.rs to codec/topo.rs
 // (M2.2 T4a), reading the arena through `Brep::parts` and `Brep::from_parts`; the bytes are the same; then to yack-codec (M3 W5), paths and visibility only.
+// M3 hardening: a path-curve variant written through the shared tagged-value function; the same
+// bytes in the same order.
 //! [`Codec`] for the topology arena. A decoded arena keeps every id, so each name and every
 //! reference into it holds; one whose ids point outside its own arrays is refused.
 
-use super::{Codec, Reader, Writer};
+use crate::wire::{Codec, Reader, Writer, put_tagged};
 use yack_topo::{
     Brep, Coedge, CoedgeId, Edge, EdgeId, Entities, Face, FaceId, FaceName, Loop, LoopId, PCurve,
     Parts, Shell, ShellId, Solid, SolidId, Tolerances, Vertex, VertexId,
@@ -27,26 +29,10 @@ ids!(VertexId, EdgeId, CoedgeId, LoopId, FaceId, ShellId, SolidId);
 
 fields!(FaceName { feature, face });
 fields!(Vertex { point });
-fields!(Edge {
-    curve,
-    range,
-    start,
-    end
-});
-fields!(Coedge {
-    edge,
-    reversed,
-    pcurve,
-    lp
-});
+fields!(Edge { curve, range, start, end });
+fields!(Coedge { edge, reversed, pcurve, lp });
 fields!(Loop { coedges, face });
-fields!(Face {
-    surface,
-    reversed,
-    loops,
-    names,
-    shell
-});
+fields!(Face { surface, reversed, loops, names, shell });
 fields!(Shell { faces, solid });
 fields!(Solid { shells, outer });
 fields!(Tolerances { vertices, edges });
@@ -59,28 +45,15 @@ impl Codec for PCurve {
                 origin.put(w);
                 dir.put(w);
             }
-            PCurve::Projected { seed } => {
-                1u8.put(w);
-                seed.put(w);
-            }
-            PCurve::Fitted { curve } => {
-                2u8.put(w);
-                (**curve).put(w);
-            }
+            PCurve::Projected { seed } => put_tagged(1, seed, w),
+            PCurve::Fitted { curve } => put_tagged(2, curve, w),
         }
     }
     fn get(r: &mut Reader) -> Option<PCurve> {
         Some(match u8::get(r)? {
-            0 => PCurve::Affine {
-                origin: Codec::get(r)?,
-                dir: Codec::get(r)?,
-            },
-            1 => PCurve::Projected {
-                seed: Codec::get(r)?,
-            },
-            2 => PCurve::Fitted {
-                curve: Box::new(Codec::get(r)?),
-            },
+            0 => PCurve::Affine { origin: Codec::get(r)?, dir: Codec::get(r)? },
+            1 => PCurve::Projected { seed: Codec::get(r)? },
+            2 => PCurve::Fitted { curve: Box::new(Codec::get(r)?) },
             _ => return None,
         })
     }
