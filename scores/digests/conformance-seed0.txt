@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree f088b2d-names2-post
-# reason: M4.11 source names on shell and offset faces (ab8c4a8, f088b2d): names only; bench 49 moved (offset 9, shell 40) with byte-identical reports and meshes; conformance seed 0: 745 lines (shell 437, offset 252, read_step 53, 3 downstream booleans), 242/242 cases in the 22 moved families with identical outcomes and values (w-m11 names2 proof)
+# Solid::digest() per result (cargo xtask digest); tree fd624d4+8daaf4b7
+# reason: M4.8 chamfer_angle native rung first (fd624d4): only the 18 bench chamfer_angle cases move (a springrep-form body from yack-blend replaces a held cadrs body); conformance seed 0 identical; bake-off native 18/18 equal to cadrs to 6e-16, brep-bench chamfer/ 35/35 pass 0 wrong, graded masses within 1.4e-15 (w-m04-conf-69)
 assemblies-0b6698123f5fc1db 000 box 40cdce05b1ebf256f87f687d3fb1a121d396827065189259c9b5556a04e9a7c7
 assemblies-0b6698123f5fc1db 001 sphere 06144ad26a11692bfd8d87032211e69a9d8223b9872535f325d2b159775074a8
 assemblies-0b6698123f5fc1db 002 box 3dfdf972ef0f97deeb80911ff5018df5894d8a8746e6ae2b4f8a230bc5d06c70

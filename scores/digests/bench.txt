@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree f088b2d-names2-post
-# reason: M4.11 source names on shell and offset faces (ab8c4a8, f088b2d): names only; bench 49 moved (offset 9, shell 40) with byte-identical reports and meshes; conformance seed 0: 745 lines (shell 437, offset 252, read_step 53, 3 downstream booleans), 242/242 cases in the 22 moved families with identical outcomes and values (w-m11 names2 proof)
+# Solid::digest() per result (cargo xtask digest); tree fd624d4+8daaf4b7
+# reason: M4.8 chamfer_angle native rung first (fd624d4): only the 18 bench chamfer_angle cases move (a springrep-form body from yack-blend replaces a held cadrs body); conformance seed 0 identical; bake-off native 18/18 equal to cadrs to 6e-16, brep-bench chamfer/ 35/35 pass 0 wrong, graded masses within 1.4e-15 (w-m04-conf-69)
 boolean/box-minus-through-cylinder a383360aa7cad335c1244b4fd0f92fecf2e3d5223cb2ca561f8e01868942566e
 boolean/boxes-common 6ca20909349786779d9a0e4c4be4544baf4933abea25fa93b059c8e87d5ef91d
 boolean/boxes-cut 73fe72cd0177fde9fe6237ddcb2f3ba0e951e5218eb4576198cd4bfd058b6c68
@@ -31,12 +31,12 @@ boolean/tori-common d9c43f54504d718d1f96517fa6d1572bd79691532548b5c8b384aa826272
 boolean/tube ec32c33eb5469b59d7d26e45595e753b19f457317ec43a1a803d858fc469bc38
 boolean/tube-flush-ends 0774fc3fc94df69e659cd5a4fb1a4c91c3b79ac7d62eef74b725b5e6c8525cb3
 boolean/unequal-lens-aslant 7324422fe8c6310ac7ea565269f88b6cf8efcbf8dcae001e7632ece88b10356f
-chamfer/ball-in-conical-seat-distance-1-angle-45 827ce2068a77fb4721ea1e8bd8c1ecc92497682c9d860cfe176d7f81eb06c3c2
-chamfer/ball-in-conical-seat-distance-2-angle-30 cf32cee207869822acc116ea8c635b9696626de837b4848f0f172cb1ebf07464
-chamfer/ball-in-conical-seat-distance-3-angle-15 e804bf7e8a73373d216d73a38bb05ceabdfb3e9f69e281df900de07abc4fad1b
-chamfer/ball-on-plate-rim-distance-1-angle-50 d98cbcdb9425b9c3ef8fa910dda0b044708bd97b4ab4ecd87461f67ffa666107
-chamfer/ball-on-plate-rim-distance-2-angle-40 62ae54b12b09b300a5875dacb1ad5150941d92c626915d1d9862439cc7d138e6
-chamfer/ball-on-plate-rim-distance-2-angle-45 1a06791b2ca0369dc770259cd5bacc3d652ffe5b4b67ad4e6f49986e475e1c41
+chamfer/ball-in-conical-seat-distance-1-angle-45 1577246f9560f3eb8684594ebe3e54f614687a2e8d65dff6f4310acb962400ac
+chamfer/ball-in-conical-seat-distance-2-angle-30 5081a905d16d46d308b786ec3b0d60edd7edfd7b856135cce649db3b0996fd71
+chamfer/ball-in-conical-seat-distance-3-angle-15 e91511b98debe8fce9b34b22f1feb4d13ae104f6627025f7b3f0cf62abdd8e57
+chamfer/ball-on-plate-rim-distance-1-angle-50 ee01a8b507a50ff33cdd0f4999b2a060efd6b11056efb1e79122c63c865e3544
+chamfer/ball-on-plate-rim-distance-2-angle-40 661f53ee09ec9912c3432ca88f8c4c909a43aba264f67f72ee2c93df1e68a390
+chamfer/ball-on-plate-rim-distance-2-angle-45 450bcede41abef9e6bd5bd665c0d8404823addbb8b455bbd58a8ad007fed30a7
 chamfer/ball-on-post-two-distances 9e1dd92723f5a5118a09de0177a6544235cfd42b92dbae4b314a9d166d3c1673
 chamfer/ball-segment-rim-chamfered-to-its-center a456e2989597eff1198f9772adc57af4d5585c40a9f80a7cb95f2b83a3d652db
 chamfer/ball-segment-rim-two-distances 83002365fc4152aa678e6f2c6b71be0d3333b5dd71dfa9b3db5782f494b8f658
@@ -44,28 +44,28 @@ chamfer/block-ridge 18b29925fff93db272361a3cc7751e290311234036ed6b070de13da0dc3c
 chamfer/bored-ball-rim-chamfered-through-its-bore 50e34b9c7ad83cee2f1262098fead989d15e78b33232c8bc1edee255600a2d50
 chamfer/bored-ball-rim-two-distances 1aaaf6975327dc83015e1f6f8b69fc17a0d78e5eeed4affa24a0adc4a7748140
 chamfer/box-top-asymmetric a64fda87f38f760a5964fa5be09206c6a6850f459c97955870af93c5b7b6e978
-chamfer/capped-frustum-rim-distance-1-angle-45 65eb1a9e9cec202a176700964f2fee7db02f5de5df5e216ba85b788aa1eef5c5
-chamfer/capped-frustum-rim-distance-1-angle-60 d247c6415a27c3362ebf23e68059bd43cdcc1ece4d0e707a77ad8c1b9a327a25
-chamfer/capped-frustum-rim-distance-2-angle-45 316f0e03b406fc418ecdd177c122663c4f8fb975bb1167fb3978f3e69fb2772d
+chamfer/capped-frustum-rim-distance-1-angle-45 ddb7a731ab6fd3b1e8bf06dd94c65ebf7c82d05dabbc63b36e6f90d227efb1eb
+chamfer/capped-frustum-rim-distance-1-angle-60 2e62494c61a88f68413822949c8bd932abfa11675e66839baa67da6169563644
+chamfer/capped-frustum-rim-distance-2-angle-45 332a9f02570e809dd60c25cd63952c3e68a882a4e40fecf7d531fb4fcffbb187
 chamfer/cube-all-edges dbc6dadc38a601cb574739ca9542b7a256d0c582feaa96eaa0962cc98ee3d87d
 chamfer/cube-all-edges-mitered a2503b668326cc9d930a76030ad5054a41e9824400a56e5565c7be90bd3e0e46
 chamfer/cylinder-rim-to-point 12c161d1b893adb34ed5c899ae69fd6966861b0f316c951f1170f7c4184ea7ff
 chamfer/hemisphere-rim-chamfered-to-its-center 58fca298afd892a2c4da1aaa37c9401abbcc07d79d5f321f29c2938dc050ce0c
-chamfer/hemisphere-rim-distance-1-angle-45 8b81b8ea3f87c7993a25cc313cb2645506d41f7f7e8bbc38e247e906ceb73592
-chamfer/hemisphere-rim-distance-2-angle-45 057db5f6505fa30adf280c3d4b749b5a63eda900dfc1e95a82f2a7f2e578a2d7
+chamfer/hemisphere-rim-distance-1-angle-45 b9f4995b4d93136b58c2d4c234616d9b0e21cdbdffb814e7d4973062723b3184
+chamfer/hemisphere-rim-distance-2-angle-45 08a63c80032388f4ed19b637130f2bc6ee933d695b1b978405f6d8d80b251ef4
 chamfer/hemisphere-rim-two-distances 39aae53a1b12716801262f661e4cbe229e1634f9c0774d395293c12f1da7897d
 chamfer/l-block-inside-consumed d5b423fcfec9741c705d96daf67badfe5ce7cead3e42b49b714134060564d035
 chamfer/lens-rim-two-distances d9b9fb64017203e2416b0908561413807ef5bebf72e816697d266681acc8b5a9
-chamfer/narrow-sector-rim-distance-2-angle-45 1fed1c25480316088f861a275238d865685b8a821bbe24aa3aa0eb61ca659cc1
+chamfer/narrow-sector-rim-distance-2-angle-45 b1b654512d7fcbd2bb96f95e4e5819c348068f0196908e350013c716a691897e
 chamfer/octahedron-all-edges 76e1cc4ff26a2ba85475e9561202d1cf7a204d3f9a7fa14769986e5d2a885467
 chamfer/octahedron-all-edges-mitered e6a02f405e57c9c7f80e17ad8842eb18cbce4aa724cfbb9dd5f08df3a03c95b9
-chamfer/spherical-sector-rim-distance-1-angle-45 1fd612ae425ea328e3886e814780773d4d2d8fb6291dcf3ce7154dc9a28178ef
-chamfer/spherical-sector-rim-distance-2-angle-60 234e60ab8270888eb7de106bfb9354b07c4d5ea318d4a7072fcf1f713d730fe5
-chamfer/spherical-sector-rim-distance-3-angle-30 7e706eb9c569556bb5025cf8f8f5f7f2d1000a16fbde9067c80f78391e305774
+chamfer/spherical-sector-rim-distance-1-angle-45 f4f4a90ba5b79bf8aef80e21bfd821c6ad8538cb894dc984d16e5e0007d4c422
+chamfer/spherical-sector-rim-distance-2-angle-60 11cefb87f8e66c7d06b841d1482ec5dde9e663e125ab913aeafe41d87909c765
+chamfer/spherical-sector-rim-distance-3-angle-30 c621112f9e24757edea23825e03c489563d0ce8c364ecfaee2a8b969ff73f863
 chamfer/spherical-sector-rim-two-distances 6645bcae943ca62f855bb11c30b8247298b7bc8102b4134842bb687084041975
-chamfer/wide-sector-rim-distance-1-angle-45 4a9c1862a49001df5d16da2d44a6ae58b5222573ffb05eb1fbc4834f8e3e8d11
-chamfer/wide-sector-rim-distance-2-angle-30 9df0beed4c82280f0aa8512204e2ee033b6f40aa6190e738f039b3f05c77fa02
-chamfer/wide-sector-rim-distance-3-angle-20 59af9e519f3e2819992435524b33dd7a4d95806bf47be60bd15b8031355b805b
+chamfer/wide-sector-rim-distance-1-angle-45 b37c395b5c26339630a0b672ac29d6106c6f0f205f37dcaa47ba6231b3f241ab
+chamfer/wide-sector-rim-distance-2-angle-30 d705f860be21d9ebdb5fb742d0d89b75506650f183a2f1dfec0fb928e21e6b7b
+chamfer/wide-sector-rim-distance-3-angle-20 82745dd55b67b624e0ce362ad6cc303340713a4945f5ce4dbba4c77409ef4d98
 cnc/ball-end-surface-raster a49c4f395550151d5879458fa0161cf9ddeeff353261f0d8afcf04a6a8269a4c
 cnc/bull-nose-profile 2439fb8622e147f6a8638aec404b8f9727a8d6a397adabe7b2e8a1dbce3e6776
 cnc/five-axis-dome refused
