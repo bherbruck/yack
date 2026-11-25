@@ -97,16 +97,16 @@ fn a_shaped_blend_names_what_it_makes_under_its_feature() {
         "{bevels:?}"
     );
     // A block grown by 1 mm: its six faces, a round on each of twelve edges, a ball's patch at
-    // each of eight corners.
+    // each of eight corners. Each round also names the block edge it grows from (`round_e<k>`)
+    // and each corner patch the block vertex (`corner_v<k>`), for History's origins (ab8c4a8).
     let grown = edit::offset(&b, 1.0, "g").unwrap().name_counts();
     assert!(
         own(&grown) && grown.get("g.corner") == Some(&8),
         "{grown:?}"
     );
-    assert_eq!(
-        grown.keys().filter(|n| n.starts_with("g.round_")).count(),
-        12,
-        "{grown:?}"
-    );
-    assert_eq!(grown.len(), 6 + 12 + 1, "{grown:?}");
+    let starting = |prefix: &str| grown.keys().filter(|n| n.starts_with(prefix)).count();
+    assert_eq!(starting("g.round_") - starting("g.round_e"), 12, "{grown:?}");
+    assert_eq!(starting("g.round_e"), 12, "{grown:?}");
+    assert_eq!(starting("g.corner_v"), 8, "{grown:?}");
+    assert_eq!(grown.len(), 6 + 12 + 12 + 1 + 8, "{grown:?}");
 }
