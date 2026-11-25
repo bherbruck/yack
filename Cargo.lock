@@ -387,6 +387,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-swept"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-check",
+ "yack-math",
+ "yack-topo",
+]
+
+[[package]]
 name = "yack-tol"
 version = "0.0.0"
 

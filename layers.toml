@@ -187,7 +187,7 @@ license = "MIT OR Apache-2.0"
 layer = 9
 kind = "kernel"
 owner = "lead"
-deps = ["yack-boolean", "yack-build", "yack-intersect", "yack-locate", "yack-check", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base"]
+deps = ["yack-boolean", "yack-build", "yack-intersect", "yack-locate", "yack-check", "yack-topo", "yack-geom", "yack-numeric", "yack-math", "yack-tol", "yack-base", "yack-heal", "yack-measure", "yack-mesh", "yack-profile"]
 license = "MIT OR Apache-2.0"
 
 # ---- layer 10 ----
