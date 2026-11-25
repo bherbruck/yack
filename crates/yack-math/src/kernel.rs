@@ -1,13 +1,15 @@
 // yack: Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 // Adapted from springrep@a03e8a1 src/math.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: `within` moved in from tol.rs (M2), being the one tolerance compare that takes a point;
-// moved to yack_math::kernel (M3 W2', D26); paths and visibility only.
+// moved to yack_math::kernel (M3 W2', D26); paths and visibility only; hardening (w-h1): documented,
+// and the matrix sums run over rows and columns rather than positions.
 //! Points, vectors, frames, rigid transforms and boxes. A point and a vector share [`Vec3`]; the
 //! name at each use says which it is.
 //!
 //! springrep's own maths, beside yack-math's checked types. Temporary (D26): each crate's M3
 //! hardening moves onto those types, and this module goes when the last user has.
 
+/// Bounding volume hierarchies and the closest points of segments and triangles.
 pub mod bvh;
 
 use std::ops::{Add, AddAssign, Div, Index, Mul, Neg, Sub, SubAssign};
@@ -23,41 +25,55 @@ pub fn within(d: f64, t: f64, at: Point3) -> bool {
     d <= t + 16.0 * f64::EPSILON * (1.0 + at.x.abs().max(at.y.abs()).max(at.z.abs()))
 }
 
+/// A point or vector in space, in millimetres.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vec3 {
+    /// The x coordinate.
     pub x: f64,
+    /// The y coordinate.
     pub y: f64,
+    /// The z coordinate.
     pub z: f64,
 }
 
+/// A point: a [`Vec3`] read as a position.
 pub type Point3 = Vec3;
 
 impl Vec3 {
+    /// The zero vector, or the origin.
     pub const ZERO: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+    /// The unit x vector.
     pub const X: Vec3 = Vec3::new(1.0, 0.0, 0.0);
+    /// The unit y vector.
     pub const Y: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+    /// The unit z vector.
     pub const Z: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 
+    /// The vector `(x, y, z)`.
     #[inline]
     pub const fn new(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3 { x, y, z }
     }
 
+    /// The vector `[x, y, z]`.
     #[inline]
-    pub fn from_array(a: [f64; 3]) -> Vec3 {
-        Vec3::new(a[0], a[1], a[2])
+    pub fn from_array([x, y, z]: [f64; 3]) -> Vec3 {
+        Vec3::new(x, y, z)
     }
 
+    /// `[x, y, z]`.
     #[inline]
     pub fn to_array(self) -> [f64; 3] {
         [self.x, self.y, self.z]
     }
 
+    /// The dot product.
     #[inline]
     pub fn dot(self, o: Vec3) -> f64 {
         self.x * o.x + self.y * o.y + self.z * o.z
     }
 
+    /// The cross product, right-handed.
     #[inline]
     pub fn cross(self, o: Vec3) -> Vec3 {
         Vec3::new(
@@ -67,11 +83,13 @@ impl Vec3 {
         )
     }
 
+    /// The squared length.
     #[inline]
     pub fn norm2(self) -> f64 {
         self.dot(self)
     }
 
+    /// The length.
     #[inline]
     pub fn norm(self) -> f64 {
         self.norm2().sqrt()
@@ -94,11 +112,13 @@ impl Vec3 {
         self.unit().unwrap_or(Vec3::ZERO)
     }
 
+    /// The point a fraction `t` of the way from `self` to `o`.
     #[inline]
     pub fn lerp(self, o: Vec3, t: f64) -> Vec3 {
         self + (o - self) * t
     }
 
+    /// The distance to `o`.
     #[inline]
     pub fn dist(self, o: Vec3) -> f64 {
         (self - o).norm()
@@ -117,11 +137,13 @@ impl Vec3 {
         self.cross(a).unit_or_zero()
     }
 
+    /// The largest coordinate's size.
     #[inline]
     pub fn max_abs(self) -> f64 {
         self.x.abs().max(self.y.abs()).max(self.z.abs())
     }
 
+    /// Whether every coordinate is finite.
     #[inline]
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
@@ -205,18 +227,23 @@ impl Neg for Vec3 {
 /// A point or vector in a surface's parameter plane, or in a sketch.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vec2 {
+    /// The first coordinate (u in a parameter plane).
     pub x: f64,
+    /// The second coordinate (v in a parameter plane).
     pub y: f64,
 }
 
 impl Vec2 {
+    /// The zero vector, or the origin.
     pub const ZERO: Vec2 = Vec2::new(0.0, 0.0);
 
+    /// The vector `(x, y)`.
     #[inline]
     pub const fn new(x: f64, y: f64) -> Vec2 {
         Vec2 { x, y }
     }
 
+    /// The dot product.
     #[inline]
     pub fn dot(self, o: Vec2) -> f64 {
         self.x * o.x + self.y * o.y
@@ -228,21 +255,25 @@ impl Vec2 {
         self.x * o.y - self.y * o.x
     }
 
+    /// The length.
     #[inline]
     pub fn norm(self) -> f64 {
         self.dot(self).sqrt()
     }
 
+    /// The distance to `o`.
     #[inline]
     pub fn dist(self, o: Vec2) -> f64 {
         (self - o).norm()
     }
 
+    /// The point a fraction `t` of the way from `self` to `o`.
     #[inline]
     pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {
         self + (o - self) * t
     }
 
+    /// `self` turned a quarter turn anticlockwise.
     #[inline]
     pub fn perp(self) -> Vec2 {
         Vec2::new(-self.y, self.x)
@@ -293,13 +324,18 @@ impl Neg for Vec2 {
 /// normal and a cylinder's or circle's axis, and angles are measured from `x` towards `y`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
+    /// The origin.
     pub origin: Point3,
+    /// The unit x axis.
     pub x: Vec3,
+    /// The unit y axis, `z × x`.
     pub y: Vec3,
+    /// The unit z axis: the normal or axis.
     pub z: Vec3,
 }
 
 impl Frame {
+    /// The world frame.
     pub const WORLD: Frame = Frame {
         origin: Vec3::ZERO,
         x: Vec3::X,
@@ -329,22 +365,26 @@ impl Frame {
         Frame::new(origin, z, z.any_perpendicular())
     }
 
+    /// `p` in the frame's coordinates.
     #[inline]
     pub fn to_local(&self, p: Point3) -> Vec3 {
         let d = p - self.origin;
         Vec3::new(d.dot(self.x), d.dot(self.y), d.dot(self.z))
     }
 
+    /// The point with frame coordinates `l`.
     #[inline]
     pub fn to_world(&self, l: Vec3) -> Point3 {
         self.origin + self.x * l.x + self.y * l.y + self.z * l.z
     }
 
+    /// The vector with frame components `l`.
     #[inline]
     pub fn dir_to_world(&self, l: Vec3) -> Vec3 {
         self.x * l.x + self.y * l.y + self.z * l.z
     }
 
+    /// The vector `d` in the frame's components.
     #[inline]
     pub fn dir_to_local(&self, d: Vec3) -> Vec3 {
         Vec3::new(d.dot(self.x), d.dot(self.y), d.dot(self.z))
@@ -362,6 +402,7 @@ impl Frame {
         self.x * a.cos() + self.y * a.sin()
     }
 
+    /// The frame moved by `t`.
     pub fn transformed(&self, t: &Transform) -> Frame {
         Frame {
             origin: t.point(self.origin),
@@ -371,6 +412,7 @@ impl Frame {
         }
     }
 
+    /// The frame moved by `d`.
     pub fn translated(&self, d: Vec3) -> Frame {
         Frame {
             origin: self.origin + d,
@@ -392,7 +434,9 @@ impl Frame {
 /// numbers from a file or another program go through [`Transform::rigid`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
+    /// The rotation, by rows.
     pub r: [[f64; 3]; 3],
+    /// The translation, applied after the rotation.
     pub t: Vec3,
 }
 
@@ -400,6 +444,7 @@ pub struct Transform {
 /// with few digits: six digits' worth.
 const ORTHOGONAL: f64 = 1e-6;
 
+/// The determinant.
 fn det3(m: &[[f64; 3]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
@@ -411,9 +456,9 @@ fn det3(m: &[[f64; 3]; 3]) -> f64 {
 /// and a frame moved by it has axes that far from unit and from square, more than the kernel's
 /// angular tolerance.
 pub fn nearest_orthogonal(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
-    for i in 0..3 {
-        for j in 0..3 {
-            let dot: f64 = (0..3).map(|k| m[i][k] * m[j][k]).sum();
+    for (i, row_i) in m.iter().enumerate() {
+        for (j, row_j) in m.iter().enumerate() {
+            let dot = dot3(row_i, row_j);
             let want = if i == j { 1.0 } else { 0.0 };
             let off = (dot - want).abs();
             if off.is_nan() || off > ORTHOGONAL {
@@ -422,20 +467,19 @@ pub fn nearest_orthogonal(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
         }
     }
     // The orthogonal factor of the polar decomposition, by Newton's iteration q ← ½(q + q⁻ᵀ),
-    // which converges quadratically: from 1e-6 off, two steps reach rounding.
+    // which converges quadratically: from 1e-6 off, two steps reach rounding. q⁻ᵀ is the
+    // cofactor matrix over the determinant, and row i of the cofactors is the cross product of the
+    // two rows after it.
     let mut q = *m;
     for _ in 0..4 {
         let d = det3(&q);
-        let mut next = [[0.0; 3]; 3];
-        for (i, row) in next.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate() {
-                let (a, b) = ((i + 1) % 3, (i + 2) % 3);
-                let (c, e) = ((j + 1) % 3, (j + 2) % 3);
-                let cofactor = q[a][c] * q[b][e] - q[a][e] * q[b][c];
-                *cell = 0.5 * (q[i][j] + cofactor / d);
+        let [r0, r1, r2] = q.map(Vec3::from_array);
+        let cofactors = [r1.cross(r2), r2.cross(r0), r0.cross(r1)];
+        for (row, cofactor) in q.iter_mut().zip(cofactors) {
+            for (cell, c) in row.iter_mut().zip(cofactor.to_array()) {
+                *cell = 0.5 * (*cell + c / d);
             }
         }
-        q = next;
     }
     Some(q)
 }
@@ -452,11 +496,13 @@ impl Transform {
         }
     }
 
+    /// The motion that moves nothing.
     pub const IDENTITY: Transform = Transform {
         r: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         t: Vec3::ZERO,
     };
 
+    /// The translation by `d`.
     pub fn translation(d: Vec3) -> Transform {
         Transform {
             t: d,
@@ -493,6 +539,7 @@ impl Transform {
         }
     }
 
+    /// The vector `v` rotated: a direction moves without the translation.
     #[inline]
     pub fn vector(&self, v: Vec3) -> Vec3 {
         let r = &self.r;
@@ -503,6 +550,7 @@ impl Transform {
         )
     }
 
+    /// The point `p` moved.
     #[inline]
     pub fn point(&self, p: Point3) -> Point3 {
         self.vector(p) + self.t
@@ -510,25 +558,17 @@ impl Transform {
 
     /// `self` followed by `next`.
     pub fn then(&self, next: &Transform) -> Transform {
-        let mut r = [[0.0; 3]; 3];
-        for (i, row) in r.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate() {
-                *cell = (0..3).map(|k| next.r[i][k] * self.r[k][j]).sum();
-            }
-        }
+        let columns = transpose(&self.r);
+        let r = next.r.map(|row| columns.map(|column| dot3(&row, &column)));
         Transform {
             r,
             t: next.point(self.t),
         }
     }
 
+    /// The motion that undoes `self`.
     pub fn inverse(&self) -> Transform {
-        let mut r = [[0.0; 3]; 3];
-        for (i, row) in r.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate() {
-                *cell = self.r[j][i];
-            }
-        }
+        let r = transpose(&self.r);
         let inv = Transform { r, t: Vec3::ZERO };
         Transform {
             r,
@@ -537,10 +577,23 @@ impl Transform {
     }
 }
 
+/// The dot product of two rows, summed first to last.
+fn dot3(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// The transpose of `m`: its rows as columns.
+fn transpose(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let [[a, b, c], [d, e, f], [g, h, i]] = *m;
+    [[a, d, g], [b, e, h], [c, f, i]]
+}
+
 /// An axis-aligned box. An empty box has `min > max`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
+    /// The low corner.
     pub min: Point3,
+    /// The high corner.
     pub max: Point3,
 }
 
@@ -551,16 +604,19 @@ impl Default for Aabb {
 }
 
 impl Aabb {
+    /// The empty box, which [`Aabb::add`] grows from.
     pub const EMPTY: Aabb = Aabb {
         min: Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
         max: Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
     };
 
+    /// Whether the box holds nothing.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.min.x > self.max.x
     }
 
+    /// Grows the box to hold `p`.
     #[inline]
     pub fn add(&mut self, p: Point3) {
         self.min = Vec3::new(
@@ -575,6 +631,7 @@ impl Aabb {
         );
     }
 
+    /// Grows the box to hold `o`.
     #[inline]
     pub fn union(&mut self, o: &Aabb) {
         if !o.is_empty() {
@@ -583,6 +640,7 @@ impl Aabb {
         }
     }
 
+    /// The length of the box's diagonal; zero for an empty box.
     #[inline]
     pub fn diagonal(&self) -> f64 {
         if self.is_empty() {
@@ -592,6 +650,7 @@ impl Aabb {
         }
     }
 
+    /// The box's centre.
     #[inline]
     pub fn center(&self) -> Point3 {
         (self.min + self.max) * 0.5

@@ -1,12 +1,13 @@
 // yack: A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 // Adapted from springrep@a03e8a1 src/mesh/bvh.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from mesh/bvh.rs to math/bvh.rs (M2); `Bvh::new` takes the triangles' positions and
-// indices rather than a mesh; moved to yack_math::kernel::bvh (M3 W2', D26); paths and visibility only.
+// indices rather than a mesh; moved to yack_math::kernel::bvh (M3 W2', D26); paths and visibility only;
+// hardening (w-h1): the four box queries share one walk, nodes and runs are read with checked
+// access, and `Bvh::new` asserts its corner indices.
 //! A bounding volume hierarchy over boxes, and the closest points and crossings of points,
 //! segments and triangles: the search structures the thin-place probe, distances and rays share.
 
 use super::{Aabb, Point3, Transform, Vec3};
-
 
 /// A bounding volume hierarchy over boxes: a mesh's triangles, or any primitives' boxes.
 pub struct Bvh {
@@ -16,19 +17,38 @@ pub struct Bvh {
     order: Vec<usize>,
 }
 
+/// A node of a [`Bvh`]: two children by index into its nodes, or a run `lo..hi` of its order.
 enum Node {
     Inner(usize, usize),
     Leaf(usize, usize),
 }
 
+/// The leaves hold at most this many boxes.
+const LEAF_SIZE: usize = 4;
+
 impl Bvh {
+    /// The hierarchy over the boxes of `triangles`, each three indices into `positions`.
+    ///
+    /// # Panics
+    ///
+    /// When a corner index is past the end of `positions`. A mesh's triangles index its own
+    /// positions, so such an index is the caller's bug, never a refusal (a contract panic, counted
+    /// in scores/lints.txt; the firewall reports it as `Internal`).
     pub fn new(positions: &[Point3], triangles: &[[u32; 3]]) -> Bvh {
-        let boxes: Vec<Aabb> = triangles
+        let boxes = triangles
             .iter()
-            .map(|t| {
+            .map(|corners| {
                 let mut b = Aabb::EMPTY;
-                for &i in t {
-                    b.add(positions[i as usize]);
+                for &i in corners {
+                    let corner = positions.get(i as usize);
+                    assert!(
+                        corner.is_some(),
+                        "Bvh::new: corner index {i} is past the {} positions",
+                        positions.len()
+                    );
+                    if let Some(&p) = corner {
+                        b.add(p);
+                    }
                 }
                 b
             })
@@ -49,91 +69,104 @@ impl Bvh {
         bvh
     }
 
+    /// The boxes of the run `lo..hi` of the order, as indices. Every node's run lies in the
+    /// order; a debug build checks it.
+    fn run(&self, lo: usize, hi: usize) -> &[usize] {
+        let run = self.order.get(lo..hi);
+        debug_assert!(
+            run.is_some(),
+            "Bvh run {lo}..{hi} is outside its {} boxes",
+            self.order.len()
+        );
+        run.unwrap_or_default()
+    }
+
+    /// The box of index `i`. Every index in the order has one; a debug build checks it.
+    fn bounds(&self, i: usize) -> &Aabb {
+        let bounds = self.boxes.get(i);
+        debug_assert!(bounds.is_some(), "Bvh box {i} is past its {} boxes", self.boxes.len());
+        bounds.unwrap_or(&Aabb::EMPTY)
+    }
+
+    /// Adds the node over the run `lo..hi` and, past [`LEAF_SIZE`] boxes, its two halves split at
+    /// the median of the box centres along the run's longest side. Returns the node's index.
     fn split(&mut self, lo: usize, hi: usize) -> usize {
         let mut bb = Aabb::EMPTY;
-        for &i in &self.order[lo..hi] {
-            bb.union(&self.boxes[i]);
+        for &i in self.run(lo, hi) {
+            bb.union(self.bounds(i));
         }
         let at = self.nodes.len();
-        if hi - lo <= 4 {
-            self.nodes.push((bb, Node::Leaf(lo, hi)));
+        self.nodes.push((bb, Node::Leaf(lo, hi)));
+        if hi - lo <= LEAF_SIZE {
             return at;
         }
-        self.nodes.push((bb, Node::Leaf(lo, hi)));
         let ext = bb.max - bb.min;
-        let axis = if ext.x >= ext.y && ext.x >= ext.z {
-            0
+        let centre = |b: &Aabb| (b.min + b.max) * 0.5;
+        let key: fn(Vec3) -> f64 = if ext.x >= ext.y && ext.x >= ext.z {
+            |c| c.x
         } else if ext.y >= ext.z {
-            1
+            |c| c.y
         } else {
-            2
-        };
-        let key = |b: &Aabb| {
-            let c = (b.min + b.max) * 0.5;
-            [c.x, c.y, c.z][axis]
+            |c| c.z
         };
         let mid = (lo + hi) / 2;
         let boxes = &self.boxes;
-        self.order[lo..hi].sort_by(|&i, &j| key(&boxes[i]).total_cmp(&key(&boxes[j])));
+        let along = |i: usize| boxes.get(i).map_or(0.0, |b| key(centre(b)));
+        if let Some(run) = self.order.get_mut(lo..hi) {
+            run.sort_by(|&i, &j| along(i).total_cmp(&along(j)));
+        }
         let l = self.split(lo, mid);
         let r = self.split(mid, hi);
-        self.nodes[at].1 = Node::Inner(l, r);
+        if let Some(node) = self.nodes.get_mut(at) {
+            node.1 = Node::Inner(l, r);
+        }
         at
+    }
+
+    /// Fills `out` with every box `keep` holds, searching down from the root through the nodes
+    /// `skip` does not rule out.
+    fn collect(
+        &self,
+        skip: impl Fn(&Aabb) -> bool,
+        keep: impl Fn(&Aabb) -> bool,
+        out: &mut Vec<usize>,
+    ) {
+        out.clear();
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut stack = vec![0];
+        while let Some(n) = stack.pop() {
+            let Some((bb, node)) = self.nodes.get(n) else {
+                continue;
+            };
+            if skip(bb) {
+                continue;
+            }
+            match *node {
+                Node::Inner(l, r) => {
+                    stack.push(l);
+                    stack.push(r);
+                }
+                Node::Leaf(lo, hi) => out.extend(
+                    self.run(lo, hi)
+                        .iter()
+                        .copied()
+                        .filter(|&i| keep(self.bounds(i))),
+                ),
+            }
+        }
     }
 
     /// Every box that, slid any distance either way along `d`, meets `q`: every triangle a line
     /// along `d` through `q` can cross, so a ray's crossings keep their parity.
     pub fn along_line(&self, q: &Aabb, d: Vec3, out: &mut Vec<usize>) {
-        out.clear();
-        if self.nodes.is_empty() {
-            return;
-        }
-        let mut stack = vec![0];
-        while let Some(n) = stack.pop() {
-            let (bb, node) = &self.nodes[n];
-            if !line_meets(bb, q, d) {
-                continue;
-            }
-            match *node {
-                Node::Inner(l, r) => {
-                    stack.push(l);
-                    stack.push(r);
-                }
-                Node::Leaf(lo, hi) => out.extend(
-                    self.order[lo..hi]
-                        .iter()
-                        .copied()
-                        .filter(|&i| line_meets(&self.boxes[i], q, d)),
-                ),
-            }
-        }
+        self.collect(|b| !line_meets(b, q, d), |b| line_meets(b, q, d), out);
     }
 
     /// Every box within straight-line distance `d` of `q`.
     pub fn within(&self, q: &Aabb, d: f64, out: &mut Vec<usize>) {
-        out.clear();
-        if self.nodes.is_empty() {
-            return;
-        }
-        let mut stack = vec![0];
-        while let Some(n) = stack.pop() {
-            let (bb, node) = &self.nodes[n];
-            if box_gap(bb, q) > d {
-                continue;
-            }
-            match *node {
-                Node::Inner(l, r) => {
-                    stack.push(l);
-                    stack.push(r);
-                }
-                Node::Leaf(lo, hi) => out.extend(
-                    self.order[lo..hi]
-                        .iter()
-                        .copied()
-                        .filter(|&i| box_gap(&self.boxes[i], q) <= d),
-                ),
-            }
-        }
+        self.collect(|b| box_gap(b, q) > d, |b| box_gap(b, q) <= d, out);
     }
 
     /// Every box, widened by `pad` on each side, that the segment `o + t·d` for `t` in `[t0, t1]`
@@ -146,10 +179,6 @@ impl Bvh {
         pad: f64,
         out: &mut Vec<usize>,
     ) {
-        out.clear();
-        if self.nodes.is_empty() {
-            return;
-        }
         let meets = |b: &Aabb| {
             let (mut lo, mut hi) = (t0, t1);
             for (o, d, a, z) in [
@@ -172,25 +201,7 @@ impl Bvh {
             }
             true
         };
-        let mut stack = vec![0];
-        while let Some(n) = stack.pop() {
-            let (bb, node) = &self.nodes[n];
-            if !meets(bb) {
-                continue;
-            }
-            match *node {
-                Node::Inner(l, r) => {
-                    stack.push(l);
-                    stack.push(r);
-                }
-                Node::Leaf(lo, hi) => out.extend(
-                    self.order[lo..hi]
-                        .iter()
-                        .copied()
-                        .filter(|&i| meets(&self.boxes[i])),
-                ),
-            }
-        }
+        self.collect(|b| !meets(b), meets, out);
     }
 
     /// Whether `near` holds for some box of `self` and some box of `other` moved by `t` that lie
@@ -206,43 +217,44 @@ impl Bvh {
         if self.nodes.is_empty() || other.nodes.is_empty() {
             return false;
         }
-        let moved = |b: &Aabb| moved_box(b, t);
         let mut stack = vec![(0usize, 0usize)];
         while let Some((a, b)) = stack.pop() {
-            let (ba, na) = &self.nodes[a];
-            let (bb, nb) = &other.nodes[b];
-            let bb = moved(bb);
+            let (Some((ba, na)), Some((bb, nb))) = (self.nodes.get(a), other.nodes.get(b)) else {
+                continue;
+            };
+            let bb = moved_box(bb, t);
             if box_gap(ba, &bb) > d {
                 continue;
             }
             match (na, nb) {
-                (Node::Leaf(alo, ahi), Node::Leaf(blo, bhi)) => {
-                    for &j in &other.order[*blo..*bhi] {
-                        let bj = moved(&other.boxes[j]);
-                        for &i in &self.order[*alo..*ahi] {
-                            if box_gap(&self.boxes[i], &bj) <= d && near(i, j) {
+                (&Node::Leaf(alo, ahi), &Node::Leaf(blo, bhi)) => {
+                    for &j in other.run(blo, bhi) {
+                        let bj = moved_box(other.bounds(j), t);
+                        for &i in self.run(alo, ahi) {
+                            if box_gap(self.bounds(i), &bj) <= d && near(i, j) {
                                 return true;
                             }
                         }
                     }
                 }
-                (Node::Inner(l, r), Node::Leaf(..)) => {
-                    stack.push((*l, b));
-                    stack.push((*r, b));
+                (&Node::Inner(l, r), Node::Leaf(..)) => {
+                    stack.push((l, b));
+                    stack.push((r, b));
                 }
-                (Node::Leaf(..), Node::Inner(l, r)) => {
-                    stack.push((a, *l));
-                    stack.push((a, *r));
+                (Node::Leaf(..), &Node::Inner(l, r)) => {
+                    stack.push((a, l));
+                    stack.push((a, r));
                 }
-                (Node::Inner(al, ar), Node::Inner(bl, br)) => {
+                (&Node::Inner(al, ar), &Node::Inner(bl, br)) => {
+                    // Open the larger box first.
                     let ea = ba.max - ba.min;
                     let eb = bb.max - bb.min;
                     if ea.dot(ea) >= eb.dot(eb) {
-                        stack.push((*al, b));
-                        stack.push((*ar, b));
+                        stack.push((al, b));
+                        stack.push((ar, b));
                     } else {
-                        stack.push((a, *bl));
-                        stack.push((a, *br));
+                        stack.push((a, bl));
+                        stack.push((a, br));
                     }
                 }
             }
@@ -252,10 +264,6 @@ impl Bvh {
 
     /// Every box that meets `q`.
     pub fn query(&self, q: &Aabb, out: &mut Vec<usize>) {
-        out.clear();
-        if self.nodes.is_empty() {
-            return;
-        }
         let meets = |b: &Aabb| {
             b.min.x <= q.max.x
                 && q.min.x <= b.max.x
@@ -264,35 +272,19 @@ impl Bvh {
                 && b.min.z <= q.max.z
                 && q.min.z <= b.max.z
         };
-        let mut stack = vec![0];
-        while let Some(n) = stack.pop() {
-            let (bb, node) = &self.nodes[n];
-            if !meets(bb) {
-                continue;
-            }
-            match *node {
-                Node::Inner(l, r) => {
-                    stack.push(l);
-                    stack.push(r);
-                }
-                Node::Leaf(lo, hi) => out.extend(
-                    self.order[lo..hi]
-                        .iter()
-                        .copied()
-                        .filter(|&i| meets(&self.boxes[i])),
-                ),
-            }
-        }
+        self.collect(|b| !meets(b), meets, out);
     }
 }
 
-/// The straight-line distance between two boxes; zero where they meet.
 /// Whether `b` slid some distance either way along `d` meets `q`: on each axis the slide carries
 /// it over `q` for a span of distances, and those spans share one.
 fn line_meets(b: &Aabb, q: &Aabb, d: Vec3) -> bool {
     let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
-    for k in 0..3 {
-        let (lo, hi, step) = (q.min[k] - b.max[k], q.max[k] - b.min[k], d[k]);
+    for (lo, hi, step) in [
+        (q.min.x - b.max.x, q.max.x - b.min.x, d.x),
+        (q.min.y - b.max.y, q.max.y - b.min.y, d.y),
+        (q.min.z - b.max.z, q.max.z - b.min.z, d.z),
+    ] {
         if step.abs() < 1e-12 {
             if lo > 0.0 || hi < 0.0 {
                 return false;
@@ -306,6 +298,7 @@ fn line_meets(b: &Aabb, q: &Aabb, d: Vec3) -> bool {
     t0 <= t1
 }
 
+/// The straight-line distance between two boxes; zero where they meet.
 pub fn box_gap(a: &Aabb, b: &Aabb) -> f64 {
     let gap = |lo1: f64, hi1: f64, lo2: f64, hi2: f64| (lo2 - hi1).max(lo1 - hi2).max(0.0);
     let (x, y, z) = (
@@ -319,9 +312,9 @@ pub fn box_gap(a: &Aabb, b: &Aabb) -> f64 {
 /// The box round `b`'s corners moved by `t`.
 pub fn moved_box(b: &Aabb, t: &Transform) -> Aabb {
     let mut out = Aabb::EMPTY;
-    for &x in &[b.min.x, b.max.x] {
-        for &y in &[b.min.y, b.max.y] {
-            for &z in &[b.min.z, b.max.z] {
+    for x in [b.min.x, b.max.x] {
+        for y in [b.min.y, b.max.y] {
+            for z in [b.min.z, b.max.z] {
                 out.add(t.point(Point3::new(x, y, z)));
             }
         }
@@ -329,13 +322,19 @@ pub fn moved_box(b: &Aabb, t: &Transform) -> Aabb {
     out
 }
 
+/// The three sides of triangle `t`, each from a corner to the next.
+fn sides(t: &[Point3; 3]) -> [(Point3, Point3); 3] {
+    let [a, b, c] = *t;
+    [(a, b), (b, c), (c, a)]
+}
+
 /// The distance between two triangles: zero where they cross, else the nearest of each one's
 /// sides to the other.
 pub fn triangles(a: &[Point3; 3], b: &[Point3; 3]) -> f64 {
     let mut best = f64::INFINITY;
     for (s, t) in [(a, b), (b, a)] {
-        for k in 0..3 {
-            best = best.min(segment_triangle(s[k], s[(k + 1) % 3], t).0);
+        for (p, q) in sides(s) {
+            best = best.min(segment_triangle(p, q, t).0);
             if best == 0.0 {
                 return 0.0;
             }
@@ -366,6 +365,7 @@ pub fn ray_triangle(p: Point3, d: Vec3, a: Point3, b: Point3, c: Point3) -> Opti
     (u >= 0.0 && v >= 0.0 && u + v <= 1.0).then_some(t)
 }
 
+/// The point of segment `ab` nearest `p`.
 pub fn on_segment(p: Point3, a: Point3, b: Point3) -> Point3 {
     let d = b - a;
     let l = d.dot(d);
@@ -447,8 +447,8 @@ pub fn segment_triangle(p: Point3, q: Point3, t: &[Point3; 3]) -> (f64, Point3, 
             best = (d, e, c);
         }
     }
-    for k in 0..3 {
-        let x = segments(p, q, t[k], t[(k + 1) % 3]);
+    for (a, b) in sides(t) {
+        let x = segments(p, q, a, b);
         if x.0 < best.0 {
             best = x;
         }
@@ -458,14 +458,54 @@ pub fn segment_triangle(p: Point3, q: Point3, t: &[Point3; 3]) -> (f64, Point3, 
 
 /// Where segment `pq` crosses triangle `t`, if it does.
 pub fn crossing(p: Point3, q: Point3, t: &[Point3; 3]) -> Option<Point3> {
+    let [a, b, c] = *t;
     let d = q - p;
-    let s = ray_triangle(p, d, t[0], t[1], t[2])?;
+    let s = ray_triangle(p, d, a, b, c)?;
     (0.0..=1.0).contains(&s).then(|| p + d * s)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every query finds what testing each box alone finds, in some order.
+    #[test]
+    fn queries_match_testing_every_box() {
+        let mut seed = 11u64;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut point = || Vec3::new(rnd() * 10.0, rnd() * 10.0, rnd() * 10.0);
+        let boxes: Vec<Aabb> = (0..200)
+            .map(|_| {
+                let mut b = Aabb::EMPTY;
+                b.add(point());
+                b.add(point() * 0.1 + b.min);
+                b
+            })
+            .collect();
+        let bvh = Bvh::of_boxes(boxes.clone());
+        let mut q = Aabb::EMPTY;
+        q.add(Vec3::new(3.0, 3.0, 3.0));
+        q.add(Vec3::new(5.0, 4.0, 6.0));
+        let sorted = |mut v: Vec<usize>| {
+            v.sort_unstable();
+            v
+        };
+        let every = |keep: &dyn Fn(&Aabb) -> bool| -> Vec<usize> {
+            (0..boxes.len()).filter(|&i| keep(&boxes[i])).collect()
+        };
+        let mut out = Vec::new();
+        bvh.query(&q, &mut out);
+        assert_eq!(sorted(out.clone()), every(&|b| box_gap(b, &q) == 0.0));
+        bvh.within(&q, 1.5, &mut out);
+        assert_eq!(sorted(out.clone()), every(&|b| box_gap(b, &q) <= 1.5));
+        let d = Vec3::new(1.0, 0.5, 0.0);
+        bvh.along_line(&q, d, &mut out);
+        assert_eq!(sorted(out.clone()), every(&|b| line_meets(b, &q, d)));
+        assert!(!out.is_empty());
+    }
 
     #[test]
     fn a_segment_in_a_tilted_triangle_s_plane_does_not_cross_it_from_afar() {
