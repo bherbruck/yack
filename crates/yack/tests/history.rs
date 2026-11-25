@@ -277,6 +277,13 @@ fn cadrs_only_ops_report_their_histories() -> Result<()> {
     let net = vec![vec![[0.0, 0.0, 12.0].into(), [0.0, 10.0, 12.0].into()], vec![[10.0, 0.0, 12.0].into(), [10.0, 10.0, 12.0].into()]];
     let mill = cylinder(&Frame::at([2.0, 5.0, 9.0]), 1.0, 3.0)?;
     let ball = sphere(&Frame::WORLD, 1.0)?;
+    // the rational quadratic NURBS sphere of radius 5 (nurbs_solid's own example)
+    let ring = [[1., 0.], [1., 1.], [0., 1.], [-1., 1.], [-1., 0.], [-1., -1.], [0., -1.], [1., -1.], [1., 0.]];
+    let arc = [[0., -5.], [5., -5.], [5., 0.], [5., 5.], [0., 5.]];
+    let sphere_net: Vec<Vec<Point3>> = ring.iter().map(|&[x, y]| arc.iter().map(|&[r, z]| Point3::new(r * x, r * y, z)).collect()).collect();
+    let wt = [1.0, std::f64::consts::FRAC_1_SQRT_2, 0.5];
+    let w: Vec<Vec<f64>> = (0..9usize).map(|i| (0..5usize).map(|j| wt[i % 2 + j % 2]).collect()).collect();
+    let (ku, kv) = ([0., 0., 0., 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1., 1., 1.], [0., 0., 0., 0.5, 0.5, 1., 1., 1.]);
     let calls: Vec<(&str, Vec<&Solid>, Result<Solid>)> = vec![
         ("chamfer_angle", vec![&b], b.chamfer_angle(b.edge_at([5.0, 0.0, 10.0])?, top, 1.0, deg(45.0))),
         ("cut_swept", vec![&b, &mill], b.cut_swept(&mill, &Motion::slide([6.0, 0.0, 0.0]))),
@@ -295,6 +302,7 @@ fn cadrs_only_ops_report_their_histories() -> Result<()> {
         ("shell_rounded", vec![&b], b.shell_rounded(&[top], 1.0)),
         ("shell_outward_rounded", vec![&b], b.shell_outward_rounded(&[top], 1.0)),
         ("swept", vec![&ball], ball.swept(&Motion::slide([5.0, 0.0, 0.0]))),
+        ("nurbs_solid", vec![], nurbs_solid(&Frame::WORLD, [2, 2], [&ku, &kv], &sphere_net, Some(&w))),
     ];
     for (op, inputs, made) in calls {
         match made {
