@@ -75,9 +75,34 @@ fn finish(b: Brep) -> Result<Brep> {
 mod tests {
     use super::*;
 
+    use yack_math::kernel::Frame;
+
+    fn cube() -> Brep {
+        yack_build::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "box").unwrap()
+    }
+
     #[test]
-    fn with_nothing_built_yet_every_motion_declines() {
-        let slide = Motion::Slide { by: Vec3::new(1.0, 0.0, 0.0) };
-        assert!(matches!(swept(&Brep::new(), &slide), Err(Error::Unsupported(_))));
+    fn a_box_slid_along_an_edge_is_a_longer_box() {
+        let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }).unwrap();
+        assert!((yack_measure::volume(&s) - 1500.0).abs() < 1e-9, "{}", yack_measure::volume(&s));
+    }
+
+    #[test]
+    fn a_box_slid_aslant_covers_its_shadow_along_the_slide() {
+        // A box slid by (3, 4, 0): itself, and the prisms its two leading faces sweep, 300 + 400.
+        let s = swept(&cube(), &Motion::Slide { by: Vec3::new(3.0, 4.0, 0.0) }).unwrap();
+        assert!((yack_measure::volume(&s) - 1700.0).abs() < 1e-9, "{}", yack_measure::volume(&s));
+        let s = swept(&cube(), &Motion::Slide { by: Vec3::new(1.0, 2.0, 3.0) }).unwrap();
+        assert!((yack_measure::volume(&s) - 1600.0).abs() < 1e-9, "{}", yack_measure::volume(&s));
+    }
+
+    #[test]
+    fn what_is_not_built_yet_declines() {
+        let turn = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 1.0 };
+        assert!(matches!(swept(&cube(), &turn), Err(Error::Unsupported(_))));
+        let ball = yack_build::primitive::sphere(&Frame::WORLD, 2.0, "ball").unwrap();
+        assert!(matches!(swept(&ball, &Motion::Slide { by: Vec3::X }), Err(Error::Unsupported(_))));
+        let nothing = Motion::Slide { by: Vec3::ZERO };
+        assert!(matches!(swept(&cube(), &nothing), Err(Error::InvalidInput(_))));
     }
 }
