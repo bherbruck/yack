@@ -395,6 +395,7 @@ input = ["engine"]
 ladder = ["bakeoff", "firewall"]
 codec = ["firewall"]
 engine_cadrs = ["engine", "input"]
+engine_swept = ["engine", "input"]
 history = []
 solid = ["engine", "input", "engine_cadrs", "history"]
 values = ["engine", "input", "engine_cadrs", "solid"]
@@ -403,7 +404,7 @@ query = ["engine", "input", "engine_cadrs", "solid", "firewall", "bakeoff", "lad
 make = ["engine", "input", "engine_cadrs", "firewall", "bakeoff", "ladder"]
 boolean = ["engine", "input", "engine_cadrs", "firewall", "bakeoff", "ladder"]
 step = ["engine", "input", "engine_cadrs", "firewall", "bakeoff", "ladder"]
-edit = ["engine", "input", "engine_cadrs", "solid", "firewall", "bakeoff", "ladder"]
+edit = ["engine", "input", "engine_cadrs", "engine_swept", "solid", "firewall", "bakeoff", "ladder"]
 blend = ["engine", "input", "engine_cadrs", "solid", "firewall", "bakeoff", "ladder", "edit"]
 
 # xtask passed 5,000 lines with `bundle` (M6): its top-level modules, lowest first.
