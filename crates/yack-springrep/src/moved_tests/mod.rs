@@ -6,5 +6,6 @@ mod intersect;
 mod measure;
 mod mesh;
 mod rays;
+mod step;
 mod sweep;
 mod tweak;

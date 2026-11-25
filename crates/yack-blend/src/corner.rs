@@ -1,6 +1,6 @@
 // yack: A fillet running round a corner round smaller than itself and bent the same way: the corner of a
 // Adapted from springrep@a03e8a1 src/blend/corner.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/corner.rs to yack-blend (M3 W9a); paths and visibility only.
 //! A fillet running round a corner round smaller than itself and bent the same way: the corner of a
 //! plate whose walls meet in a round of radius ρ, its rim filleted with r > ρ, or a pocket's floor
 //! filleted past its corner rounds. The ball cannot follow the round: it rolls along each wall, both
@@ -545,7 +545,7 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
     BTreeSet::from([FaceName::new(MARK, name)])
 }
 
-fn corner_tool(
+#[allow(clippy::panic)] fn corner_tool(
     body: &Brep,
     plate: FaceId,
     base: &[BaseArc],
@@ -605,7 +605,7 @@ fn corner_tool(
     let mut lows = Vec::with_capacity(n);
     let mut tops = Vec::with_capacity(n);
     for (k, arc) in base.iter().enumerate() {
-        let (mid, w) = arc_middle(arc.centre, arc.from, arc.to).expect("checked above");
+        let (mid, w) = arc_middle(arc.centre, arc.from, arc.to).unwrap_or_else(|| panic!("checked above"));
         lows.push(tool.add_edge(
             quad([arc.from, mid, arc.to], w)?,
             (0.0, 1.0),
@@ -668,7 +668,7 @@ fn corner_tool(
     let index = |f: FaceId| {
         body.face_ids()
             .position(|g| g == f)
-            .expect("a face of the body")
+            .unwrap_or_else(|| panic!("a face of the body"))
     };
     let mut walk = Vec::with_capacity(n + 3);
     for (k, &e) in lows.iter().enumerate() {
@@ -685,7 +685,7 @@ fn corner_tool(
         walk,
     }];
     for (k, arc) in base.iter().enumerate() {
-        let (mid, _) = arc_middle(arc.centre, arc.from, arc.to).expect("checked above");
+        let (mid, _) = arc_middle(arc.centre, arc.from, arc.to).unwrap_or_else(|| panic!("checked above"));
         let mid_arc =
             arc.centre + (mid - arc.centre).unit_or_zero() * (arc.from - arc.centre).norm();
         faces.push(ToolFace {

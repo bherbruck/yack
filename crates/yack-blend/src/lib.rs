@@ -2,7 +2,7 @@
 // Adapted from springrep@a03e8a1 src/blend.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: faces_named and edges_named moved in from pick.rs (to blend/named.rs), EdgeName out to
 // topo::names (M2.5, T8); the hand-run SPRINGREP_BLEND_VERIFY mode (env read, clocks, compare) removed
-// (M3 W9a-0).
+// (M3 W9a-0); then to yack-blend (M3 W9a), paths and visibility only.
 //! Chamfers and fillets on solid edges. Each comes three ways: `fillet` and `chamfer` pick every
 //! edge where the surfaces of two named faces meet; the `_named` forms take [`EdgeName`]s, which
 //! can also pick only where the faces carrying the names meet; the `_edges` forms take the edges
@@ -26,14 +26,38 @@
 //! trimmed by the face past it. Three fillets
 //! meeting at a corner of three planes close with the sphere touching all three.
 
-pub(crate) mod shaped;
+
+// springrep's blend code indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names the moved code uses.
+use yack_base::kernel::Error;
+use yack_base::kernel::Result;
+use yack_boolean as boolean;
+use yack_build::build;
+use yack_check as check;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_intersect as intersect;
+use yack_build::loft;
+use yack_math::kernel as math;
+use yack_measure as measure;
+use yack_numeric as numeric;
+use yack_profile as profile;
+use yack_build::sweep;
+use yack_tol as tol;
+use yack_topo as topo;
+#[cfg(test)]
+use yack_mesh as mesh;
+pub mod shaped;
 
 pub use shaped::{
     chamfer_distances, fillet_conic, fillet_faces, fillet_g2, fillet_radii, fillet_setback,
     fillet_setback_g2, fillet_variable, full_round,
 };
 
-use std::collections::{BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 use std::f64::consts::{PI, TAU};
 
 mod corner;
@@ -50,12 +74,10 @@ mod sew;
 pub use crate::topo::EdgeName;
 pub use named::{edges_named, faces_named};
 use crate::{
-    Error, Result, boolean, check,
     error::invalid,
     geom::{Curve, Surface},
     math::{Frame, Point3, Vec2, Vec3},
     profile::{NamedSegment, Profile, ProfileLoop, Segment},
-    sweep, tol,
     topo::{Brep, CoedgeId, CoedgeSpec, EdgeId, FaceId, FaceName, Facts, OnFace, PCurve, VertexId},
 };
 
@@ -186,7 +208,7 @@ pub fn chamfer_two_edges(
 /// [`fillet_edges`] whose rounds meet over a concave edge in the crease where they cross, the
 /// ball kept from swinging round it: the solid `body` grown by `radius` rounds this way, whose
 /// faces moved out meet over the concave edge where the growth leaves it sharp.
-pub(crate) fn fillet_edges_mitred(
+pub fn fillet_edges_mitred(
     body: &Brep,
     edges: &[EdgeId],
     radius: f64,
@@ -207,7 +229,7 @@ const APART: &str = "edge";
 /// `out`, blended from [`apart_names`]' copy of `body`, with each face's own names in place of
 /// the one it was picked by. A design's names may be shared by faces a boolean brought together
 /// and would pick more edges than the ones asked for, so the blend runs on names of its own.
-fn own_names(body: &Brep, mut out: Brep) -> Brep {
+#[allow(clippy::disallowed_types)] fn own_names(body: &Brep, mut out: Brep) -> Brep { // D26: BTree* in hardening, proven by digests
     let own: HashMap<String, &BTreeSet<FaceName>> = body
         .face_ids()
         .map(|f| (format!("f{}", f.index()), &body.face(f).names))
@@ -383,7 +405,7 @@ pub(crate) fn blend(body: &Brep, pairs: &[EdgeName], kind: Kind, feature: &str) 
 }
 
 /// [`blend`], the ball's swing round concave edges between its rounds put back where `swing`.
-fn blend_with(
+#[allow(clippy::disallowed_types)] fn blend_with( // D26: BTree* in hardening, proven by digests
     body: &Brep,
     pairs: &[EdgeName],
     kind: Kind,
@@ -439,7 +461,7 @@ fn blend_with(
 
 /// [`blend`] of the edges `picked` from `pairs`; where `swing`, a fillet's ball swings round each
 /// sharp concave edge two of its pieces meet over ([`corner::sharp`]).
-fn blend_picked(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn blend_picked( // D26: BTree* in hardening, proven by digests
     body: &Brep,
     pairs: &[EdgeName],
     picked: Vec<Picked>,
@@ -742,7 +764,7 @@ fn blend_picked(
             .faces
             .iter()
             .position(|&f| f == sw.plate)
-            .expect("a corner's piece lies on the plate");
+            .unwrap_or_else(|| panic!("a corner's piece lies on the plate"));
         let mut tool = sw.tool;
         for f in tool.face_ids().collect::<Vec<_>>() {
             let which = tool
@@ -760,7 +782,7 @@ fn blend_picked(
                 other => {
                     let index = other
                         .strip_prefix("face_")
-                        .expect("a corner tool face's name");
+                        .unwrap_or_else(|| panic!("a corner tool face's name"));
                     BTreeSet::from([FaceName::new(SIDE_MARK, format!("r_{index}"))])
                 }
             };
@@ -1059,7 +1081,7 @@ pub(crate) fn picked_edges(body: &Brep, pair: &EdgeName) -> Result<Vec<EdgeId>> 
 /// Every edge each pair names, in edge order, then every edge a picked one runs on into
 /// tangentially: a blend runs round the whole tangent chain of each edge it names. An edge two pairs pick is blended once and carries both
 /// pairs' names.
-fn pick(body: &Brep, pairs: &[EdgeName], strict: bool) -> Result<Vec<Picked>> {
+#[allow(clippy::disallowed_types)] fn pick(body: &Brep, pairs: &[EdgeName], strict: bool) -> Result<Vec<Picked>> { // D26: BTree* in hardening, proven by digests
     let mut uses: HashMap<EdgeId, Vec<CoedgeId>> = HashMap::new();
     for c in body.coedge_ids() {
         uses.entry(body.coedge(c).edge).or_default().push(c);
@@ -1228,7 +1250,7 @@ fn end_index(body: &Brep, e: EdgeId, v: VertexId) -> usize {
 }
 
 /// The picked edges at each vertex.
-fn picked_at_vertices(body: &Brep, picked: &[Picked]) -> HashMap<VertexId, Vec<usize>> {
+#[allow(clippy::disallowed_types)] fn picked_at_vertices(body: &Brep, picked: &[Picked]) -> HashMap<VertexId, Vec<usize>> { // D26: BTree* in hardening, proven by digests
     let mut out: HashMap<VertexId, Vec<usize>> = HashMap::new();
     for (i, pk) in picked.iter().enumerate() {
         let e = body.edge(pk.edge);
@@ -1280,12 +1302,12 @@ fn circle_meridian(s: &Surface, origin: Point3, axis: Vec3) -> Option<(f64, Poin
     }
 }
 
-fn section(body: &Brep, pk: &Picked) -> Result<Section> {
+#[allow(clippy::panic)] fn section(body: &Brep, pk: &Picked) -> Result<Section> {
     let e = body.edge(pk.edge);
     let curve = e
         .curve
         .as_ref()
-        .expect("a picked edge is used by two faces");
+        .unwrap_or_else(|| panic!("a picked edge is used by two faces"));
     let (path, t) = match curve {
         Curve::Line(l) => {
             let start = curve.eval(e.range.0);
@@ -1884,9 +1906,9 @@ fn faces_at(body: &Brep, v: VertexId) -> BTreeSet<FaceId> {
 
 /// A point on the picked edge a little way in from its end `v`, to tell which side of a surface
 /// through `v` the piece lies on.
-fn inward_point(body: &Brep, e: EdgeId, v: VertexId, step: f64) -> Point3 {
+#[allow(clippy::panic)] fn inward_point(body: &Brep, e: EdgeId, v: VertexId, step: f64) -> Point3 {
     let edge = body.edge(e);
-    let curve = edge.curve.as_ref().expect("a picked edge has a curve");
+    let curve = edge.curve.as_ref().unwrap_or_else(|| panic!("a picked edge has a curve"));
     let (t0, t1) = edge.range;
     let speed = curve.d1(0.5 * (t0 + t1)).1.norm().max(1e-300);
     let dt = (step / speed).min(0.5 * (t1 - t0));
@@ -1989,7 +2011,7 @@ fn continues(
 
 /// Two straight pieces that meet at a corner `v` of a plane both their edges bound, each the
 /// mirror image of the other across the plane between their other faces, end on that plane.
-fn mitre(
+#[allow(clippy::panic)] fn mitre(
     body: &Brep,
     picked: &[Picked],
     sections: &[Section],
@@ -2015,7 +2037,7 @@ fn mitre(
         pk.faces
             .into_iter()
             .find(|f| f != common)
-            .expect("two faces")
+            .unwrap_or_else(|| panic!("two faces"))
     };
     let (wa, wb) = (wall(a), wall(b));
     let plane = |f: FaceId| matches!(body.face(f).surface, Surface::Plane(_));
@@ -2391,7 +2413,7 @@ fn extent(s: &Section, o: &Outline) -> f64 {
 }
 
 /// The solid of one picked edge's blend material, finished at both ends.
-fn piece(s: &Section, o: &Outline, ends: [End; 2], feature: &str) -> Result<Brep> {
+#[allow(clippy::panic)] fn piece(s: &Section, o: &Outline, ends: [End; 2], feature: &str) -> Result<Brep> {
     let mut ext = [0.0; 2];
     let mut ats = [Vec3::ZERO; 2];
     let mut back = [0.0; 2];
@@ -2444,7 +2466,7 @@ fn piece(s: &Section, o: &Outline, ends: [End; 2], feature: &str) -> Result<Brep
                         .map(|a| wrap(a - end))
                         .into_iter()
                         .min_by(|x, y| x.abs().total_cmp(&y.abs()))
-                        .expect("two half planes");
+                        .unwrap_or_else(|| panic!("two half planes"));
                     Some(if k == 0 { -past } else { past })
                 }
                 _ => None,
@@ -2563,7 +2585,7 @@ fn clipped(tool: &Brep, clip: &Clip, at: Point3, reach: f64, feature: &str) -> R
 /// does not glue on, as the last piece of a run that closes on itself at a mitre does (its far
 /// end's cap would lie on the first piece's), starts a tool of its own, cut after the run as a
 /// mitred piece is.
-fn joined(joints: &[(usize, usize)], pieces: Vec<(usize, Brep)>) -> Result<Vec<Brep>> {
+#[allow(clippy::disallowed_types)] fn joined(joints: &[(usize, usize)], pieces: Vec<(usize, Brep)>) -> Result<Vec<Brep>> { // D26: BTree* in hardening, proven by digests
     let mut left: HashMap<usize, Brep> = pieces.into_iter().collect();
     let mut order: Vec<usize> = left.keys().copied().collect();
     order.sort();
@@ -2606,7 +2628,7 @@ type EdgePair = (EdgeId, EdgeId, bool);
 /// `a` and `b` joined along every planar face of one that the other covers exactly from the other
 /// side, with the same straight and circular edges: those faces go, and their edges are shared.
 /// `None` when there is no such face, or the joined solid does not check valid.
-pub(crate) fn glue(a: &Brep, b: &Brep) -> Option<Brep> {
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] pub(crate) fn glue(a: &Brep, b: &Brep) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
     let mut caps: Vec<(FaceId, FaceId, Vec<EdgePair>)> = Vec::new();
     for fa in a.face_ids() {
         for fb in b.face_ids() {
@@ -2660,7 +2682,7 @@ pub(crate) fn glue(a: &Brep, b: &Brep) -> Option<Brep> {
     let mut eb_to: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
     let mut vb_to: HashMap<VertexId, VertexId> = HashMap::new();
     for (&e_b, &(e_a, flip)) in &a_of_b {
-        eb_to.insert(e_b, (ea[e_a.index()].expect("kept"), flip));
+        eb_to.insert(e_b, (ea[e_a.index()].unwrap_or_else(|| panic!("kept")), flip));
         let (xa, xb) = (a.edge(e_a), b.edge(e_b));
         let (s, e) = if flip {
             (xa.end, xa.start)
@@ -2714,12 +2736,12 @@ pub(crate) fn glue(a: &Brep, b: &Brep) -> Option<Brep> {
                     let co = src.coedge(c);
                     let spec = match edges {
                         None => CoedgeSpec {
-                            edge: ea[co.edge.index()].expect("a kept edge"),
+                            edge: ea[co.edge.index()].unwrap_or_else(|| panic!("a kept edge")),
                             reversed: co.reversed,
                             pcurve: co.pcurve.clone(),
                         },
                         Some(map) => {
-                            let (edge, flip) = map[co.edge.index()].expect("a kept edge");
+                            let (edge, flip) = map[co.edge.index()].unwrap_or_else(|| panic!("a kept edge"));
                             if eb_to.contains_key(&co.edge) {
                                 // Where the coedge starts in the face's parameters, which a
                                 // projected pcurve continues from along the shared edge.
@@ -2858,7 +2880,7 @@ fn renamed(mut tool: Brep, blend: &str, names: &BTreeSet<FaceName>) -> Brep {
 /// the centre, and each ends on the section through it: a great circle arc from the foot of the
 /// centre on one plane to its foot on the other. The patch is the spherical triangle of the three
 /// feet, whatever the angles between the planes.
-pub(super) struct Ball {
+pub(crate) struct Ball {
     centre: Point3,
     radius: f64,
     normals: [Vec3; 3],
@@ -2953,7 +2975,7 @@ fn corner_ball(
 }
 
 /// The parallelepiped at `origin` spanned by `w`, its faces planes facing out.
-fn parallelepiped(origin: Point3, w: [Vec3; 3]) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] fn parallelepiped(origin: Point3, w: [Vec3; 3]) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     let w = if w[0].cross(w[1]).dot(w[2]) > 0.0 {
         w
     } else {
@@ -3068,7 +3090,7 @@ fn corner_tool(ball: &Ball, feature: &str) -> Result<Brep> {
 mod tests {
     use super::*;
     use crate::intersect::csi::signed_distance;
-    use crate::{check, measure, mesh};
+    
 
     fn up(z: f64) -> Frame {
         Frame::new(Vec3::new(0.0, 0.0, z), Vec3::Z, Vec3::X).unwrap()

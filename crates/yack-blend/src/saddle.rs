@@ -1,6 +1,6 @@
 // yack: A saddle: four straight edges filleted to one radius at a vertex of three planes square to each
 // Adapted from springrep@a03e8a1 src/blend/saddle.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/saddle.rs to yack-blend (M3 W9a); paths and visibility only.
 //! A saddle: four straight edges filleted to one radius at a vertex of three planes square to each
 //! other, alternating concave and convex round it. Two lines cross at the vertex in the plane of
 //! two of the faces, and each turns from concave to convex there, so no ball touches all four.
@@ -13,7 +13,7 @@
 //! meets each fillet G1. None of the body's faces reach inside. The cube is cut from the body and
 //! that solid is joined in its place.
 
-use std::collections::{BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 
 use super::{
     Picked,
@@ -45,7 +45,7 @@ pub(super) struct Saddle {
 }
 
 /// The saddle the picked edges `at` make at `v`, if they make one.
-pub(super) fn find(
+#[allow(clippy::panic)] pub(super) fn find(
     body: &Brep,
     picked: &[Picked],
     at: &[usize],
@@ -123,7 +123,7 @@ pub(super) fn find(
             pts.iter().all(|&q| dom.locate(s.at(q)) != Where::Outside)
         };
         let side_of = |k: usize, n: Vec3| {
-            let normals = &edges.iter().find(|e| e.0 == s.edges[k]).expect("an edge").3;
+            let normals = &edges.iter().find(|e| e.0 == s.edges[k]).unwrap_or_else(|| panic!("an edge")).3;
             usize::from(!near(normals[0], n))
         };
         let x = side_of(0, -a);
@@ -148,7 +148,7 @@ pub(super) fn find(
     None
 }
 
-impl Saddle {
+#[allow(clippy::disallowed_types)] impl Saddle { // D26: BTree* in hardening, proven by digests
     /// The point at `q` in the saddle's frame, in radii.
     fn at(&self, q: [f64; 3]) -> Point3 {
         self.origin + (self.a * q[0] + self.b * q[1] + self.c * q[2]) * self.r

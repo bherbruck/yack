@@ -1,4 +1,7 @@
 # files over 1500 lines and their allowed length (gate 6; may only fall)
+crates/yack-blend/src/lib.rs 3429
+crates/yack-boolean/src/lib.rs 2874
+crates/yack-boolean/src/tests.rs 1696
 crates/yack-cadrs/src/lib.rs 1608
 crates/yack-cadrs/src/native/blend.rs 4004
 crates/yack-cadrs/src/native/boolean.rs 6466
@@ -34,8 +37,5 @@ crates/yack-cadrs/src/native/xbuild.rs 2754
 crates/yack-cadrs/src/types.rs 1969
 crates/yack-cadrs/tests/analytic_blocks.rs 1584
 crates/yack-cadrs/tests/conformance.rs 4795
-crates/yack-springrep/src/blend.rs 3465
-crates/yack-boolean/src/lib.rs 2874
-crates/yack-boolean/src/tests.rs 1696
 crates/yack-measure/src/lib.rs 1562
 crates/yack-springrep/src/step/tests.rs 1964

@@ -1,4 +1,5 @@
 # small float literals without `// tol:` per crate (gate 7; may only fall)
+yack-blend 46
 yack-boolean 32
 yack-build 35
 yack-cadrs 1166

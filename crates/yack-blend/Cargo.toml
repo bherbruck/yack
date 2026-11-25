@@ -1,0 +1,29 @@
+[package]
+name = "yack-blend"
+description = "yack internal crate (not published; use the `yack` crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+yack-base = { path = "../yack-base" }
+yack-boolean = { path = "../yack-boolean" }
+yack-build = { path = "../yack-build" }
+yack-check = { path = "../yack-check" }
+yack-geom = { path = "../yack-geom" }
+yack-intersect = { path = "../yack-intersect" }
+yack-math = { path = "../yack-math" }
+yack-measure = { path = "../yack-measure" }
+yack-numeric = { path = "../yack-numeric" }
+yack-profile = { path = "../yack-profile" }
+yack-tol = { path = "../yack-tol" }
+yack-topo = { path = "../yack-topo" }
+
+[dev-dependencies]
+yack-mesh = { path = "../yack-mesh" }
+
+[lints]
+workspace = true

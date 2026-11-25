@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 #![warn(unreachable_pub)]
 
-pub mod blend;
+pub use yack_blend as blend;
 pub use yack_boolean as boolean;
 pub use yack_build::build;
 pub use yack_check as check;
@@ -21,6 +21,7 @@ pub mod edit;
 pub mod facade;
 use yack_base::kernel as error;
 pub use yack_geom as geom;
+#[cfg(test)]
 pub(crate) use yack_intersect as intersect;
 pub use yack_build::loft;
 #[cfg(test)]

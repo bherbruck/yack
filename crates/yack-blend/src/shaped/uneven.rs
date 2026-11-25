@@ -1,6 +1,6 @@
 // yack: The corner where three fillets of unequal radii meet, closed without a crease.
 // Adapted from springrep@a03e8a1 src/blend/shaped/uneven.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/shaped/uneven.rs to yack-blend (M3 W9a); paths and visibility only.
 //! The corner where three fillets of unequal radii meet, closed without a crease.
 //!
 //! A ball of radius `ρ` touching two of the corner's planes has its centre `ρ` in from both, and
@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use crate::boolean::half_space;
 use crate::{
-    blend, boolean,
+    boolean,
     error::{Error, Result},
     geom::{Circle, Cone, Curve, Cylinder, Line, Sphere, Surface},
     math::{Frame, Point3, Vec2, Vec3},
@@ -520,7 +520,7 @@ pub(super) fn rounded(s: &Brep, edges: &[(EdgeId, f64)]) -> Result<Option<Brep>>
             }
             these.push(e);
         }
-        let round = blend::fillet_edges(&cut, &these, r, "\u{1}fil")?;
+        let round = crate::fillet_edges(&cut, &these, r, "\u{1}fil")?;
         out = Some(match out {
             None => round,
             Some(o) => boolean::intersection(&o, &round)?,

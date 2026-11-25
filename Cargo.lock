@@ -149,6 +149,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-blend"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-boolean",
+ "yack-build",
+ "yack-check",
+ "yack-geom",
+ "yack-intersect",
+ "yack-math",
+ "yack-measure",
+ "yack-mesh",
+ "yack-numeric",
+ "yack-profile",
+ "yack-tol",
+ "yack-topo",
+]
+
+[[package]]
 name = "yack-boolean"
 version = "0.0.0"
 dependencies = [
@@ -359,6 +378,7 @@ name = "yack-springrep"
 version = "1.0.1"
 dependencies = [
  "yack-base",
+ "yack-blend",
  "yack-boolean",
  "yack-build",
  "yack-check",

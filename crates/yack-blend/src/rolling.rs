@@ -1,6 +1,6 @@
 // yack: A fillet along a tangent chain of edges no constant section sweeps: the surface a ball of the
 // Adapted from springrep@a03e8a1 src/blend/rolling.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/rolling.rs to yack-blend (M3 W9a); paths and visibility only.
 //! A fillet along a tangent chain of edges no constant section sweeps: the surface a ball of the
 //! fillet's radius sweeps rolling along the chain in contact with the faces on both sides.
 //!
@@ -28,7 +28,7 @@
 //! them, an end's plane gives up the corner the blend takes and gains its trim curve, and the
 //! segments' faces fill the strip.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeMap, BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 
 use super::{Picked, outward, run};
 use crate::{
@@ -139,7 +139,7 @@ impl End {
 }
 
 /// The chain and the ball.
-struct Roll<'a> {
+#[allow(clippy::disallowed_types)] struct Roll<'a> { // D26: BTree* in hardening, proven by digests
     body: &'a Brep,
     links: Vec<Link>,
     closed: bool,
@@ -171,7 +171,7 @@ impl Roll<'_> {
     }
 
     /// The point and unit tangent of link `i`'s edge `d` along it from its start in `s`.
-    fn on_link(&self, i: usize, d: f64) -> Result<(Point3, Vec3)> {
+    #[allow(clippy::panic)] fn on_link(&self, i: usize, d: f64) -> Result<(Point3, Vec3)> {
         let l = &self.links[i];
         let e = self.body.edge(l.edge);
         let t = if l.forward {
@@ -179,7 +179,7 @@ impl Roll<'_> {
         } else {
             e.range.1 - d
         };
-        let (p, dt) = e.curve.as_ref().expect("a picked edge has a curve").d1(t);
+        let (p, dt) = e.curve.as_ref().unwrap_or_else(|| panic!("a picked edge has a curve")).d1(t);
         let Some(along) = (if l.forward { dt } else { -dt }).unit() else {
             return unsupported("on an edge with no tangent");
         };
@@ -322,7 +322,7 @@ impl Roll<'_> {
     }
 
     /// Where, near the joint at the end of link `i`, side `k`'s contact crosses its junction.
-    fn crossing(&self, i: usize, k: usize) -> Result<Option<f64>> {
+    #[allow(clippy::panic)] fn crossing(&self, i: usize, k: usize) -> Result<Option<f64>> {
         let Some(j) = &self.joints[i][k] else {
             return Ok(None);
         };
@@ -362,7 +362,7 @@ impl Roll<'_> {
             } else {
                 // The foot on the face before the junction, across the junction curve from it.
                 let x = self.body.edge(j.edge);
-                let jc = x.curve.as_ref().expect("a junction has a curve");
+                let jc = x.curve.as_ref().unwrap_or_else(|| panic!("a junction has a curve"));
                 let (p, _) = self.foot_on(j.before, sec.centre);
                 let tq = nearest_param(jc, p, x.range)?;
                 let (q, tj) = jc.d1(tq);
@@ -484,7 +484,7 @@ struct Segment {
     contact: [BSpline; 2],
 }
 
-fn fit(roll: &Roll, a: f64, b: f64) -> Result<Segment> {
+#[allow(clippy::panic)] fn fit(roll: &Roll, a: f64, b: f64) -> Result<Segment> {
     let link = roll.link_at(0.5 * (a + b));
     let mut guess = None;
     for &n in &SAMPLES {
@@ -549,9 +549,9 @@ fn fit(roll: &Roll, a: f64, b: f64) -> Result<Segment> {
         }
         if worst <= FIT * tol::LINEAR {
             let mut it = splines.into_iter();
-            let c0 = it.next().expect("four splines");
+            let c0 = it.next().unwrap_or_else(|| panic!("four splines"));
             let _ = it.next();
-            let c1 = it.next().expect("four splines");
+            let c1 = it.next().unwrap_or_else(|| panic!("four splines"));
             return Ok(Segment {
                 a,
                 b,
@@ -649,7 +649,7 @@ fn chain(body: &Brep, picked: &[Picked]) -> Option<(Vec<Link>, bool)> {
 }
 
 /// The fillet of `radius` along the tangent chain `picked`, edge `i`'s faces named `names[i]`.
-pub(super) fn fillet(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] pub(super) fn fillet( // D26: BTree* in hardening, proven by digests
     body: &Brep,
     picked: &[Picked],
     radius: f64,
@@ -692,7 +692,7 @@ pub(super) fn fillet(
     };
     let tangent = |link: &Link, leaving: bool| -> Vec3 {
         let e = body.edge(link.edge);
-        let c = e.curve.as_ref().expect("checked above");
+        let c = e.curve.as_ref().unwrap_or_else(|| panic!("checked above"));
         let at_end = leaving != link.forward;
         let t = if at_end { e.range.1 } else { e.range.0 };
         let d = c.d1(t).1.unit_or_zero();
@@ -847,7 +847,7 @@ pub(super) fn fillet(
             let mut steps = 0;
             loop {
                 let x = body.edge(edge);
-                let c = x.curve.as_ref().expect("an end face's edge has a curve");
+                let c = x.curve.as_ref().unwrap_or_else(|| panic!("an end face's edge has a curve"));
                 let starts = x.start == from;
                 // A line, circle or ellipse runs on past its ends, so the first edge's contact may
                 // lie past the vertex, where the blend opens the end face.
@@ -1182,7 +1182,7 @@ pub(super) fn fillet(
                             e: EdgeId,
                             reversed: bool| {
                 let x = out.edge(e);
-                let curve = x.curve.as_ref().expect("a new edge has a curve");
+                let curve = x.curve.as_ref().unwrap_or_else(|| panic!("a new edge has a curve"));
                 let (ta, tb) = if reversed {
                     (x.range.1, x.range.0)
                 } else {
@@ -1214,7 +1214,7 @@ pub(super) fn fillet(
                 }
                 if !is_chain(c) {
                     let co = body.coedge(c);
-                    let ne = emap[co.edge.index()].expect("every other edge is copied");
+                    let ne = emap[co.edge.index()].unwrap_or_else(|| panic!("every other edge is copied"));
                     let x = out.edge(ne);
                     let (from, to) = if co.reversed {
                         (x.end, x.start)
@@ -1270,10 +1270,10 @@ pub(super) fn fillet(
                     .links
                     .iter()
                     .position(|l| l.edge == co.edge)
-                    .expect("a chain edge");
+                    .unwrap_or_else(|| panic!("a chain edge"));
                 let k = (0..2)
                     .find(|&k| roll.links[li].faces[k] == f)
-                    .expect("a chain edge's face is one of its sides");
+                    .unwrap_or_else(|| panic!("a chain edge's face is one of its sides"));
                 let along = k == 0;
                 let mut run = 0;
                 while i + run < order.len() && is_chain(order[i + run]) {
@@ -1298,7 +1298,7 @@ pub(super) fn fillet(
                     mine.reverse();
                 }
                 for j in mine {
-                    let e = pieces[j][k].expect("filtered above");
+                    let e = pieces[j][k].unwrap_or_else(|| panic!("filtered above"));
                     push_new(&mut specs, &mut hint, &out, e, !along);
                 }
                 i += run;
@@ -1329,7 +1329,7 @@ pub(super) fn fillet(
         let on_face = |e: EdgeId, reversed: bool, hint: Vec2, out: &Brep| -> CoedgeSpec {
             let x = out.edge(e);
             let t = if reversed { x.range.1 } else { x.range.0 };
-            let p = x.curve.as_ref().expect("a curve").eval(t);
+            let p = x.curve.as_ref().unwrap_or_else(|| panic!("a curve")).eval(t);
             CoedgeSpec {
                 edge: e,
                 reversed,
@@ -1348,7 +1348,7 @@ pub(super) fn fillet(
         // The start side, v rising: the arc at `a` where kept, the start trim where it cuts.
         let side_run = |at_start: bool, specs: &mut Vec<CoedgeSpec>, out: &Brep| {
             let b_here = if at_start { sg.a } else { sg.b };
-            let bi = bound_index(b_here).expect("a segment ends on a bound");
+            let bi = bound_index(b_here).unwrap_or_else(|| panic!("a segment ends on a bound"));
             let mut parts: Vec<(f64, CoedgeSpec)> = Vec::new();
             for &(v0, v1, e) in &arcs[bi] {
                 let mid = 0.5 * (v0 + v1);
@@ -1414,7 +1414,7 @@ pub(super) fn fillet(
             .shell(sh)
             .faces
             .iter()
-            .map(|f| fmap[f.index()].expect("every face is copied"))
+            .map(|f| fmap[f.index()].unwrap_or_else(|| panic!("every face is copied")))
             .collect();
         if body.shell(sh).faces.contains(&picked[0].faces[0]) {
             faces.extend(&blends);
@@ -1452,7 +1452,7 @@ impl Ord for OrderedF64 {
 
 /// The parameter of curve `c` nearest `p`: a line's or circle's in closed form (a circle's within
 /// a turn of `range`), any other's by sampling `range` and refining with Newton steps.
-fn nearest_param(c: &Curve, p: Point3, range: (f64, f64)) -> Result<f64> {
+#[allow(clippy::panic)] fn nearest_param(c: &Curve, p: Point3, range: (f64, f64)) -> Result<f64> {
     match c {
         Curve::Line(l) => Ok((p - l.origin).dot(l.dir)),
         Curve::Circle(ci) => {
@@ -1466,7 +1466,7 @@ fn nearest_param(c: &Curve, p: Point3, range: (f64, f64)) -> Result<f64> {
             let mut t = (0..=n)
                 .map(|i| range.0 + (range.1 - range.0) * i as f64 / n as f64)
                 .min_by(|&a, &b| c.eval(a).dist(p).total_cmp(&c.eval(b).dist(p)))
-                .expect("samples");
+                .unwrap_or_else(|| panic!("samples"));
             for _ in 0..50 {
                 let (q, d) = c.d1(t);
                 let h = 1e-6 * (range.1 - range.0).max(1e-9);

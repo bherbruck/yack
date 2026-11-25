@@ -1,6 +1,6 @@
 // yack: Blends built as faces and sewn into the body (D. J. Jackson, "Boundary representation
 // Adapted from springrep@a03e8a1 src/blend/sew.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/sew.rs to yack-blend (M3 W9a); paths and visibility only.
 //! Blends built as faces and sewn into the body (D. J. Jackson, "Boundary representation
 //! modelling with local tolerances", Solid Modeling '95, section 5): each piece's blend faces
 //! are taken whole from its swept tool, whose sides lie on the two faces its edge joins, so the
@@ -11,7 +11,7 @@
 //! point is one the sweep made or one already on the body. Where the pieces do not close up that
 //! way, the caller cuts the tools instead.
 
-use std::collections::{BTreeSet, HashMap};
+#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
 
 use super::{Ball, Picked, SIDES, run::Beyond};
 use crate::{
@@ -99,7 +99,7 @@ struct Parts {
 }
 
 /// Piece `i`'s blend faces in its tool, which other pieces' blends may share.
-fn parts(tool: &Brep, i: usize) -> Option<Parts> {
+#[allow(clippy::disallowed_types)] fn parts(tool: &Brep, i: usize) -> Option<Parts> { // D26: BTree* in hardening, proven by digests
     let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     for c in tool.coedge_ids() {
         faces_of
@@ -152,7 +152,7 @@ struct Mapped {
 /// The blend sewn into `body`: every piece's blend faces, named `names[i]`, facing out of the body
 /// when the piece is `convex[i]`, cut away from it, and into it otherwise; or why it could not be.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn sewn(
+#[allow(clippy::disallowed_types)] pub(super) fn sewn( // D26: BTree* in hardening, proven by digests
     body: &Brep,
     picked: &[Picked],
     tools: &[Brep],
@@ -539,7 +539,7 @@ pub(super) fn sewn(
 
 /// The sphere octant closing a corner where the pieces `at` stop short: bounded by each one's end
 /// section, a quarter circle of the sphere, and facing out of the body.
-fn corner_face(
+#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn corner_face( // D26: BTree* in hardening, proven by digests
     out: &mut Brep,
     ball: &Ball,
     at: &[usize],
@@ -568,7 +568,7 @@ fn corner_face(
     let mut lp: Vec<(EdgeId, bool)> = vec![(arcs[0], false)];
     let mut left: Vec<EdgeId> = arcs[1..].to_vec();
     while !left.is_empty() {
-        let (e, rev) = *lp.last().expect("started with one");
+        let (e, rev) = *lp.last().unwrap_or_else(|| panic!("started with one"));
         let x = out.edge(e);
         let tip = if rev { x.start } else { x.end };
         let k = left
@@ -611,7 +611,7 @@ fn corner_face(
 }
 
 /// What rebuilding a body face's loop reads.
-struct Rebuild<'a> {
+#[allow(clippy::disallowed_types)] struct Rebuild<'a> { // D26: BTree* in hardening, proven by digests
     picked: &'a [Picked],
     picked_of: &'a HashMap<EdgeId, usize>,
     parts: &'a [Parts],
@@ -636,7 +636,7 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
 /// Body loop `lp` with each picked edge replaced by its piece's contact curve on this face, each
 /// edge cut back to its new ends, and an end section across each corner the blend took off; and
 /// whether anything changed.
-fn rebuild_loop(
+#[allow(clippy::panic)] fn rebuild_loop(
     body: &Brep,
     lp: crate::topo::LoopId,
     r: &Rebuild,
@@ -678,8 +678,8 @@ fn rebuild_loop(
             };
             let tool = &r.tools[i];
             let tc = tool.edge(*ce);
-            let tcurve = tc.curve.as_ref().expect("checked in parts");
-            let curve = edge.curve.as_ref().expect("a picked edge has a curve");
+            let tcurve = tc.curve.as_ref().unwrap_or_else(|| panic!("checked in parts"));
+            let curve = edge.curve.as_ref().unwrap_or_else(|| panic!("a picked edge has a curve"));
             let tm = 0.5 * (edge.range.0 + edge.range.1);
             let (p, d) = curve.d1(tm);
             let d = if co.reversed { -d } else { d };
@@ -708,7 +708,7 @@ fn rebuild_loop(
             changed = true;
             continue;
         }
-        let ne = r.emap[co.edge.index()].expect("every unpicked edge is kept");
+        let ne = r.emap[co.edge.index()].unwrap_or_else(|| panic!("every unpicked edge is kept"));
         let range = r.ranges[co.edge.index()];
         let new_start = if co.reversed { range.1 } else { range.0 };
         let pcurve = match &co.pcurve {
@@ -834,7 +834,7 @@ fn across(
 
 /// Whether a face the blend made or changed shares an edge with another face on its surface, so
 /// [`unify`] would merge them.
-fn mergeable(b: &Brep, sides: &[Option<usize>]) -> bool {
+#[allow(clippy::disallowed_types)] fn mergeable(b: &Brep, sides: &[Option<usize>]) -> bool { // D26: BTree* in hardening, proven by digests
     let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     for c in b.coedge_ids() {
         faces_of

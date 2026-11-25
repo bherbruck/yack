@@ -1,6 +1,6 @@
 // yack: An end whose contact curve runs on past a short edge at its vertex: the strip a blend takes off
 // Adapted from springrep@a03e8a1 src/blend/run.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/run.rs to yack-blend (M3 W9a); paths and visibility only.
 //! An end whose contact curve runs on past a short edge at its vertex: the strip a blend takes off
 //! a face reaches beyond the next edge of that face's loop, onto the faces past it. Walking the
 //! face's loop from the vertex finds the edge the contact curve finally crosses; every edge before

@@ -1,6 +1,6 @@
 // yack: The corner patch where four fillets meet at a saddle: two concave and two convex, alternating.
 // Adapted from springrep@a03e8a1 src/blend/saddle_patch.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/saddle_patch.rs to yack-blend (M3 W9a); paths and visibility only.
 //! The corner patch where four fillets meet at a saddle: two concave and two convex, alternating.
 //!
 //! The hole they leave has four sides, each on one fillet: the concave fillets end on quarter
@@ -440,7 +440,7 @@ fn slot_reach(slot: &[usize], nu: usize, nv: usize, pu: usize, pv: usize) -> usi
 }
 
 /// A Bézier's control points refined to `knots` by knot insertion.
-fn refined(r: &Rational, inner: &[f64]) -> (Vec<H>, Vec<f64>) {
+#[allow(clippy::panic)] fn refined(r: &Rational, inner: &[f64]) -> (Vec<H>, Vec<f64>) {
     let p = r.h.len() - 1;
     let mut ctrl = r.h.clone();
     let mut knots: Vec<f64> = std::iter::repeat_n(0.0, p + 1)
@@ -449,7 +449,7 @@ fn refined(r: &Rational, inner: &[f64]) -> (Vec<H>, Vec<f64>) {
     for &t in inner {
         let s = (0..knots.len() - 1)
             .rfind(|&i| knots[i] <= t && t < knots[i + 1])
-            .expect("t inside the knots");
+            .unwrap_or_else(|| panic!("t inside the knots"));
         let mut next = Vec::with_capacity(ctrl.len() + 1);
         for i in 0..=ctrl.len() {
             if i + p <= s {
@@ -472,10 +472,10 @@ fn refined(r: &Rational, inner: &[f64]) -> (Vec<H>, Vec<f64>) {
 }
 
 /// The values and first derivatives of every degree-`p` basis function at `t`.
-fn basis(knots: &[f64], p: usize, t: f64) -> (Vec<f64>, Vec<f64>) {
+#[allow(clippy::panic)] fn basis(knots: &[f64], p: usize, t: f64) -> (Vec<f64>, Vec<f64>) {
     let n = knots.len() - p - 1;
     let t = t.clamp(knots[p], knots[n] - 1e-13);
-    let span = (p..n).rfind(|&i| knots[i] <= t).expect("a span");
+    let span = (p..n).rfind(|&i| knots[i] <= t).unwrap_or_else(|| panic!("a span"));
     // Cox–de Boor up to degree p, keeping degree p − 1 for the derivative.
     let mut nb = vec![0.0; n + p];
     nb[span] = 1.0;
@@ -517,7 +517,7 @@ fn basis(knots: &[f64], p: usize, t: f64) -> (Vec<f64>, Vec<f64>) {
 
 /// Solves the symmetric positive semidefinite `a`·x = `b` by Cholesky with diagonal pivoting,
 /// leaving out the directions whose pivots fall to rounding: nearly dependent constraints.
-fn psd_solve(a: &[f64], b: &[f64], m: usize) -> Vec<f64> {
+#[allow(clippy::panic)] fn psd_solve(a: &[f64], b: &[f64], m: usize) -> Vec<f64> {
     let mut l = a.to_vec();
     let mut order: Vec<usize> = (0..m).collect();
     let top = (0..m).map(|i| a[i * m + i]).fold(0.0f64, f64::max);
@@ -525,7 +525,7 @@ fn psd_solve(a: &[f64], b: &[f64], m: usize) -> Vec<f64> {
     while rank < m {
         let k = (rank..m)
             .max_by(|&i, &j| l[order[i] * m + order[i]].total_cmp(&l[order[j] * m + order[j]]))
-            .unwrap();
+            .unwrap_or_else(|| panic!("called `Option::unwrap()` on a `None` value"));
         let pk = order[k];
         let d = l[pk * m + pk];
         if d <= 1e-13 * top {

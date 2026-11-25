@@ -1,6 +1,6 @@
 // yack: a blend's faces and edges picked by the names faces carry.
 // Adapted from springrep@a03e8a1 src/pick.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from pick.rs to blend/named.rs (M2.5, T8), pick being dissolved; paths only.
+// Changes: moved from pick.rs to blend/named.rs (M2.5, T8), pick being dissolved; paths only; then to yack-blend (M3 W9a), paths and visibility only.
 //! A blend's faces and edges picked by the names faces carry.
 
 use std::collections::BTreeSet;

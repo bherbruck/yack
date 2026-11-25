@@ -1,6 +1,6 @@
 // yack: Rounds and chamfers beyond one size on edges picked together: a round between faces that
 // Adapted from springrep@a03e8a1 src/blend/shaped.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/blend/shaped.rs to yack-blend (M3 W9a); paths and visibility only.
 //! Rounds and chamfers beyond one size on edges picked together: a round between faces that
 //! share no edge, a full round, sections that are conics or curvature continuous, a radius that
 //! grows along its edge, a size for each edge, and corners set back. Each builds an exact tool
@@ -10,7 +10,7 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::{
-    blend, boolean,
+    boolean,
     boolean::half_space,
     error::{Error, Result},
     geom::{Curve, Surface},
@@ -50,7 +50,7 @@ fn named(segment: Segment, name: &str) -> NamedSegment {
 }
 
 /// A plane face's point and outward unit normal.
-pub(crate) fn plane_of(b: &Brep, f: FaceId) -> Result<(Point3, Vec3)> {
+pub fn plane_of(b: &Brep, f: FaceId) -> Result<(Point3, Vec3)> {
     match &b.face(f).surface {
         Surface::Plane(pl) => {
             let n = if b.face(f).reversed {
@@ -316,7 +316,7 @@ fn section_blend(
 
 /// `s` with its straight convex edge through `mark`, between planes, rounded as [`section_blend`]
 /// rounds one; with `from`, only from the plane through it square to the edge, on `mark`'s side.
-fn section_cut(
+#[allow(clippy::panic)] fn section_cut(
     s: &Brep,
     mark: Point3,
     from: Option<Point3>,
@@ -362,7 +362,7 @@ fn section_cut(
         .collect();
     segments.push(blend(tb, corner, ta));
     let mut ring: Vec<Vec2> = pts.to_vec();
-    ring.push(segments.last().expect("a closing section").at(0.5));
+    ring.push(segments.last().unwrap_or_else(|| panic!("a closing section")).at(0.5));
     let twice: f64 = (0..ring.len())
         .map(|i| ring[i].cross(ring[(i + 1) % ring.len()]))
         .sum();
@@ -531,7 +531,7 @@ fn gn_center_w(order: u32, alpha: f64, d: f64, center: f64) -> f64 {
 /// `s = 1 − t`, `α = (1 − w)s⁴(1 − wt)/D` and `β = (1 − w)t⁴(1 − w + wt)/D` over
 /// `D = (s³ + t³)(1 − w + wt)(1 − wt)`, a rational quintic whose weights are D's Bernstein
 /// coefficients, positive for `w < 1`.
-fn g2_section(a: Vec2, apex: Vec2, b: Vec2, w: f64) -> Segment {
+#[allow(clippy::panic)] fn g2_section(a: Vec2, apex: Vec2, b: Vec2, w: f64) -> Segment {
     let den = |t: f64| {
         let s = 1.0 - t;
         (s.powi(3) + t.powi(3)) * (1.0 - w + w * t) * (1.0 - w * t)
@@ -559,7 +559,7 @@ fn g2_section(a: Vec2, apex: Vec2, b: Vec2, w: f64) -> Segment {
         rhs[r * 3 + 1] = p.y;
         rhs[r * 3 + 2] = d;
     }
-    let x = crate::numeric::solve_dense(m, rhs, 6, 3).expect("the Bernstein matrix is invertible");
+    let x = crate::numeric::solve_dense(m, rhs, 6, 3).unwrap_or_else(|e| panic!("{}: {e:?}", "the Bernstein matrix is invertible"));
     let (ctrl, weights) = (0..6)
         .map(|i| {
             let wgt = x[i * 3 + 2];
@@ -792,7 +792,7 @@ fn fillet_radii_raw(s: &Brep, edges: &[(EdgeId, f64)]) -> Result<Brep> {
     let mut out: Option<Brep> = None;
     for r in radii {
         let these: Vec<EdgeId> = edges.iter().filter(|e| e.1 == r).map(|e| e.0).collect();
-        let round = blend::fillet_edges(s, &these, r, "\u{1}fil")?;
+        let round = crate::fillet_edges(s, &these, r, "\u{1}fil")?;
         out = Some(match out {
             None => round,
             Some(o) => boolean::intersection(&o, &round)?,
@@ -815,7 +815,7 @@ fn chamfer_distances_raw(s: &Brep, edges: &[(EdgeId, f64)]) -> Result<Brep> {
     let mut out: Option<Brep> = None;
     for d in sizes {
         let these: Vec<EdgeId> = edges.iter().filter(|e| e.1 == d).map(|e| e.0).collect();
-        let cut = blend::chamfer_edges(s, &these, d, "\u{1}cha")?;
+        let cut = crate::chamfer_edges(s, &these, d, "\u{1}cha")?;
         out = Some(match out {
             None => cut,
             Some(o) => boolean::intersection(&o, &cut)?,
@@ -897,8 +897,8 @@ fn fillet_setback_raw(s: &Brep, edges: &[EdgeId], radius: f64, setback: f64) -> 
         .edge_ids()
         .filter(|&e| !wedge.edge(e).is_degenerate() && faces_of(e) == 2)
         .collect();
-    let patch = blend::fillet_edges(&wedge, &rims, r, "set")?;
-    let rounds = blend::fillet_edges(s, edges, r, "\u{1}fil")?;
+    let patch = crate::fillet_edges(&wedge, &rims, r, "set")?;
+    let rounds = crate::fillet_edges(s, edges, r, "\u{1}fil")?;
     let k = cube(d)?;
     boolean::union(
         &boolean::difference(&rounds, &k)?,
@@ -1069,7 +1069,7 @@ mod tests {
         );
         let at = |x, y, z| measure::edge_at(&b, Point3::new(x, y, z)).unwrap().0;
         let edges = [at(10.0, 10.0 - c, 2.0), at(10.0 - c, 10.0, 2.0)];
-        let out = crate::blend::fillet_edges(&b, &edges, 2.0, "f").unwrap();
+        let out = crate::fillet_edges(&b, &edges, 2.0, "f").unwrap();
         assert!(
             crate::check::check(&out).is_empty(),
             "{:?}",
