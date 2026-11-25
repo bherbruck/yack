@@ -13,6 +13,14 @@ mod blend_step {
         let bytes: &[u8] = match name {
             "corner-1.6-2" => include_bytes!("../../tests/data/corner-1.6-2.yack"),
             "corner-0.8-5" => include_bytes!("../../tests/data/corner-0.8-5.yack"),
+            "l-rounded-0" => include_bytes!("../../tests/data/l-rounded-0.yack"),
+            "l-rounded-1" => include_bytes!("../../tests/data/l-rounded-1.yack"),
+            "l-rounded-2" => include_bytes!("../../tests/data/l-rounded-2.yack"),
+            "l-rounded-3" => include_bytes!("../../tests/data/l-rounded-3.yack"),
+            "l-rounded-4" => include_bytes!("../../tests/data/l-rounded-4.yack"),
+            "l-rounded-5" => include_bytes!("../../tests/data/l-rounded-5.yack"),
+            "l-rounded-6" => include_bytes!("../../tests/data/l-rounded-6.yack"),
+            "l-rounded-7" => include_bytes!("../../tests/data/l-rounded-7.yack"),
             _ => panic!("no fixture {name}"),
         };
         codec::from_bytes(bytes).and_then(|mut v| v.pop()).unwrap()
@@ -29,6 +37,21 @@ mod blend_step {
             assert!(back.rejected.is_empty(), "{:?}", back.rejected);
             let (v, w) = (measure::volume(&out), measure::volume(&back.brep));
             assert!((v - w).abs() < 1e-7 * v, "{tag}: {v} against {w}");
+        }
+    }
+
+    /// an_l_s_rounded_edges_swing_round_its_concave_edge's eight Ls, every convex edge rounded,
+    /// written and read back: the swing's torus, whose pole lies on its boundary, is the same solid.
+    /// Moved from edit.rs (M3 W9b).
+    #[test]
+    fn a_rounded_l_reads_back_from_a_file_as_the_same_solid() {
+        for k in 0..8 {
+            let out = fixture(&format!("l-rounded-{k}"));
+            let text = crate::step::write(&out, "l").unwrap();
+            let back = crate::step::read(text.as_bytes(), "l").unwrap();
+            assert!(back.rejected.is_empty(), "{:?}", back.rejected);
+            let (v, w) = (measure::volume(&out), measure::volume(&back.brep));
+            assert!((v - w).abs() < 1e-7 * v.max(1.0), "l-rounded-{k}: {v} against {w}");
         }
     }
 }

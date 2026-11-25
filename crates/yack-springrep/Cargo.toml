@@ -14,6 +14,7 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+yack-edit = { path = "../yack-edit" }
 yack-blend = { path = "../yack-blend" }
 yack-boolean = { path = "../yack-boolean" }
 yack-tweak = { path = "../yack-tweak" }

@@ -4,6 +4,7 @@ yack-boolean 32
 yack-build 35
 yack-cadrs 1166
 yack-check 5
+yack-edit 3
 yack-geom 1
 yack-intersect 50
 yack-locate 11

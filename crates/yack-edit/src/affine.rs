@@ -1,6 +1,6 @@
 // yack: A solid mapped by an affine map that need not keep its shape: stretched along axes, sheared or
 // Adapted from springrep@a03e8a1 src/edit/affine.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: none (verbatim); this header added.
+// Changes: moved from springrep's src/edit/affine.rs to yack-edit (M3 W9b); paths and visibility only.
 //! A solid mapped by an affine map that need not keep its shape: stretched along axes, sheared or
 //! mirrored. A plane maps to a plane and a line to a line; a circle maps to an ellipse, and each
 //! surface of revolution to the image of its exact rational form, so nothing is approximated.

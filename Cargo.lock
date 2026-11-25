@@ -268,6 +268,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "yack-edit"
+version = "0.0.0"
+dependencies = [
+ "yack-base",
+ "yack-blend",
+ "yack-boolean",
+ "yack-build",
+ "yack-check",
+ "yack-geom",
+ "yack-math",
+ "yack-measure",
+ "yack-profile",
+ "yack-tol",
+ "yack-topo",
+ "yack-tweak",
+]
+
+[[package]]
 name = "yack-geom"
 version = "0.0.0"
 dependencies = [
@@ -383,6 +401,7 @@ dependencies = [
  "yack-build",
  "yack-check",
  "yack-codec",
+ "yack-edit",
  "yack-geom",
  "yack-intersect",
  "yack-locate",

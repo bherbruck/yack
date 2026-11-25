@@ -16,7 +16,7 @@ pub use yack_check as check;
 pub use yack_codec as codec;
 pub use yack_locate::distance;
 pub mod draw;
-pub mod edit;
+pub use yack_edit as edit;
 // yack: glue the yack facade calls (not springrep code).
 pub mod facade;
 use yack_base::kernel as error;
@@ -40,7 +40,6 @@ pub mod step;
 pub use yack_build::sweep;
 pub use yack_tol as tol;
 pub use yack_topo as topo;
-pub(crate) use yack_tweak as tweak;
 
 pub use error::{Error, Result};
 

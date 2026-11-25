@@ -1,25 +1,43 @@
 // yack: Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 // Adapted from springrep@a03e8a1 src/edit.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: convex_edges moved in from pick.rs (M2.5, T8).
+// Changes: convex_edges moved in from pick.rs (M2.5, T8); then to yack-edit (M3 W9b), paths and visibility only.
 //! Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 //! distance or stretched, and the slab a face sweeps. Each builds exact tools and combines them
 //! with the booleans, blends and face moves.
 
-use std::collections::HashMap;
+
+// springrep's edit code indexes by position; D26's hardening pass moves it onto checked access,
+// as for yack-linalg until M5.
+#![allow(clippy::indexing_slicing)]
+
+// springrep's foundation modules (D26), under the names the moved code uses.
+use yack_blend as blend;
+use yack_boolean as boolean;
+use yack_build::build;
+use yack_base::kernel as error;
+use yack_geom as geom;
+use yack_math::kernel as math;
+use yack_measure as measure;
+use yack_profile as profile;
+use yack_build::sweep;
+use yack_tol as tol;
+use yack_topo as topo;
+use yack_tweak as tweak;
+#[cfg(test)]
+use yack_check as check;
+#[cfg(test)]
+use yack_build::primitive;
+#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
 use std::f64::consts::{PI, TAU};
 
 use crate::{
-    blend,
     blend::shaped::plane_of,
-    boolean,
     boolean::half_space,
     error::{Error, Result},
     geom::{Curve, Surface},
     math::{Aabb, Frame, Point3, Vec2, Vec3},
-    measure,
     profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::{extrude, revolve},
-    tol,
     topo::{Brep, EdgeId, FaceId, FaceName},
 };
 
@@ -35,7 +53,7 @@ pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<
 }
 
 /// `b` with each face of `by` moved that far along its outward normal, onto its offset surface.
-pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     merged(crate::tweak::offset_faces(b, by)?)
 }
 
@@ -98,7 +116,7 @@ pub enum Wall {
 /// are `<feature>.inner`. An inward wall leaves every face of `s` in place with its names. An
 /// outward wall's outside is new and carries no name, and each face of `s` is the wall's inside,
 /// keeping its names beside `inner`.
-pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &str) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &str) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     if thickness.is_nan() || thickness <= tol::LINEAR {
         return Err(Error::InvalidInput(
             "a shell's wall must be thicker than the tolerance".into(),
@@ -151,7 +169,7 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
 /// The points within `distance` of `s`: every face moved out that far, a hole that closes on the
 /// way followed there, each convex edge rounded at `distance` (which leaves a ball's patch at each
 /// convex corner), and over each end of a hole that closed, the dimple its rim leaves.
-pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     if distance == 0.0 {
         return Ok(s.clone());
     }
@@ -265,7 +283,7 @@ fn dimple(o: Point3, up: Vec3, r: f64, d: f64, feature: &str) -> Result<Brep> {
 
 /// The solid `faces` sweep moving from 0 to `thickness` along their outward normals, inward where
 /// it is negative: `s` with them moved, less `s`, or `s` less `s` with them moved in.
-pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
+#[allow(clippy::disallowed_types)] pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
     let by: HashMap<FaceId, f64> = faces.iter().map(|&f| (f, thickness)).collect();
     let moved = offset_faces(s, &by)?;
     if thickness > 0.0 {
@@ -591,12 +609,8 @@ mod tests {
                 - 2.0 * ((2.0 - PI / 2.0) * (PI / 2.0 - 1.0) - k) * r * r;
             close(measure::volume(&out), volume);
             close(measure::area(&out), area);
-            // Written and read back, the swing's torus, whose pole lies on its boundary, is
-            // the same solid.
-            let text = crate::step::write(&out, "l").unwrap();
-            let back = crate::step::read(text.as_bytes(), "l").unwrap();
-            assert!(back.rejected.is_empty(), "{:?}", back.rejected);
-            close(measure::volume(&back.brep), volume);
+            // Written and read back it is the same solid: springrep's moved_tests/step.rs reads
+            // these Ls from fixtures (M3 W9b).
         }
     }
 
