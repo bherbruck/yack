@@ -185,6 +185,7 @@ ALLOW = (
     "// W11: springrep's own kernel tests, moved here when springrep went (ruling (b)). They build with the\n"
     "// kernel crates directly and compute their expected values, so the facade's maths ban and the\n"
     "// workspace lints' test-only exemptions (which reach only #[test] fns) do not fit them.\n"
+    "// TODO(api-owner, hardening, D26): rewrite these tests to the lints, test by test, and drop this allow.\n"
     "#![allow(clippy::disallowed_methods, clippy::disallowed_types, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]\n"
 )
 
