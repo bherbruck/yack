@@ -19,10 +19,13 @@
 #   `cargo test -p yack` whole (its moved tests in crates/yack/tests included), the --lib tests of
 #   yack-bridge and every --external crate, then the extras.
 set -u
+# a verdict line goes to stdout as before and to stderr too: the builder keeps stdout's tail only, before
+# stderr, so a failed window's reason would otherwise be lost (w-h1-59, lead)
+say() { echo "$*"; echo "$*" >&2; }
 TAG=$1; APPLY=$2; shift 2; tag=$(echo $TAG | tr A-Z a-z)
 EXTRA=(); REST=()
 while [ $# -gt 0 ]; do
-  if [ "$1" = "--extra" ]; then [ $# -ge 2 ] || { echo "$TAG ABORT: --extra needs a command"; exit 1; }; EXTRA+=("$2"); shift 2
+  if [ "$1" = "--extra" ]; then [ $# -ge 2 ] || { say "$TAG ABORT: --extra needs a command"; exit 1; }; EXTRA+=("$2"); shift 2
   else REST+=("$1"); shift; fi
 done
 set -- "${REST[@]}"
@@ -30,10 +33,13 @@ NOPRE=0; if [ "${1:-}" = "--no-pre" ]; then NOPRE=1; shift; fi
 DIRTY_OK=(); EXT=(); APPLY_ARGS=()
 if [ "${1:-}" = "--dirty-ok" ]; then shift; while [ $# -gt 0 ] && [ "$1" != "--external" ]; do DIRTY_OK+=("$1"); shift; done; fi
 if [ "${1:-}" = "--external" ]; then shift; EXT=("$@"); APPLY_ARGS=(--with-external "$@"); set --; fi
-[ $# -eq 0 ] || { echo "$TAG ABORT: unread arguments: $*"; exit 1; }
+[ $# -eq 0 ] || { say "$TAG ABORT: unread arguments: $*"; exit 1; }
 Y=/home/brenn/github/yack; R=/home/brenn/github/yack-ref/bin; SR=$Y/crates/yack-springrep; SRREL=crates/yack-springrep
 cd $Y
-if [ -e swarm/FREEZE ]; then echo "$TAG ABORT: swarm/FREEZE is held: $(cat swarm/FREEZE)"; exit 1; fi
+# the whole run, both streams, in swarm/res/<tag>-window.txt
+WLOG=$Y/swarm/res/$tag-window.txt; : > "$WLOG"
+exec > >(tee -a "$WLOG") 2> >(tee -a "$WLOG" >&2)
+if [ -e swarm/FREEZE ]; then say "$TAG ABORT: swarm/FREEZE is held: $(cat swarm/FREEZE)"; exit 1; fi
 echo "$TAG w11-window since $(date '+%F %T')" > swarm/FREEZE
 trap 'rm -f $Y/swarm/FREEZE' EXIT; trap 'exit 130' INT TERM HUP
 fp() { echo "$(git rev-parse --short HEAD)+$( { git diff; git status --short --untracked-files=all; } | md5sum | cut -c1-8)"; }
@@ -46,15 +52,15 @@ snap() { mkdir -p $R/$1 && cp bin/release/yack-conformance bin/release/yack-benc
 
 # springrep must be exactly HEAD's (tracked and untracked), or a restore from HEAD would lose work
 dirty=$(git status --short --untracked-files=all -- $SRREL)
-[ -z "$dirty" ] || { echo "$TAG ABORT: $SRREL differs from HEAD, so a restore from HEAD would lose it:"; echo "$dirty"; exit 1; }
+[ -z "$dirty" ] || { say "$TAG ABORT: $SRREL differs from HEAD, so a restore from HEAD would lose it:"; echo "$dirty"; exit 1; }
 CHECK=(); for f in "${EXT[@]}"; do case " ${DIRTY_OK[*]} " in *" $f "*) ;; *) CHECK+=("$f");; esac; done
 if [ ${#CHECK[@]} -gt 0 ]; then dirty=$(git status --short -- "${CHECK[@]}"); else dirty=""; fi
-for f in "${DIRTY_OK[@]}"; do echo "$TAG dirty-ok $f pre-hash $(md5sum < $f | cut -c1-8)"; done
-[ -z "$dirty" ] || { echo "$TAG ABORT: files the move touches have uncommitted changes:"; echo "$dirty"; exit 1; }
+for f in "${DIRTY_OK[@]}"; do say "$TAG dirty-ok $f pre-hash $(md5sum < $f | cut -c1-8)"; done
+[ -z "$dirty" ] || { say "$TAG ABORT: files the move touches have uncommitted changes:"; echo "$dirty"; exit 1; }
 O1=$(others); PFP=$(fp)
-if [ $NOPRE -eq 0 ]; then build || { echo "$TAG pre build failed"; exit 1; }; fi
-cargo xtask gate >/dev/null 2>&1; G1=$?; echo "$TAG gate before: rc=$G1"
-if [ $NOPRE -eq 0 ]; then snap $tag-pre-$PFP; echo "$TAG PRE=$PFP others=$O1"; else echo "$TAG --no-pre: no pre build (tree $PFP) others=$O1"; fi
+if [ $NOPRE -eq 0 ]; then build || { say "$TAG pre build failed"; exit 1; }; fi
+cargo xtask gate >/dev/null 2>&1; G1=$?; say "$TAG gate before: rc=$G1"
+if [ $NOPRE -eq 0 ]; then snap $tag-pre-$PFP; say "$TAG PRE=$PFP others=$O1"; else say "$TAG --no-pre: no pre build (tree $PFP) others=$O1"; fi
 
 # the externals, Cargo.lock and the workspace Cargo.toml (its members lose springrep) are backed up; an
 # external the move creates has no backup, so a restore deletes it (and its empty directories)
@@ -69,35 +75,35 @@ restore() {
     if [ -e "$BK/ext/$f" ]; then mkdir -p "$(dirname "$f")" && cp "$BK/ext/$f" "$f" && touch "$f"; else rm -f "$f"; rmdir -p --ignore-fail-on-non-empty "$(dirname $f)" 2>/dev/null; fi
   done
   left=$(git status --short --untracked-files=all -- $SRREL)
-  if [ -n "$left" ]; then echo "$TAG RESTORE INCOMPLETE: $SRREL still differs from HEAD:"; echo "$left"; else echo "$TAG restored $SRREL whole from HEAD"; fi
-  echo "$TAG restored its files:" "${BACKED[@]}"
+  if [ -n "$left" ]; then say "$TAG RESTORE INCOMPLETE: $SRREL still differs from HEAD:"; echo "$left"; else say "$TAG restored $SRREL whole from HEAD"; fi
+  say "$TAG restored its files:" "${BACKED[@]}"
 }
 python3 $APPLY $SR "${APPLY_ARGS[@]}"; ARC=$?
-if [ -d "$SR" ]; then echo "$TAG apply rc=$ARC; $SRREL still present"; else echo "$TAG apply rc=$ARC; $SRREL deleted"; fi
+if [ -d "$SR" ]; then say "$TAG apply rc=$ARC; $SRREL still present"; else say "$TAG apply rc=$ARC; $SRREL deleted"; fi
 [ $ARC -eq 0 ] || { restore; exit 1; }
-build || { echo "$TAG post build failed"; restore; exit 1; }
+build || { say "$TAG post build failed"; restore; exit 1; }
 QFP=$(fp)
 crates() { { echo yack; echo yack-bridge; for f in "${EXT[@]}"; do case $f in crates/*) echo $f | sed 's|crates/\([^/]*\)/.*|\1|';; esac; done; } | sort -u | while read -r c; do [ -f "crates/$c/Cargo.toml" ] && echo $c; done; }
 for pkg in $(crates); do
-  cargo test -p $pkg --no-run > $Y/swarm/res/$tag-tests-$pkg.txt 2>&1 || { echo "$TAG $pkg tests do not compile (all of it: swarm/res/$tag-tests-$pkg.txt)"; grep -A3 '^error' $Y/swarm/res/$tag-tests-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
+  cargo test -p $pkg --no-run > $Y/swarm/res/$tag-tests-$pkg.txt 2>&1 || { say "$TAG $pkg tests do not compile (all of it: swarm/res/$tag-tests-$pkg.txt)"; grep -A3 '^error' $Y/swarm/res/$tag-tests-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
 done
 for pkg in $(crates); do
-  if temporary $pkg; then echo "$TAG clippy: $pkg is temporary, skipped"; continue; fi
-  cargo clippy -p $pkg --all-targets --no-deps -- -D warnings > $Y/swarm/res/$tag-clippy-$pkg.txt 2>&1 || { echo "$TAG clippy -D warnings fails in $pkg (all sites: swarm/res/$tag-clippy-$pkg.txt)"; grep -A3 '^error' $Y/swarm/res/$tag-clippy-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
+  if temporary $pkg; then say "$TAG clippy: $pkg is temporary, skipped"; continue; fi
+  cargo clippy -p $pkg --all-targets --no-deps -- -D warnings > $Y/swarm/res/$tag-clippy-$pkg.txt 2>&1 || { say "$TAG clippy -D warnings fails in $pkg (all sites: swarm/res/$tag-clippy-$pkg.txt)"; grep -A3 '^error' $Y/swarm/res/$tag-clippy-$pkg.txt | grep -- '-->' | head -40; restore; exit 1; }
 done
-cargo xtask api || { echo "$TAG xtask api fails"; restore; exit 1; }
-cargo xtask gate; G2=$?; echo "$TAG gate after: rc=$G2"
-[ $G1 -ne 0 ] || [ $G2 -eq 0 ] || { echo "$TAG gate was green and the move makes it fail"; restore; exit 1; }
-cargo test -p yack || { echo "$TAG yack tests fail"; restore; exit 1; }
+cargo xtask api || { say "$TAG xtask api fails"; restore; exit 1; }
+cargo xtask gate; G2=$?; say "$TAG gate after: rc=$G2"
+[ $G1 -ne 0 ] || [ $G2 -eq 0 ] || { say "$TAG gate was green and the move makes it fail"; restore; exit 1; }
+cargo test -p yack || { say "$TAG yack tests fail"; restore; exit 1; }
 for pkg in $(crates); do
   [ "$pkg" = yack ] && continue
-  cargo test -p $pkg --lib || { echo "$TAG $pkg tests fail"; restore; exit 1; }
+  cargo test -p $pkg --lib || { say "$TAG $pkg tests fail"; restore; exit 1; }
 done
 for cmd in "${EXTRA[@]}"; do
-  echo "$TAG extra: $cmd"
-  bash -c "$cmd" || { echo "$TAG extra fails: $cmd"; restore; exit 1; }
+  say "$TAG extra: $cmd"
+  bash -c "$cmd" || { say "$TAG extra fails: $cmd"; restore; exit 1; }
 done
 snap $tag-post-$QFP; O2=$(others)
-echo "$TAG POST=$QFP others=$O2"
-if [ "$O1" != "$O2" ]; then echo "$TAG OTHERS CHANGED during window ($O1 -> $O2): pair contaminated"; exit 3; fi
-echo "$TAG others unchanged"
+say "$TAG POST=$QFP others=$O2"
+if [ "$O1" != "$O2" ]; then say "$TAG OTHERS CHANGED during window ($O1 -> $O2): pair contaminated"; exit 3; fi
+say "$TAG others unchanged"
