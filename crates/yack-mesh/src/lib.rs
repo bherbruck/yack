@@ -1,15 +1,12 @@
 // yack: Tessellation. Each edge is discretised once and both its faces use those points, so the mesh of
 // Adapted from springrep@a03e8a1 src/mesh/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/mesh/mod.rs to yack-mesh (M3 W6); paths and visibility only.
+// Changes: moved from springrep's src/mesh/mod.rs to yack-mesh (M3 W6); paths and visibility only;
+// hardening (w-h1): ordered maps, checked access, par_map over a slice, a bad vertex an error.
 //! Tessellation. Each edge is discretised once and both its faces use those points, so the mesh of
 //! a valid solid is watertight by construction. Each face is a constrained Delaunay triangulation
 //! of those points in its parameter plane, refined until every triangle is within the deflection
 //! limits of the surface (`face`).
 
-
-// springrep's mesh indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names mesh's code uses.
 use yack_base::kernel::Error;
@@ -33,7 +30,7 @@ mod tests;
 pub use crate::geom::{MeshOptions, edge_params};
 pub use query::{closest, nearest_boundary, nearest_of, nearest_solid, rays};
 
-#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -76,7 +73,7 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 
 
 /// Tessellates every face of `b` within `opt`.
-#[allow(clippy::disallowed_types)] pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> { // D26: BTree* in hardening, proven by digests
+pub fn tessellate(b: &Brep, opt: &MeshOptions) -> Result<Mesh> {
     let positive = |x: f64| x > 0.0 && x.is_finite();
     if !positive(opt.linear) || !positive(opt.angular) {
         return Err(Error::InvalidInput(format!(
@@ -94,14 +91,18 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
         .collect();
     let mut uses: Vec<Vec<CoedgeId>> = vec![Vec::new(); b.edge_ids().count()];
     for c in b.coedge_ids() {
-        uses[b.coedge(c).edge.index()].push(c);
+        if let Some(on_edge) = uses.get_mut(b.coedge(c).edge.index()) {
+            on_edge.push(c);
+        }
     }
     let edges: Vec<EdgeId> = b.edge_ids().collect();
-    let params = par_map(edges.len(), |i| {
-        let edge = b.edge(edges[i]);
+    let jobs: Vec<(EdgeId, &[CoedgeId])> =
+        edges.iter().copied().zip(uses.iter().map(Vec::as_slice)).collect();
+    let params = par_map(&jobs, |&(e, coedges)| {
+        let edge = b.edge(e);
         let (t0, t1) = edge.range;
         match &edge.curve {
-            Some(c) => fit_faces(b, c, edge_params(c, t0, t1, opt), &uses[i], opt),
+            Some(c) => fit_faces(b, c, edge_params(c, t0, t1, opt), coedges, opt),
             None => {
                 let n = ((t1 - t0) / opt.angular).ceil().max(1.0) as usize;
                 (0..=n)
@@ -113,40 +114,48 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
     let mut params = params;
     // Two edges between one pair of vertices, each drawn as one chord, would draw one segment
     // that all four of their faces use.
-    let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-    for (i, &e) in edges.iter().enumerate() {
+    let mut by_ends: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    for (i, (&e, ts)) in edges.iter().zip(&params).enumerate() {
         let edge = b.edge(e);
-        if edge.curve.is_some() && params[i].len() == 2 && edge.start != edge.end {
+        if edge.curve.is_some() && ts.len() == 2 && edge.start != edge.end {
             let (a, c) = (edge.start.index(), edge.end.index());
             by_ends.entry((a.min(c), a.max(c))).or_default().push(i);
         }
     }
     for group in by_ends.values().filter(|g| g.len() > 1) {
         for &i in group {
-            let ts = &mut params[i];
-            ts.insert(1, 0.5 * (ts[0] + ts[1]));
+            if let Some(ts) = params.get_mut(i)
+                && let &[t0, t1] = ts.as_slice()
+            {
+                ts.insert(1, 0.5 * (t0 + t1));
+            }
         }
     }
+    let vertex_gid = |v: crate::topo::VertexId| {
+        vgid.get(v.index()).copied().ok_or_else(|| {
+            Error::InvalidInput(format!("an edge's vertex {} is not in the solid", v.index()))
+        })
+    };
     let mut samples: Vec<Vec<(f64, u32)>> = Vec::with_capacity(edges.len());
     for (&e, ts) in edges.iter().zip(params) {
         let edge = b.edge(e);
-        let last = ts.len() - 1;
+        let last = ts.len().saturating_sub(1);
         let s = ts
             .iter()
             .enumerate()
             .map(|(k, &t)| {
                 let gid = match &edge.curve {
-                    _ if k == 0 => vgid[edge.start.index()],
-                    _ if k == last => vgid[edge.end.index()],
+                    _ if k == 0 => vertex_gid(edge.start)?,
+                    _ if k == last => vertex_gid(edge.end)?,
                     Some(c) => {
                         mesh.positions.push(c.eval(t));
                         (mesh.positions.len() - 1) as u32
                     }
-                    None => vgid[edge.start.index()],
+                    None => vertex_gid(edge.start)?,
                 };
-                (t, gid)
+                Ok((t, gid))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         samples.push(s);
     }
     uncross(b, &edges, &mut samples, &mut mesh.positions);
@@ -160,7 +169,7 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 /// plane. Two edges that leave nearly one point at a small angle can have chords that cross where
 /// the curves do not; halving the curved one's chords near there separates them. Segments that
 /// still cross after the rounds are left for the face to refuse.
-#[allow(clippy::disallowed_types)] fn uncross( // D26: BTree* in hardening, proven by digests
+fn uncross(
     b: &Brep,
     edges: &[EdgeId],
     samples: &mut [Vec<(f64, u32)>],
@@ -168,36 +177,42 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 ) {
     let faces: Vec<FaceId> = b.face_ids().collect();
     for _ in 0..32 {
-        let found = par_map(faces.len(), |i| crossing_segments(b, faces[i], samples));
-        let split: HashSet<(usize, usize)> = found.into_iter().flatten().collect();
+        let found = par_map(&faces, |&f| crossing_segments(b, f, samples));
+        let split: BTreeSet<(usize, usize)> = found.into_iter().flatten().collect();
         if split.is_empty() {
             return;
         }
-        let mut by_edge: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut by_edge: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (e, k) in split {
             by_edge.entry(e).or_default().push(k);
         }
         for (e, ks) in by_edge {
-            let Some(curve) = &b.edge(edges[e]).curve else {
+            let (Some(&edge), Some(edge_samples)) = (edges.get(e), samples.get_mut(e)) else {
+                continue;
+            };
+            let Some(curve) = &b.edge(edge).curve else {
                 continue;
             };
             // A chord no longer than the edge's tolerance (an imported edge's own, else the linear
             // one) cannot be told apart from one it crosses by halving it: its image in the face
             // is known no better, and below the linear tolerance a curve's parameter-plane points
             // are rounding, whose wobble halving would chase down to coincident samples.
-            let within = b.edge_tolerance(edges[e]).max(crate::tol::LINEAR);
+            let within = b.edge_tolerance(edge).max(crate::tol::LINEAR);
             let resolved = |a: f64, z: f64| curve.eval(a).dist(curve.eval(z)) > within;
-            let old = std::mem::take(&mut samples[e]);
+            let old = std::mem::take(edge_samples);
             let mut new = Vec::with_capacity(old.len() + ks.len());
-            for k in 0..old.len() {
-                new.push(old[k]);
-                if ks.contains(&k) && k + 1 < old.len() && resolved(old[k].0, old[k + 1].0) {
-                    let t = 0.5 * (old[k].0 + old[k + 1].0);
+            for (k, &here) in old.iter().enumerate() {
+                new.push(here);
+                if ks.contains(&k)
+                    && let Some(&next) = old.get(k + 1)
+                    && resolved(here.0, next.0)
+                {
+                    let t = 0.5 * (here.0 + next.0);
                     positions.push(curve.eval(t));
                     new.push((t, (positions.len() - 1) as u32));
                 }
             }
-            samples[e] = new;
+            *edge_samples = new;
         }
     }
 }
@@ -205,21 +220,23 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 /// Gives each of two or more edges between one pair of vertices that is left a single chord (after
 /// [`drop_unresolved`]) a sample at its middle: their chords would otherwise be one segment that
 /// all their faces use, four triangles on one edge (bench swept/tumbling-torus-full-turn, carried).
-#[allow(clippy::disallowed_types)] fn separate_twins(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>], positions: &mut Vec<Point3>) { // D26: BTree* in hardening, proven by digests
-    let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-    for (i, &e) in edges.iter().enumerate() {
+fn separate_twins(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>], positions: &mut Vec<Point3>) {
+    let mut by_ends: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    for (i, (&e, s)) in edges.iter().zip(samples.iter()).enumerate() {
         let edge = b.edge(e);
-        if edge.curve.is_some() && samples[i].len() == 2 && edge.start != edge.end {
+        if edge.curve.is_some() && s.len() == 2 && edge.start != edge.end {
             let (a, c) = (edge.start.index(), edge.end.index());
             by_ends.entry((a.min(c), a.max(c))).or_default().push(i);
         }
     }
     for group in by_ends.values().filter(|g| g.len() > 1) {
         for &i in group {
-            let Some(curve) = &b.edge(edges[i]).curve else { continue };
-            let t = 0.5 * (samples[i][0].0 + samples[i][1].0);
+            let (Some(&e), Some(s)) = (edges.get(i), samples.get_mut(i)) else { continue };
+            let Some(curve) = &b.edge(e).curve else { continue };
+            let &[(t0, _), (t1, _)] = s.as_slice() else { continue };
+            let t = 0.5 * (t0 + t1);
             positions.push(curve.eval(t));
-            samples[i].insert(1, (t, (positions.len() - 1) as u32));
+            s.insert(1, (t, (positions.len() - 1) as u32));
         }
     }
 }
@@ -229,11 +246,11 @@ pub(crate) fn seeding(opt: &MeshOptions, b: &Brep) -> MeshOptions {
 /// runs past a pole, a stretch of it projects to one point. Both faces drop the sample, so they
 /// still share every chord.
 fn drop_unresolved(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>]) {
-    for (i, &e) in edges.iter().enumerate() {
-        if b.edge_tolerance(e) <= crate::tol::LINEAR || samples[i].len() < 3 {
+    for (&e, edge_samples) in edges.iter().zip(samples.iter_mut()) {
+        if b.edge_tolerance(e) <= crate::tol::LINEAR || edge_samples.len() < 3 {
             continue;
         }
-        let ts: Vec<f64> = samples[i].iter().map(|x| x.0).collect();
+        let ts: Vec<f64> = edge_samples.iter().map(|x| x.0).collect();
         let images: Vec<Vec<Vec2>> = b
             .coedge_ids()
             .filter(|&c| b.coedge(c).edge == e)
@@ -254,8 +271,11 @@ fn drop_unresolved(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>]) 
         let last = ts.len() - 1;
         let same = |a: usize, z: usize| {
             images.iter().any(|uvs| {
-                let near = 1e-12 * (1.0 + uvs[a].x.abs() + uvs[a].y.abs());
-                (uvs[a] - uvs[z]).norm() <= near
+                let (Some(&ua), Some(&uz)) = (uvs.get(a), uvs.get(z)) else {
+                    return false;
+                };
+                let near = 1e-12 * (1.0 + ua.x.abs() + ua.y.abs());
+                (ua - uz).norm() <= near
             })
         };
         let mut kept = vec![0];
@@ -266,7 +286,7 @@ fn drop_unresolved(b: &Brep, edges: &[EdgeId], samples: &mut [Vec<(f64, u32)>]) 
         }
         kept.push(last);
         if kept.len() < ts.len() {
-            samples[i] = kept.into_iter().map(|k| samples[i][k]).collect();
+            *edge_samples = kept.into_iter().filter_map(|k| edge_samples.get(k).copied()).collect();
         }
     }
 }
@@ -316,33 +336,28 @@ pub(crate) fn one_sheet<T>(
         shifts.push(each);
     }
     for ((pts, run), each) in loops.iter_mut().zip(runs).zip(&shifts) {
-        for (k, &(at, _)) in run.iter().enumerate() {
+        for (k, (&(at, _), &shift)) in run.iter().zip(each).enumerate() {
             let to = run.get(k + 1).map_or(pts.len(), |next| next.0);
-            for p in &mut pts[at..to] {
-                p.0 = p.0 + each[k];
+            for p in pts.get_mut(at..to).into_iter().flatten() {
+                p.0 = p.0 + shift;
             }
         }
     }
     let area = |pts: &[(Vec2, T)]| -> f64 {
-        let n = pts.len();
-        (0..n)
-            .map(|i| {
-                let (a, b) = (pts[i].0, pts[(i + 1) % n].0);
-                a.x * b.y - b.x * a.y
-            })
+        closed_sides(pts.iter().map(|p| p.0))
+            .map(|(a, b)| a.x * b.y - b.x * a.y)
             .sum::<f64>()
             .abs()
     };
-    let Some(outer) = (0..loops.len()).max_by(|&i, &j| area(&loops[i]).total_cmp(&area(&loops[j])))
+    let Some((outer, outer_pts)) =
+        loops.iter().enumerate().max_by(|(_, x), (_, y)| area(x).total_cmp(&area(y)))
     else {
         return;
     };
-    let ring: Vec<Vec2> = loops[outer].iter().map(|p| p.0).collect();
+    let ring: Vec<Vec2> = outer_pts.iter().map(|p| p.0).collect();
     let inside = |q: Vec2| -> bool {
-        let n = ring.len();
         let mut odd = false;
-        for i in 0..n {
-            let (a, b) = (ring[i], ring[(i + 1) % n]);
+        for (a, b) in closed_sides(ring.iter().copied()) {
             if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x) {
                 odd = !odd;
             }
@@ -379,10 +394,15 @@ pub(crate) fn one_sheet<T>(
     }
 }
 
+/// Each point of a closed polygon with the next, the last with the first.
+fn closed_sides<P: Copy>(points: impl Iterator<Item = P> + Clone) -> impl Iterator<Item = (P, P)> {
+    points.clone().zip(points.cycle().skip(1))
+}
+
 /// Moves each parameter-plane image of a mesh point onto an earlier image of the same point when
 /// rounding alone parts them, so the face is meshed through one point there and not two a hair
 /// apart. Images a period or a pole's span apart are far more than this apart.
-#[allow(clippy::disallowed_types)] pub(crate) fn snap_repeats(pts: &mut [(Vec2, u32)]) { // D26: BTree* in hardening, proven by digests
+pub(crate) fn snap_repeats(pts: &mut [(Vec2, u32)]) {
     let (mut lo, mut hi) = (
         Vec2::new(f64::INFINITY, f64::INFINITY),
         Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -392,7 +412,7 @@ pub(crate) fn one_sheet<T>(
         hi = Vec2::new(hi.x.max(uv.x), hi.y.max(uv.y));
     }
     let near = 1e-9 * (hi - lo).norm();
-    let mut seen: HashMap<u32, Vec<Vec2>> = HashMap::new();
+    let mut seen: BTreeMap<u32, Vec<Vec2>> = BTreeMap::new();
     for (uv, g) in pts.iter_mut() {
         let images = seen.entry(*g).or_default();
         match images.iter().find(|q| (**q - *uv).norm() <= near) {
@@ -406,7 +426,7 @@ pub(crate) fn one_sheet<T>(
 /// segments other than at a shared end, every segment of a loop too short to bound an area, and
 /// every curved segment with another loop point between it and its curve, which a coarse
 /// deflection leaves on the wrong side of the chord.
-#[allow(clippy::panic)] fn crossing_segments(b: &Brep, f: FaceId, samples: &[Vec<(f64, u32)>]) -> Vec<(usize, usize)> {
+fn crossing_segments(b: &Brep, f: FaceId, samples: &[Vec<(f64, u32)>]) -> Vec<(usize, usize)> {
     // Each loop's points as the face mesher takes them: every coedge's samples but its last.
     let mut segs: Vec<(Vec2, Vec2, usize, usize)> = Vec::new();
     let mut neighbours: Vec<(usize, usize)> = Vec::new();
@@ -422,86 +442,94 @@ pub(crate) fn one_sheet<T>(
         for &co in &b.lp(lp).coedges {
             let c = b.coedge(co);
             let e = c.edge.index();
-            let n = samples[e].len();
-            let mut ts: Vec<f64> = samples[e].iter().map(|x| x.0).collect();
+            let Some(edge_samples) = samples.get(e) else { continue };
+            let n = edge_samples.len();
+            let mut ts: Vec<f64> = edge_samples.iter().map(|x| x.0).collect();
             if c.reversed {
                 ts.reverse();
             }
             let uvs = b.coedge_uvs(co, &ts);
-            run.push((pts.len(), uvs[n - 1]));
+            let (Some(&end), Some(&t_end)) = (uvs.last(), ts.last()) else { continue };
+            run.push((pts.len(), end));
             let curved = matches!(&b.edge(c.edge).curve, Some(cv) if !matches!(cv, Curve::Line(_)));
             // Interleaved with the samples, so a periodic parameter continues as it does there.
             let halves: Vec<Option<Vec2>> = if curved {
                 let mut both = Vec::with_capacity(2 * n);
-                for w in ts.windows(2) {
-                    both.push(w[0]);
-                    both.push(0.5 * (w[0] + w[1]));
+                for pair in ts.windows(2) {
+                    if let &[t0, t1] = pair {
+                        both.push(t0);
+                        both.push(0.5 * (t0 + t1));
+                    }
                 }
-                both.push(ts[n - 1]);
+                both.push(t_end);
                 let uv2 = b.coedge_uvs(co, &both);
-                (0..n - 1).map(|k| Some(uv2[2 * k + 1])).collect()
+                uv2.iter().skip(1).step_by(2).take(n - 1).map(|&uv| Some(uv)).collect()
             } else {
                 vec![None; n - 1]
             };
-            for (k, &uv) in uvs.iter().enumerate().take(n - 1) {
+            for (k, (&uv, &half)) in uvs.iter().zip(&halves).enumerate().take(n - 1) {
                 let (seg, at) = if c.reversed {
                     (n - 2 - k, n - 1 - k)
                 } else {
                     (k, k)
                 };
+                let Some(&(_, gid)) = edge_samples.get(at) else { continue };
                 pts.push((uv, e, seg));
-                points.push((uv, samples[e][at].1));
-                mids.push(halves[k]);
+                points.push((uv, gid));
+                mids.push(half);
             }
         }
-        sheet.push(
-            (0..pts.len())
-                .map(|k| (pts[k].0, points.len() - pts.len() + k))
-                .collect(),
-        );
+        let base = points.len() - pts.len();
+        sheet.push(pts.iter().enumerate().map(|(k, p)| (p.0, base + k)).collect());
         runs.push(run);
         loops.push(pts);
     }
     let surface = &b.face(f).surface;
     one_sheet((surface.u_period(), surface.v_period()), &mut sheet, &runs);
     for &(uv, k) in sheet.iter().flatten() {
-        if let Some(mid) = &mut mids[k] {
-            *mid = *mid + (uv - points[k].0);
+        let (Some(mid), Some(point)) = (mids.get_mut(k), points.get_mut(k)) else { continue };
+        if let Some(mid) = mid {
+            *mid = *mid + (uv - point.0);
         }
-        points[k].0 = uv;
+        point.0 = uv;
     }
     snap_repeats(&mut points);
-    let mut snapped = points.into_iter().map(|p| p.0);
-    for mut pts in loops {
-        for p in &mut pts {
-            p.0 = snapped.next().unwrap_or_else(|| panic!("one snapped point per loop point"));
-        }
+    // One snapped point per loop point, in loop order.
+    for (p, snapped) in loops.iter_mut().flatten().zip(points) {
+        p.0 = snapped.0;
+    }
+    for pts in loops {
         let first = segs.len();
         let m = pts.len();
         if m < 3 {
             out.extend(pts.iter().map(|&(_, e, k)| (e, k)));
         }
-        for i in 0..m {
-            let (a, e, k) = pts[i];
-            segs.push((a, pts[(i + 1) % m].0, e, k));
+        for (i, (&(a, e, k), next)) in closed_sides(pts.iter()).enumerate() {
+            segs.push((a, next.0, e, k));
             neighbours.push((first + (i + m - 1) % m, first + (i + 1) % m));
         }
     }
     let lo = |s: &(Vec2, Vec2, usize, usize)| s.0.x.min(s.1.x);
-    let mut order: Vec<usize> = (0..segs.len()).collect();
-    order.sort_by(|&i, &j| lo(&segs[i]).total_cmp(&lo(&segs[j])));
+    // The segments by their least u; a stable sort, so ties keep their order.
+    let mut by_lo: Vec<(usize, f64)> = segs.iter().map(lo).enumerate().collect();
+    by_lo.sort_by(|x, y| x.1.total_cmp(&y.1));
+    let order: Vec<usize> = by_lo.into_iter().map(|(i, _)| i).collect();
     for (oi, &i) in order.iter().enumerate() {
-        let (a, c, ..) = segs[i];
+        let (Some(&seg_i), Some(&(before, after))) = (segs.get(i), neighbours.get(i)) else {
+            continue;
+        };
+        let (a, c, ..) = seg_i;
         if a == c {
             continue;
         }
         let hi = a.x.max(c.x);
-        for &j in &order[oi + 1..] {
-            let (p, q, ..) = segs[j];
-            if lo(&segs[j]) > hi {
+        for &j in order.iter().skip(oi + 1) {
+            let Some(seg_j) = segs.get(j) else { continue };
+            let (p, q, ..) = *seg_j;
+            if lo(seg_j) > hi {
                 break;
             }
-            if p == q || neighbours[i].0 == j || neighbours[i].1 == j {
+            if p == q || before == j || after == j {
                 continue;
             }
             if a.y.max(c.y) < p.y.min(q.y) || p.y.max(q.y) < a.y.min(c.y) {
@@ -513,23 +541,24 @@ pub(crate) fn one_sheet<T>(
             let (o1, o2) = (orient(a, c, p), orient(a, c, q));
             let (o3, o4) = (orient(p, q, a), orient(p, q, c));
             if o1 * o2 <= 0.0 && o3 * o4 <= 0.0 {
-                out.push((segs[i].2, segs[i].3));
-                out.push((segs[j].2, segs[j].3));
+                out.push((seg_i.2, seg_i.3));
+                out.push((seg_j.2, seg_j.3));
             }
         }
     }
     let mut by_x: Vec<Vec2> = segs.iter().map(|s| s.0).collect();
     by_x.sort_by(|p, q| p.x.total_cmp(&q.x));
-    for (i, &(a, c, e, k)) in segs.iter().enumerate() {
-        let Some(m) = mids[i] else { continue };
+    for (&(a, c, e, k), &mid) in segs.iter().zip(&mids) {
+        let Some(m) = mid else { continue };
         let turn = orient(a, c, m);
         if turn == 0.0 {
             continue;
         }
         let (x0, x1) = (a.x.min(c.x).min(m.x), a.x.max(c.x).max(m.x));
         let from = by_x.partition_point(|p| p.x < x0);
-        let inside = by_x[from..]
+        let inside = by_x
             .iter()
+            .skip(from)
             .take_while(|p| p.x <= x1)
             .filter(|&&p| p != a && p != c)
             .any(|&p| {
@@ -567,9 +596,9 @@ fn fit_faces(
             let uvs = b.coedge_uvs(co, &order);
             let surface = &b.face(b.coedge_face(co)).surface;
             let n = ts.len() - 1;
-            for k in 0..n {
-                let mid = (uvs[k] + uvs[k + 1]) * 0.5;
-                let (ta, tb) = (order[k], order[k + 1]);
+            for (k, (uv, t)) in uvs.windows(2).zip(order.windows(2)).enumerate().take(n) {
+                let (&[uv_a, uv_b], &[ta, tb]) = (uv, t) else { continue };
+                let mid = (uv_a + uv_b) * 0.5;
                 let on_curve = c.eval(0.5 * (ta + tb));
                 // A step shorter than the deflection cannot stray by more than it; one that
                 // still seems to stray is a parameter-plane jump that splitting cannot mend.
@@ -584,14 +613,15 @@ fn fit_faces(
                     let at = uv + (mid - uv) * 1e-6;
                     surface.normal(at.x, at.y)
                 };
-                let (na, nm) = (inward(uvs[k]), surface.normal(mid.x, mid.y));
-                let nb = inward(uvs[k + 1]);
+                let (na, nm) = (inward(uv_a), surface.normal(mid.x, mid.y));
+                let nb = inward(uv_b);
                 let turn = na.angle(nb).max(na.angle(nm)).max(nm.angle(nb));
                 if !short
                     && (surface.eval(mid.x, mid.y).dist(on_curve) > opt.linear
                         || turn > opt.angular)
+                    && let Some(cut) = split.get_mut(if reversed { n - 1 - k } else { k })
                 {
-                    split[if reversed { n - 1 - k } else { k }] = true;
+                    *cut = true;
                 }
             }
         }
@@ -599,13 +629,14 @@ fn fit_faces(
             break;
         }
         let mut next = Vec::with_capacity(2 * ts.len());
-        for k in 0..ts.len() - 1 {
-            next.push(ts[k]);
-            if split[k] {
-                next.push(0.5 * (ts[k] + ts[k + 1]));
+        for (pair, &cut) in ts.windows(2).zip(&split) {
+            let &[t0, t1] = pair else { continue };
+            next.push(t0);
+            if cut {
+                next.push(0.5 * (t0 + t1));
             }
         }
-        next.push(ts[ts.len() - 1]);
+        next.extend(ts.last());
         ts = next;
     }
     ts
@@ -615,9 +646,7 @@ fn fit_faces(
 fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Mesh) -> Result<()> {
     let ids: Vec<FaceId> = b.face_ids().collect();
     let positions = &mesh.positions;
-    let results = par_map(ids.len(), |i| {
-        face::mesh_face(b, ids[i], opt, samples, positions)
-    });
+    let results = par_map(&ids, |&f| face::mesh_face(b, f, opt, samples, positions));
     let mut meshes = Vec::with_capacity(ids.len());
     for (r, &f) in results.into_iter().zip(&ids) {
         let named = |m: String| {
@@ -634,23 +663,23 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
     for (fm, &f) in meshes.iter().zip(&ids) {
         let start = mesh.triangles.len();
         let local: Vec<u32> = fm
-            .gid
-            .iter()
-            .zip(&fm.pos)
+            .points()
             .enumerate()
             .map(|(i, (g, p))| match g {
-                Some(g) => *g,
+                Some(g) => g,
                 None if i < BOX as usize => u32::MAX,
                 None => {
-                    mesh.positions.push(*p);
+                    mesh.positions.push(p);
                     (mesh.positions.len() - 1) as u32
                 }
             })
             .collect();
         let reversed = b.face(f).reversed;
+        // Every corner of the face's mesh has a global point.
+        let global = |i: u32| local.get(i as usize).copied();
         let tris: Vec<[u32; 3]> = fm
             .triangles()
-            .map(|(_, t)| t.map(|i| local[i as usize]))
+            .filter_map(|(_, [a, b, c])| Some([global(a)?, global(b)?, global(c)?]))
             .filter(|g| g[0] != g[1] && g[1] != g[2] && g[0] != g[2])
             .collect();
         for g in unfold(tris) {
@@ -666,19 +695,23 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
 /// whose copies along the parameter plane are one point, a point can be joined to the pole on both
 /// sides of one chord: the two triangles cover nothing, and each of their edges would be used twice
 /// too often.
-#[allow(clippy::disallowed_types)] fn unfold(tris: Vec<[u32; 3]>) -> Vec<[u32; 3]> { // D26: BTree* in hardening, proven by digests
+fn unfold(tris: Vec<[u32; 3]>) -> Vec<[u32; 3]> {
     // Each triangle turned to start at its least point: a folded pair then reads a, b, c and a, c, b.
-    let turned = |g: [u32; 3]| {
-        let k = (0..3).min_by_key(|&k| g[k]).unwrap_or(0);
-        [g[k], g[(k + 1) % 3], g[(k + 2) % 3]]
+    let turned = |mut g: [u32; 3]| {
+        let k = g.iter().enumerate().min_by_key(|&(_, v)| v).map_or(0, |(k, _)| k);
+        g.rotate_left(k);
+        g
     };
-    let mut open: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
+    let mut open: BTreeMap<[u32; 3], Vec<usize>> = BTreeMap::new();
     let mut folded = vec![false; tris.len()];
     for (i, &g) in tris.iter().enumerate() {
         let [a, b, c] = turned(g);
         if let Some(j) = open.get_mut(&[a, c, b]).and_then(Vec::pop) {
-            folded[i] = true;
-            folded[j] = true;
+            for k in [i, j] {
+                if let Some(f) = folded.get_mut(k) {
+                    *f = true;
+                }
+            }
         } else {
             open.entry([a, b, c]).or_default().push(i);
         }
@@ -694,20 +727,23 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
 /// non-manifold; a point of the face's own in its middle keeps each face's interior edges its own.
 /// Uses are counted over triangles with three distinct points, since the copies of a pole or seam
 /// point in one face draw the same segment more than once without using it more than twice.
-#[allow(clippy::disallowed_types)] fn split_shared_chords(b: &Brep, ids: &[FaceId], meshes: &mut [face::FaceMesh]) { // D26: BTree* in hardening, proven by digests
+fn split_shared_chords(b: &Brep, ids: &[FaceId], meshes: &mut [face::FaceMesh]) {
+    let gid = |fm: &face::FaceMesh, v: u32| fm.gid(v);
     let key = |fm: &face::FaceMesh, a: u32, c: u32| {
-        let (ga, gc) = (fm.gid[a as usize]?, fm.gid[c as usize]?);
+        let (ga, gc) = (gid(fm, a)?, gid(fm, c)?);
         (ga != gc).then(|| (ga.min(gc), ga.max(gc)))
     };
     let distinct = |fm: &face::FaceMesh, tri: [u32; 3]| {
-        let g = tri.map(|v| fm.gid[v as usize]);
-        (0..3).all(|k| g[k].is_none() || g[k] != g[(k + 1) % 3])
+        sides(tri).iter().all(|&(a, c)| {
+            let (ga, gc) = (gid(fm, a), gid(fm, c));
+            ga.is_none() || ga != gc
+        })
     };
-    let mut uses: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut uses: BTreeMap<(u32, u32), u32> = BTreeMap::new();
     for fm in meshes.iter() {
         for (_, tri) in fm.triangles().filter(|&(_, tri)| distinct(fm, tri)) {
-            for k in 0..3 {
-                if let Some(g) = key(fm, tri[k], tri[(k + 1) % 3]) {
+            for (a, c) in sides(tri) {
+                if let Some(g) = key(fm, a, c) {
                     *uses.entry(g).or_default() += 1;
                 }
             }
@@ -716,9 +752,9 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
     for (fm, &f) in meshes.iter_mut().zip(ids) {
         let mut todo = Vec::new();
         for (t, tri) in fm.triangles() {
-            for k in 0..3 {
-                let (a, c) = (tri[k], tri[(k + 1) % 3]);
-                if a > c || fm.cdt.fixed[t as usize][k] {
+            let fixed = fm.cdt.tri(t).fixed;
+            for ((a, c), fixed) in sides(tri).into_iter().zip(fixed) {
+                if a > c || fixed {
                     continue;
                 }
                 if key(fm, a, c).is_some_and(|g| uses.get(&g).is_some_and(|&n| n > 2)) {
@@ -735,13 +771,20 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
     }
 }
 
-/// `f(0..n)` in order, spread over the machine's threads.
-#[allow(clippy::panic)] fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+/// A triangle's three sides, each from a corner to the next.
+fn sides(t: [u32; 3]) -> [(u32, u32); 3] {
+    let [a, b, c] = t;
+    [(a, b), (b, c), (c, a)]
+}
+
+/// `f` of each of `items`, in order, spread over the machine's threads.
+fn par_map<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    let n = items.len();
     let threads = std::thread::available_parallelism()
         .map_or(1, |x| x.get())
         .min(n);
     if threads <= 1 {
-        return (0..n).map(f).collect();
+        return items.iter().map(f).collect();
     }
     let next = AtomicUsize::new(0);
     let mut parts: Vec<(usize, T)> = std::thread::scope(|scope| {
@@ -751,17 +794,18 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
                     let mut mine = Vec::new();
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
-                        if i >= n {
+                        let Some(item) = items.get(i) else {
                             break mine;
-                        }
-                        mine.push((i, f(i)));
+                        };
+                        mine.push((i, f(item)));
                     }
                 })
             })
             .collect();
         workers
             .into_iter()
-            .flat_map(|w| w.join().unwrap_or_else(|e| panic!("mesh worker panicked: {e:?}")))
+            // A worker's panic is a bug in the mesher: it goes on up as that panic.
+            .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
             .collect()
     });
     parts.sort_by_key(|p| p.0);
@@ -793,10 +837,17 @@ impl MeshReport {
     }
 }
 
-#[allow(clippy::disallowed_types)] pub fn report(b: &Brep, mesh: &Mesh, solid: SolidId) -> MeshReport { // D26: BTree* in hardening, proven by digests
-    let faces: HashSet<FaceId> = b.solid_faces(solid).into_iter().collect();
+/// The points at a triangle's three corners, or `None` when one is past `positions`.
+fn corners(positions: &[Point3], [a, b, c]: [u32; 3]) -> Option<[Point3; 3]> {
+    let at = |i: u32| positions.get(i as usize).copied();
+    Some([at(a)?, at(b)?, at(c)?])
+}
+
+/// How the part of `mesh` on `solid`'s faces fails to close, if it does, with its volume.
+pub fn report(b: &Brep, mesh: &Mesh, solid: SolidId) -> MeshReport {
+    let faces: BTreeSet<FaceId> = b.solid_faces(solid).into_iter().collect();
     let mut r = MeshReport::default();
-    let mut directed: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut directed: BTreeMap<(u32, u32), usize> = BTreeMap::new();
     for (f, range) in &mesh.faces {
         if !faces.contains(f) {
             continue;
@@ -804,21 +855,21 @@ impl MeshReport {
         if range.is_empty() {
             r.faces_without_mesh += 1;
         }
-        for t in &mesh.triangles[range.clone()] {
+        for t in mesh.triangles.get(range.clone()).into_iter().flatten() {
+            let Some(p) = corners(&mesh.positions, *t) else { continue };
             r.triangles += 1;
-            let p = t.map(|i| mesh.positions[i as usize]);
             let n: Vec3 = (p[1] - p[0]).cross(p[2] - p[0]);
             let longest = p[0].dist(p[1]).max(p[1].dist(p[2])).max(p[2].dist(p[0]));
             if n.norm() <= crate::tol::LINEAR * longest {
                 r.degenerate_triangles += 1;
             }
             r.volume += p[0].dot(p[1].cross(p[2])) / 6.0;
-            for k in 0..3 {
-                *directed.entry((t[k], t[(k + 1) % 3])).or_insert(0) += 1;
+            for side in sides(*t) {
+                *directed.entry(side).or_insert(0) += 1;
             }
         }
     }
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
     for (&(a, c), &n_ab) in &directed {
         let k = if a < c { (a, c) } else { (c, a) };
         if !seen.insert(k) {

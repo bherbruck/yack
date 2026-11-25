@@ -1,6 +1,8 @@
 // yack: A constrained Delaunay triangulation in the plane: points go in by location and Lawson flips,
 // Adapted from springrep@a03e8a1 src/mesh/cdt.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/mesh/cdt.rs to yack-mesh (M3 W6); paths and visibility only.
+// Changes: moved from springrep's src/mesh/cdt.rs to yack-mesh (M3 W6); paths and visibility only;
+// hardening (w-h1): one `Tri` per triangle in place of three parallel arrays, read and written
+// through checked accessors; a broken segment walk is an error.
 //! A constrained Delaunay triangulation in the plane: points go in by location and Lawson flips,
 //! constraint segments by Sloan's flips, and every edge that is not a constraint is kept locally
 //! Delaunay. The first four vertices are a box round everything, so every inserted point lands
@@ -27,14 +29,72 @@ pub(super) enum Located {
     Blocked,
 }
 
+/// One triangle: its corners counter-clockwise, edge `k` running from corner `k` to corner `k + 1`;
+/// the triangle across each edge, or [`NONE`] on the box; and which edges are constraints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Tri {
+    pub corners: [u32; 3],
+    pub across: [u32; 3],
+    pub fixed: [bool; 3],
+}
+
+impl Tri {
+    /// What a missing triangle reads as: no corners, no neighbours, no constraints.
+    const MISSING: Tri = Tri { corners: [NONE; 3], across: [NONE; 3], fixed: [false; 3] };
+
+    fn new(corners: [u32; 3]) -> Tri {
+        Tri { corners, across: [NONE; 3], fixed: [false; 3] }
+    }
+
+    /// Corner `k`.
+    pub fn corner(&self, k: usize) -> u32 {
+        third(self.corners, k)
+    }
+
+    /// The triangle across edge `k`.
+    pub fn across(&self, k: usize) -> u32 {
+        third(self.across, k)
+    }
+
+    /// Whether edge `k` is a constraint.
+    pub fn is_fixed(&self, k: usize) -> bool {
+        third(self.fixed, k)
+    }
+
+    /// The edge running `a → b`, if this triangle has it.
+    fn edge(&self, a: u32, b: u32) -> Option<usize> {
+        (0..3).find(|&k| self.corner(k) == a && self.corner(nx(k)) == b)
+    }
+
+    /// The corner that is neither `a` nor `b`.
+    fn other(&self, a: u32, b: u32) -> Option<u32> {
+        self.corners.iter().copied().find(|&x| x != a && x != b)
+    }
+}
+
+/// Element `k` of a triangle's three, for `k` in `0..3`.
+pub(super) fn third<T: Copy>([x, y, z]: [T; 3], k: usize) -> T {
+    match k {
+        0 => x,
+        1 => y,
+        _ => z,
+    }
+}
+
+/// Element `k` of a triangle's three, mutably.
+fn third_mut<T>(three: &mut [T; 3], k: usize) -> &mut T {
+    let [x, y, z] = three;
+    match k {
+        0 => x,
+        1 => y,
+        _ => z,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Cdt {
-    pub p: Vec<Vec2>,
-    /// Counter-clockwise; edge `k` runs from corner `k` to corner `k + 1`.
-    pub tri: Vec<[u32; 3]>,
-    /// The triangle across each edge, or [`NONE`] on the box.
-    pub nbr: Vec<[u32; 3]>,
-    pub fixed: Vec<[bool; 3]>,
+    p: Vec<Vec2>,
+    tris: Vec<Tri>,
     /// One triangle at each vertex.
     vt: Vec<u32>,
     hint: u32,
@@ -53,69 +113,106 @@ impl Cdt {
     pub(super) fn new(lo: Vec2, hi: Vec2) -> Cdt {
         let span = (hi.x - lo.x).max(hi.y - lo.y).max(1e-9);
         let (lo, hi) = (lo - Vec2::new(span, span), hi + Vec2::new(span, span));
+        let mut tris = vec![Tri::new([0, 1, 2]), Tri::new([0, 2, 3])];
+        if let [first, second] = tris.as_mut_slice() {
+            first.across = [NONE, NONE, 1];
+            second.across = [0, NONE, NONE];
+        }
         Cdt {
             p: vec![lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)],
-            tri: vec![[0, 1, 2], [0, 2, 3]],
-            nbr: vec![[NONE, NONE, 1], [0, NONE, NONE]],
-            fixed: vec![[false; 3]; 2],
+            tris,
             vt: vec![0, 0, 0, 1],
             hint: 0,
         }
     }
 
-    fn at(&self, v: u32) -> Vec2 {
-        self.p[v as usize]
+    /// The number of triangles, the box's included.
+    pub(super) fn triangle_count(&self) -> usize {
+        self.tris.len()
+    }
+
+    /// The number of vertices, the box's included.
+    pub(super) fn point_count(&self) -> usize {
+        self.p.len()
+    }
+
+    /// Triangle `t`. Every id the triangulation hands out names one; a debug build checks it.
+    pub(super) fn tri(&self, t: u32) -> Tri {
+        let tri = self.tris.get(t as usize).copied();
+        debug_assert!(tri.is_some(), "triangle {t} is past the {}", self.tris.len());
+        tri.unwrap_or(Tri::MISSING)
+    }
+
+    /// Vertex `v`'s position. Every vertex id names one; a debug build checks it.
+    pub(super) fn point(&self, v: u32) -> Vec2 {
+        let p = self.p.get(v as usize).copied();
+        debug_assert!(p.is_some(), "vertex {v} is past the {}", self.p.len());
+        p.unwrap_or_default()
+    }
+
+    fn tri_mut(&mut self, t: u32) -> Option<&mut Tri> {
+        self.tris.get_mut(t as usize)
+    }
+
+    /// The triangle recorded at vertex `v`.
+    fn vertex_tri(&self, v: u32) -> u32 {
+        self.vt.get(v as usize).copied().unwrap_or(NONE)
     }
 
     fn corner(&self, t: u32, v: u32) -> Option<usize> {
-        self.tri[t as usize].iter().position(|&x| x == v)
+        self.tri(t).corners.iter().position(|&x| x == v)
     }
 
-    fn set(&mut self, t: u32, tri: [u32; 3]) {
-        if t as usize == self.tri.len() {
-            self.tri.push(tri);
-            self.nbr.push([NONE; 3]);
-            self.fixed.push([false; 3]);
-        } else {
-            self.tri[t as usize] = tri;
+    fn set(&mut self, t: u32, corners: [u32; 3]) {
+        if t as usize == self.tris.len() {
+            self.tris.push(Tri::new(corners));
+        } else if let Some(tri) = self.tri_mut(t) {
+            tri.corners = corners;
         }
-        for v in tri {
-            self.vt[v as usize] = t;
+        for v in corners {
+            if let Some(at) = self.vt.get_mut(v as usize) {
+                *at = t;
+            }
+        }
+    }
+
+    /// Edge `k` of `t` and its neighbour's across it: its neighbour and flag.
+    fn set_side(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
+        if let Some(tri) = self.tri_mut(t) {
+            *third_mut(&mut tri.across, k) = n;
+            *third_mut(&mut tri.fixed, k) = fixed;
         }
     }
 
     /// Makes edge `k` of `t` face `n` (whose edge runs the other way), with the given flag.
     #[allow(clippy::panic)] fn link(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
-        self.nbr[t as usize][k] = n;
-        self.fixed[t as usize][k] = fixed;
+        self.set_side(t, k, n, fixed);
         if n == NONE {
             return;
         }
-        let (a, b) = (self.tri[t as usize][k], self.tri[t as usize][nx(k)]);
-        let back = (0..3)
-            .find(|&j| self.tri[n as usize][j] == b && self.tri[n as usize][nx(j)] == a)
-            .unwrap_or_else(|| panic!("neighbour shares the edge"));
-        self.nbr[n as usize][back] = t;
-        self.fixed[n as usize][back] = fixed;
+        let tri = self.tri(t);
+        let (a, b) = (tri.corner(k), tri.corner(nx(k)));
+        let back = self.tri(n).edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        self.set_side(n, back, t, fixed);
     }
 
     /// The triangle and edge index of the directed edge `a → b`, if it exists.
     pub(super) fn find_edge(&self, a: u32, b: u32) -> Option<(u32, usize)> {
         self.around(a)
             .into_iter()
-            .find_map(|(t, i)| (self.tri[t as usize][nx(i)] == b).then_some((t, i)))
+            .find_map(|(t, i)| (self.tri(t).corner(nx(i)) == b).then_some((t, i)))
     }
 
     /// Every triangle at `v`, with `v`'s corner index in it.
     #[allow(clippy::panic)] pub(super) fn around(&self, v: u32) -> Vec<(u32, usize)> {
-        let start = self.vt[v as usize];
+        let start = self.vertex_tri(v);
         let mut out = Vec::new();
         let mut t = start;
         // Clockwise: across the edge leaving `v`.
         loop {
             let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
             out.push((t, i));
-            let n = self.nbr[t as usize][i];
+            let n = self.tri(t).across(i);
             if n == NONE {
                 break;
             }
@@ -128,7 +225,7 @@ impl Cdt {
         let mut t = start;
         loop {
             let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
-            let n = self.nbr[t as usize][pv(i)];
+            let n = self.tri(t).across(pv(i));
             if n == NONE {
                 return out;
             }
@@ -142,25 +239,26 @@ impl Cdt {
     pub(super) fn locate(&self, start: u32, q: Vec2) -> Located {
         // A point far outside, such as a sliver's circumcentre at 1e306, overflows the orientation
         // test to NaN, which would read as inside whatever triangle the walk starts from.
-        let (lo, hi) = (self.p[0], self.p[2]);
+        let (lo, hi) = (self.point(0), self.point(2));
         if !(q.x > lo.x && q.x < hi.x && q.y > lo.y && q.y < hi.y) {
             return Located::Blocked;
         }
-        let mut t = if (start as usize) < self.tri.len() {
+        let mut t = if (start as usize) < self.tris.len() {
             start
         } else {
             0
         };
-        let cap = 4 * self.tri.len() + 64;
+        let cap = 4 * self.tris.len() + 64;
         for step in 0..cap {
             let off = step % 3;
             let mut moved = false;
+            let tri = self.tri(t);
             for i in 0..3 {
                 let k = (i + off) % 3;
-                let [a, b] = [self.tri[t as usize][k], self.tri[t as usize][nx(k)]];
-                if orient(self.at(a), self.at(b), q) < 0.0 {
-                    let n = self.nbr[t as usize][k];
-                    if n == NONE || self.fixed[t as usize][k] {
+                let [a, b] = [tri.corner(k), tri.corner(nx(k))];
+                if orient(self.point(a), self.point(b), q) < 0.0 {
+                    let n = tri.across(k);
+                    if n == NONE || tri.is_fixed(k) {
                         return Located::Blocked;
                     }
                     t = n;
@@ -176,18 +274,16 @@ impl Cdt {
     }
 
     fn classify_in(&self, t: u32, q: Vec2) -> Located {
-        let tri = self.tri[t as usize];
-        let o: Vec<f64> = (0..3)
-            .map(|k| orient(self.at(tri[k]), self.at(tri[nx(k)]), q))
-            .collect();
-        let zeros: Vec<usize> = (0..3).filter(|&k| o[k] == 0.0).collect();
-        match zeros.len() {
-            0 => Located::Inside(t),
-            1 => Located::OnEdge(t, zeros[0]),
+        let tri = self.tri(t);
+        let side = |k: usize| orient(self.point(tri.corner(k)), self.point(tri.corner(nx(k))), q);
+        let o = [0, 1, 2].map(side);
+        let zeros: Vec<usize> = (0..3).filter(|&k| third(o, k) == 0.0).collect();
+        match zeros.as_slice() {
+            [] => Located::Inside(t),
+            &[k] => Located::OnEdge(t, k),
             // On two edges: the corner they share.
-            _ => {
-                let (k1, k2) = (zeros[0], zeros[1]);
-                Located::Vertex(if k2 == nx(k1) { tri[k2] } else { tri[k1] })
+            &[k1, k2, ..] => {
+                Located::Vertex(if k2 == nx(k1) { tri.corner(k2) } else { tri.corner(k1) })
             }
         }
     }
@@ -207,7 +303,8 @@ impl Cdt {
             Located::Blocked => return Err(NONE),
             Located::Vertex(x) => return Err(x),
             Located::OnEdge(t, k) => {
-                if self.fixed[t as usize][k] || self.nbr[t as usize][k] == NONE {
+                let tri = self.tri(t);
+                if tri.is_fixed(k) || tri.across(k) == NONE {
                     return Err(NONE);
                 }
                 self.p.push(q);
@@ -221,7 +318,7 @@ impl Cdt {
             }
         }
         self.legalize_around(v);
-        self.hint = self.vt[v as usize];
+        self.hint = self.vertex_tri(v);
         Ok(v)
     }
 
@@ -236,17 +333,16 @@ impl Cdt {
     }
 
     fn split_triangle(&mut self, t: u32, v: u32) {
-        let [a, b, c] = self.tri[t as usize];
-        let n = self.nbr[t as usize];
-        let f = self.fixed[t as usize];
-        let t1 = self.tri.len() as u32;
+        let Tri { corners: [a, b, c], across: n, fixed: f } = self.tri(t);
+        let t1 = self.tris.len() as u32;
         let t2 = t1 + 1;
         self.set(t, [a, b, v]);
         self.set(t1, [b, c, v]);
         self.set(t2, [c, a, v]);
-        self.link(t, 0, n[0], f[0]);
-        self.link(t1, 0, n[1], f[1]);
-        self.link(t2, 0, n[2], f[2]);
+        let ([n0, n1, n2], [f0, f1, f2]) = (n, f);
+        self.link(t, 0, n0, f0);
+        self.link(t1, 0, n1, f1);
+        self.link(t2, 0, n2, f2);
         self.link(t, 1, t1, false);
         self.link(t, 2, t2, false);
         self.link(t1, 1, t2, false);
@@ -254,20 +350,18 @@ impl Cdt {
 
     /// Splits edge `k` of `t` at the new vertex `v`, which lies on it.
     #[allow(clippy::panic)] pub(super) fn split_edge(&mut self, t: u32, k: usize, v: u32) {
-        let ti = t as usize;
-        let (a, b, c) = (self.tri[ti][k], self.tri[ti][nx(k)], self.tri[ti][pv(k)]);
-        let (n_bc, f_bc) = (self.nbr[ti][nx(k)], self.fixed[ti][nx(k)]);
-        let (n_ca, f_ca) = (self.nbr[ti][pv(k)], self.fixed[ti][pv(k)]);
-        let fab = self.fixed[ti][k];
-        let u = self.nbr[ti][k];
-        let ui = u as usize;
-        let j = (0..3)
-            .find(|&j| self.tri[ui][j] == b && self.tri[ui][nx(j)] == a)
-            .unwrap_or_else(|| panic!("neighbour shares the edge"));
-        let d = self.tri[ui][pv(j)];
-        let (n_ad, f_ad) = (self.nbr[ui][nx(j)], self.fixed[ui][nx(j)]);
-        let (n_db, f_db) = (self.nbr[ui][pv(j)], self.fixed[ui][pv(j)]);
-        let t1 = self.tri.len() as u32;
+        let tri = self.tri(t);
+        let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
+        let (n_bc, f_bc) = (tri.across(nx(k)), tri.is_fixed(nx(k)));
+        let (n_ca, f_ca) = (tri.across(pv(k)), tri.is_fixed(pv(k)));
+        let fab = tri.is_fixed(k);
+        let u = tri.across(k);
+        let other = self.tri(u);
+        let j = other.edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        let d = other.corner(pv(j));
+        let (n_ad, f_ad) = (other.across(nx(j)), other.is_fixed(nx(j)));
+        let (n_db, f_db) = (other.across(pv(j)), other.is_fixed(pv(j)));
+        let t1 = self.tris.len() as u32;
         let t2 = t1 + 1;
         self.set(t, [c, a, v]);
         self.set(t1, [b, c, v]);
@@ -286,26 +380,24 @@ impl Cdt {
     /// Flips edge `k` of `t` when the two triangles that would replace it are both
     /// counter-clockwise; returns the two triangles, or `None` when the quad is not convex.
     #[allow(clippy::panic)] pub(super) fn flip(&mut self, t: u32, k: usize) -> Option<(u32, u32)> {
-        let ti = t as usize;
-        let (a, b, c) = (self.tri[ti][k], self.tri[ti][nx(k)], self.tri[ti][pv(k)]);
-        let u = self.nbr[ti][k];
-        if u == NONE || self.fixed[ti][k] {
+        let tri = self.tri(t);
+        let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
+        let u = tri.across(k);
+        if u == NONE || tri.is_fixed(k) {
             return None;
         }
-        let ui = u as usize;
-        let j = (0..3)
-            .find(|&j| self.tri[ui][j] == b && self.tri[ui][nx(j)] == a)
-            .unwrap_or_else(|| panic!("neighbour shares the edge"));
-        let d = self.tri[ui][pv(j)];
-        if orient(self.at(c), self.at(a), self.at(d)) <= 0.0
-            || orient(self.at(d), self.at(b), self.at(c)) <= 0.0
+        let other = self.tri(u);
+        let j = other.edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        let d = other.corner(pv(j));
+        if orient(self.point(c), self.point(a), self.point(d)) <= 0.0
+            || orient(self.point(d), self.point(b), self.point(c)) <= 0.0
         {
             return None;
         }
-        let (n_ca, f_ca) = (self.nbr[ti][pv(k)], self.fixed[ti][pv(k)]);
-        let (n_bc, f_bc) = (self.nbr[ti][nx(k)], self.fixed[ti][nx(k)]);
-        let (n_ad, f_ad) = (self.nbr[ui][nx(j)], self.fixed[ui][nx(j)]);
-        let (n_db, f_db) = (self.nbr[ui][pv(j)], self.fixed[ui][pv(j)]);
+        let (n_ca, f_ca) = (tri.across(pv(k)), tri.is_fixed(pv(k)));
+        let (n_bc, f_bc) = (tri.across(nx(k)), tri.is_fixed(nx(k)));
+        let (n_ad, f_ad) = (other.across(nx(j)), other.is_fixed(nx(j)));
+        let (n_db, f_db) = (other.across(pv(j)), other.is_fixed(pv(j)));
         self.set(t, [c, a, d]);
         self.set(u, [d, b, c]);
         self.link(t, 0, n_ca, f_ca);
@@ -318,18 +410,14 @@ impl Cdt {
 
     /// Whether edge `k` of `t` should be flipped to restore the Delaunay property.
     #[allow(clippy::panic)] fn illegal(&self, t: u32, k: usize) -> bool {
-        let ti = t as usize;
-        let u = self.nbr[ti][k];
-        if u == NONE || self.fixed[ti][k] {
+        let tri = self.tri(t);
+        let u = tri.across(k);
+        if u == NONE || tri.is_fixed(k) {
             return false;
         }
-        let (a, b, c) = (self.tri[ti][k], self.tri[ti][nx(k)], self.tri[ti][pv(k)]);
-        let d = self.tri[u as usize]
-            .iter()
-            .copied()
-            .find(|&x| x != a && x != b)
-            .unwrap_or_else(|| panic!("neighbour has a third corner"));
-        in_circle(self.at(a), self.at(b), self.at(c), self.at(d))
+        let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
+        let d = self.tri(u).other(a, b).unwrap_or_else(|| panic!("neighbour has a third corner"));
+        in_circle(self.point(a), self.point(b), self.point(c), self.point(d))
     }
 
     /// Lawson flips of the edges opposite a new vertex, spreading as they flip.
@@ -355,7 +443,7 @@ impl Cdt {
 
     /// Flips every illegal edge until none is left, or until the work cap.
     pub(super) fn legalize_all(&mut self) {
-        let mut stack: Vec<(u32, usize)> = (0..self.tri.len() as u32)
+        let mut stack: Vec<(u32, usize)> = (0..self.tris.len() as u32)
             .flat_map(|t| (0..3).map(move |k| (t, k)))
             .collect();
         let mut budget = 20 * stack.len() + 64;
@@ -378,15 +466,15 @@ impl Cdt {
 
     /// Makes `a — b` an edge of the triangulation and marks it a constraint. Fails when the
     /// segment runs through another vertex or crosses another constraint.
-    #[allow(clippy::panic)] pub(super) fn insert_segment(&mut self, a: u32, b: u32) -> Result<(), &'static str> {
+    pub(super) fn insert_segment(&mut self, a: u32, b: u32) -> Result<(), &'static str> {
         if a == b {
             return Ok(());
         }
-        let (pa, pb) = (self.at(a), self.at(b));
+        let (pa, pb) = (self.point(a), self.point(b));
         let mut first = None;
         for (t, i) in self.around(a) {
-            let tri = self.tri[t as usize];
-            let (c1, c2) = (tri[nx(i)], tri[pv(i)]);
+            let tri = self.tri(t);
+            let (c1, c2) = (tri.corner(nx(i)), tri.corner(pv(i)));
             if c1 == b {
                 self.mark(t, i);
                 return Ok(());
@@ -395,9 +483,9 @@ impl Cdt {
                 self.mark(t, pv(i));
                 return Ok(());
             }
-            let (o1, o2) = (orient(pa, self.at(c1), pb), orient(pa, self.at(c2), pb));
+            let (o1, o2) = (orient(pa, self.point(c1), pb), orient(pa, self.point(c2), pb));
             for (o, c) in [(o1, c1), (o2, c2)] {
-                if o == 0.0 && (self.at(c) - pa).dot(pb - pa) > 0.0 {
+                if o == 0.0 && (self.point(c) - pa).dot(pb - pa) > 0.0 {
                     return Err("a face boundary runs through another boundary point");
                 }
             }
@@ -411,27 +499,25 @@ impl Cdt {
         };
         let mut crossed = VecDeque::new();
         loop {
-            let ti = t as usize;
-            let k = (0..3)
-                .find(|&k| self.tri[ti][k] == r && self.tri[ti][nx(k)] == l)
-                .unwrap_or_else(|| panic!("walk keeps the crossed edge"));
-            if self.fixed[ti][k] {
+            let tri = self.tri(t);
+            let Some(k) = tri.edge(r, l) else {
+                return Err("a face boundary segment walk lost its crossed edge");
+            };
+            if tri.is_fixed(k) {
                 return Err("face boundaries cross");
             }
             crossed.push_back((r, l));
-            let n = self.nbr[ti][k];
+            let n = tri.across(k);
             if n == NONE {
                 return Err("a face boundary segment leaves the triangulation");
             }
-            let v = self.tri[n as usize]
-                .iter()
-                .copied()
-                .find(|&x| x != r && x != l)
-                .unwrap_or_else(|| panic!("neighbour has a third corner"));
+            let Some(v) = self.tri(n).other(r, l) else {
+                return Err("a face boundary segment walk met a triangle with no third corner");
+            };
             if v == b {
                 break;
             }
-            let o = orient(pa, pb, self.at(v));
+            let o = orient(pa, pb, self.point(v));
             if o == 0.0 {
                 return Err("a face boundary runs through another boundary point");
             }
@@ -441,7 +527,7 @@ impl Cdt {
                 r = v;
             }
             t = n;
-            if crossed.len() > self.tri.len() {
+            if crossed.len() > self.tris.len() {
                 return Err("a face boundary segment walk does not end");
             }
         }
@@ -455,12 +541,12 @@ impl Cdt {
             let Some((t, k)) = self.find_edge(u, w).or_else(|| self.find_edge(w, u)) else {
                 return Err("a crossed edge went missing");
             };
-            let c = self.tri[t as usize][pv(k)];
+            let c = self.tri(t).corner(pv(k));
             match self.flip(t, k) {
                 None => crossed.push_back((u, w)),
                 Some(_) => {
-                    let d = self.tri[t as usize][2];
-                    let (oc, od) = (orient(pa, pb, self.at(c)), orient(pa, pb, self.at(d)));
+                    let [.., d] = self.tri(t).corners;
+                    let (oc, od) = (orient(pa, pb, self.point(c)), orient(pa, pb, self.point(d)));
                     let ends = c == a || c == b || d == a || d == b;
                     if !ends && ((oc > 0.0 && od < 0.0) || (oc < 0.0 && od > 0.0)) {
                         crossed.push_back((c, d));
@@ -478,7 +564,7 @@ impl Cdt {
     }
 
     fn mark(&mut self, t: u32, k: usize) {
-        let n = self.nbr[t as usize][k];
+        let n = self.tri(t).across(k);
         self.link(t, k, n, true);
     }
 }
@@ -488,13 +574,13 @@ mod tests {
     use super::*;
 
     fn check_mesh(c: &Cdt) {
-        for t in 0..c.tri.len() {
-            let [a, b, d] = c.tri[t];
-            assert!(orient(c.p[a as usize], c.p[b as usize], c.p[d as usize]) > 0.0);
-            for k in 0..3 {
-                let n = c.nbr[t][k];
+        for t in 0..c.triangle_count() as u32 {
+            let tri = c.tri(t);
+            let [a, b, d] = tri.corners;
+            assert!(orient(c.point(a), c.point(b), c.point(d)) > 0.0);
+            for n in tri.across {
                 if n != NONE {
-                    assert!(c.nbr[n as usize].contains(&(t as u32)));
+                    assert!(c.tri(n).across.contains(&t));
                 }
             }
         }
@@ -541,6 +627,6 @@ mod tests {
             .find_edge(ids[1], ids[22])
             .or_else(|| c2.find_edge(ids[22], ids[1]))
             .unwrap();
-        assert!(c2.fixed[t as usize][k]);
+        assert!(c2.tri(t).is_fixed(k));
     }
 }

@@ -1,6 +1,7 @@
 // yack: What a viewer draws: each face meshed as its own triangles, with the exact surface's normal at
 // Adapted from springrep@a03e8a1 src/mesh/display.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/mesh/display.rs to yack-mesh (M3 W6); paths and visibility only.
+// Changes: moved from springrep's src/mesh/display.rs to yack-mesh (M3 W6); paths and visibility only;
+// hardening (w-h1): ordered maps and checked access.
 //! What a viewer draws: each face meshed as its own triangles, with the exact surface's normal at
 //! every node, and the solid's drawn edges as polylines. Faces share no nodes, so shading is
 //! smooth within a face and creased where two faces meet. At a pole or an apex each triangle has
@@ -12,9 +13,9 @@
 //! `_FACE` attribute holding each node's face index, the triangles, and `COLOR_0` when each face
 //! is given a colour.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeMap, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
-use super::{MeshOptions, edge_params, tessellate};
+use super::{MeshOptions, cdt::third, edge_params, tessellate};
 use crate::{
     Result,
     intersect::ssi::same_domain,
@@ -72,7 +73,7 @@ pub fn display(b: &Brep) -> Result<Display> {
 
 /// `b` as a viewer draws it, its faces within `linear` mm of the surface and its edges within
 /// `edge_linear` mm of their curves, each turning by at most [`ANGLE`] across a piece.
-#[allow(clippy::disallowed_types)] pub fn display_within(b: &Brep, linear: f64, edge_linear: f64) -> Result<Display> { // D26: BTree* in hardening, proven by digests
+pub fn display_within(b: &Brep, linear: f64, edge_linear: f64) -> Result<Display> {
     let mesh = tessellate(
         b,
         &MeshOptions {
@@ -80,21 +81,19 @@ pub fn display(b: &Brep) -> Result<Display> {
             angular: ANGLE,
         },
     )?;
-    let ranges: HashMap<FaceId, std::ops::Range<usize>> = mesh.faces.iter().cloned().collect();
+    let ranges: BTreeMap<FaceId, std::ops::Range<usize>> = mesh.faces.iter().cloned().collect();
     let order = shell_order(b);
-    let index: HashMap<FaceId, usize> = order.iter().enumerate().map(|(k, &f)| (f, k)).collect();
+    let index: BTreeMap<FaceId, usize> = order.iter().enumerate().map(|(k, &f)| (f, k)).collect();
     let mut faces = Vec::with_capacity(order.len());
     for &f in &order {
         let face = b.face(f);
         let mut out = Face::default();
         let mut local: BTreeMap<u32, u32> = BTreeMap::new();
-        for tri in ranges
-            .get(&f)
-            .map_or(&[][..], |r| &mesh.triangles[r.clone()])
-        {
+        let tris = ranges.get(&f).and_then(|r| mesh.triangles.get(r.clone()));
+        for tri in tris.unwrap_or_default() {
+            let Some(pts) = super::corners(&mesh.positions, *tri) else { continue };
             let mut t = [0u32; 3];
-            for (k, &g) in tri.iter().enumerate() {
-                let p = mesh.positions[g as usize];
+            for (slot, (k, (&g, &p))) in t.iter_mut().zip(tri.iter().zip(&pts).enumerate()) {
                 let uv = face.surface.project(p);
                 let (_, su, sv) = face.surface.d1(uv.x, uv.y);
                 let outward = |u: f64, v: f64| {
@@ -105,8 +104,7 @@ pub fn display(b: &Brep) -> Result<Display> {
                 // turn with the other: there the triangle takes its own node, with the normal
                 // along the triangle's middle, at the far side's midpoint's parameter.
                 if su.norm() <= tol::LINEAR || sv.norm() <= tol::LINEAR {
-                    let far =
-                        [tri[(k + 1) % 3], tri[(k + 2) % 3]].map(|j| mesh.positions[j as usize]);
+                    let far = [third(pts, (k + 1) % 3), third(pts, (k + 2) % 3)];
                     let mid = face.surface.project(far[0].lerp(far[1], 0.5));
                     let n = if su.norm() <= sv.norm() {
                         outward(mid.x, uv.y)
@@ -115,10 +113,10 @@ pub fn display(b: &Brep) -> Result<Display> {
                     };
                     out.positions.push(f32s(p));
                     out.normals.push(n);
-                    t[k] = (out.positions.len() - 1) as u32;
+                    *slot = (out.positions.len() - 1) as u32;
                     continue;
                 }
-                t[k] = *local.entry(g).or_insert_with(|| {
+                *slot = *local.entry(g).or_insert_with(|| {
                     out.positions.push(f32s(p));
                     out.normals.push(outward(uv.x, uv.y));
                     (out.positions.len() - 1) as u32
@@ -128,7 +126,7 @@ pub fn display(b: &Brep) -> Result<Display> {
         }
         faces.push(out);
     }
-    let mut uses: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+    let mut uses: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
     for f in b.face_ids() {
         for &lp in &b.face(f).loops {
             for &c in &b.lp(lp).coedges {
@@ -147,8 +145,8 @@ pub fn display(b: &Brep) -> Result<Display> {
         let Some(curve) = &x.curve else { continue };
         let two = uses.get(&e).cloned().unwrap_or_default();
         // A seam is one face meeting itself; two faces on one surface make no crease.
-        if two.len() == 2
-            && (two[0] == two[1] || same_domain(&b.face(two[0]).surface, &b.face(two[1]).surface))
+        if let &[x, y] = two.as_slice()
+            && (x == y || same_domain(&b.face(x).surface, &b.face(y).surface))
         {
             continue;
         }
@@ -236,9 +234,9 @@ pub fn glb(faces: &[Face], colors: Option<&[String]>) -> Vec<u8> {
     });
     let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for p in &pos {
-        for i in 0..3 {
-            lo[i] = lo[i].min(p[i]);
-            hi[i] = hi[i].max(p[i]);
+        for ((l, h), &x) in lo.iter_mut().zip(hi.iter_mut()).zip(p) {
+            *l = l.min(x);
+            *h = h.max(x);
         }
     }
     let num = |v: f32| {

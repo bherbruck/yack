@@ -1,6 +1,8 @@
 // yack: One face's mesh: a constrained Delaunay triangulation of its boundary samples in a scaled
 // Adapted from springrep@a03e8a1 src/mesh/face.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/mesh/face.rs to yack-mesh (M3 W6); paths and visibility only.
+// Changes: moved from springrep's src/mesh/face.rs to yack-mesh (M3 W6); paths and visibility only;
+// hardening (w-h1): one `Vertex` per mesh point in place of five parallel arrays, read through
+// checked accessors, and the triangulation through `Cdt`'s.
 //! One face's mesh: a constrained Delaunay triangulation of its boundary samples in a scaled
 //! parameter plane, refined by inserting points where a triangle strays from the surface.
 //!
@@ -9,12 +11,12 @@
 //! straight lines and short round it. A triangle is refined at its circumcentre in that plane, or
 //! at its worst sample when the circumcentre is outside the face.
 
-#[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::FRAC_PI_2;
 
 use super::{
     MeshOptions,
-    cdt::{BOX, Cdt, Located, NONE},
+    cdt::{BOX, Cdt, Located, NONE, third},
     predicates::{circumcenter, orient},
 };
 use crate::{
@@ -36,16 +38,28 @@ const MIN_ANGLE_SINE: f64 = 0.34;
 /// triangle's corners, or in a triangle no taller than it, is not inserted.
 const CROWDED: f64 = 1e-3;
 
+/// One point of a face's mesh.
+#[derive(Clone, Copy, Debug)]
+struct Vertex {
+    uv: Vec2,
+    pos: Point3,
+    /// The global mesh point of a boundary sample; interior points have none.
+    gid: Option<u32>,
+    /// At a pole, the parameter-plane direction the pole spans.
+    pole: Option<Vec2>,
+    /// The surface normal there, once asked for.
+    normal: Option<Vec3>,
+}
+
+impl Vertex {
+    /// A corner of the triangulation's box, which is no point of the face.
+    const BOX: Vertex = Vertex { uv: Vec2::ZERO, pos: Point3::ZERO, gid: None, pole: None, normal: None };
+}
+
 pub(super) struct FaceMesh {
     pub cdt: Cdt,
-    pub uv: Vec<Vec2>,
-    pub pos: Vec<Point3>,
-    /// The global mesh point of each boundary sample; interior points have none.
-    pub gid: Vec<Option<u32>>,
-    pub inside: Vec<bool>,
-    /// At a pole, the parameter-plane direction the pole spans.
-    pole: Vec<Option<Vec2>>,
-    normal: Vec<Option<Vec3>>,
+    verts: Vec<Vertex>,
+    inside: Vec<bool>,
     scale: Vec2,
     curved: bool,
 }
@@ -53,7 +67,7 @@ pub(super) struct FaceMesh {
 /// A face's boundary samples, loop by loop, as (parameters, global point).
 type Loops = Vec<Vec<(Vec2, u32)>>;
 
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] pub(super) fn mesh_face( // D26: BTree* in hardening, proven by digests
+pub(super) fn mesh_face(
     b: &Brep,
     f: FaceId,
     opt: &MeshOptions,
@@ -63,29 +77,31 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
     let face = b.face(f);
     let surf = &face.surface;
     let mut loops: Loops = Vec::new();
-    let mut poles: HashMap<u32, Vec2> = HashMap::new();
+    let mut poles: BTreeMap<u32, Vec2> = BTreeMap::new();
     let mut runs: Vec<Vec<super::Run>> = Vec::new();
     for &lp in &face.loops {
         let mut pts = Vec::new();
         let mut run = Vec::new();
         for &co in &b.lp(lp).coedges {
             let c = b.coedge(co);
-            let mut s = samples[c.edge.index()].clone();
+            let Some(mut s) = samples.get(c.edge.index()).cloned() else { continue };
             if c.reversed {
                 s.reverse();
             }
             let ts: Vec<f64> = s.iter().map(|x| x.0).collect();
             let uvs = b.coedge_uvs(co, &ts);
-            run.push((pts.len(), uvs[uvs.len() - 1]));
+            let (Some(&first), Some(&last), Some(&(_, g0))) = (uvs.first(), uvs.last(), s.first())
+            else {
+                continue;
+            };
+            run.push((pts.len(), last));
             if b.edge(c.edge).is_degenerate() {
-                let d = uvs[uvs.len() - 1] - uvs[0];
+                let d = last - first;
                 if d.norm() > 0.0 {
-                    poles.insert(s[0].1, d / d.norm());
+                    poles.insert(g0, d / d.norm());
                 }
             }
-            for k in 0..s.len() - 1 {
-                pts.push((uvs[k], s[k].1));
-            }
+            pts.extend(uvs.iter().zip(&s).take(s.len() - 1).map(|(&uv, &(_, g))| (uv, g)));
         }
         runs.push(run);
         loops.push(pts);
@@ -93,19 +109,15 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
     super::one_sheet((surf.u_period(), surf.v_period()), &mut loops, &runs);
     let mut flat: Vec<(Vec2, u32)> = loops.iter().flatten().copied().collect();
     super::snap_repeats(&mut flat);
-    let mut snapped = flat.into_iter();
-    for p in loops.iter_mut().flatten() {
-        *p = snapped.next().unwrap_or_else(|| panic!("one snapped point per loop point"));
+    // One snapped point per loop point, in loop order.
+    for (p, snapped) in loops.iter_mut().flatten().zip(flat) {
+        *p = snapped;
     }
     let (scale, curved) = metric(surf, &loops, &poles, positions, opt);
     let mut fm = FaceMesh {
         cdt: Cdt::new(Vec2::ZERO, Vec2::ZERO),
-        uv: vec![Vec2::ZERO; BOX as usize],
-        pos: vec![Point3::ZERO; BOX as usize],
-        gid: vec![None; BOX as usize],
+        verts: vec![Vertex::BOX; BOX as usize],
         inside: Vec::new(),
-        pole: vec![None; BOX as usize],
-        normal: vec![None; BOX as usize],
         scale,
         curved,
     };
@@ -132,10 +144,13 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
             let h = fm.cdt.hint();
             let v = match fm.cdt.insert(fm.m(uv), h) {
                 Ok(v) => {
-                    fm.push(uv, positions[g as usize], Some(g), poles.get(&g).copied());
+                    let Some(&at) = positions.get(g as usize) else {
+                        return Err(Error::Numerical("a face boundary sample has no mesh point".into()));
+                    };
+                    fm.push(uv, at, Some(g), poles.get(&g).copied());
                     v
                 }
-                Err(x) if x != NONE && fm.gid[x as usize] == Some(g) => x,
+                Err(x) if x != NONE && fm.gid(x) == Some(g) => x,
                 Err(_) => {
                     return Err(Error::Numerical("face boundary touches itself".into()));
                 }
@@ -147,12 +162,8 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
     let area: f64 = ids
         .iter()
         .map(|row| {
-            (0..row.len())
-                .map(|i| {
-                    let a = fm.cdt.p[row[i] as usize];
-                    let c = fm.cdt.p[row[(i + 1) % row.len()] as usize];
-                    a.cross(c)
-                })
+            super::closed_sides(row.iter().copied())
+                .map(|(a, c)| fm.cdt.point(a).cross(fm.cdt.point(c)))
                 .sum::<f64>()
         })
         .sum();
@@ -163,8 +174,7 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
     }
     let mut segs: Vec<(u32, u32)> = Vec::new();
     for row in &ids {
-        for i in 0..row.len() {
-            let (a, c) = (row[i], row[(i + 1) % row.len()]);
+        for (a, c) in super::closed_sides(row.iter().copied()) {
             if a != c {
                 segs.push((a, c));
             }
@@ -184,10 +194,10 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
 
 /// The parameter-plane scale for a face: one unit along each parameter is about the longest step
 /// the deflection limits allow along it, at most the face's size. Whether the face is curved.
-#[allow(clippy::disallowed_types)] fn metric( // D26: BTree* in hardening, proven by digests
+fn metric(
     surf: &Surface,
     loops: &Loops,
-    poles: &HashMap<u32, Vec2>,
+    poles: &BTreeMap<u32, Vec2>,
     positions: &[Point3],
     opt: &MeshOptions,
 ) -> (Vec2, bool) {
@@ -196,8 +206,7 @@ type Loops = Vec<Vec<(Vec2, u32)>>;
         Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
         -Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
     );
-    for &(_, g) in &pts {
-        let p = positions[g as usize];
+    for p in pts.iter().filter_map(|&(_, g)| positions.get(g as usize)) {
         lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
         hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
     }
@@ -265,46 +274,79 @@ enum Verdict {
     Shape,
 }
 
-#[allow(clippy::disallowed_types)] impl FaceMesh { // D26: BTree* in hardening, proven by digests
+impl FaceMesh {
     fn m(&self, uv: Vec2) -> Vec2 {
         Vec2::new(uv.x * self.scale.x, uv.y * self.scale.y)
     }
 
     fn push(&mut self, uv: Vec2, pos: Point3, gid: Option<u32>, pole: Option<Vec2>) {
-        self.uv.push(uv);
-        self.pos.push(pos);
-        self.gid.push(gid);
-        self.pole.push(pole);
-        self.normal.push(None);
+        self.verts.push(Vertex { uv, pos, gid, pole, normal: None });
+    }
+
+    /// Point `v`. Every vertex of the triangulation has one; a debug build checks it.
+    fn vertex(&self, v: u32) -> Vertex {
+        let vertex = self.verts.get(v as usize).copied();
+        debug_assert!(vertex.is_some(), "mesh point {v} is past the {}", self.verts.len());
+        vertex.unwrap_or(Vertex::BOX)
+    }
+
+    fn uv(&self, v: u32) -> Vec2 {
+        self.vertex(v).uv
+    }
+
+    fn pos(&self, v: u32) -> Point3 {
+        self.vertex(v).pos
+    }
+
+    /// The global mesh point of point `v`, if it is a boundary sample.
+    pub(super) fn gid(&self, v: u32) -> Option<u32> {
+        self.verts.get(v as usize).and_then(|x| x.gid)
+    }
+
+    /// Each point's global mesh point, if a boundary sample, and its position, in order.
+    pub(super) fn points(&self) -> impl Iterator<Item = (Option<u32>, Point3)> + '_ {
+        self.verts.iter().map(|x| (x.gid, x.pos))
+    }
+
+    /// Whether triangle `t` is inside the face.
+    fn is_inside(&self, t: u32) -> bool {
+        self.inside.get(t as usize).copied().unwrap_or(false)
+    }
+
+    fn set_inside(&mut self, t: u32) {
+        if let Some(x) = self.inside.get_mut(t as usize) {
+            *x = true;
+        }
     }
 
     /// Marks the triangles inside the face: those on the left of each boundary segment and every
     /// triangle reached from them without crossing a segment.
     fn classify(&mut self, segs: &[(u32, u32)]) -> Result<()> {
-        let n = self.cdt.tri.len();
+        let n = self.cdt.triangle_count();
         self.inside = vec![false; n];
         let mut stack = Vec::new();
         for &(a, c) in segs {
             let Some((t, _)) = self.cdt.find_edge(a, c) else {
                 return Err(Error::Numerical("face boundary segment is missing".into()));
             };
-            if !self.inside[t as usize] {
-                self.inside[t as usize] = true;
+            if !self.is_inside(t) {
+                self.set_inside(t);
                 stack.push(t);
             }
         }
         while let Some(t) = stack.pop() {
+            let tri = self.cdt.tri(t);
             for k in 0..3 {
-                let nb = self.cdt.nbr[t as usize][k];
-                if nb != NONE && !self.cdt.fixed[t as usize][k] && !self.inside[nb as usize] {
-                    self.inside[nb as usize] = true;
+                let nb = tri.across(k);
+                if nb != NONE && !tri.is_fixed(k) && !self.is_inside(nb) {
+                    self.set_inside(nb);
                     stack.push(nb);
                 }
             }
         }
-        let directed: HashSet<(u32, u32)> = segs.iter().copied().collect();
-        for t in 0..n {
-            if self.inside[t] && self.cdt.tri[t].iter().any(|&v| v < BOX) {
+        let directed: BTreeSet<(u32, u32)> = segs.iter().copied().collect();
+        for t in 0..n as u32 {
+            if self.is_inside(t) && self.cdt.tri(t).corners.iter().any(|&v| v < BOX) {
                 return Err(Error::Numerical("face boundary does not close".into()));
             }
         }
@@ -313,7 +355,7 @@ enum Verdict {
                 continue;
             }
             if let Some((t, _)) = self.cdt.find_edge(c, a)
-                && self.inside[t as usize]
+                && self.is_inside(t)
             {
                 return Err(Error::Numerical(
                     "face boundary loops do not bound one region".into(),
@@ -329,8 +371,9 @@ enum Verdict {
         let mut sum = Vec2::ZERO;
         let mut n = 0.0;
         for &v in &c {
-            if self.pole[v as usize].is_none() {
-                sum = sum + self.uv[v as usize];
+            let x = self.vertex(v);
+            if x.pole.is_none() {
+                sum = sum + x.uv;
                 n += 1.0;
             }
         }
@@ -341,46 +384,52 @@ enum Verdict {
         Some(c.map(|v| self.facing(v, toward)))
     }
 
+    /// Point `v`'s parameters, a pole's moved along it to face `toward`.
     fn facing(&self, v: u32, toward: Vec2) -> Vec2 {
-        let uv = self.uv[v as usize];
-        match self.pole[v as usize] {
+        let Vertex { uv, pole, .. } = self.vertex(v);
+        match pole {
             Some(d) => uv + d * (toward - uv).dot(d),
             None => uv,
         }
     }
 
+    /// Whether points `a` and `c` are one boundary sample.
     fn same_point(&self, a: u32, c: u32) -> bool {
-        self.gid[a as usize].is_some() && self.gid[a as usize] == self.gid[c as usize]
+        let ga = self.vertex(a).gid;
+        ga.is_some() && ga == self.vertex(c).gid
     }
 
     fn corner_normal(&mut self, surf: &Surface, v: u32, at: Vec2, toward: Vec2) -> Vec3 {
-        if self.pole[v as usize].is_some() {
+        if self.vertex(v).pole.is_some() {
             // A hair in from the pole, towards the triangle: on the pole itself a cone's radius is
             // zero to rounding, and its normal takes its sign from that radius.
             let at = at + (toward - at) * 1e-6;
             return surf.normal(at.x, at.y);
         }
-        *self.normal[v as usize].get_or_insert_with(|| surf.normal(at.x, at.y))
+        match self.verts.get_mut(v as usize) {
+            Some(x) => *x.normal.get_or_insert_with(|| surf.normal(at.x, at.y)),
+            None => surf.normal(at.x, at.y),
+        }
     }
 
     fn assess(&mut self, surf: &Surface, t: u32, opt: &MeshOptions) -> Verdict {
-        let c = self.cdt.tri[t as usize];
+        let c = self.cdt.tri(t).corners;
         if c.iter().any(|&v| v < BOX) {
             return Verdict::Fine;
         }
-        let p = c.map(|v| self.pos[v as usize]);
+        let p = c.map(|v| self.pos(v));
         // However small the face, a triangle across which the surface turns more than a right angle
         // stands for none of it: a ball narrower than the deflection, sampled at its poles and
         // seam alone, would be triangles from pole to pole that fold flat.
         if let Some(s) = self.sample_uvs(c) {
             for i in 0..3 {
                 let j = (i + 1) % 3;
-                if self.same_point(c[i], c[j]) {
+                if self.same_point(third(c, i), third(c, j)) {
                     continue;
                 }
                 let mid = (s[0] + s[1] + s[2]) / 3.0;
-                let ni = self.corner_normal(surf, c[i], s[i], mid);
-                let nj = self.corner_normal(surf, c[j], s[j], mid);
+                let ni = self.corner_normal(surf, third(c, i), third(s, i), mid);
+                let nj = self.corner_normal(surf, third(c, j), third(s, j), mid);
                 if ni.dot(nj) < 0.0 {
                     return Verdict::Refine((s[0] + s[1] + s[2]) / 3.0);
                 }
@@ -394,7 +443,7 @@ enum Verdict {
         let Some(s) = self.sample_uvs(c) else {
             return Verdict::Fine;
         };
-        let fixed = self.cdt.fixed[t as usize];
+        let fixed = self.cdt.tri(t).fixed;
         // A boundary segment is shared with the next face and never split here; what the surface
         // strays from it is the edge's error, so the centroid may stray that much more.
         let mut allow: f64 = 0.0;
@@ -402,13 +451,14 @@ enum Verdict {
         let mut bad = false;
         for (i, &on_boundary) in fixed.iter().enumerate() {
             let j = (i + 1) % 3;
-            if self.same_point(c[i], c[j]) {
+            let (ci, cj) = (third(c, i), third(c, j));
+            if self.same_point(ci, cj) {
                 continue;
             }
-            let ui = self.facing(c[i], self.uv[c[j] as usize]);
-            let uj = self.facing(c[j], self.uv[c[i] as usize]);
+            let ui = self.facing(ci, self.uv(cj));
+            let uj = self.facing(cj, self.uv(ci));
             let mid = (ui + uj) * 0.5;
-            let dev = surf.eval(mid.x, mid.y).dist((p[i] + p[j]) * 0.5);
+            let dev = surf.eval(mid.x, mid.y).dist((third(p, i) + third(p, j)) * 0.5);
             if on_boundary {
                 allow = allow.max(dev);
                 continue;
@@ -420,12 +470,12 @@ enum Verdict {
                 }
             }
             let mid = (s[0] + s[1] + s[2]) / 3.0;
-            let ni = self.corner_normal(surf, c[i], s[i], mid);
-            let nj = self.corner_normal(surf, c[j], s[j], mid);
+            let ni = self.corner_normal(surf, ci, third(s, i), mid);
+            let nj = self.corner_normal(surf, cj, third(s, j), mid);
             // The turn between two corners is taken across the step between them the way the
             // normal turns. Where that is no longer than the deflection the surface there is
             // within it of the triangle whatever the turn, as on a wire thinner than it.
-            let across = (nj - ni).unit().map_or(0.0, |t| (p[j] - p[i]).dot(t).abs());
+            let across = (nj - ni).unit().map_or(0.0, |t| (third(p, j) - third(p, i)).dot(t).abs());
             if across > opt.linear && ni.angle(nj) > opt.angular {
                 bad = true;
             }
@@ -450,7 +500,7 @@ enum Verdict {
 
     /// Badly shaped in the scaled plane and larger than one unit there.
     fn skinny(&self, c: [u32; 3]) -> bool {
-        let m = c.map(|v| self.cdt.p[v as usize]);
+        let m = c.map(|v| self.cdt.point(v));
         let l = [m[0].dist(m[1]), m[1].dist(m[2]), m[2].dist(m[0])];
         let area2 = orient(m[0], m[1], m[2]).abs();
         let lmax = l[0].max(l[1]).max(l[2]);
@@ -471,12 +521,13 @@ enum Verdict {
         let m = self.m(uv);
         let loc = self.cdt.locate(t, m);
         if let Located::Inside(x) | Located::OnEdge(x, _) = loc {
-            if !self.inside[x as usize] {
+            if !self.is_inside(x) {
                 return None;
             }
             // A triangle whose error lies along a boundary segment it cannot split would otherwise
             // be refined again and again a little nearer that segment, leaving slivers.
-            let c = self.cdt.tri[x as usize].map(|v| self.cdt.p[v as usize]);
+            let tri = self.cdt.tri(x).corners;
+            let c = tri.map(|v| self.cdt.point(v));
             let longest = c[0].dist(c[1]).max(c[1].dist(c[2])).max(c[2].dist(c[0]));
             let nearest = c.iter().map(|q| q.dist(m)).fold(f64::INFINITY, f64::min);
             let height = orient(c[0], c[1], c[2]).abs() / longest;
@@ -486,38 +537,34 @@ enum Verdict {
             // Nor one within the tolerance of a side's line in space, where it would make a flat
             // triangle that no flip may mend (a pole's narrowing spline face, past the stretch the
             // scaled plane sees).
-            let tri = self.cdt.tri[x as usize];
             let q = surf.eval(uv.x, uv.y);
-            let flat = (0..3).any(|k| {
-                let (a, b) = (
-                    self.pos[tri[k] as usize],
-                    self.pos[tri[(k + 1) % 3] as usize],
-                );
-                (b - a).cross(q - a).norm() <= tol::LINEAR * a.dist(b)
-            });
+            let flat = super::closed_sides(tri.iter().map(|&v| self.pos(v)))
+                .any(|(a, b)| (b - a).cross(q - a).norm() <= tol::LINEAR * a.dist(b));
             if flat {
                 return None;
             }
         }
-        let n_before = self.cdt.tri.len();
+        let n_before = self.cdt.triangle_count();
         let v = self.cdt.insert_at(m, loc).ok()?;
         self.push(uv, surf.eval(uv.x, uv.y), None, None);
-        self.inside.resize(self.cdt.tri.len(), true);
-        debug_assert!(self.cdt.tri.len() >= n_before);
+        self.inside.resize(self.cdt.triangle_count(), true);
+        debug_assert!(self.cdt.triangle_count() >= n_before);
         Some(v)
     }
 
     fn refine(&mut self, b: &Brep, f: FaceId, opt: &MeshOptions) -> Result<()> {
         let surf = &b.face(f).surface;
         let mut queued = self.inside.clone();
-        let mut queue: Vec<u32> = (0..self.cdt.tri.len() as u32)
-            .filter(|&t| self.inside[t as usize])
+        let mut queue: Vec<u32> = (0..self.cdt.triangle_count() as u32)
+            .filter(|&t| self.is_inside(t))
             .collect();
         let mut pops: usize = 0;
         while let Some(t) = queue.pop() {
-            queued[t as usize] = false;
+            if let Some(q) = queued.get_mut(t as usize) {
+                *q = false;
+            }
             pops += 1;
-            if self.uv.len() > MAX_FACE_POINTS {
+            if self.verts.len() > MAX_FACE_POINTS {
                 return Err(Error::Unsupported(format!(
                     "a face that needs more than {MAX_FACE_POINTS} points at a deflection of {} mm",
                     opt.linear
@@ -531,7 +578,7 @@ enum Verdict {
                 Verdict::Refine(at) => Some(at),
                 Verdict::Shape => None,
             };
-            let c = self.cdt.tri[t as usize].map(|v| self.cdt.p[v as usize]);
+            let c = self.cdt.tri(t).corners.map(|v| self.cdt.point(v));
             let center = circumcenter(c[0], c[1], c[2])
                 .map(|m| Vec2::new(m.x / self.scale.x, m.y / self.scale.y));
             let mut v = center.and_then(|uv| self.add(surf, t, uv));
@@ -540,15 +587,16 @@ enum Verdict {
             {
                 v = self.add(surf, t, at);
                 if v.is_none() {
-                    let cuv = self.cdt.tri[t as usize]
+                    let cuv = self.cdt.tri(t)
+                        .corners
                         .iter()
-                        .fold(Vec2::ZERO, |s, &x| s + self.uv[x as usize])
+                        .fold(Vec2::ZERO, |s, &x| s + self.uv(x))
                         / 3.0;
                     v = self.add(surf, t, cuv);
                 }
             }
             let Some(v) = v else { continue };
-            queued.resize(self.cdt.tri.len(), false);
+            queued.resize(self.cdt.triangle_count(), false);
             for x in self
                 .cdt
                 .around(v)
@@ -556,8 +604,10 @@ enum Verdict {
                 .map(|(x, _)| x)
                 .chain(std::iter::once(t))
             {
-                if !queued[x as usize] {
-                    queued[x as usize] = true;
+                if let Some(q) = queued.get_mut(x as usize)
+                    && !*q
+                {
+                    *q = true;
                     queue.push(x);
                 }
             }
@@ -567,8 +617,8 @@ enum Verdict {
 
     /// A triangle's height over its longest side in space, and that side.
     fn height(&self, c: [u32; 3]) -> (f64, usize) {
-        let p = c.map(|v| self.pos[v as usize]);
-        let side = |k: usize| p[k].dist(p[(k + 1) % 3]);
+        let p = c.map(|v| self.pos(v));
+        let side = |k: usize| third(p, k).dist(third(p, (k + 1) % 3));
         let k = (0..3)
             .max_by(|&a, &b| side(a).total_cmp(&side(b)))
             .unwrap_or(0);
@@ -583,25 +633,26 @@ enum Verdict {
     fn unflatten(&mut self) {
         for _ in 0..4 {
             let mut flipped = false;
-            for t in 0..self.cdt.tri.len() as u32 {
-                let c = self.cdt.tri[t as usize];
-                if !self.inside[t as usize] || c.iter().any(|&v| v < BOX) {
+            for t in 0..self.cdt.triangle_count() as u32 {
+                let tri = self.cdt.tri(t);
+                let c = tri.corners;
+                if !self.is_inside(t) || c.iter().any(|&v| v < BOX) {
                     continue;
                 }
                 let (h, k) = self.height(c);
                 if h > tol::LINEAR {
                     continue;
                 }
-                let u = self.cdt.nbr[t as usize][k];
-                if u == NONE || self.cdt.fixed[t as usize][k] || !self.inside[u as usize] {
+                let u = tri.across(k);
+                if u == NONE || tri.is_fixed(k) || !self.is_inside(u) {
                     continue;
                 }
-                let d = self.cdt.tri[u as usize];
+                let d = self.cdt.tri(u).corners;
                 if d.iter().any(|&v| v < BOX) {
                     continue;
                 }
                 let before = h.min(self.height(d).0);
-                let (a, b, x) = (c[k], c[(k + 1) % 3], c[(k + 2) % 3]);
+                let (a, b, x) = (third(c, k), third(c, (k + 1) % 3), third(c, (k + 2) % 3));
                 let Some(&y) = d.iter().find(|&&v| v != a && v != b) else {
                     continue;
                 };
@@ -618,23 +669,23 @@ enum Verdict {
 
     /// Splits the interior edge `k` of triangle `t` at its middle.
     pub(super) fn split_chord(&mut self, surf: &Surface, t: u32, k: usize) {
-        let tri = self.cdt.tri[t as usize];
-        let (a, c) = (tri[k], tri[(k + 1) % 3]);
-        let ua = self.facing(a, self.uv[c as usize]);
-        let uc = self.facing(c, self.uv[a as usize]);
+        let tri = self.cdt.tri(t);
+        let (a, c) = (tri.corner(k), tri.corner((k + 1) % 3));
+        let ua = self.facing(a, self.uv(c));
+        let uc = self.facing(c, self.uv(a));
         let uv = (ua + uc) * 0.5;
-        let m = (self.cdt.p[a as usize] + self.cdt.p[c as usize]) * 0.5;
-        let v = self.cdt.p.len() as u32;
+        let m = (self.cdt.point(a) + self.cdt.point(c)) * 0.5;
+        let v = self.cdt.point_count() as u32;
         self.cdt.push_point(m, t);
         self.cdt.split_edge(t, k, v);
         self.push(uv, surf.eval(uv.x, uv.y), None, None);
-        self.inside.resize(self.cdt.tri.len(), true);
+        self.inside.resize(self.cdt.triangle_count(), true);
     }
 
     /// The face's triangles, as corner indices.
     pub(super) fn triangles(&self) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
-        (0..self.cdt.tri.len() as u32)
-            .filter(|&t| self.inside[t as usize])
-            .map(|t| (t, self.cdt.tri[t as usize]))
+        (0..self.cdt.triangle_count() as u32)
+            .filter(|&t| self.is_inside(t))
+            .map(|t| (t, self.cdt.tri(t).corners))
     }
 }
