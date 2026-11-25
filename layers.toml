@@ -241,7 +241,7 @@ license = "MIT OR Apache-2.0"
 layer = 12
 kind = "temporary"
 owner = "lead"
-deps = ["yack-springrep", "yack-cadrs"]
+deps = ["yack-springrep", "yack-cadrs", "yack-topo", "yack-geom", "yack-math", "yack-check", "yack-base"]
 delete_by = "M4"
 license = "MIT OR Apache-2.0"
 
