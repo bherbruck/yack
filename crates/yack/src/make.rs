@@ -705,7 +705,16 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Ang
 /// ```
 pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile: &Profile) -> Result<Solid> {
     let op = "ruled";
-    cadrs_only(op, &|| engine_cadrs::ruled(op, bottom, bottom_profile, top, top_profile))
+    let cadrs = || engine_cadrs::ruled(op, bottom, bottom_profile, top, top_profile);
+    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
+    // its sides are `seg:side`, as a loft's
+    let native = || {
+        let feature = engine::feature();
+        let (b, t) = (engine::profile(op, bottom_profile, None)?, engine::profile(op, top_profile, None)?);
+        let made = yack_build::ruled::ruled(&engine::frame(bottom), &b, &engine::frame(top), &t, &feature);
+        engine::made_as(&feature, op, &[("side", "seg:side")], made)
+    };
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
 }
 
 /// `profile` (in the frame's xy plane) carried along the helix about the line through

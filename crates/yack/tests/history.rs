@@ -377,3 +377,23 @@ fn forcing_one_op_leaves_the_others_on_their_ladders() -> Result<()> {
     assert_eq!(built_by(&s), "native");
     Ok(())
 }
+
+
+/// yack-build's native `ruled` under `force_op("ruled", Native)`: a hyperboloid's caps and side
+/// all trace to their profile segments (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_ruled_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let rim = Profile::circle([0.0, 0.0], 5.0)?;
+    let top = Frame::new([0.0, 0.0, 5.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0])?;
+    force_op("ruled", Engine::Native);
+    let made = ruled(&Frame::at([0.0, 0.0, -5.0]), &rim, &top, &rim);
+    force(Engine::Both);
+    let h = made?;
+    assert_eq!(built_by(&h), "native");
+    let found = audit("native ruled", &[], &h);
+    assert!(found.is_empty(), "native ruled: {found:?}");
+    eprintln!("native ruled: {} faces, every one with an origin", h.faces().len());
+    Ok(())
+}
