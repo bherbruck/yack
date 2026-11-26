@@ -2,6 +2,7 @@
 // Adapted from springrep@a03e8a1 src/boolean/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved verbatim from the end of boolean/tests.rs into this child module; then to yack-boolean (M3 W8), paths and visibility only.
 use super::*;
+use crate::bounds::face_bbox;
 
 /// Solids whose faces bulge past their own edges: a ball and a ring turned off the axes, a spline
 /// profile turned part way round an axis, and a ball stretched into a spline surface.

@@ -1,6 +1,7 @@
 // yack: Thin places in a valid solid, for design hygiene: faces narrower than a size, and material or
 // Adapted from springrep@a03e8a1 src/probe.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/probe.rs to yack-view (M3 W9d); paths and visibility only.
+// Changes: moved from springrep's src/probe.rs to yack-view (M3 W9d); paths and visibility only; checked
+// access, and an error where it panicked (hardening V1).
 //! Thin places in a valid solid, for design hygiene: faces narrower than a size, and material or
 //! empty space thinner than one between faces that face each other. A valid solid can still hold
 //! a 0.1 µm sliver or a hairline gap with real wall area when the design states two values a hair
@@ -72,7 +73,7 @@ fn face_perimeter(b: &Brep, f: FaceId) -> (f64, Option<Point3>) {
         for &c in &b.lp(l).coedges {
             let e = b.edge(b.coedge(c).edge);
             // A seam is not a boundary: the face runs on across it.
-            if uses[&b.coedge(c).edge.index()] > 1 {
+            if uses.get(&b.coedge(c).edge.index()).is_some_and(|&n| n > 1) {
                 continue;
             }
             let Some(curve) = &e.curve else { continue };
@@ -140,7 +141,7 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
 /// space. Each mesh triangle's centroid is moved onto its face's exact surface and a ray cast both
 /// ways along the exact normal; a crossing of another face's triangle that faces it is measured
 /// again between the exact surfaces. The mesh's chord error widens the search, never the verdict.
-#[allow(clippy::panic)] pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
+pub fn thin_places(b: &Brep, below: f64) -> Result<Vec<Thin>> {
     let mut last = None;
     let mut mesh = None;
     for opt in MESHES {
@@ -153,7 +154,7 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
         }
     }
     let Some((mesh, chord)) = mesh else {
-        return Err(last.unwrap_or_else(|| panic!("a mesh was tried")));
+        return Err(last.unwrap_or_else(|| crate::error::Error::Unsupported("no mesh setting was tried".into())));
     };
     let mut face_of = Vec::with_capacity(mesh.triangles.len());
     for (f, r) in &mesh.faces {
@@ -165,7 +166,7 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
     let mut near = Vec::new();
     for (f, range) in &mesh.faces {
         for ti in range.clone() {
-            let [i, j, k] = mesh.triangles[ti].map(|i| mesh.positions[i as usize]);
+            let Some([i, j, k]) = corners(&mesh, ti) else { continue };
             let area = 0.5 * (j - i).cross(k - i).norm();
             if area <= 0.0 {
                 continue;
@@ -181,24 +182,25 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
                 if u == ti {
                     continue;
                 }
-                let [a, bb, c] = mesh.triangles[u].map(|i| mesh.positions[i as usize]);
+                let Some([a, bb, c]) = corners(&mesh, u) else { continue };
                 let Some(t) = ray_triangle(p, n, a, bb, c) else {
                     continue;
                 };
                 let tn = (bb - a).cross(c - a);
-                let other = face_of[u];
+                let Some(&other) = face_of.get(u) else { continue };
                 let (_, on) = on_face(b, other, p + n * t);
                 if on.dot(n) > FACING || tn.norm() == 0.0 {
                     continue;
                 }
-                let side = usize::from(t < 0.0);
-                if t.abs() <= reach && best[side].is_none_or(|(s, _)| t.abs() < s) {
-                    best[side] = Some((t.abs(), u));
+                // Outside first, material second.
+                let slot = if t < 0.0 { &mut best[1] } else { &mut best[0] };
+                if t.abs() <= reach && (*slot).is_none_or(|(s, _)| t.abs() < s) {
+                    *slot = Some((t.abs(), u));
                 }
             }
             for (side, hit) in best.into_iter().enumerate() {
                 let Some((t, u)) = hit else { continue };
-                let other = face_of[u];
+                let Some(&other) = face_of.get(u) else { continue };
                 let dir = if side == 0 { n } else { -n };
                 let (q, _) = on_face(b, other, p + dir * t);
                 let gap = (q - p).norm();
@@ -241,6 +243,13 @@ fn on_face(b: &Brep, f: FaceId, p: Point3) -> (Point3, Vec3) {
         }
     }
     Ok(out)
+}
+
+/// A mesh triangle's corners; `None` past the mesh's tables.
+fn corners(mesh: &crate::mesh::Mesh, t: usize) -> Option<[Point3; 3]> {
+    let &[a, b, c] = mesh.triangles.get(t)?;
+    let at = |k: u32| mesh.positions.get(k as usize).copied();
+    Some([at(a)?, at(b)?, at(c)?])
 }
 
 #[cfg(test)]

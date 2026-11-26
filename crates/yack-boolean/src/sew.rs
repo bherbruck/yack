@@ -811,7 +811,7 @@ const THIN: f64 = 10.0 * tol::LINEAR;
                 let shell: Vec<(&Domain, Aabb)> = solids[s].0[..solids[s].1]
                     .iter()
                     .flatten()
-                    .map(|&f| (dom(f), super::face_bbox(dom(f))))
+                    .map(|&f| (dom(f), super::bounds::face_bbox(dom(f))))
                     .collect();
                 classify::contains(&shell, probe) == Some(true)
             })

@@ -1,7 +1,8 @@
 // yack: Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 // Adapted from springrep@a03e8a1 src/edit.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: convex_edges moved in from pick.rs (M2.5, T8); then to yack-edit (M3 W9b), paths and visibility only;
-// on checked access, its indexing allow gone (hardening E1).
+// on checked access, its indexing allow gone (hardening E1); an edge's faces read from its uses, not
+// a scan of every coedge (hardening E2).
 //! Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 //! distance or stretched, and the slab a face sweeps. Each builds exact tools and combines them
 //! with the booleans, blends and face moves.
@@ -25,6 +26,7 @@ use yack_check as check;
 #[cfg(test)]
 use yack_build::primitive;
 #[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
 
 use crate::{
@@ -79,8 +81,7 @@ pub fn convex_edges(b: &Brep) -> Result<Vec<EdgeId>> {
     for e in b.edge_ids() {
         let edge = b.edge(e);
         let Some(c) = &edge.curve else { continue };
-        let uses: Vec<_> = b.coedge_ids().filter(|&o| b.coedge(o).edge == e).collect();
-        let &[cf, cg] = uses.as_slice() else { continue };
+        let &[cf, cg] = b.edge_uses(e) else { continue };
         let (f, g) = (b.coedge_face(cf), b.coedge_face(cg));
         if f == g {
             continue;
@@ -139,7 +140,7 @@ pub enum Wall {
             // solid's topology and so its face ids.
             let kept = same_topology(s, &cavity);
             for f in cavity.face_ids().collect::<Vec<_>>() {
-                let mut names: std::collections::BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
+                let mut names: BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
                 if kept {
                     names.insert(FaceName::new(feature, format!("inner_f{}", f.index())));
                 }
@@ -221,12 +222,7 @@ pub enum Wall {
                 let Some(Curve::Circle(rim)) = &s.edge(e).curve else {
                     continue;
                 };
-                let Some(g) = s
-                    .coedge_ids()
-                    .filter(|&o| s.coedge(o).edge == e)
-                    .map(|o| s.coedge_face(o))
-                    .find(|&g| g != f)
-                else {
+                let Some(g) = s.edge_uses(e).iter().map(|&o| s.coedge_face(o)).find(|&g| g != f) else {
                     continue;
                 };
                 let (_, up) = plane_of(s, g)?;
@@ -304,11 +300,7 @@ pub fn delete_faces(s: &Brep, faces: &[FaceId]) -> Result<Brep> {
             for &c in &s.lp(lp).coedges {
                 let e = s.coedge(c).edge;
                 rims.push(e);
-                for g in s
-                    .coedge_ids()
-                    .filter(|&o| s.coedge(o).edge == e)
-                    .map(|o| s.coedge_face(o))
-                {
+                for g in s.edge_uses(e).iter().map(|&o| s.coedge_face(o)) {
                     if !faces.contains(&g) && !near.contains(&g) {
                         near.push(g);
                     }

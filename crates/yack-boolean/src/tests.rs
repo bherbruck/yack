@@ -4,6 +4,7 @@
 use std::f64::consts::{PI, TAU};
 
 use super::*;
+use crate::select::{Class, choose};
 use crate::{
     locate::classify, topo::face_domain,
 };

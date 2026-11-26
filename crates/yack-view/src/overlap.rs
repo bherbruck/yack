@@ -1,6 +1,7 @@
 // yack: Whether two placed solids share material, and how much: interference for an assembly sweep.
 // Adapted from springrep@a03e8a1 src/overlap.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/overlap.rs to yack-view (M3 W9d); paths and visibility only.
+// Changes: moved from springrep's src/overlap.rs to yack-view (M3 W9d); paths and visibility only; checked
+// access, and an error where it panicked (hardening V1).
 //! Whether two placed solids share material, and how much: interference for an assembly sweep.
 //!
 //! Each solid is meshed once, with a bounding volume hierarchy over its triangles. A mesh lies
@@ -68,7 +69,7 @@ pub struct Body {
 }
 
 impl Body {
-    #[allow(clippy::panic)] pub fn new(brep: Brep) -> Result<Body> {
+    pub fn new(brep: Brep) -> Result<Body> {
         // Every placed copy of the body inherits the spline surfaces' seeds and polynomials.
         for f in brep.face_ids() {
             if let crate::geom::Surface::Nurbs(n) = &brep.face(f).surface {
@@ -98,7 +99,7 @@ impl Body {
                 Err(e) => last = Some(e),
             }
         }
-        Err(last.unwrap_or_else(|| panic!("MESHES is not empty")))
+        Err(last.unwrap_or_else(|| crate::error::Error::Unsupported("no mesh setting was tried".into())))
     }
 
     pub fn brep(&self) -> &Brep {
@@ -175,19 +176,18 @@ impl Body {
     fn clear_of(&self, p: Point3, r: f64) -> bool {
         let mut near = Vec::new();
         self.bvh.within(&Aabb { min: p, max: p }, r, &mut near);
-        near.iter().all(|&i| {
-            let t = self.triangle(i);
-            on_triangle(p, &t).dist(p) > r
-        })
+        near.iter().all(|&i| self.triangle(i).is_none_or(|t| on_triangle(p, &t).dist(p) > r))
     }
 
     fn volume(&self) -> f64 {
         *self.volume.get_or_init(|| measure::volume(&self.brep))
     }
 
-    fn triangle(&self, i: usize) -> [Point3; 3] {
-        let t = self.mesh.triangles[i];
-        [0, 1, 2].map(|k| self.mesh.positions[t[k] as usize])
+    /// Triangle `i`'s corners; `None` past the mesh's tables.
+    fn triangle(&self, i: usize) -> Option<[Point3; 3]> {
+        let &[a, b, c] = self.mesh.triangles.get(i)?;
+        let at = |k: u32| self.mesh.positions.get(k as usize).copied();
+        Some([at(a)?, at(b)?, at(c)?])
     }
 
     /// Whether `p`, in this body's frame, lies inside its mesh: the parity of a ray's crossings,
@@ -207,8 +207,8 @@ impl Body {
                 let hits = out
                     .iter()
                     .filter(|&&i| {
-                        let [a, b, c] = self.triangle(i);
-                        ray_triangle(p, d, a, b, c).is_some_and(|s| s > 0.0)
+                        self.triangle(i)
+                            .is_some_and(|[a, b, c]| ray_triangle(p, d, a, b, c).is_some_and(|s| s > 0.0))
                     })
                     .count();
                 hits % 2 == 1
@@ -245,9 +245,9 @@ pub fn overlap(a: &Body, b: &Body, rel: &Transform) -> Result<Overlap> {
     let moved = moved_box(&b.bbox, rel);
     let boxes_meet = crate::math::bvh::box_gap(&a.bbox, &moved) <= margin;
     let near = boxes_meet
-        && a.bvh.any_within(&b.bvh, rel, margin, |i, j| {
-            let tb = b.triangle(j).map(|p| rel.point(p));
-            triangles(&a.triangle(i), &tb) <= margin
+        && a.bvh.any_within(&b.bvh, rel, margin, |i, j| match (b.triangle(j), a.triangle(i)) {
+            (Some(tb), Some(ta)) => triangles(&ta, &tb.map(|p| rel.point(p))) <= margin,
+            _ => false,
         });
     if !near {
         if !boxes_meet {
@@ -383,16 +383,16 @@ impl Seen {
             let x = p - Point3::new(0.0, 0.0, 0.0);
             ([x.dot(u), x.dot(v)], x.dot(d))
         };
-        let (c, w): (Vec<[f64; 2]>, Vec<f64>) = t.iter().map(|&p| at(p)).unzip();
-        let uv = [c[0], c[1], c[2]];
-        let lo = [0, 1].map(|k| uv[0][k].min(uv[1][k]).min(uv[2][k]));
-        let hi = [0, 1].map(|k| uv[0][k].max(uv[1][k]).max(uv[2][k]));
+        let [(c0, w0), (c1, w1), (c2, w2)] = t.map(at);
+        let uv = [c0, c1, c2];
+        let lo = [c0[0].min(c1[0]).min(c2[0]), c0[1].min(c1[1]).min(c2[1])];
+        let hi = [c0[0].max(c1[0]).max(c2[0]), c0[1].max(c1[1]).max(c2[1])];
         // The mesh winds each triangle about its outward normal, and (u, v, d) is right-handed,
         // so the signed area across the move is the normal's share along it.
         let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
         let facing = e1.cross(e2).dot(d);
         let span = e1.norm().max(e2.norm());
-        let w = [w[0], w[1], w[2]];
+        let w = [w0, w1, w2];
         let own = (w[0].min(w[1]).min(w[2]), w[0].max(w[1]).max(w[2]));
         let [p, q, r] = uv;
         let (f1, f2) = ([q[0] - p[0], q[1] - p[1]], [r[0] - p[0], r[1] - p[1]]);
@@ -436,8 +436,8 @@ impl Seen {
             [cell.lo[0], cell.hi[1]],
             [cell.hi[0], cell.hi[1]],
         ];
-        (0..3).all(|k| {
-            let (p, q) = (self.uv[k], self.uv[(k + 1) % 3]);
+        let [a, b, c] = self.uv;
+        [(a, b), (b, c), (c, a)].into_iter().all(|(p, q)| {
             let n = [q[1] - p[1], p[0] - q[0]];
             if n[0] == 0.0 && n[1] == 0.0 {
                 return true;
@@ -529,7 +529,7 @@ impl Ord for Cell {
 /// How far `a` moves along `d` before it runs into `b`, both in one frame, or `None` when it passes
 /// clear: [`swept_contacts`] for one body against one.
 pub fn swept_contact(a: &Body, b: &Body, d: Vec3, how: &Sweep) -> Option<f64> {
-    swept_contacts(&[a], &[b], d, how)[0]
+    swept_contacts(&[a], &[b], d, how).into_iter().next().flatten()
 }
 
 /// How far the bodies `moving`, moved together along `d`, go before they run into each of
@@ -568,7 +568,7 @@ pub fn swept_contacts(moving: &[&Body], fixed: &[&Body], d: Vec3, how: &Sweep) -
         body.bvh.along_line(&reach, d, &mut near);
         sa.extend(
             near.iter()
-                .map(|&i| Seen::new(&body.triangle(i), first_part + body.part[i], frame)),
+                .filter_map(|&i| Some(Seen::new(&body.triangle(i)?, first_part + body.part.get(i)?, frame))),
         );
         first_part += body.solids;
     }
@@ -584,7 +584,7 @@ pub fn swept_contacts(moving: &[&Body], fixed: &[&Body], d: Vec3, how: &Sweep) -
             body.bvh.along_line(&from, d, &mut near);
             let sb: Vec<Seen> = near
                 .iter()
-                .map(|&i| Seen::new(&body.triangle(i), body.part[i], frame))
+                .filter_map(|&i| Some(Seen::new(&body.triangle(i)?, *body.part.get(i)?, frame)))
                 .collect();
             let rb = (1.01 * body.deflection).max(how.inside);
             first_contact(&sa, &sb, frame, (ra, rb), how, &clear_of_moving, &|p| {
@@ -620,11 +620,10 @@ fn first_contact(
     let shadow = |s: &[Seen], of: &[u32]| {
         let mut lo = [f64::INFINITY; 2];
         let mut hi = [f64::NEG_INFINITY; 2];
-        for &i in of {
-            let t = &s[i as usize];
-            for k in 0..2 {
-                lo[k] = lo[k].min(t.lo[k]);
-                hi[k] = hi[k].max(t.hi[k]);
+        for t in of.iter().filter_map(|&i| s.get(i as usize)) {
+            for ((l, h), (&tl, &th)) in lo.iter_mut().zip(hi.iter_mut()).zip(t.lo.iter().zip(&t.hi)) {
+                *l = l.min(tl);
+                *h = h.max(th);
             }
         }
         (lo, hi)
@@ -634,8 +633,8 @@ fn first_contact(
     // Only the moving triangles over the fixed body's shadow.
     let all_a: Vec<u32> = (0..sa.len() as u32)
         .filter(|&i| {
-            let t = &sa[i as usize];
-            t.lo[0] <= hb[0] && t.hi[0] >= lb[0] && t.lo[1] <= hb[1] && t.hi[1] >= lb[1]
+            sa.get(i as usize)
+                .is_some_and(|t| t.lo[0] <= hb[0] && t.hi[0] >= lb[0] && t.lo[1] <= hb[1] && t.hi[1] >= lb[1])
         })
         .collect();
     if all_a.is_empty() {
@@ -661,7 +660,7 @@ fn first_contact(
         let mut ka = Vec::new();
         let (mut a_near, mut a_far) = (f64::INFINITY, f64::NEG_INFINITY);
         for &i in pa {
-            let t = &sa[i as usize];
+            let Some(t) = sa.get(i as usize) else { continue };
             if t.meets(&cell) {
                 ka.push(i);
                 if t.front {
@@ -679,7 +678,7 @@ fn first_contact(
         let mut kb = Vec::new();
         let mut ahead = f64::INFINITY;
         for &i in pb {
-            let t = &sb[i as usize];
+            let Some(t) = sb.get(i as usize) else { continue };
             if t.meets(&cell) {
                 kb.push(i);
                 let (near, far) = t.depth_over(&cell);
@@ -706,8 +705,7 @@ fn first_contact(
         let size = (cell.hi[0] - cell.lo[0]).max(cell.hi[1] - cell.lo[1]);
         if size > how.cell {
             // Halved along each side longer than the finest cell, so no two children are one.
-            let halves = |k: usize| {
-                let (lo, hi) = (cell.lo[k], cell.hi[k]);
+            let halves = |lo: f64, hi: f64| {
                 if hi - lo > how.cell {
                     let mid = 0.5 * (lo + hi);
                     vec![(lo, mid), (mid, hi)]
@@ -715,8 +713,8 @@ fn first_contact(
                     vec![(lo, hi)]
                 }
             };
-            for (x0, x1) in halves(0) {
-                for (y0, y1) in halves(1) {
+            for (x0, x1) in halves(cell.lo[0], cell.hi[0]) {
+                for (y0, y1) in halves(cell.lo[1], cell.hi[1]) {
                     queue.extend(make([x0, y0], [x1, y1], &cell.a, &cell.b));
                 }
             }
@@ -753,7 +751,7 @@ fn stretches(s: &[Seen], tris: &[u32], x: f64, y: f64) -> Option<Vec<(f64, f64)>
     let mut ws: Vec<(u32, f64)> = tris
         .iter()
         .filter_map(|&i| {
-            let t = &s[i as usize];
+            let t = s.get(i as usize)?;
             Some((t.part, t.crossing(x, y)?))
         })
         .collect();
@@ -764,7 +762,7 @@ fn stretches(s: &[Seen], tris: &[u32], x: f64, y: f64) -> Option<Vec<(f64, f64)>
         if !run.len().is_multiple_of(2) {
             return None;
         }
-        out.extend(run.chunks(2).map(|c| (c[0].1, c[1].1)));
+        out.extend(run.as_chunks::<2>().0.iter().map(|&[(_, enter), (_, leave)]| (enter, leave)));
     }
     out.sort_by(|p, q| p.0.total_cmp(&q.0));
     let mut merged: Vec<(f64, f64)> = Vec::new();

@@ -3,10 +3,6 @@
 //! A solid seen from outside: [`draw`]'s hidden-line drawings, [`overlap`]'s overlaps, meetings and
 //! swept contacts between bodies, and [`probe`]'s thin places.
 
-// springrep's view code indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names the moved code uses.
 use yack_base::kernel::Result;
 use yack_boolean as boolean;

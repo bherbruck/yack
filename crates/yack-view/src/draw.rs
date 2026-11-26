@@ -73,28 +73,27 @@ pub fn hidden_lines(b: &Brep, direction: Vec3, tolerance: f64) -> Result<Drawing
     // Where each stroke is cut: crossings with the others' projections, and their ends on it.
     let mut cuts: Vec<Vec<f64>> = vec![Vec::new(); strokes.len()];
     let near = 1e-9 * scale;
-    for i in 0..strokes.len() {
-        for j in 0..strokes.len() {
+    for (i, ((si, ti), (fi, cut))) in strokes.iter().zip(&samples).zip(flats.iter().zip(cuts.iter_mut())).enumerate() {
+        for (j, ((sj, tj), fj)) in strokes.iter().zip(&samples).zip(&flats).enumerate() {
             if i == j {
                 continue;
             }
-            for (k, w) in flats[i].windows(2).enumerate() {
-                for (l, x) in flats[j].windows(2).enumerate() {
-                    if let Some((sa, _)) = chords_cross(w[0], w[1], x[0], x[1]) {
-                        let ta = samples[i][k] + (samples[i][k + 1] - samples[i][k]) * sa;
-                        let tb = samples[j][l] + (samples[j][l + 1] - samples[j][l]) * 0.5;
-                        if let Some(t) = pin_crossing(&strokes[i], &strokes[j], ta, tb, &flat) {
-                            cuts[i].push(t);
+            for ((ta0, ta1), (wa, wb)) in chords(ti, fi) {
+                for ((tb0, tb1), (xa, xb)) in chords(tj, fj) {
+                    if let Some((sa, _)) = chords_cross(wa, wb, xa, xb) {
+                        let ta = ta0 + (ta1 - ta0) * sa;
+                        let tb = tb0 + (tb1 - tb0) * 0.5;
+                        if let Some(t) = pin_crossing(si, sj, ta, tb, &flat) {
+                            cut.push(t);
                         }
                     }
                 }
             }
-            let sj = &strokes[j];
             for end in [sj.curve.eval(sj.t0), sj.curve.eval(sj.t1)] {
-                if let Some(t) = foot(&strokes[i], &samples[i], end, &flat)
-                    && flat(strokes[i].curve.eval(t)).dist(flat(end)) <= near
+                if let Some(t) = foot(si, ti, end, &flat)
+                    && flat(si.curve.eval(t)).dist(flat(end)) <= near
                 {
-                    cuts[i].push(t);
+                    cut.push(t);
                 }
             }
         }
@@ -116,9 +115,9 @@ pub fn hidden_lines(b: &Brep, direction: Vec3, tolerance: f64) -> Result<Drawing
             .is_ok_and(|hits| hits.iter().any(|h| h.normal.dot(-d) > 1e-9))
     };
 
-    for (i, s) in strokes.iter().enumerate() {
+    for ((s, cut), stroke_samples) in strokes.iter().zip(&cuts).zip(&samples) {
         let span = s.t1 - s.t0;
-        let mut ts: Vec<f64> = cuts[i]
+        let mut ts: Vec<f64> = cut
             .iter()
             .copied()
             .filter(|&t| (t - s.t0) * span.signum() > 1e-9 * span.abs())
@@ -131,15 +130,16 @@ pub fn hidden_lines(b: &Brep, direction: Vec3, tolerance: f64) -> Result<Drawing
         // Consecutive pieces of one visibility join.
         let mut runs: Vec<(bool, f64, f64)> = Vec::new();
         for w in ts.windows(2) {
-            let mid = s.curve.eval(0.5 * (w[0] + w[1]));
+            let &[a, z] = w else { continue };
+            let mid = s.curve.eval(0.5 * (a + z));
             let h = hidden(s, mid);
             match runs.last_mut() {
-                Some(last) if last.0 == h => last.2 = w[1],
-                _ => runs.push((h, w[0], w[1])),
+                Some(last) if last.0 == h => last.2 = z,
+                _ => runs.push((h, a, z)),
             }
         }
         for (h, a, z) in runs {
-            let mut pts: Vec<f64> = samples[i]
+            let mut pts: Vec<f64> = stroke_samples
                 .iter()
                 .copied()
                 .filter(|&t| ((t - a) / span) > 1e-12 && ((z - t) / span) > 1e-12)
@@ -157,6 +157,14 @@ pub fn hidden_lines(b: &Brep, direction: Vec3, tolerance: f64) -> Result<Drawing
     Ok(out)
 }
 
+/// A stroke's chords: each pair of neighbouring samples, with their projections.
+fn chords<'a>(ts: &'a [f64], flats: &'a [Vec2]) -> impl Iterator<Item = ((f64, f64), (Vec2, Vec2))> + 'a {
+    ts.windows(2).zip(flats.windows(2)).filter_map(|pair| match pair {
+        (&[t0, t1], &[p0, p1]) => Some(((t0, t1), (p0, p1))),
+        _ => None,
+    })
+}
+
 /// The drawing's strokes: every edge but a seam or one between faces that meet smoothly, and each
 /// outline trimmed to the stretches of it that lie on its face.
 fn strokes(b: &Brep, d: Vec3, tolerance: f64) -> Vec<Stroke> {
@@ -164,17 +172,12 @@ fn strokes(b: &Brep, d: Vec3, tolerance: f64) -> Vec<Stroke> {
     for e in b.edge_ids() {
         let edge = b.edge(e);
         let Some(c) = &edge.curve else { continue };
-        let faces: Vec<FaceId> = b
-            .coedge_ids()
-            .filter(|&co| b.coedge(co).edge == e)
-            .map(|co| b.coedge_face(co))
-            .collect();
-        if faces.len() == 2 && faces[0] == faces[1] {
-            continue;
-        }
+        let faces: Vec<FaceId> = b.edge_uses(e).iter().map(|&co| b.coedge_face(co)).collect();
         let (t0, t1) = edge.range;
-        let mid = c.eval(0.5 * (t0 + t1));
-        if faces.len() == 2 && smooth(b, faces[0], faces[1], mid) {
+        // A seam (one face both sides), or an edge between faces that meet smoothly, draws nothing.
+        if let &[f, g] = faces.as_slice()
+            && (f == g || smooth(b, f, g, c.eval(0.5 * (t0 + t1))))
+        {
             continue;
         }
         out.push(Stroke {
@@ -205,10 +208,14 @@ fn strokes(b: &Brep, d: Vec3, tolerance: f64) -> Vec<Stroke> {
                 }
                 0.5 * (a + z)
             };
-            let mut start = inside[0].then_some(ts[0]);
-            for k in 0..ts.len() - 1 {
-                if inside[k] != inside[k + 1] {
-                    let t = pin(ts[k], ts[k + 1], inside[k]);
+            let mut start = match (inside.first(), ts.first()) {
+                (Some(&true), Some(&t)) => Some(t),
+                _ => None,
+            };
+            for (tw, iw) in ts.windows(2).zip(inside.windows(2)) {
+                let (&[ta, tb], &[ia, ib]) = (tw, iw) else { continue };
+                if ia != ib {
+                    let t = pin(ta, tb, ia);
                     match start.take() {
                         Some(a) => out.push(Stroke {
                             curve: curve.clone(),
@@ -220,11 +227,11 @@ fn strokes(b: &Brep, d: Vec3, tolerance: f64) -> Vec<Stroke> {
                     }
                 }
             }
-            if let Some(a) = start {
+            if let (Some(a), Some(&end)) = (start, ts.last()) {
                 out.push(Stroke {
                     curve: curve.clone(),
                     t0: a,
-                    t1: ts[ts.len() - 1],
+                    t1: end,
                     faces: vec![f],
                 });
             }

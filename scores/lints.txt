@@ -13,4 +13,4 @@ yack-shim 1
 yack-step 4
 yack-topo 1
 yack-tweak 0
-yack-view 2
+yack-view 0
