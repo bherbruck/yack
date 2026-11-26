@@ -4,11 +4,6 @@
 //! An exchange file's solid measured as the standard defines it: its volume and area from its
 //! faces' surfaces bounded by their edges' curves.
 
-
-// springrep's step code indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names the moved code uses.
 use yack_base::kernel::Error;
 use yack_base::kernel::Result;

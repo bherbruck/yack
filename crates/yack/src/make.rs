@@ -688,7 +688,15 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Ang
         return Err(Error::invalid(op, "height", format!("height {height} is not a non-zero length")));
     }
     let d = draft.radians();
-    cadrs_only(op, &|| engine_cadrs::extrude_drafted(op, frame, profile, height, d, both_ways))
+    let cadrs = || engine_cadrs::extrude_drafted(op, frame, profile, height, d, both_ways);
+    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
+    // its sides are `seg:side` (beside their segments' own names), as a loft's
+    let native = || {
+        let feature = engine::feature();
+        let made = yack_build::drafted::extrude_drafted(&engine::frame(frame), &engine::profile(op, profile, None)?, height, d, both_ways, &feature);
+        engine::made_as(&feature, op, &[("side", "seg:side")], made)
+    };
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
 }
 
 /// The solid whose sides are straight lines from `bottom_profile` (drawn in `bottom`) to
@@ -706,15 +714,16 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Ang
 pub fn ruled(bottom: &Frame, bottom_profile: &Profile, top: &Frame, top_profile: &Profile) -> Result<Solid> {
     let op = "ruled";
     let cadrs = || engine_cadrs::ruled(op, bottom, bottom_profile, top, top_profile);
-    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
-    // its sides are `seg:side`, as a loft's
+    // yack-build's native rung first (bake-off doc/donors.md: 506 cases, one reaches ruled, V/A
+    // bit-identical, every face with an origin); cadrs answers what it declines. Its sides are
+    // `seg:side`, as a loft's
     let native = || {
         let feature = engine::feature();
         let (b, t) = (engine::profile(op, bottom_profile, None)?, engine::profile(op, top_profile, None)?);
         let made = yack_build::ruled::ruled(&engine::frame(bottom), &b, &engine::frame(top), &t, &feature);
         engine::made_as(&feature, op, &[("side", "seg:side")], made)
     };
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }]))
 }
 
 /// `profile` (in the frame's xy plane) carried along the helix about the line through

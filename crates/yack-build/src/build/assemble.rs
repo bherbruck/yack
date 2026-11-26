@@ -1,7 +1,6 @@
 // yack: a STEP solid's arena built, turned the way its volume says, and checked (from topology.rs).
 //! The last step of reading a solid: build its arena, turn any shell that reads inside out, and
 //! check it.
-#![warn(clippy::indexing_slicing)]
 
 use super::heal;
 use super::raw::{Raw, build};

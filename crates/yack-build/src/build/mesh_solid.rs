@@ -5,7 +5,6 @@
 // triangle's corners and edges by array patterns, a point's neighbours by checked access.
 //! A solid from a closed triangle mesh: each triangle a plane face, so the kernel's booleans,
 //! distances and measures take a mesh another tool wrote as they take any solid.
-#![warn(clippy::indexing_slicing)]
 
 use std::collections::BTreeMap;
 

@@ -4,10 +4,6 @@
 //! builder the STEP reader, the blends and the affine edit share, with its healing for now.
 
 
-// springrep's build code indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names the moved code uses.
 use yack_base::kernel::Error;
 use yack_base::kernel::Result;
@@ -26,4 +22,5 @@ pub mod build;
 pub mod loft;
 pub mod primitive;
 pub mod ruled;
+pub mod drafted;
 pub mod sweep;

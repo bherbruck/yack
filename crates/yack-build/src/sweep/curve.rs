@@ -12,7 +12,6 @@
 //! steps fine enough to be exact to rounding. Each side face is a rational B-spline whose columns are
 //! cubics through each profile control point's track at stations along the path; the stations
 //! double until every column stays within a tenth of the tolerance of its track between them.
-#![warn(clippy::indexing_slicing)]
 
 use super::helix::{Helix, Motion, Seg, assemble, helix};
 use crate::{

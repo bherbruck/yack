@@ -121,6 +121,42 @@ mod tests {
     }
 
     #[test]
+    fn a_cylinder_slid_square_to_its_axis_is_a_stadium_prism() {
+        // r 2, 10 tall, slid 5 across: its volume and 5 times its 4 × 10 shadow.
+        let c = yack_build::primitive::cylinder(&Frame::WORLD, 2.0, 10.0, "c").unwrap();
+        let s = swept(&c, &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
+        near(yack_measure::volume(&s), std::f64::consts::PI * 40.0 + 200.0);
+    }
+
+    #[test]
+    fn the_end_mill_slid_across_a_block_answers_and_never_refuses_its_input() {
+        // brep-bench swept/end-mill-slid-across-block's tool: r 2, 8 tall at (-5, 0, 7), slid 30
+        // along x. A malformed piece once came back as InvalidInput, a final refusal; any failure
+        // of the pieces is a decline, and this one answers: πr²h + 30·(2r·h).
+        let frame = Frame::new(Point3::new(-5.0, 0.0, 7.0), Vec3::Z, Vec3::X).unwrap();
+        let c = yack_build::primitive::cylinder(&frame, 2.0, 8.0, "c").unwrap();
+        let s = swept(&c, &Motion::Slide { by: Vec3::new(30.0, 0.0, 0.0) }, "f");
+        assert!(!matches!(s, Err(Error::InvalidInput(_))), "{s:?}");
+        near(yack_measure::volume(&s.unwrap()), std::f64::consts::PI * 32.0 + 960.0);
+    }
+
+    #[test]
+    fn cones_slid_cover_their_shadows_along_the_slide() {
+        let pi = std::f64::consts::PI;
+        // A point up (r 2, 6 tall) slid 5 across: its volume and 5 times its triangle shadow.
+        let point = yack_build::primitive::cone(&Frame::WORLD, 2.0, 0.0, 6.0, "p").unwrap();
+        let s = swept(&point, &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
+        near(yack_measure::volume(&s), pi * 4.0 * 2.0 + 5.0 * 12.0);
+        // A frustum (r 3 to 1, 4 tall) slid 5 across: its shadow is a trapezoid, 16.
+        let frustum = yack_build::primitive::cone(&Frame::WORLD, 3.0, 1.0, 4.0, "q").unwrap();
+        let s = swept(&frustum, &Motion::Slide { by: Vec3::new(0.0, 5.0, 0.0) }, "f").unwrap();
+        near(yack_measure::volume(&s), pi * 4.0 * (9.0 + 3.0 + 1.0) / 3.0 + 5.0 * 16.0);
+        // The point slid down its axis: itself and the cylinder its base sweeps.
+        let s = swept(&point, &Motion::Slide { by: Vec3::new(0.0, 0.0, -5.0) }, "f").unwrap();
+        near(yack_measure::volume(&s), pi * 4.0 * 2.0 + pi * 4.0 * 5.0);
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();

@@ -1,6 +1,9 @@
 // yack: Section curves as clamped rational B-splines in homogeneous coordinates, and the operations
 // Adapted from springrep@a03e8a1 src/loft/rail.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/loft/rail.rs to yack-build (M3 W7); paths and visibility only.
+// Changes: moved from springrep's src/loft/rail.rs to yack-build (M3 W7); paths and visibility only;
+// M3 hardening (w-h3): knot insertion, degree elevation, blossoms, Cox–de Boor and the fits walk
+// their arrays by iterators, windows and checked access instead of indexing, in the same order of
+// arithmetic; a knot that cannot be inserted stops the insertion instead of panicking.
 //! Section curves as clamped rational B-splines in homogeneous coordinates, and the operations
 //! that make a column of them share one degree and knot vector, so their control points can be
 //! skinned into a surface.
@@ -20,6 +23,9 @@ pub type Hom = [f64; 4];
 pub fn hom(p: Point3, w: f64) -> Hom {
     [p.x * w, p.y * w, p.z * w, w]
 }
+
+/// The point a rail without control points starts and ends at: nowhere.
+const NOWHERE: Point3 = Vec3::new(f64::NAN, f64::NAN, f64::NAN);
 
 pub fn point(h: Hom) -> Point3 {
     Vec3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
@@ -72,49 +78,67 @@ impl Rail {
         Ok(r.normalized())
     }
 
+    /// The parameters it runs over: NaN for a rail whose knots are too few for its control points.
     pub fn domain(&self) -> (f64, f64) {
-        (self.knots[self.degree], self.knots[self.pw.len()])
+        let knot = |i: usize| self.knots.get(i).copied().unwrap_or(f64::NAN);
+        (knot(self.degree), knot(self.pw.len()))
     }
 
+    /// Its first control point, NaN for a rail with none.
     pub fn start(&self) -> Point3 {
-        point(self.pw[0])
+        self.pw.first().map_or(NOWHERE, |&h| point(h))
     }
 
+    /// Its last control point, NaN for a rail with none.
     pub fn end(&self) -> Point3 {
-        point(self.pw[self.pw.len() - 1])
+        self.pw.last().map_or(NOWHERE, |&h| point(h))
     }
 
     fn multiplicity(&self, t: f64) -> usize {
         self.knots.iter().filter(|&&k| k == t).count()
     }
 
-    /// Inserts `t` once (Boehm's algorithm).
-    fn insert(&mut self, t: f64) {
+    /// Inserts `t` once (Boehm's algorithm); false, the rail unchanged, where its knots and
+    /// control points do not make a B-spline.
+    fn insert(&mut self, t: f64) -> bool {
         let (p, n) = (self.degree, self.pw.len());
         let u = &self.knots;
+        // The span `t` falls in: control points k − p ..= k shape it.
         let mut k = p;
-        while k + 1 < n && u[k + 1] <= t {
+        while k + 1 < n && u.get(k + 1).is_some_and(|&x| x <= t) {
             k += 1;
         }
+        let Some(first_moved) = k.checked_sub(p) else { return false };
+        let (Some(kept_before), Some(blended), Some(kept_after), Some(lows), Some(highs)) = (
+            self.pw.get(..=first_moved),
+            self.pw.get(first_moved..=k),
+            self.pw.get(k..),
+            u.get(first_moved + 1..=k),
+            u.get(k + 1..=k + p),
+        ) else {
+            return false;
+        };
+        // Points up to the span's first stay, from its last on they move up one place, and each
+        // between is its two neighbours mixed by where `t` falls in its knots.
         let mut q = Vec::with_capacity(n + 1);
-        for i in 0..=n {
-            if i + p <= k {
-                q.push(self.pw[i]);
-            } else if i > k {
-                q.push(self.pw[i - 1]);
-            } else {
-                let den = u[i + p] - u[i];
-                let a = if den > 0.0 { (t - u[i]) / den } else { 0.0 };
-                q.push(mix(self.pw[i - 1], self.pw[i], a));
-            }
+        q.extend_from_slice(kept_before);
+        let neighbours = blended.iter().zip(blended.iter().skip(1));
+        for ((&before, &after), (&lo, &hi)) in neighbours.zip(lows.iter().zip(highs)) {
+            let den = hi - lo;
+            let a = if den > 0.0 { (t - lo) / den } else { 0.0 };
+            q.push(mix(before, after, a));
         }
+        q.extend_from_slice(kept_after);
         self.pw = q;
         self.knots.insert(k + 1, t);
+        true
     }
 
     fn insert_to(&mut self, t: f64, m: usize) {
         while self.multiplicity(t) < m {
-            self.insert(t);
+            if !self.insert(t) {
+                break;
+            }
         }
     }
 
@@ -131,11 +155,10 @@ impl Rail {
         let mut knots = vec![t0; p + 1];
         knots.extend(r.knots.iter().filter(|&&k| k > t0 && k < t1));
         knots.extend(std::iter::repeat_n(t1, p + 1));
-        let pw = r.pw[j0..=j1].to_vec();
+        let malformed = || Error::Numerical("B-spline piece has a malformed knot vector".into());
+        let pw = r.pw.get(j0..=j1).ok_or_else(malformed)?.to_vec();
         if knots.len() != pw.len() + p + 1 {
-            return Err(Error::Numerical(
-                "B-spline piece has a malformed knot vector".into(),
-            ));
+            return Err(malformed());
         }
         Ok(Rail {
             degree: p,
@@ -145,7 +168,9 @@ impl Rail {
     }
 
     pub fn reversed(&self) -> Rail {
-        let (a, b) = (self.knots[0], self.knots[self.knots.len() - 1]);
+        // With no knots there are none to map, and the ends are never read.
+        let a = self.knots.first().copied().unwrap_or_default();
+        let b = self.knots.last().copied().unwrap_or_default();
         Rail {
             degree: self.degree,
             knots: self.knots.iter().rev().map(|&k| a + b - k).collect(),
@@ -191,22 +216,22 @@ impl Rail {
         }
         let segs = (r.pw.len() - 1) / p;
         let mut pw: Vec<Hom> = Vec::new();
-        for s in 0..segs {
-            let mut bez: Vec<Hom> = r.pw[s * p..=s * p + p].to_vec();
+        // Each Bézier piece's p + 1 points, sharing its ends with its neighbours.
+        let pieces = (0..segs).filter_map(|s| r.pw.get(s * p..=s * p + p));
+        for (s, piece) in pieces.enumerate() {
+            let mut bez: Vec<Hom> = piece.to_vec();
             for d in p..q {
                 let mut up = Vec::with_capacity(d + 2);
-                up.push(bez[0]);
-                for i in 1..=d {
-                    let a = i as f64 / (d + 1) as f64;
-                    up.push(mix(bez[i], bez[i - 1], a));
+                up.extend(bez.first());
+                for (i, (&before, &here)) in bez.iter().zip(bez.iter().skip(1)).enumerate() {
+                    let a = (i + 1) as f64 / (d + 1) as f64;
+                    up.push(mix(here, before, a));
                 }
-                up.push(bez[d]);
+                up.extend(bez.last());
                 bez = up;
             }
-            if s > 0 {
-                bez.remove(0);
-            }
-            pw.extend(bez);
+            // A piece after the first starts where the one before ended.
+            pw.extend(bez.into_iter().skip(usize::from(s > 0)));
         }
         let (a, b) = r.domain();
         let mut knots = vec![a; q + 1];
@@ -234,12 +259,11 @@ impl Rail {
 /// The blossom of the Bézier `pts` at `ts`, one parameter per de Casteljau level.
 fn blossom(pts: &[Hom], ts: &[f64]) -> Hom {
     let mut q = pts.to_vec();
-    for (k, &t) in ts.iter().enumerate() {
-        for i in 0..q.len() - 1 - k {
-            q[i] = mix(q[i], q[i + 1], t);
-        }
+    // Each de Casteljau level mixes every point with the next, one fewer each time.
+    for &t in ts {
+        q = q.iter().zip(q.iter().skip(1)).map(|(&a, &b)| mix(a, b, t)).collect();
     }
-    q[0]
+    q.first().copied().unwrap_or_default()
 }
 
 /// The clamped B-spline `(knots, pw)` of `degree` carried on past both ends of its domain by
@@ -266,18 +290,24 @@ pub(crate) fn extended(
         r.insert_to(last, p);
     }
     let lo = -delta / (first - a);
+    let n = r.pw.len();
+    // The first and last spans' control points: a rail with fewer than p + 1 has no spans.
+    let (Some(first_span), Some(last_span)) =
+        (r.pw.get(..=p), n.checked_sub(p + 1).and_then(|from| r.pw.get(from..)))
+    else {
+        return (r.knots, r.pw);
+    };
     let head: Vec<Hom> = (0..=p)
         .map(|i| {
             let ts: Vec<f64> = (0..p).map(|k| if k < p - i { lo } else { 1.0 }).collect();
-            blossom(&r.pw[..=p], &ts)
+            blossom(first_span, &ts)
         })
         .collect();
-    let n = r.pw.len();
     let hi = (b + delta - last) / (b - last);
     let tail: Vec<Hom> = (0..=p)
         .map(|i| {
             let ts: Vec<f64> = (0..p).map(|k| if k < p - i { 0.0 } else { hi }).collect();
-            blossom(&r.pw[n - 1 - p..], &ts)
+            blossom(last_span, &ts)
         })
         .collect();
     if n == p + 1 {
@@ -290,13 +320,17 @@ pub(crate) fn extended(
         knots.extend(std::iter::repeat_n(b + delta, p + 1));
         return (knots, pw);
     }
-    r.pw[..=p].copy_from_slice(&head);
-    r.pw[n - 1 - p..].copy_from_slice(&tail);
+    for (slot, h) in r.pw.iter_mut().zip(head) {
+        *slot = h;
+    }
+    for (slot, h) in r.pw.iter_mut().skip(n - 1 - p).zip(tail) {
+        *slot = h;
+    }
     let m = r.knots.len();
-    for k in &mut r.knots[..=p] {
+    for k in r.knots.iter_mut().take(p + 1) {
         *k = a - delta;
     }
-    for k in &mut r.knots[m - 1 - p..] {
+    for k in r.knots.iter_mut().skip(m.saturating_sub(p + 1)) {
         *k = b + delta;
     }
     (r.knots, r.pw)
@@ -328,17 +362,15 @@ fn conic(frame: &Frame, a: f64, b: f64, t0: f64, t1: f64) -> Rail {
 
 /// Every rail of one column at one degree on one knot vector.
 pub fn make_compatible(rails: &mut [Rail]) {
-    let same = rails.windows(2).all(|w| {
-        w[0].degree == w[1].degree
-            && w[0].knots.len() == w[1].knots.len()
-            && w[0]
-                .knots
-                .iter()
-                .zip(&w[1].knots)
-                .all(|(a, b)| (a - b).abs() <= 1e-12)
-    });
+    let alike = |x: &Rail, y: &Rail| {
+        x.degree == y.degree
+            && x.knots.len() == y.knots.len()
+            && x.knots.iter().zip(&y.knots).all(|(a, b)| (a - b).abs() <= 1e-12)
+    };
+    let same = rails.iter().zip(rails.iter().skip(1)).all(|(x, y)| alike(x, y));
     if same {
-        let knots = rails[0].knots.clone();
+        let Some(first) = rails.first() else { return };
+        let knots = first.knots.clone();
         for r in rails.iter_mut() {
             r.knots = knots.clone();
         }
@@ -384,9 +416,10 @@ impl Across {
             .map(|k| {
                 let mut c = [0.0; 4];
                 for (s, d) in data.iter().enumerate() {
-                    let f = self.coef[k * self.n + s];
-                    for i in 0..4 {
-                        c[i] += f * d[i];
+                    // Every coefficient the data reaches is there, `controls() · n` of them.
+                    let Some(&f) = self.coef.get(k * self.n + s) else { continue };
+                    for (ci, di) in c.iter_mut().zip(d) {
+                        *ci += f * di;
                     }
                 }
                 c
@@ -398,8 +431,8 @@ impl Across {
         let vals = basis(self.degree, &self.knots, v);
         let mut out = [0.0; 4];
         for (c, b) in ctrl.iter().zip(vals) {
-            for i in 0..4 {
-                out[i] += b * c[i];
+            for (oi, ci) in out.iter_mut().zip(c) {
+                *oi += b * ci;
             }
         }
         out
@@ -409,34 +442,55 @@ impl Across {
 /// Every basis function of `degree` on `knots` at `t` (Cox–de Boor), right-continuous except at
 /// the domain's end.
 pub fn basis(degree: usize, knots: &[f64], t: f64) -> Vec<f64> {
-    let n = knots.len() - degree - 1;
-    let end = knots[n];
-    let mut nb: Vec<f64> = (0..knots.len() - 1)
-        .map(|i| {
-            let inside = knots[i] <= t && t < knots[i + 1];
-            let last = t >= end && knots[i] < end && knots[i + 1] >= end;
+    let Some(n) = knots.len().checked_sub(degree + 1) else { return Vec::new() };
+    let Some(&end) = knots.get(n) else { return Vec::new() };
+    // Degree 0: one function a span, 1 on it.
+    let mut nb: Vec<f64> = knots
+        .iter()
+        .zip(knots.iter().skip(1))
+        .map(|(&k0, &k1)| {
+            let inside = k0 <= t && t < k1;
+            let last = t >= end && k0 < end && k1 >= end;
             if inside || last { 1.0 } else { 0.0 }
         })
         .collect();
+    // Each degree's functions from the last degree's, one fewer each time: function i spans
+    // knots i ..= i + d + 1, and mixes functions i and i + 1 of the degree below.
     for d in 1..=degree {
-        for i in 0..knots.len() - 1 - d {
-            let l = knots[i + d] - knots[i];
-            let r = knots[i + d + 1] - knots[i + 1];
-            let a = if l > 0.0 {
-                (t - knots[i]) / l * nb[i]
-            } else {
-                0.0
-            };
-            let b = if r > 0.0 {
-                (knots[i + d + 1] - t) / r * nb[i + 1]
-            } else {
-                0.0
-            };
-            nb[i] = a + b;
-        }
+        let below = nb.iter().zip(nb.iter().skip(1));
+        nb = knots
+            .windows(d + 2)
+            .zip(below)
+            .map(|(span, (&left, &right))| {
+                let (Some(&k0), Some(&k1), Some(&kd), Some(&kd1)) =
+                    (span.first(), span.get(1), span.get(d), span.last())
+                else {
+                    return 0.0;
+                };
+                let l = kd - k0;
+                let r = kd1 - k1;
+                let a = if l > 0.0 { (t - k0) / l * left } else { 0.0 };
+                let b = if r > 0.0 { (kd1 - t) / r * right } else { 0.0 };
+                a + b
+            })
+            .collect();
     }
     nb.truncate(n);
     nb
+}
+
+/// Adds `x` to `v[i]`; every index the fits use is in range by their matrices' sizes.
+fn add_at(v: &mut [f64], i: usize, x: f64) {
+    if let Some(e) = v.get_mut(i) {
+        *e += x;
+    }
+}
+
+/// Sets `v[i]` to `x`, under [`add_at`]'s promise.
+fn set_at(v: &mut [f64], i: usize, x: f64) {
+    if let Some(e) = v.get_mut(i) {
+        *e = x;
+    }
 }
 
 fn binomial(n: usize, k: usize) -> f64 {
@@ -451,30 +505,32 @@ pub(crate) fn bezier_fit(params: &[f64], degree: usize) -> Result<Across> {
     let bern =
         |k: usize, v: f64| binomial(p, k) * v.powi(k as i32) * (1.0 - v).powi((p - k) as i32);
     let mut coef = vec![0.0; (p + 1) * n];
-    coef[0] = 1.0;
-    coef[p * n + n - 1] = 1.0;
+    set_at(&mut coef, 0, 1.0);
+    set_at(&mut coef, p * n + n - 1, 1.0);
     let m = p - 1;
     if m > 0 {
         let rows = n - 2;
+        // The parameters between the first and last, which the fit is free at.
+        let inner = params.get(1..n - 1).unwrap_or_default();
         let mut ata = vec![0.0; m * m];
         let mut atb = vec![0.0; m * rows];
-        for (r, &v) in params[1..n - 1].iter().enumerate() {
+        for (r, &v) in inner.iter().enumerate() {
             for a in 0..m {
                 let ba = bern(a + 1, v);
-                atb[a * rows + r] = ba;
+                set_at(&mut atb, a * rows + r, ba);
                 for b in 0..m {
-                    ata[a * m + b] += ba * bern(b + 1, v);
+                    add_at(&mut ata, a * m + b, ba * bern(b + 1, v));
                 }
             }
         }
         let x = solve_dense(ata, atb, m, rows)?;
         for a in 0..m {
             let k = a + 1;
-            for (r, &v) in params[1..n - 1].iter().enumerate() {
-                let g = x[a * rows + r];
-                coef[k * n + r + 1] += g;
-                coef[k * n] -= g * bern(0, v);
-                coef[k * n + n - 1] -= g * bern(p, v);
+            for (r, &v) in inner.iter().enumerate() {
+                let g = x.get(a * rows + r).copied().unwrap_or_default();
+                add_at(&mut coef, k * n + r + 1, g);
+                add_at(&mut coef, k * n, -(g * bern(0, v)));
+                add_at(&mut coef, k * n + n - 1, -(g * bern(p, v)));
             }
         }
     }
@@ -491,22 +547,25 @@ pub(crate) fn bezier_fit(params: &[f64], degree: usize) -> Result<Across> {
 /// The cubic (quadratic, linear for fewer sections) through every data point at `params`, with
 /// not-a-knot ends.
 pub(crate) fn interpolation(params: &[f64]) -> Result<Across> {
+    let (Some(&first), Some(&last)) = (params.first(), params.last()) else {
+        return Err(Error::InvalidInput("an interpolation through no points".into()));
+    };
     let n = params.len();
     let p = (n - 1).min(3);
-    let mut knots = vec![params[0]; p + 1];
+    let mut knots = vec![first; p + 1];
     if p == 3 {
-        knots.extend_from_slice(&params[2..n - 2]);
+        knots.extend_from_slice(params.get(2..n - 2).unwrap_or_default());
     }
-    knots.extend(std::iter::repeat_n(params[n - 1], p + 1));
+    knots.extend(std::iter::repeat_n(last, p + 1));
     let mut a = vec![0.0; n * n];
     for (row, &t) in params.iter().enumerate() {
         for (j, b) in basis(p, &knots, t).into_iter().enumerate() {
-            a[row * n + j] = b;
+            set_at(&mut a, row * n + j, b);
         }
     }
     let mut id = vec![0.0; n * n];
     for i in 0..n {
-        id[i * n + i] = 1.0;
+        set_at(&mut id, i * n + i, 1.0);
     }
     let coef = solve_dense(a, id, n, n)?;
     Ok(Across {

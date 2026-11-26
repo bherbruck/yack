@@ -7,7 +7,6 @@
 //! Sweeps of planar profiles into solids: straight, turned about an axis, along a path of legs
 //! and bends, along a helix, and along a space curve. Every side face takes the names of the
 //! profile segment that sweeps it; caps are `start` (on the sketch plane) and `end`.
-#![warn(clippy::indexing_slicing)]
 
 mod curve;
 mod helix;

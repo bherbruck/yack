@@ -323,6 +323,7 @@ loft = []
 sweep = ["loft"]
 primitive = ["loft", "sweep"]
 ruled = ["loft"]
+drafted = ["loft"]
 
 [modules.yack-boolean]
 arrange = []

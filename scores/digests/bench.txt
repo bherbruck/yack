@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree fd624d4+8daaf4b7
-# reason: M4.8 chamfer_angle native rung first (fd624d4): only the 18 bench chamfer_angle cases move (a springrep-form body from yack-blend replaces a held cadrs body); conformance seed 0 identical; bake-off native 18/18 equal to cadrs to 6e-16, brep-bench chamfer/ 35/35 pass 0 wrong, graded masses within 1.4e-15 (w-m04-conf-69)
+# Solid::digest() per result (cargo xtask digest); tree 6bf3aeb+5f17fd5a
+# reason: M4.9 ruled native rung first (w-m11 506-case sweep, w-m03 -222): only geometry/hyperboloid-ruled moves (one B-spline side instead of two, V/A bit-identical, every face with an origin); bench otherwise and conformance seed 0 identical on snapshot head-6bf3aeb+5f17fd5a
 boolean/box-minus-through-cylinder a383360aa7cad335c1244b4fd0f92fecf2e3d5223cb2ca561f8e01868942566e
 boolean/boxes-common 6ca20909349786779d9a0e4c4be4544baf4933abea25fa93b059c8e87d5ef91d
 boolean/boxes-cut 73fe72cd0177fde9fe6237ddcb2f3ba0e951e5218eb4576198cd4bfd058b6c68
@@ -176,7 +176,7 @@ geometry/high-degree-bezier-dome a5658898acd0a0b16fd533e46c51208a93ea6777b3c8303
 geometry/horn-torus dec22f80a7bbf8a27b1360aca8ac2a7e5d0a358d6b43f9879e23d3447a0dadb2
 geometry/hyperboloid f779674ad2c9480b4f06e227fec45fa54865dc61882a8daae80da8576f362e4d
 geometry/hyperboloid-of-two-sheets 9c5f58dd7b1cc4152117b2be47620d06c85e4a9def78421eb2adf2e6f73ae78b
-geometry/hyperboloid-ruled c2022ad3459b467af94087d85810c77ba912e93640467453c97da92b12cf3203
+geometry/hyperboloid-ruled 2b077cc524d0c5cfd8341881c585bf6aa5ebb9ea12728690b077016f04ee2ba8
 geometry/lemon 19cf44e751b7a488f51e7d5ee1de17cbc414c8891466e57d827a8ed3333503c7
 geometry/nurbs-cone c6f72c31a665c9926eae0f1fb90c45320e976ccb0de4ab261ec230a5803678b2
 geometry/nurbs-sphere f25c5014dd8ecce8ec0f3e33565f5d035bc8ce1344ae7fd41703d79b572c2039

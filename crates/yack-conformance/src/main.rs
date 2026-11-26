@@ -420,16 +420,25 @@ impl Kernel for Yack {
     }
 }
 
-/// The bake-off build (PLAN §3.5) runs one engine alone when `YACK_ENGINE` names it; unset or
-/// anything else keeps the ladder. Read once, before the first request.
+/// The bake-off build (PLAN §3.5) runs one engine alone when `YACK_ENGINE` names it (`springrep`,
+/// `cadrs`, `native`), or for one op only as `ENGINE@OP` (`springrep@thicken`: every other op keeps
+/// its ladder); unset or anything else keeps the ladder. Read once, before the first request.
 #[cfg(feature = "bakeoff")]
 fn force_engine() {
-    use yack::bakeoff::{Engine, force};
+    use yack::bakeoff::{Engine, force, force_op};
     #[allow(clippy::disallowed_methods)] // tool crate: the bake-off's opt-in switch, read once
-    match std::env::var("YACK_ENGINE").as_deref() {
-        Ok("springrep") => force(Engine::Springrep),
-        Ok("cadrs") => force(Engine::Cadrs),
-        _ => {}
+    let Ok(spec) = std::env::var("YACK_ENGINE") else { return };
+    let (name, op) = spec.split_once('@').map_or((spec.as_str(), None), |(n, o)| (n, Some(o)));
+    let e = match name {
+        "springrep" => Engine::Springrep,
+        "cadrs" => Engine::Cadrs,
+        "native" => Engine::Native,
+        _ => return,
+    };
+    match op {
+        Some(op) if !op.is_empty() => force_op(op, e),
+        Some(_) => {}
+        None => force(e),
     }
 }
 

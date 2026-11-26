@@ -13,7 +13,6 @@
 //! derivatives at evenly spaced turns. The pieces are spaced so the column stays within
 //! `SCREW_FIT` of the helix, and a rational surface is a convex mix of its columns, so the surface
 //! stays as close to the exact screw surface.
-#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::TAU;
 

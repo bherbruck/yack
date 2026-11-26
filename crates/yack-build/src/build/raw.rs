@@ -1,7 +1,8 @@
 // yack: a solid's raw topology (points, edges, faces and their uses) built into an arena.
 // Adapted from springrep@a03e8a1 src/step/topology.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from step/topology.rs to build/raw.rs (M2 T5): the builder the STEP reader, the
-// blends and edit::affine share; paths and visibility only; then to yack-build (M3 W7), paths and visibility only.
+// blends and edit::affine share; paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
+// M3 hardening (w-h3): a use of an edge with no curve gives no samples (an error) instead of a panic.
 //! A solid's raw topology, as a file or a rebuild gives it, built into an arena: its points, its
 //! edges and their uses, its faces and their loops, then each edge's range and pcurves.
 
@@ -239,9 +240,10 @@ impl Builder {
     }
 
     /// The 3-D samples of a use of an edge, in its direction.
-    #[allow(clippy::panic)] fn samples(&self, u: Use) -> (Vec<f64>, Vec<Point3>) {
+    /// `None` for a pole, which a STEP edge never is.
+    fn samples(&self, u: Use) -> Option<(Vec<f64>, Vec<Point3>)> {
         let e = self.b.edge(self.edges[u.edge]);
-        let c = e.curve.as_ref().unwrap_or_else(|| panic!("STEP edges have curves"));
+        let c = e.curve.as_ref()?;
         let (t0, t1) = e.range;
         let mut cuts = vec![t0];
         cuts.extend(c.breakpoints(t0, t1));
@@ -261,14 +263,15 @@ impl Builder {
             ts.reverse();
         }
         let pts = ts.iter().map(|&t| c.eval(t)).collect();
-        (ts, pts)
+        Some((ts, pts))
     }
 
     /// Each use's parameter-plane samples, continuous along the loop and closing back on its
     /// start; `None` if no choice of periods closes it. Where a loop leaves a pole the period it
     /// leaves in is free, and `sign`, when given, picks the choice that encloses area that way.
     fn track_loop(&self, s: &Surface, uses: &[Use], sign: Option<f64>) -> Option<Vec<Track>> {
-        let samples: Vec<(Vec<f64>, Vec<Point3>)> = uses.iter().map(|&u| self.samples(u)).collect();
+        let samples: Vec<(Vec<f64>, Vec<Point3>)> =
+            uses.iter().map(|&u| self.samples(u)).collect::<Option<_>>()?;
         let start = s.project(samples[0].1[0]);
         let mut acc = Vec::with_capacity(uses.len());
         self.track_from(s, uses, &samples, 0, start, sign, &mut acc)

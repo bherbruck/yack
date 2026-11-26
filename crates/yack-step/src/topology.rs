@@ -31,16 +31,39 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
     Err(Error::Unsupported(format!("STEP #{id}: {what}")))
 }
 
-/// `raw` without the edges split in two after they were read, which no face uses any more.
-#[allow(clippy::disallowed_types)] fn without_split(mut raw: Raw, splits: &HashMap<usize, [usize; 2]>) -> Raw { // D26: BTree* in hardening, proven by digests
-    if splits.is_empty() {
-        return raw;
+/// A table of the solid being read lacks an entry its own topology names: refused, not guessed at.
+fn broken(what: &str) -> Error {
+    Error::InvalidInput(format!("STEP: the topology names {what} it does not hold"))
+}
+
+/// The representative of `i` in the union-find `parent`, halving the path on the way.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&up) = parent.get(i) {
+        if up == i {
+            break;
+        }
+        let grand = parent.get(up).copied().unwrap_or(up);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = grand;
+        }
+        i = grand;
     }
-    let mut index = vec![usize::MAX; raw.edges.len()];
+    i
+}
+
+/// `raw` without the edges split in two after they were read, which no face uses any more.
+#[allow(clippy::disallowed_types)] fn without_split(mut raw: Raw, splits: &HashMap<usize, [usize; 2]>) -> Result<Raw> { // D26: BTree* in hardening, proven by digests
+    if splits.is_empty() {
+        return Ok(raw);
+    }
+    // Each old edge's new index; a split one has none.
+    let mut index = Vec::with_capacity(raw.edges.len());
     let mut kept = Vec::with_capacity(raw.edges.len());
     for (i, e) in raw.edges.drain(..).enumerate() {
-        if !splits.contains_key(&i) {
-            index[i] = kept.len();
+        if splits.contains_key(&i) {
+            index.push(usize::MAX);
+        } else {
+            index.push(kept.len());
             kept.push(e);
         }
     }
@@ -48,39 +71,37 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
     for f in &mut raw.faces {
         for (_, uses) in &mut f.bounds {
             for u in uses {
-                u.edge = index[u.edge];
+                u.edge = *index.get(u.edge).ok_or_else(|| broken("an edge"))?;
             }
         }
     }
-    raw
+    Ok(raw)
 }
 
 /// `raw` with its coincident vertices made one, and then its coincident edges. A solid that
 /// touches itself is written, as STEP's manifold solids require, with each side of the contact
 /// given its own vertices and edges; two vertices of one valid solid are never that close, so
 /// coincident ones are such a contact, and joining them gives it back.
-#[allow(clippy::disallowed_types)] fn join_contacts(mut raw: Raw) -> Raw { // D26: BTree* in hardening, proven by digests
+#[allow(clippy::disallowed_types)] fn join_contacts(mut raw: Raw) -> Result<Raw> { // D26: BTree* in hardening, proven by digests
     let n = raw.points.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    fn root(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
+    let x_of = |i: usize| raw.points.get(i).map_or(f64::NAN, |p| p.x);
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| raw.points[a].x.total_cmp(&raw.points[b].x));
+    order.sort_by(|&a, &b| x_of(a).total_cmp(&x_of(b)));
     let mut joined = false;
     for (k, &i) in order.iter().enumerate() {
-        for &j in &order[k + 1..] {
-            if raw.points[j].x - raw.points[i].x > tol::LINEAR {
+        let Some(&pi) = raw.points.get(i) else { continue };
+        for &j in order.iter().skip(k + 1) {
+            let Some(&pj) = raw.points.get(j) else { continue };
+            if pj.x - pi.x > tol::LINEAR {
                 break;
             }
-            if raw.points[i].dist(raw.points[j]) <= tol::LINEAR {
+            if pi.dist(pj) <= tol::LINEAR {
                 let (a, b) = (root(&mut parent, i), root(&mut parent, j));
                 if a != b {
-                    parent[a.max(b)] = a.min(b);
+                    if let Some(slot) = parent.get_mut(a.max(b)) {
+                        *slot = a.min(b);
+                    }
                     joined = true;
                 }
             }
@@ -90,23 +111,26 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
         // The points kept, renumbered in order.
         let mut index = vec![usize::MAX; n];
         let (mut points, mut ids) = (Vec::new(), Vec::new());
-        for (i, slot) in index.iter_mut().enumerate() {
+        for ((i, slot), (&p, &id)) in index.iter_mut().enumerate().zip(raw.points.iter().zip(&raw.vertex_ids)) {
             if root(&mut parent, i) == i {
                 *slot = points.len();
-                points.push(raw.points[i]);
-                ids.push(raw.vertex_ids[i]);
+                points.push(p);
+                ids.push(id);
             }
         }
-        let at: Vec<usize> = (0..n).map(|i| index[root(&mut parent, i)]).collect();
+        let at = (0..n)
+            .map(|i| index.get(root(&mut parent, i)).copied().ok_or_else(|| broken("a point")))
+            .collect::<Result<Vec<usize>>>()?;
+        let moved = |v: usize| at.get(v).copied().ok_or_else(|| broken("a vertex"));
         raw.points = points;
         raw.vertex_ids = ids;
         for e in &mut raw.edges {
-            e.start = at[e.start];
-            e.end = at[e.end];
+            e.start = moved(e.start)?;
+            e.end = moved(e.end)?;
         }
         for f in &mut raw.faces {
             for v in &mut f.points {
-                *v = at[*v];
+                *v = moved(*v)?;
             }
         }
     }
@@ -121,24 +145,25 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
     let m = raw.edges.len();
     let mut into: Vec<(usize, bool)> = (0..m).map(|i| (i, false)).collect();
     let mut any = false;
+    let ends_of = |e: &RawEdge| Some((*raw.points.get(e.start)?, *raw.points.get(e.end)?));
     for group in ends.values().filter(|g| g.len() > 1) {
         for (k, &i) in group.iter().enumerate() {
-            if into[i].0 != i {
+            if into.get(i).is_none_or(|&(to, _)| to != i) {
                 continue;
             }
-            let a = &raw.edges[i];
-            let (pa, pz) = (raw.points[a.start], raw.points[a.end]);
+            let Some(a) = raw.edges.get(i) else { continue };
+            let Some((pa, pz)) = ends_of(a) else { continue };
             let Some((t0, t1)) = edge_range(&a.curve, pa, pz, a.start == a.end) else {
                 continue;
             };
             let (q, d) = a.curve.d1(0.5 * (t0 + t1));
-            for &j in &group[k + 1..] {
-                let b = &raw.edges[j];
-                if into[j].0 != j {
+            for &j in group.iter().skip(k + 1) {
+                let Some(b) = raw.edges.get(j) else { continue };
+                if into.get(j).is_none_or(|&(to, _)| to != j) {
                     continue;
                 }
                 // On `b`'s curve within its range: two arcs of one circle share their ends too.
-                let (pb, pe) = (raw.points[b.start], raw.points[b.end]);
+                let Some((pb, pe)) = ends_of(b) else { continue };
                 let Some((u0, u1)) = edge_range(&b.curve, pb, pe, b.start == b.end) else {
                     continue;
                 };
@@ -147,41 +172,47 @@ fn unsupported<T>(id: u64, what: &str) -> Result<T> {
                     t = u0 + (t - u0).rem_euclid(p);
                 }
                 let (r, dr) = b.curve.d1(t);
-                if (u0..=u1).contains(&t) && r.dist(q) <= tol::LINEAR {
-                    into[j] = (i, d.dot(dr) < 0.0);
+                if (u0..=u1).contains(&t)
+                    && r.dist(q) <= tol::LINEAR
+                    && let Some(slot) = into.get_mut(j)
+                {
+                    *slot = (i, d.dot(dr) < 0.0);
                     any = true;
                 }
             }
         }
     }
     if !any {
-        return raw;
+        return Ok(raw);
     }
-    let mut kept = vec![usize::MAX; m];
+    // Each edge's place among those kept, `usize::MAX` for one merged into another.
+    let mut kept = Vec::with_capacity(m);
     let mut edges = Vec::new();
-    for i in 0..m {
-        if into[i].0 == i {
-            kept[i] = edges.len();
-            edges.push(raw.edges[i].clone());
+    for (i, (&(to, _), e)) in into.iter().zip(&raw.edges).enumerate() {
+        if to == i {
+            kept.push(edges.len());
+            edges.push(e.clone());
+        } else {
+            kept.push(usize::MAX);
         }
     }
-    for (i, &(to, _)) in into.iter().enumerate() {
+    for (i, (&(to, _), e)) in into.iter().zip(&raw.edges).enumerate() {
         if to != i {
-            let faces = raw.edges[i].faces.clone();
-            edges[kept[to]].faces.extend(faces);
+            let into_edge = kept.get(to).and_then(|&k| edges.get_mut(k)).ok_or_else(|| broken("an edge"))?;
+            into_edge.faces.extend(e.faces.iter().copied());
         }
     }
     raw.edges = edges;
     for f in &mut raw.faces {
         for (_, uses) in &mut f.bounds {
             for u in uses {
-                let (to, flip) = into[u.edge];
-                u.edge = kept[to];
+                let &(to, flip) = into.get(u.edge).ok_or_else(|| broken("an edge"))?;
+                u.edge = *kept.get(to).ok_or_else(|| broken("an edge"))?;
                 u.reversed ^= flip;
             }
         }
     }
-    raw
+    Ok(raw)
 }
 
 /// The vertex a use starts at.
@@ -193,9 +224,14 @@ fn about(frame: &Frame) -> impl Fn(Point3) -> f64 + '_ {
     }
 }
 
-fn use_start(raw: &Raw, u: &Use) -> usize {
-    let e = &raw.edges[u.edge];
-    if u.reversed { e.end } else { e.start }
+fn use_start(raw: &Raw, u: &Use) -> Option<usize> {
+    let e = raw.edges.get(u.edge)?;
+    Some(if u.reversed { e.end } else { e.start })
+}
+
+/// The point at the vertex a use starts at.
+fn use_point(raw: &Raw, u: &Use) -> Option<Point3> {
+    raw.points.get(use_start(raw, u)?).copied()
 }
 
 /// Reads one solid's topology, sharing vertices and edges between its faces.
@@ -300,12 +336,14 @@ impl<'g, 'a> Reader<'g, 'a> {
             return bad(lp, "a polygon needs three distinct corners");
         }
         let mut uses = Vec::new();
-        for k in 0..corners.len() {
-            let (a, b) = (corners[k], corners[(k + 1) % corners.len()]);
+        // Each corner and the next, the last's next the first.
+        for (&a, &b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
             let edge = match self.sides.get(&(a.min(b), a.max(b))) {
                 Some(&e) => e,
                 None => {
-                    let (pa, pb) = (self.raw.points[a], self.raw.points[b]);
+                    let (Some(&pa), Some(&pb)) = (self.raw.points.get(a), self.raw.points.get(b)) else {
+                        return Err(broken("a polygon corner"));
+                    };
                     let Some(dir) = (pb - pa).unit() else {
                         return bad(lp, "a polygon side has no length");
                     };
@@ -321,7 +359,7 @@ impl<'g, 'a> Reader<'g, 'a> {
                     e
                 }
             };
-            let along = self.raw.edges[edge].start == a;
+            let along = self.raw.edges.get(edge).ok_or_else(|| broken("a polygon side"))?.start == a;
             uses.push(Use {
                 edge,
                 reversed: along != forward,
@@ -377,7 +415,9 @@ impl<'g, 'a> Reader<'g, 'a> {
     /// A seam from `from` to `apex` along `surface`, for a face that closes on its apex: a
     /// generator of a cone, a meridian of a sphere.
     fn seam(&mut self, id: u64, surface: &Surface, from: usize, apex: usize) -> Result<usize> {
-        let (p, q) = (self.raw.points[from], self.raw.points[apex]);
+        let (Some(&p), Some(&q)) = (self.raw.points.get(from), self.raw.points.get(apex)) else {
+            return Err(broken("a seam's end"));
+        };
         let curve = match surface {
             Surface::Cone(_) => match (q - p).unit() {
                 Some(dir) => Curve::Line(Line { origin: p, dir }),
@@ -431,8 +471,8 @@ impl<'g, 'a> Reader<'g, 'a> {
 
     /// Splits edge `e` at its parameter `t` into two edges meeting at a new vertex there, and
     /// gives every face read so far, and `bounds`, the halves in its place. Returns the vertex.
-    fn split_edge(&mut self, e: usize, t: f64, bounds: &mut [(bool, Vec<Use>)]) -> usize {
-        let edge = self.raw.edges[e].clone();
+    fn split_edge(&mut self, e: usize, t: f64, bounds: &mut [(bool, Vec<Use>)]) -> Option<usize> {
+        let edge = self.raw.edges.get(e)?.clone();
         let p = edge.curve.eval(t);
         self.raw.points.push(p);
         self.raw.vertex_ids.push(edge.id);
@@ -445,15 +485,19 @@ impl<'g, 'a> Reader<'g, 'a> {
         let n = self.raw.edges.len();
         self.splits.insert(e, [n - 2, n - 1]);
         for f in 0..self.raw.faces.len() {
-            for b in 0..self.raw.faces[f].bounds.len() {
-                let uses = self.expand(&self.raw.faces[f].bounds[b].1);
-                self.raw.faces[f].bounds[b].1 = uses;
+            let count = self.raw.faces.get(f).map_or(0, |face| face.bounds.len());
+            for b in 0..count {
+                let Some(old) = self.raw.faces.get(f).and_then(|face| face.bounds.get(b)) else { continue };
+                let uses = self.expand(&old.1);
+                if let Some(slot) = self.raw.faces.get_mut(f).and_then(|face| face.bounds.get_mut(b)) {
+                    slot.1 = uses;
+                }
             }
         }
         for (_, uses) in bounds.iter_mut() {
             *uses = self.expand(uses);
         }
-        v
+        Some(v)
     }
 
     /// Where `uses` cross the angle `at`, as an edge and its parameter, `angle` giving a point's.
@@ -468,8 +512,8 @@ impl<'g, 'a> Reader<'g, 'a> {
                 - std::f64::consts::PI
         };
         for u in uses {
-            let e = &self.raw.edges[u.edge];
-            let (ps, pe) = (self.raw.points[e.start], self.raw.points[e.end]);
+            let e = self.raw.edges.get(u.edge)?;
+            let (ps, pe) = (*self.raw.points.get(e.start)?, *self.raw.points.get(e.end)?);
             let (t0, t1) = edge_range(&e.curve, ps, pe, e.start == e.end)?;
             let n = 64;
             for k in 0..n {
@@ -507,8 +551,8 @@ impl<'g, 'a> Reader<'g, 'a> {
     fn swept_by(&self, angle: &dyn Fn(Point3) -> f64, uses: &[Use]) -> Option<f64> {
         let mut total = 0.0;
         for u in uses {
-            let e = &self.raw.edges[u.edge];
-            let (ps, pe) = (self.raw.points[e.start], self.raw.points[e.end]);
+            let e = self.raw.edges.get(u.edge)?;
+            let (ps, pe) = (*self.raw.points.get(e.start)?, *self.raw.points.get(e.end)?);
             let (t0, t1) = edge_range(&e.curve, ps, pe, e.start == e.end)?;
             let n = 64;
             let mut ts: Vec<f64> = (0..=n)
@@ -518,7 +562,8 @@ impl<'g, 'a> Reader<'g, 'a> {
                 ts.reverse();
             }
             for w in ts.windows(2) {
-                let d = angle(e.curve.eval(w[1])) - angle(e.curve.eval(w[0]));
+                let &[a, z] = w else { continue };
+                let d = angle(e.curve.eval(z)) - angle(e.curve.eval(a));
                 let d = (d + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
                     - std::f64::consts::PI;
                 if d.abs() > 1.0 {
@@ -564,7 +609,9 @@ impl<'g, 'a> Reader<'g, 'a> {
         if wa * wb >= 0.0 {
             return None;
         }
-        let (a, b) = (&bounds[ka].1, &bounds[kb].1);
+        let (Some((_, a)), Some((_, b))) = (bounds.get(ka), bounds.get(kb)) else {
+            return None;
+        };
         // A vertex of each loop on one line of the surface: a cylinder's lines run along its
         // axis, a cone's through its apex.
         let on_line = |p: Point3, q: Point3| {
@@ -577,29 +624,32 @@ impl<'g, 'a> Reader<'g, 'a> {
             let (ux, uy) = (lp.x / rp, lp.y / rp);
             (lq.x - ux * rq).hypot(lq.y - uy * rq) <= tol::LINEAR
         };
-        let aligned = (0..a.len())
-            .flat_map(|i| (0..b.len()).map(move |j| (i, j)))
-            .find(|&(i, j)| {
-                let at = |u: &Use| self.raw.points[use_start(&self.raw, u)];
-                on_line(at(&a[i]), at(&b[j]))
-            });
+        let aligned = a
+            .iter()
+            .enumerate()
+            .flat_map(|(i, ua)| b.iter().enumerate().map(move |(j, ub)| (i, j, ua, ub)))
+            .find(|&(_, _, ua, ub)| match (use_point(&self.raw, ua), use_point(&self.raw, ub)) {
+                (Some(p), Some(q)) => on_line(p, q),
+                _ => false,
+            })
+            .map(|(i, j, _, _)| (i, j));
         let (a, b, ia, ib) = match aligned {
             Some((i, j)) => (a.clone(), b.clone(), i, j),
             None => {
                 // No vertex of the second loop at the first's angle: split the second's edge
                 // there, in every face that uses it.
-                let va = use_start(&self.raw, &a[0]);
-                let la = frame.to_local(self.raw.points[va]);
+                let va = use_start(&self.raw, a.first()?)?;
+                let la = frame.to_local(*self.raw.points.get(va)?);
                 let (e, t) = self.crossing(&about(&frame), b, la.y.atan2(la.x))?;
-                let v = self.split_edge(e, t, bounds);
-                let (a, b) = (bounds[ka].1.clone(), bounds[kb].1.clone());
-                let ia = a.iter().position(|u| use_start(&self.raw, u) == va)?;
-                let ib = b.iter().position(|u| use_start(&self.raw, u) == v)?;
+                let v = self.split_edge(e, t, bounds)?;
+                let (a, b) = (bounds.get(ka)?.1.clone(), bounds.get(kb)?.1.clone());
+                let ia = a.iter().position(|u| use_start(&self.raw, u) == Some(va))?;
+                let ib = b.iter().position(|u| use_start(&self.raw, u) == Some(v))?;
                 (a, b, ia, ib)
             }
         };
-        let (va, vb) = (use_start(&self.raw, &a[ia]), use_start(&self.raw, &b[ib]));
-        let (pa, pb) = (self.raw.points[va], self.raw.points[vb]);
+        let (va, vb) = (use_start(&self.raw, a.get(ia)?)?, use_start(&self.raw, b.get(ib)?)?);
+        let (pa, pb) = (*self.raw.points.get(va)?, *self.raw.points.get(vb)?);
         // The seam's line at the vertices' angle about the axis.
         let la = frame.to_local(pa);
         let radial = (frame.x * la.x + frame.y * la.y).unit()?;
@@ -642,12 +692,12 @@ impl<'g, 'a> Reader<'g, 'a> {
             faces: Vec::new(),
         });
         let seam = self.raw.edges.len() - 1;
-        let mut out: Vec<Use> = a[ia..].iter().chain(&a[..ia]).copied().collect();
+        let mut out: Vec<Use> = a.iter().skip(ia).chain(a.iter().take(ia)).copied().collect();
         out.push(Use {
             edge: seam,
             reversed: false,
         });
-        out.extend(b[ib..].iter().chain(&b[..ib]).copied());
+        out.extend(b.iter().skip(ib).chain(b.iter().take(ib)).copied());
         out.push(Use {
             edge: seam,
             reversed: true,
@@ -700,13 +750,17 @@ impl<'g, 'a> Reader<'g, 'a> {
         // sliver beside a vertex a file placed a little off the line.
         let mut angles: Vec<f64> = [ka, kb]
             .iter()
-            .flat_map(|&k| bounds[k].1.iter())
-            .map(|u| angle(self.raw.points[use_start(&self.raw, u)]).rem_euclid(TAU))
+            .filter_map(|&k| bounds.get(k))
+            .flat_map(|(_, uses)| uses.iter())
+            .filter_map(|u| use_point(&self.raw, u))
+            .map(|p| angle(p).rem_euclid(TAU))
             .collect();
         angles.sort_by(f64::total_cmp);
-        let at = (0..angles.len())
-            .map(|i| {
-                let (lo, hi) = (angles[i], angles[(i + 1) % angles.len()]);
+        // Each angle and the next round, the last's next the first.
+        let at = angles
+            .iter()
+            .zip(angles.iter().cycle().skip(1))
+            .map(|(&lo, &hi)| {
                 let gap = (hi - lo).rem_euclid(TAU);
                 let gap = if gap == 0.0 { TAU } else { gap };
                 (gap, lo + 0.5 * gap)
@@ -715,27 +769,27 @@ impl<'g, 'a> Reader<'g, 'a> {
             .1;
         let seam = Curve::Nurbs(Box::new(n.iso_curve(!in_v, at / TAU * period).ok()?));
         let on_seam = |raw: &Raw, u: &Use| {
-            let q = raw.points[use_start(raw, u)];
-            seam.eval(param_of(&seam, q)).dist(q) <= tol::LINEAR
+            use_point(raw, u).is_some_and(|q| seam.eval(param_of(&seam, q)).dist(q) <= tol::LINEAR)
         };
         // A vertex of each loop on the seam, the loop's edge split there where it has none.
         let mut ends = [0usize; 2];
-        for (slot, k) in [ka, kb].into_iter().enumerate() {
-            ends[slot] = match bounds[k].1.iter().find(|u| on_seam(&self.raw, u)) {
-                Some(u) => use_start(&self.raw, u),
+        for (end, k) in ends.iter_mut().zip([ka, kb]) {
+            let found = bounds.get(k)?.1.iter().find(|u| on_seam(&self.raw, u)).copied();
+            *end = match found {
+                Some(u) => use_start(&self.raw, &u)?,
                 None => {
-                    let uses = bounds[k].1.clone();
+                    let uses = bounds.get(k)?.1.clone();
                     let (e, t) = self.crossing(&angle, &uses, at)?;
-                    self.split_edge(e, t, bounds)
+                    self.split_edge(e, t, bounds)?
                 }
             };
         }
         let [va, vb] = ends;
-        let (a, b) = (bounds[ka].1.clone(), bounds[kb].1.clone());
-        let ia = a.iter().position(|u| use_start(&self.raw, u) == va)?;
-        let ib = b.iter().position(|u| use_start(&self.raw, u) == vb)?;
+        let (a, b) = (bounds.get(ka)?.1.clone(), bounds.get(kb)?.1.clone());
+        let ia = a.iter().position(|u| use_start(&self.raw, u) == Some(va))?;
+        let ib = b.iter().position(|u| use_start(&self.raw, u) == Some(vb))?;
         // An edge runs the way its curve does: from whichever end comes first along the iso.
-        let back = param_of(&seam, self.raw.points[va]) > param_of(&seam, self.raw.points[vb]);
+        let back = param_of(&seam, *self.raw.points.get(va)?) > param_of(&seam, *self.raw.points.get(vb)?);
         let (start, end) = if back { (vb, va) } else { (va, vb) };
         self.raw.edges.push(RawEdge {
             id,
@@ -745,12 +799,12 @@ impl<'g, 'a> Reader<'g, 'a> {
             faces: Vec::new(),
         });
         let edge = self.raw.edges.len() - 1;
-        let mut out: Vec<Use> = a[ia..].iter().chain(&a[..ia]).copied().collect();
+        let mut out: Vec<Use> = a.iter().skip(ia).chain(a.iter().take(ia)).copied().collect();
         out.push(Use {
             edge,
             reversed: back,
         });
-        out.extend(b[ib..].iter().chain(&b[..ib]).copied());
+        out.extend(b.iter().skip(ib).chain(b.iter().take(ib)).copied());
         out.push(Use {
             edge,
             reversed: !back,
@@ -783,13 +837,15 @@ impl<'g, 'a> Reader<'g, 'a> {
         for (k, (_, uses)) in bounds.iter().enumerate() {
             // A loop through the apex, or a pole, already closes on it by its own seam.
             let at_pole = uses.iter().any(|u| {
-                let l = base.to_local(self.raw.points[use_start(&self.raw, u)]);
-                l.x.hypot(l.y) <= tol::LINEAR
+                use_point(&self.raw, u).is_some_and(|p| {
+                    let l = base.to_local(p);
+                    l.x.hypot(l.y) <= tol::LINEAR
+                })
             });
             let frame = match uses.as_slice() {
                 _ if !at_pole => base,
-                [u] if sphere => match &self.raw.edges[u.edge].curve {
-                    Curve::Circle(c) => match Frame::new(base.origin, c.frame.z, c.frame.x) {
+                [u] if sphere => match self.raw.edges.get(u.edge).map(|e| &e.curve) {
+                    Some(Curve::Circle(c)) => match Frame::new(base.origin, c.frame.z, c.frame.x) {
                         Ok(f) => f,
                         Err(_) => continue,
                     },
@@ -810,7 +866,9 @@ impl<'g, 'a> Reader<'g, 'a> {
         let Some((k, frame, w)) = found else {
             return Ok(false);
         };
-        let uses = &bounds[k].1;
+        let Some(&first) = bounds.get(k).and_then(|(_, uses)| uses.first()) else {
+            return Err(broken("a cap's loop"));
+        };
         let pole = match surface {
             Surface::Sphere(s) => {
                 s.frame = frame;
@@ -824,13 +882,10 @@ impl<'g, 'a> Reader<'g, 'a> {
         self.raw.points.push(pole);
         self.raw.vertex_ids.push(id);
         let apex = self.raw.points.len() - 1;
-        let from = use_start(&self.raw, &uses[0]);
+        let from = use_start(&self.raw, &first).ok_or_else(|| broken("a cap's edge"))?;
         let seam = self.seam(id, surface, from, apex)?;
-        for reversed in [false, true] {
-            bounds[k].1.push(Use {
-                edge: seam,
-                reversed,
-            });
+        if let Some((_, uses)) = bounds.get_mut(k) {
+            uses.extend([Use { edge: seam, reversed: false }, Use { edge: seam, reversed: true }]);
         }
         Ok(true)
     }
@@ -850,9 +905,9 @@ impl<'g, 'a> Reader<'g, 'a> {
         }
         let (mut apexes, points): (Vec<usize>, Vec<usize>) = apexes
             .into_iter()
-            .partition(|&v| closes_at(&surface, self.raw.points[v]));
+            .partition(|&v| self.raw.points.get(v).is_some_and(|&p| closes_at(&surface, p)));
         for &v in &points {
-            let p = self.raw.points[v];
+            let p = *self.raw.points.get(v).ok_or_else(|| broken("a vertex loop's vertex"))?;
             let uv = surface.project(p);
             if surface.eval(uv.x, uv.y).dist(p) > tol::LINEAR {
                 return bad(id, "a VERTEX_LOOP off its face's surface");
@@ -861,7 +916,7 @@ impl<'g, 'a> Reader<'g, 'a> {
         // A whole sphere, bounded only by a vertex loop at one pole: the kernel's seam, a
         // meridian from the other pole to it, used both ways.
         if let ([apex], 0, Surface::Sphere(sp)) = (apexes.as_slice(), bounds.len(), &surface) {
-            let (c, p) = (sp.frame.origin, self.raw.points[*apex]);
+            let (c, p) = (sp.frame.origin, *self.raw.points.get(*apex).ok_or_else(|| broken("a pole"))?);
             let other = c * 2.0 - p;
             self.raw.points.push(other);
             self.raw.vertex_ids.push(id);
@@ -901,19 +956,13 @@ impl<'g, 'a> Reader<'g, 'a> {
         match (apexes.as_slice(), bounds.len()) {
             ([], _) => {}
             (&[apex], 1) => {
-                let uses = &bounds[0].1;
-                let first = uses[0];
-                let e = &self.raw.edges[first.edge];
-                let from = if first.reversed { e.end } else { e.start };
+                let Some(from) = bounds.first().and_then(|(_, uses)| uses.first()).and_then(|u| use_start(&self.raw, u)) else {
+                    return Err(broken("a bound's first edge"));
+                };
                 let seam = self.seam(id, &surface, from, apex)?;
-                bounds[0].1.push(Use {
-                    edge: seam,
-                    reversed: false,
-                });
-                bounds[0].1.push(Use {
-                    edge: seam,
-                    reversed: true,
-                });
+                if let Some((_, uses)) = bounds.first_mut() {
+                    uses.extend([Use { edge: seam, reversed: false }, Use { edge: seam, reversed: true }]);
+                }
             }
             _ => {
                 return unsupported(
@@ -937,7 +986,7 @@ impl<'g, 'a> Reader<'g, 'a> {
         let f = self.raw.faces.len();
         for (_, uses) in &bounds {
             for u in uses {
-                self.raw.edges[u.edge].faces.push(f);
+                self.raw.edges.get_mut(u.edge).ok_or_else(|| broken("an edge"))?.faces.push(f);
             }
         }
         self.raw.faces.push(RawFace {
@@ -955,7 +1004,9 @@ impl<'g, 'a> Reader<'g, 'a> {
         let Some(e) = self.geo.file.get(id) else {
             return bad(id, "missing instance");
         };
-        let first = &e.records()[0];
+        let Some(first) = e.records().first() else {
+            return bad(id, "an instance with no record");
+        };
         let (kind, a) = (&first.name, &first.params);
         let mut shells: Vec<u64> = Vec::new();
         match kind.as_str() {
@@ -1033,7 +1084,7 @@ pub(super) type ReadSolid = (Brep, Vec<(u64, String)>, Option<heal::Healed>);
         splits: HashMap::new(),
     };
     rd.solid(id)?;
-    let file = join_contacts(without_split(rd.raw, &rd.splits));
+    let file = join_contacts(without_split(rd.raw, &rd.splits)?)?;
     let mut raw = file.clone();
     let names = || file.faces.iter().map(|f| (f.id, f.name.clone())).collect();
     let within = rd.geo.uncertainty().filter(|&u| u > tol::LINEAR);
@@ -1122,11 +1173,10 @@ pub(super) type ReadSolid = (Brep, Vec<(u64, String)>, Option<heal::Healed>);
         };
         let mut xyz = Vec::new();
         for c in coords.get(2).and_then(Param::list).unwrap_or(&[]) {
-            let v = geo.numbers(list, Some(c))?;
-            if v.len() != 3 || v.iter().any(|x| !x.is_finite()) {
-                return bad(list, "expected three finite coordinates");
+            match *geo.numbers(list, Some(c))?.as_slice() {
+                [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => xyz.push(Point3::new(x, y, z) * unit),
+                _ => return bad(list, "expected three finite coordinates"),
             }
-            xyz.push(Point3::new(v[0], v[1], v[2]) * unit);
         }
         // Triangle corners index the face's own points, which index the coordinates list.
         let own: Vec<usize> = face
@@ -1171,8 +1221,10 @@ pub(super) type ReadSolid = (Brep, Vec<(u64, String)>, Option<heal::Healed>);
             };
             let mut corners = [0; 3];
             for (corner, &i) in corners.iter_mut().zip(&idx) {
+                // `corner` has checked `i` against the list.
+                let p = *xyz.get(i).ok_or_else(|| broken("a coordinate"))?;
                 *corner = *index.entry((list, i)).or_insert_with(|| {
-                    points.push(xyz[i]);
+                    points.push(p);
                     points.len() - 1
                 });
             }
@@ -1192,17 +1244,22 @@ pub(super) type ReadSolid = (Brep, Vec<(u64, String)>, Option<heal::Healed>);
 /// area and is left out.
 fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
     let strip = strips.iter().flat_map(|s| {
-        s.windows(3).enumerate().map(|(i, w)| match i % 2 {
-            0 => vec![w[0], w[1], w[2]],
-            _ => vec![w[1], w[0], w[2]],
+        s.windows(3).enumerate().filter_map(|(i, w)| match (i % 2, w) {
+            (0, &[a, b, c]) => Some([a, b, c]),
+            (_, &[a, b, c]) => Some([b, a, c]),
+            _ => None,
         })
     });
-    let fan = fans
-        .iter()
-        .flat_map(|f| f.windows(2).skip(1).map(|w| vec![f[0], w[0], w[1]]));
+    let fan = fans.iter().flat_map(|f| {
+        f.windows(2).skip(1).filter_map(move |w| match (f.first(), w) {
+            (Some(&o), &[a, b]) => Some([o, a, b]),
+            _ => None,
+        })
+    });
     strip
         .chain(fan)
-        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .filter(|&[a, b, c]| a != b && b != c && a != c)
+        .map(|t| t.to_vec())
         .collect()
 }
 
@@ -1236,75 +1293,85 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
             "STEP: the file holds no faces to sew".into(),
         ));
     }
-    let mut raw = without_split(rd.raw, &rd.splits);
+    let mut raw = without_split(rd.raw, &rd.splits)?;
     // Points within the tolerance of each other are one, at their mean.
     let n = raw.points.len();
     let mut rep: Vec<usize> = (0..n).collect();
+    /// The representative of `i`, which then points straight at it.
     fn root(rep: &mut [usize], i: usize) -> usize {
         let mut r = i;
-        while rep[r] != r {
-            r = rep[r];
+        while let Some(&up) = rep.get(r)
+            && up != r
+        {
+            r = up;
         }
-        rep[i] = r;
+        if let Some(slot) = rep.get_mut(i) {
+            *slot = r;
+        }
         r
     }
-    for i in 0..n {
-        for j in i + 1..n {
-            if raw.points[i].dist(raw.points[j]) <= tolerance {
+    for (i, &pi) in raw.points.iter().enumerate() {
+        for (j, &pj) in raw.points.iter().enumerate().skip(i + 1) {
+            if pi.dist(pj) <= tolerance {
                 let (a, b) = (root(&mut rep, i), root(&mut rep, j));
-                if a != b {
-                    rep[b] = a;
+                if a != b
+                    && let Some(slot) = rep.get_mut(b)
+                {
+                    *slot = a;
                 }
             }
         }
     }
     let mut sum: HashMap<usize, (Point3, f64)> = HashMap::new();
-    for i in 0..n {
+    for (i, &p) in raw.points.iter().enumerate() {
         let r = root(&mut rep, i);
         let e = sum.entry(r).or_insert((Point3::ZERO, 0.0));
-        e.0 += raw.points[i];
+        e.0 += p;
         e.1 += 1.0;
     }
-    for i in 0..n {
+    for (i, p) in raw.points.iter_mut().enumerate() {
         let r = root(&mut rep, i);
-        let (s, k) = sum[&r];
-        raw.points[i] = s * (1.0 / k);
+        let &(s, k) = sum.get(&r).ok_or_else(|| broken("a point"))?;
+        *p = s * (1.0 / k);
     }
     // Edges that now run between one pair of points, and lie together along it, are one: the
     // first stands for the rest, and their uses are turned to its direction.
     let ends = |e: &RawEdge, rep: &mut [usize]| (root(rep, e.start), root(rep, e.end));
     let mut keep: Vec<usize> = (0..raw.edges.len()).collect();
     let mut turned = vec![false; raw.edges.len()];
-    for i in 0..raw.edges.len() {
-        if keep[i] != i {
+    let mid = |e: &RawEdge| {
+        let (s, z) = (*raw.points.get(e.start)?, *raw.points.get(e.end)?);
+        let t = param_of(&e.curve, s.lerp(z, 0.5));
+        Some(e.curve.eval(t))
+    };
+    for (i, ei) in raw.edges.iter().enumerate() {
+        if keep.get(i) != Some(&i) {
             continue;
         }
-        let (a, b) = ends(&raw.edges[i], &mut rep);
-        let mid = |e: &RawEdge| {
-            let (s, z) = (raw.points[e.start], raw.points[e.end]);
-            let t = param_of(&e.curve, s.lerp(z, 0.5));
-            e.curve.eval(t)
-        };
-        let mi = mid(&raw.edges[i]);
-        for j in i + 1..raw.edges.len() {
-            if keep[j] != j {
+        let (a, b) = ends(ei, &mut rep);
+        let mi = mid(ei).ok_or_else(|| broken("an edge's end"))?;
+        for (j, ej) in raw.edges.iter().enumerate().skip(i + 1) {
+            if keep.get(j) != Some(&j) {
                 continue;
             }
-            let (c, d) = ends(&raw.edges[j], &mut rep);
+            let (c, d) = ends(ej, &mut rep);
             let same = (a, b) == (c, d);
-            if !(same || (a, b) == (d, c)) || mid(&raw.edges[j]).dist(mi) > tolerance {
+            if !(same || (a, b) == (d, c)) || mid(ej).ok_or_else(|| broken("an edge's end"))?.dist(mi) > tolerance {
                 continue;
             }
-            keep[j] = i;
-            turned[j] = !same;
+            if let (Some(k), Some(tu)) = (keep.get_mut(j), turned.get_mut(j)) {
+                *k = i;
+                *tu = !same;
+            }
         }
     }
     for f in &mut raw.faces {
         for (_, uses) in &mut f.bounds {
             for u in uses.iter_mut() {
-                if keep[u.edge] != u.edge {
-                    u.reversed ^= turned[u.edge];
-                    u.edge = keep[u.edge];
+                let (&to, &turn) = keep.get(u.edge).zip(turned.get(u.edge)).ok_or_else(|| broken("an edge"))?;
+                if to != u.edge {
+                    u.reversed ^= turn;
+                    u.edge = to;
                 }
             }
         }
@@ -1325,22 +1392,26 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
     }
     let mut flip: Vec<Option<bool>> = vec![None; raw.faces.len()];
     for start in 0..raw.faces.len() {
-        if flip[start].is_some() {
+        if flip.get(start).is_none_or(Option::is_some) {
             continue;
         }
-        flip[start] = Some(false);
+        if let Some(slot) = flip.get_mut(start) {
+            *slot = Some(false);
+        }
         let mut stack = vec![start];
         while let Some(f) = stack.pop() {
-            let mine = flip[f].unwrap_or(false);
-            for (_, us) in &raw.faces[f].bounds {
+            let mine = flip.get(f).copied().flatten().unwrap_or(false);
+            let Some(face) = raw.faces.get(f) else { continue };
+            for (_, us) in &face.bounds {
                 for u in us {
                     for &(g, rev) in uses.get(&u.edge).into_iter().flatten() {
-                        if g == f || flip[g].is_some() {
+                        let Some(slot) = flip.get_mut(g) else { continue };
+                        if g == f || slot.is_some() {
                             continue;
                         }
                         // Agreeing faces use the edge opposite ways once both are turned as set.
                         let want = (u.reversed ^ mine) == rev;
-                        flip[g] = Some(want);
+                        *slot = Some(want);
                         stack.push(g);
                     }
                 }
@@ -1359,44 +1430,51 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
         }
     }
     // Only the edges and points still used are kept, renumbered.
-    let mut edge_at = vec![usize::MAX; raw.edges.len()];
+    // Each old edge's place among those kept, `usize::MAX` for one merged into another.
+    let mut edge_at = Vec::with_capacity(raw.edges.len());
     let mut edges = Vec::new();
     for (i, e) in raw.edges.drain(..).enumerate() {
-        if keep[i] == i {
-            edge_at[i] = edges.len();
+        if keep.get(i) == Some(&i) {
+            edge_at.push(edges.len());
             edges.push(e);
+        } else {
+            edge_at.push(usize::MAX);
         }
     }
     raw.edges = edges;
     for f in &mut raw.faces {
         for (_, us) in &mut f.bounds {
             for u in us.iter_mut() {
-                u.edge = edge_at[u.edge];
+                u.edge = *edge_at.get(u.edge).ok_or_else(|| broken("an edge"))?;
             }
         }
     }
+    // Each point still used, renumbered in the order first met.
     let mut point_at = vec![usize::MAX; raw.points.len()];
     let (mut points, mut ids) = (Vec::new(), Vec::new());
-    for e in &mut raw.edges {
-        for v in [&mut e.start, &mut e.end] {
-            if point_at[*v] == usize::MAX {
-                point_at[*v] = points.len();
-                points.push(raw.points[*v]);
-                ids.push(raw.vertex_ids[*v]);
-            }
-            *v = point_at[*v];
+    let mut renumber = |v: usize| -> Result<usize> {
+        let slot = point_at.get_mut(v).ok_or_else(|| broken("a vertex"))?;
+        if *slot == usize::MAX {
+            *slot = points.len();
+            points.push(*raw.points.get(v).ok_or_else(|| broken("a point"))?);
+            ids.push(*raw.vertex_ids.get(v).ok_or_else(|| broken("a vertex id"))?);
         }
+        Ok(*slot)
+    };
+    let mut ends_at = Vec::with_capacity(raw.edges.len());
+    for e in &raw.edges {
+        ends_at.push((renumber(e.start)?, renumber(e.end)?));
     }
-    for f in &mut raw.faces {
-        for p in &mut f.points {
-            *p = root(&mut rep, *p);
-            if point_at[*p] == usize::MAX {
-                point_at[*p] = points.len();
-                points.push(raw.points[*p]);
-                ids.push(raw.vertex_ids[*p]);
-            }
-            *p = point_at[*p];
-        }
+    let mut faces_at = Vec::with_capacity(raw.faces.len());
+    for f in &raw.faces {
+        faces_at.push(f.points.iter().map(|&p| renumber(root(&mut rep, p))).collect::<Result<Vec<usize>>>()?);
+    }
+    for (e, (s, z)) in raw.edges.iter_mut().zip(ends_at) {
+        e.start = s;
+        e.end = z;
+    }
+    for (f, ps) in raw.faces.iter_mut().zip(faces_at) {
+        f.points = ps;
     }
     raw.points = points;
     raw.vertex_ids = ids;
@@ -1404,7 +1482,7 @@ fn strips_and_fans(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<Vec<i64>> {
     for (fi, f) in raw.faces.iter().enumerate() {
         for (_, us) in &f.bounds {
             for u in us {
-                raw.edges[u.edge].faces.push(fi);
+                raw.edges.get_mut(u.edge).ok_or_else(|| broken("an edge"))?.faces.push(fi);
             }
         }
     }

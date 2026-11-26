@@ -2,7 +2,7 @@
 // enumerations upper-cased, its strings' control directives decoded.
 // Adapted from springrep@a03e8a1 src/step/part21.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: parsing delegated to yack-p21 (M3 native rewrite) and its types used directly; the
-// string codec moved to yack-p21 (decode_text, encode_text); then to yack-step (M3 W9c), paths and visibility only.
+// string codec moved to yack-p21 (decode_text, encode_text); then to yack-step (M3 W9c), paths and visibility only; checked access (hardening S1).
 //! STEP's exchange structure as the readers take it: [`yack_p21`]'s file, normalised as springrep
 //! read it.
 
@@ -26,7 +26,7 @@ fn opens_as_part21(s: &[u8]) -> bool {
             i += 1;
         }
         if s.get(i..).is_some_and(|r| r.starts_with(b"/*")) {
-            i = find(&s[i + 2..], b"*/").map_or(s.len(), |k| i + k + 4);
+            i = s.get(i + 2..).and_then(|rest| find(rest, b"*/")).map_or(s.len(), |k| i + k + 4);
         } else {
             return i;
         }

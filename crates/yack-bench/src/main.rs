@@ -190,6 +190,19 @@ fn built_by(_: &Solid) -> &'static str {
     "unknown"
 }
 
+/// The bake-off's History coverage, `,"origins":[with, of]`: how many of the solid's faces its
+/// History gives an origin (bake-off builds only, so a plain run's reply is unchanged).
+#[cfg(feature = "bakeoff")]
+fn origins(solid: &Solid) -> String {
+    let h = solid.history();
+    let with = solid.faces().into_iter().filter(|&f| !h.origins(f).is_empty()).count();
+    format!(",\"origins\":[{with},{}]", solid.faces().len())
+}
+#[cfg(not(feature = "bakeoff"))]
+fn origins(_: &Solid) -> String {
+    String::new()
+}
+
 /// The reply for a solid built. With `out_step`, the solid is written there and that is the whole
 /// answer, unless the writer declines (`step_error`), when the runner goes on to measure.
 fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, String> {
@@ -221,12 +234,13 @@ fn reply(solid: &Solid, out: &str, out_step: Option<&str>) -> Result<String, Str
     write_stl(out, &mesh).map_err(|e| format!("{out} not written: {e}"))?;
     Ok(format!(
         "{{\"status\":\"ok\",\"volume\":{},\"area\":{}{centroid},\"inertia\":[{}],\"faces\":{{{faces}}},\
-         \"valid\":{valid},\"strategy\":{},\"built_by\":{}{step_error}}}",
+         \"valid\":{valid},\"strategy\":{},\"built_by\":{}{}{step_error}}}",
         number(volume),
         number(area),
         rows.join(","),
         quoted(solid.strategy()),
         quoted(built_by(solid)),
+        origins(solid),
     ))
 }
 

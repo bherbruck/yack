@@ -1,6 +1,8 @@
 // yack: Moving an imported solid's surfaces, as little as possible, where its faces miss each other.
 // Adapted from springrep@a03e8a1 src/step/adjust.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from step/adjust.rs to build/adjust.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only.
+// Changes: moved from step/adjust.rs to build/adjust.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
+// M3 hardening (w-h3): its maps are BTreeMaps (D26; audited: looked up only, and `vars` iterated
+// only to gather distinct faces' moves applied all or none, so its order reaches no output).
 //! Moving an imported solid's surfaces, as little as possible, where its faces miss each other.
 //!
 //! Where two faces touch rather than cross, or a B-spline face stops short of its corner, no
@@ -11,7 +13,7 @@
 //! of its faces. Moving a surface costs more than moving a point, so surfaces move only where the
 //! points cannot close a gap on their own.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use super::raw::Raw;
 use crate::{
@@ -526,11 +528,11 @@ impl System {
 /// Moves the surfaces of `faces` and every target until each target lies on each of its faces,
 /// or until the rounds run out. Returns where each target vertex went, and whether the targets
 /// all lie on their faces within a small part of the tolerance.
-#[allow(clippy::disallowed_types)] pub(crate) fn adjust( // D26: BTree* in hardening, proven by digests
+pub(crate) fn adjust(
     raw: &mut Raw,
     faces: &[usize],
     targets: &mut [Target],
-) -> (HashMap<usize, Point3>, bool) {
+) -> (BTreeMap<usize, Point3>, bool) {
     let surfaces: Vec<Surface> = faces
         .iter()
         .map(|&f| raw.faces[f].surface.clone())
@@ -569,8 +571,8 @@ impl System {
 
 /// Damped Gauss–Newton steps on the surfaces of `faces` and on `targets`; whether every target
 /// ends on its faces.
-#[allow(clippy::disallowed_types)] fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool { // D26: BTree* in hardening, proven by digests
-    let mut vars: HashMap<usize, Vars> = HashMap::new();
+fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool {
+    let mut vars: BTreeMap<usize, Vars> = BTreeMap::new();
     let mut next = 3 * targets.len();
     for &f in faces {
         let pts: Vec<Point3> = targets
@@ -607,7 +609,7 @@ impl System {
     for w in inv_w.iter_mut().skip(3 * targets.len()) {
         *w = 1.0 / SURFACE_COST;
     }
-    let mut hints: HashMap<(usize, usize), Vec2> = HashMap::new();
+    let mut hints: BTreeMap<(usize, usize), Vec2> = BTreeMap::new();
     let mut state = linearize(raw, targets, &vars, &mut hints);
     let mut converged = false;
     for _round in 0..ROUNDS {
@@ -684,11 +686,11 @@ struct Linear {
     worst: f64,
 }
 
-#[allow(clippy::disallowed_types)] fn linearize( // D26: BTree* in hardening, proven by digests
+fn linearize(
     raw: &Raw,
     targets: &[Target],
-    vars: &HashMap<usize, Vars>,
-    hints: &mut HashMap<(usize, usize), Vec2>,
+    vars: &BTreeMap<usize, Vars>,
+    hints: &mut BTreeMap<(usize, usize), Vec2>,
 ) -> Linear {
     let mut rows = Vec::new();
     let mut rhs = Vec::new();

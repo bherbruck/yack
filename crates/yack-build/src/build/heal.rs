@@ -1,6 +1,7 @@
 // yack: Making a file's geometry agree with itself within the kernel tolerance.
 // Adapted from springrep@a03e8a1 src/step/heal.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from step/heal.rs to build/heal.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only.
+// Changes: moved from step/heal.rs to build/heal.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
+// M3 hardening (w-h3): its maps are BTreeMaps (D26; audited: looked up, filled and cleared only).
 //! Making a file's geometry agree with itself within the kernel tolerance.
 //!
 //! Exporters write each vertex, edge curve and surface separately, and many hold them together
@@ -14,7 +15,7 @@
 //! fails, or moves geometry further than the file says it meets, [`tolerate`] keeps the file's
 //! geometry and gives its edges and vertices the local tolerances it does meet within.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::adjust::{Target, adjust};
 use super::raw::{Raw, edge_range, param_of};
@@ -501,10 +502,10 @@ fn range_of(raw: &Raw, e: usize) -> Option<(f64, f64)> {
 /// Moves each vertex that misses its faces onto them, starting from `start` where given, and
 /// refits each edge that still misses. Returns each edge's range, or every vertex and edge that
 /// would not fit. `loose` refits the edges at a vertex that would not move too, from where it is.
-#[allow(clippy::disallowed_types)] fn attempt( // D26: BTree* in hardening, proven by digests
+fn attempt(
     raw: &mut Raw,
-    start: &HashMap<usize, Point3>,
-    samples: &HashMap<usize, Vec<Point3>>,
+    start: &BTreeMap<usize, Point3>,
+    samples: &BTreeMap<usize, Vec<Point3>>,
     loose: bool,
 ) -> std::result::Result<Vec<(f64, f64)>, Vec<Failure>> {
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
@@ -663,15 +664,15 @@ fn bent(c: &Curve, r: (f64, f64), n: usize, ends: (Point3, Point3)) -> Vec<Point
 
 /// The points the surface step moves: every vertex and edge on `faces`, more densely along the
 /// edges that would not fit.
-#[allow(clippy::disallowed_types)] fn targets( // D26: BTree* in hardening, proven by digests
+fn targets(
     raw: &Raw,
     faces: &BTreeSet<usize>,
     failing: &BTreeSet<usize>,
-    start: &HashMap<usize, Point3>,
+    start: &BTreeMap<usize, Point3>,
 ) -> Vec<Target> {
     let mut out = Vec::new();
     let mut vertices = BTreeSet::new();
-    let mut at_vertex: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut at_vertex: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (e, edge) in raw.edges.iter().enumerate() {
         at_vertex.entry(edge.start).or_default().push(e);
         at_vertex.entry(edge.end).or_default().push(e);
@@ -805,7 +806,7 @@ pub fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tole
     if t.edges.iter().chain(&t.vertices).all(|&x| x <= bound) { build(&kept, &t) } else { None }
 }
 
-#[allow(clippy::disallowed_types)] pub fn heal(raw: &mut Raw) -> Result<Ranges> { // D26: BTree* in hardening, proven by digests
+pub fn heal(raw: &mut Raw) -> Result<Ranges> {
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
     if (0..raw.edges.len()).all(|e| edge_fits(raw, e, ranges[e])) {
         let ranges = ranges
@@ -818,8 +819,8 @@ pub fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tole
     let mut surfaces: Vec<Surface> = file.faces.iter().map(|f| f.surface.clone()).collect();
     let mut chosen = BTreeSet::new();
     let mut failing = BTreeSet::new();
-    let mut start = HashMap::new();
-    let mut samples: HashMap<usize, Vec<Point3>> = HashMap::new();
+    let mut start = BTreeMap::new();
+    let mut samples: BTreeMap<usize, Vec<Point3>> = BTreeMap::new();
     let mut settled = true;
     let mut failed_before = usize::MAX;
     let with_surfaces = |surfaces: &[Surface]| {
@@ -905,9 +906,9 @@ pub fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tole
 /// hold what is left: where faces meet nowhere exactly, as four faces at a corner can miss each
 /// other by far less than the file's uncertainty, healing fails, but an edge elsewhere may still
 /// be further off than the file promises until it is refitted. Returns how far it moved.
-#[allow(clippy::disallowed_types)] pub fn heal_loosely(raw: &mut Raw) -> Option<Healed> { // D26: BTree* in hardening, proven by digests
+pub fn heal_loosely(raw: &mut Raw) -> Option<Healed> {
     let file = raw.clone();
-    let _ = attempt(raw, &HashMap::new(), &HashMap::new(), true);
+    let _ = attempt(raw, &BTreeMap::new(), &BTreeMap::new(), true);
     movement(&file, raw, &BTreeSet::new())
 }
 

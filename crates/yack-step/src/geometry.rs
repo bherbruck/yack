@@ -1,6 +1,6 @@
 // yack: STEP geometry entities into kernel curves, surfaces and placements, in millimetres.
 // Adapted from springrep@a03e8a1 src/step/geometry.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/step/geometry.rs to yack-step (M3 W9c); paths and visibility only.
+// Changes: moved from springrep's src/step/geometry.rs to yack-step (M3 W9c); paths and visibility only; checked access (hardening S1).
 //! STEP geometry entities into kernel curves, surfaces and placements, in millimetres.
 
 #[allow(clippy::disallowed_types)] use std::collections::{HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
@@ -249,7 +249,9 @@ impl Placing {
                 return bad(id, "conversion-based unit without a measure");
             };
             let me = self.entity(m)?;
-            let p = &me.records()[0].params;
+            let Some(p) = me.records().first().map(|r| &r.params) else {
+                return bad(m, "an instance with no record");
+            };
             let (Some(v), Some(base)) = (
                 p.first().and_then(Param::real),
                 p.get(1).and_then(Param::reference),
@@ -341,11 +343,10 @@ impl Placing {
 
     /// Three finite coordinates; a 2-D point or direction is an error here, never padded.
     fn coords(&self, id: u64, p: Option<&Param>) -> Result<Vec3> {
-        let c = self.reals(id, p)?;
-        if c.len() != 3 || c.iter().any(|x| !x.is_finite()) {
-            return bad(id, "expected three finite coordinates");
+        match *self.reals(id, p)?.as_slice() {
+            [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => Ok(Vec3::new(x, y, z)),
+            _ => bad(id, "expected three finite coordinates"),
         }
-        Ok(Vec3::new(c[0], c[1], c[2]))
     }
 
     pub(super) fn direction(&self, id: u64) -> Result<Vec3> {
@@ -433,7 +434,9 @@ impl Placing {
         if e.is("B_SPLINE_CURVE_WITH_KNOTS") {
             return self.bspline_curve(id, e).map(|c| Curve::Nurbs(Box::new(c)));
         }
-        let first = &e.records()[0];
+        let Some(first) = e.records().first() else {
+            return bad(id, "an instance with no record");
+        };
         let (kind, a) = (&first.name, &first.params);
         match kind.as_str() {
             "LINE" => {
@@ -491,8 +494,10 @@ impl Placing {
         // knot attributes; a complex one splits them between B_SPLINE_CURVE and _WITH_KNOTS.
         let (head, knots): (&[Param], &[Param]) = match e.part("B_SPLINE_CURVE") {
             Some(h) => (h, k),
-            None if k.len() >= 9 => (&k[1..6], &k[6..]),
-            None => return bad(id, "short B_SPLINE_CURVE_WITH_KNOTS"),
+            None => match (k.get(1..6), k.get(6..)) {
+                (Some(h), Some(rest)) if k.len() >= 9 => (h, rest),
+                _ => return bad(id, "short B_SPLINE_CURVE_WITH_KNOTS"),
+            },
         };
         let degree = self.degree(id, head.first())?;
         let mut ctrl = Vec::new();
@@ -523,7 +528,9 @@ impl Placing {
                 .bspline_surface(id, e)
                 .map(|s| Surface::Nurbs(Box::new(s)));
         }
-        let first = &e.records()[0];
+        let Some(first) = e.records().first() else {
+            return bad(id, "an instance with no record");
+        };
         let (kind, a) = (&first.name, &first.params);
         let frame = |s: &mut Self| -> Result<Frame> { s.placement(s.reference(id, a.get(1))?) };
         match kind.as_str() {
@@ -582,8 +589,10 @@ impl Placing {
         let k = self.params(id, "B_SPLINE_SURFACE_WITH_KNOTS")?;
         let (head, knots): (&[Param], &[Param]) = match e.part("B_SPLINE_SURFACE") {
             Some(h) => (h, k),
-            None if k.len() >= 13 => (&k[1..8], &k[8..]),
-            None => return bad(id, "short B_SPLINE_SURFACE_WITH_KNOTS"),
+            None => match (k.get(1..8), k.get(8..)) {
+                (Some(h), Some(rest)) if k.len() >= 13 => (h, rest),
+                _ => return bad(id, "short B_SPLINE_SURFACE_WITH_KNOTS"),
+            },
         };
         let du = self.degree(id, head.first())?;
         let dv = self.degree(id, head.get(1))?;

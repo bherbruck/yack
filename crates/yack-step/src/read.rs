@@ -1,7 +1,7 @@
 // yack: Reading a STEP file: the product structure gives each solid's placements, and each solid is
 // Adapted from springrep@a03e8a1 src/step/read.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: this header added; modified: traversal cap (MAX_VISITS bounds walk()/rep_solids()
-//   calls, so a product or mapped-item DAG reused at every level is refused, not expanded); then to yack-step (M3 W9c), paths and visibility only.
+//   calls, so a product or mapped-item DAG reused at every level is refused, not expanded); then to yack-step (M3 W9c), paths and visibility only; checked access (hardening S1).
 //! Reading a STEP file: the product structure gives each solid's placements, and each solid is
 //! built once and copied to every placement.
 
@@ -276,8 +276,8 @@ fn representation(f: &File, id: u64) -> Option<(Vec<u64>, Option<u64>)> {
     fn linked(&self, rep: u64) -> Vec<u64> {
         let mut seen = vec![rep];
         let mut i = 0;
-        while i < seen.len() {
-            for &r in self.links.get(&seen[i]).into_iter().flatten() {
+        while let Some(&at) = seen.get(i) {
+            for &r in self.links.get(&at).into_iter().flatten() {
                 if !seen.contains(&r) {
                     seen.push(r);
                 }
@@ -408,14 +408,14 @@ fn representation(f: &File, id: u64) -> Option<(Vec<u64>, Option<u64>)> {
         for &rep in self.reps.get(&pd).into_iter().flatten() {
             self.rep_solids(geo, rep, at, &mut Vec::new(), out)?;
         }
-        for p in &mut out[own..] {
+        for p in out.iter_mut().skip(own) {
             p.product = Some(pd);
         }
         for &(child, rel, used) in self.children.get(&pd).into_iter().flatten() {
             if let Some(t) = self.placement(geo, child, rel) {
                 let below = out.len();
                 self.walk(geo, child, &t.then(at), path, seen, out)?;
-                for p in &mut out[below..] {
+                for p in out.iter_mut().skip(below) {
                     p.uses.insert(0, used);
                 }
             }
@@ -529,9 +529,10 @@ pub fn read_part(text: &[u8], feature: &str) -> Result<Brep> {
     let mut bodies = Vec::new();
     let mut face_colours = Vec::new();
     for pl in placements {
-        match &built[&pl.key()] {
-            Err(e) => rejected.push(format!("#{}: {e}", pl.solid)),
-            Ok((b, names, heal, stated)) => {
+        match built.get(&pl.key()) {
+            None => rejected.push(format!("#{}: never built", pl.solid)),
+            Some(Err(e)) => rejected.push(format!("#{}: {e}", pl.solid)),
+            Some(Ok((b, names, heal, stated))) => {
                 if let Some(h) = heal {
                     healed.push(Healing {
                         index,
@@ -581,7 +582,7 @@ pub fn read_part(text: &[u8], feature: &str) -> Result<Brep> {
                 }
                 let solids = out.append(&copy);
                 let ids: Vec<FaceId> = out.face_ids().skip(first).collect();
-                face_colours.extend(own_colours.into_iter().map(|(k, c)| (ids[k], c)));
+                face_colours.extend(own_colours.into_iter().filter_map(|(k, c)| Some((*ids.get(k)?, c))));
                 bodies.extend(solids.into_iter().map(|solid| Body {
                     solid,
                     step_id: pl.solid,
@@ -590,10 +591,11 @@ pub fn read_part(text: &[u8], feature: &str) -> Result<Brep> {
                     colour: colours.get(&pl.solid).copied(),
                 }));
                 for x in found {
+                    let (Some(&fa), Some(&fb)) = (ids.get(x.a.index()), ids.get(x.b.index())) else { continue };
                     crossed.push(Crossed {
                         index: solid_index,
                         step_id: pl.solid,
-                        faces: (ids[x.a.index()], ids[x.b.index()]),
+                        faces: (fa, fb),
                         at: pl.at.rigid.point(x.at),
                         depth: x.depth,
                     });
@@ -750,7 +752,7 @@ fn weight(file: &File, solid: u64) -> usize {
         for f in refs_of(sh, 1) {
             total += 1;
             let Some(face) = file.get(f) else { continue };
-            let Some(s) = face.records()[0].params.get(2).and_then(Param::reference) else {
+            let Some(s) = face.records().first().and_then(|r| r.params.get(2)).and_then(Param::reference) else {
                 continue;
             };
             let Some(e) = file.get(s) else { continue };
@@ -792,7 +794,7 @@ fn weight(file: &File, solid: u64) -> usize {
                     let mut geo = Geometry::new(file);
                     let mut mine = Vec::new();
                     while let Some(&(_, k)) = order.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let (solid, context, scale) = keys[k];
+                        let Some(&(solid, context, scale)) = keys.get(k) else { continue };
                         let r = geo
                             .use_scaled(context, f64::from_bits(scale))
                             .and_then(|_| topology::solid(&mut geo, solid))
@@ -811,7 +813,9 @@ fn weight(file: &File, solid: u64) -> usize {
     });
     let mut out = HashMap::new();
     for (k, r) in results.into_iter().flatten() {
-        out.insert(keys[k], r);
+        if let Some(&key) = keys.get(k) {
+            out.insert(key, r);
+        }
     }
     for &k in keys {
         out.entry(k)

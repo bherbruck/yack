@@ -5,7 +5,6 @@
 // the next, instead of indexed modulo four; the same entities are added in the same order.
 //! A slab: the solid between a frame's xy plane and a clamped B-spline height field over a
 //! rectangle. Faces are `top`, `bottom`, and the sides `front` (y low), `right`, `back`, `left`.
-#![warn(clippy::indexing_slicing)]
 
 use crate::{
     Error, Result, check,

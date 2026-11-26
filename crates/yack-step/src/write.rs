@@ -1,6 +1,6 @@
 // yack: Writing solids as a STEP AP214 file: one part whose advanced B-rep holds every solid of the
 // Adapted from springrep@a03e8a1 src/step/write.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/step/write.rs to yack-step (M3 W9c); paths and visibility only.
+// Changes: moved from springrep's src/step/write.rs to yack-step (M3 W9c); paths and visibility only; checked access, errors where it panicked (hardening S1).
 //! Writing solids as a STEP AP214 file: one part whose advanced B-rep holds every solid of the
 //! arena, each face named by the names it carries.
 
@@ -227,7 +227,10 @@ fn key(p: Vec3) -> [u64; 3] {
         for i in 0..counts.0 {
             let mut row = Vec::with_capacity(counts.1);
             for j in 0..counts.1 {
-                row.push(self.point(ctrl[i * counts.1 + j])?);
+                let Some(&p) = ctrl.get(i * counts.1 + j) else {
+                    return Err(Error::InvalidInput("STEP: a surface has fewer control points than its counts".into()));
+                };
+                row.push(self.point(p)?);
             }
             rows.push(refs(&row));
         }
@@ -308,9 +311,9 @@ fn key(p: Vec3) -> [u64; 3] {
                 let (a, b) = ruled_rails(r)?;
                 let n = a.ctrl.len();
                 let mut ctrl = Vec::with_capacity(2 * n);
-                for i in 0..n {
-                    ctrl.push(a.ctrl[i]);
-                    ctrl.push(b.ctrl[i]);
+                for (&pa, &pb) in a.ctrl.iter().zip(&b.ctrl) {
+                    ctrl.push(pa);
+                    ctrl.push(pb);
                 }
                 let weights = a
                     .weights
@@ -460,7 +463,7 @@ fn key(p: Vec3) -> [u64; 3] {
     }
 
     /// The edge coedge `co` uses, as the one it and its partner share.
-    #[allow(clippy::panic)] fn edge(&mut self, b: &Brep, co: CoedgeId) -> Result<usize> {
+    fn edge(&mut self, b: &Brep, co: CoedgeId) -> Result<usize> {
         let e = b.coedge(co).edge;
         let mate = b.partner(co).unwrap_or(co);
         let first = co.min(mate);
@@ -468,14 +471,19 @@ fn key(p: Vec3) -> [u64; 3] {
             return Ok(id);
         }
         let edge = b.edge(e);
-        let curve = edge
-            .curve
-            .as_ref()
-            .unwrap_or_else(|| panic!("degenerate edges are not written"));
+        let Some(curve) = edge.curve.as_ref() else {
+            return Err(Error::InvalidInput("STEP: a degenerate edge has no curve to write".into()));
+        };
         // `first` arrives at its end, and the coedge before it in its loop at its start.
         let cs = &b.lp(b.coedge(first).lp).coedges;
-        let k = cs.iter().position(|&c| c == first).unwrap_or_else(|| panic!("in its loop"));
-        let before = cs[(k + cs.len() - 1) % cs.len()];
+        let Some(before) = cs
+            .iter()
+            .position(|&c| c == first)
+            .and_then(|k| cs.get((k + cs.len() - 1) % cs.len()))
+            .copied()
+        else {
+            return Err(Error::InvalidResult(vec!["STEP: a coedge is not in its own loop".into()]));
+        };
         let (at_start, at_end) = if b.coedge(first).reversed {
             (first, before)
         } else {
@@ -497,7 +505,7 @@ fn key(p: Vec3) -> [u64; 3] {
                 pcurves.push(pc);
             }
         }
-        let seam = uses.len() == 2 && b.coedge_face(uses[0]) == b.coedge_face(uses[1]);
+        let seam = matches!(*uses.as_slice(), [u0, u1] if b.coedge_face(u0) == b.coedge_face(u1));
         let geometry = match (pcurves.len(), seam) {
             (0, _) | (1, true) => c,
             (2, true) => self.add(format!("SEAM_CURVE('',#{c},{},.CURVE_3D.)", refs(&pcurves))),
@@ -512,7 +520,7 @@ fn key(p: Vec3) -> [u64; 3] {
     }
 
     /// A face; `void` writes it as part of a void's shell, which STEP stores turned inside out.
-    #[allow(clippy::panic)] fn face(&mut self, b: &Brep, f: FaceId, void: bool) -> Result<usize> {
+    fn face(&mut self, b: &Brep, f: FaceId, void: bool) -> Result<usize> {
         let face = b.face(f);
         let mut bounds = Vec::new();
         for (i, &lp) in face.loops.iter().enumerate() {
@@ -534,18 +542,21 @@ fn key(p: Vec3) -> [u64; 3] {
                     if !opened.contains(&p) {
                         opened.insert(c);
                         stack.push(Vec::new());
-                    } else if stack.len() > 1 {
-                        let inner = stack.pop().unwrap_or_else(|| panic!("more than one"));
-                        if !inner.is_empty() {
-                            parts.push((false, inner));
-                        }
+                    } else if stack.len() > 1
+                        && let Some(inner) = stack.pop()
+                        && !inner.is_empty()
+                    {
+                        parts.push((false, inner));
                     }
                     continue;
                 }
                 let e = self.edge(b, c)?;
                 let o = if co.reversed { ".F." } else { ".T." };
                 let oe = self.add(format!("ORIENTED_EDGE('',*,*,#{e},{o})"));
-                stack.last_mut().unwrap_or_else(|| panic!("never empty")).push(oe);
+                // The stack keeps its first entry: only one above it is ever popped.
+                if let Some(top) = stack.last_mut() {
+                    top.push(oe);
+                }
             }
             for rest in stack.into_iter().rev() {
                 if !rest.is_empty() {
@@ -605,11 +616,12 @@ fn key(p: Vec3) -> [u64; 3] {
             vec![0; shells.len() - n_outer]
         };
         let mut out = Vec::new();
-        for (k, &sh) in shells[..n_outer].iter().enumerate() {
+        for (k, &sh) in shells.iter().take(n_outer).enumerate() {
             let outer = self.shell(b, sh, false)?;
             let mut voids = Vec::new();
-            for (&v, _) in shells[n_outer..]
+            for (&v, _) in shells
                 .iter()
+                .skip(n_outer)
                 .zip(&hosts)
                 .filter(|(_, h)| **h == k)
             {
@@ -635,7 +647,7 @@ fn slit_mate(b: &Brep, c: CoedgeId) -> Option<CoedgeId> {
     }
     let (t0, t1) = b.edge(b.coedge(c).edge).range;
     let t = [0.5 * (t0 + t1)];
-    let gap = b.coedge_uvs(c, &t)[0].dist(b.coedge_uvs(p, &t)[0]);
+    let gap = b.coedge_uvs(c, &t).first()?.dist(*b.coedge_uvs(p, &t).first()?);
     (gap <= 1e-9 * (1.0 + t0.abs().max(t1.abs()))).then_some(p)
 }
 
@@ -766,9 +778,10 @@ pub(super) fn pcurve(b: &Brep, c: CoedgeId) -> Option<Curve2> {
         // reached 5.2e-8 on a lofted helical gear.
         let mut next = Vec::with_capacity(2 * ts.len());
         for w in ts.windows(2) {
-            next.push(w[0]);
-            if (1..8).any(|i| off(w[0] + (w[1] - w[0]) * i as f64 / 8.0) > 0.45 * tol::LINEAR) {
-                next.push(0.5 * (w[0] + w[1]));
+            let &[a, z] = w else { continue };
+            next.push(a);
+            if (1..8).any(|i| off(a + (z - a) * i as f64 / 8.0) > 0.45 * tol::LINEAR) {
+                next.push(0.5 * (a + z));
             }
         }
         next.push(t1);
@@ -847,22 +860,23 @@ fn bezier_chain(c: &Curve, rg: (f64, f64), cuts: &[f64], q: usize) -> Result<Spl
     let mut knots = vec![0.0; q + 1];
     let mut ctrl: Vec<Point3> = Vec::new();
     for (k, w) in cuts.windows(2).enumerate() {
+        let &[w0, w1] = w else { continue };
         let n = q + 1;
-        let mut a = vec![0.0; n * n];
+        // The Bernstein matrix row by row, and the curve at each row's parameter.
+        let mut a = Vec::with_capacity(n * n);
         let mut rhs = Vec::with_capacity(3 * n);
         for i in 0..n {
             let s = i as f64 / q as f64;
-            for j in 0..n {
-                a[i * n + j] = bernstein(q, j, s);
-            }
-            let t = rg.0 + (w[0] + (w[1] - w[0]) * s) * (rg.1 - rg.0);
+            a.extend((0..n).map(|j| bernstein(q, j, s)));
+            let t = rg.0 + (w0 + (w1 - w0) * s) * (rg.1 - rg.0);
             rhs.extend(c.eval(t).to_array());
         }
         let x = solve_dense(a, rhs, n, 3)?;
-        let pts: Vec<Point3> = x.chunks(3).map(|p| Vec3::new(p[0], p[1], p[2])).collect();
-        ctrl.extend_from_slice(if k == 0 { &pts } else { &pts[1..] });
+        let pts = x.as_chunks::<3>().0.iter().map(|&[px, py, pz]| Vec3::new(px, py, pz));
+        // Each piece after the first starts where the last ended.
+        ctrl.extend(pts.skip(usize::from(k != 0)));
         if k + 2 < cuts.len() {
-            knots.extend(std::iter::repeat_n(w[1], q));
+            knots.extend(std::iter::repeat_n(w1, q));
         }
     }
     knots.extend(std::iter::repeat_n(1.0, q + 1));
@@ -1018,8 +1032,9 @@ impl Writer {
             let side = self.add(format!("SURFACE_SIDE_STYLE('',(#{fills}))"));
             let usage = self.add(format!("SURFACE_STYLE_USAGE(.BOTH.,#{side})"));
             let style = self.add(format!("PRESENTATION_STYLE_ASSIGNMENT((#{usage}))"));
-            let styled: Vec<usize> = items[1..]
+            let styled: Vec<usize> = items
                 .iter()
+                .skip(1)
                 .map(|solid| self.add(format!("STYLED_ITEM('',(#{style}),#{solid})")))
                 .collect();
             self.add(format!(
@@ -1107,13 +1122,12 @@ pub fn write_assembly(name: &str, parts: &[Part], instances: &[Instance]) -> Res
     let origin = w.placement(&Frame::WORLD)?;
     let mut places = Vec::with_capacity(instances.len());
     for i in instances {
-        let r = &i.at.r;
-        let column = |j: usize| Vec3::new(r[0][j], r[1][j], r[2][j]);
+        let [[r00, r01, r02], [r10, r11, r12], [r20, r21, r22]] = i.at.r;
         places.push(w.placement(&Frame {
             origin: i.at.t,
-            x: column(0),
-            y: column(1),
-            z: column(2),
+            x: Vec3::new(r00, r10, r20),
+            y: Vec3::new(r01, r11, r21),
+            z: Vec3::new(r02, r12, r22),
         })?);
     }
     let mut items = vec![origin];
@@ -1123,7 +1137,9 @@ pub fn write_assembly(name: &str, parts: &[Part], instances: &[Instance]) -> Res
         "SHAPE_DEFINITION_REPRESENTATION(#{root_shape},#{rep})"
     ));
     for (k, (i, place)) in instances.iter().zip(places).enumerate() {
-        let (pd, part_rep) = made[i.part];
+        let Some(&(pd, part_rep)) = made.get(i.part) else {
+            return Err(Error::InvalidInput(format!("STEP: instance {} names part {}, which is not given", k + 1, i.part)));
+        };
         let used = w.add(format!(
             "NEXT_ASSEMBLY_USAGE_OCCURRENCE('{}',{},'',#{root},#{pd},$)",
             k + 1,

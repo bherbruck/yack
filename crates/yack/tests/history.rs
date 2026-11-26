@@ -397,3 +397,22 @@ fn the_native_ruled_rung_names_its_faces_for_history() -> Result<()> {
     eprintln!("native ruled: {} faces, every one with an origin", h.faces().len());
     Ok(())
 }
+
+
+/// yack-build's native `extrude_drafted` under `force_op`: a drafted square's caps and four sides
+/// all trace to the profile (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_drafted_extrusion_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let sq = Profile::rectangle([-5.0, -5.0], [5.0, 5.0])?;
+    force_op("extrude_drafted", Engine::Native);
+    let made = extrude_drafted(&Frame::WORLD, &sq, 10.0, deg(5.0), false);
+    force(Engine::Both);
+    let f = made?;
+    assert_eq!(built_by(&f), "native");
+    let found = audit("native extrude_drafted", &[], &f);
+    assert!(found.is_empty(), "native extrude_drafted: {found:?}");
+    eprintln!("native extrude_drafted: {} faces, every one with an origin", f.faces().len());
+    Ok(())
+}

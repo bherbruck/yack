@@ -4,7 +4,6 @@
 // M3 hardening (w-h3): the cone's meridian pairs each corner with the next by iterators.
 //! The five primitive solids, each placed by a frame: a block and a cylinder extruded along the
 //! frame's z, a sphere, a torus and a cone revolved about it.
-#![warn(clippy::indexing_slicing)]
 
 mod slab;
 
