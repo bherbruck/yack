@@ -202,7 +202,7 @@ pub fn parse_within(text: &str, limits: Limits) -> Result<File> {
     if text.len() > limits.bytes {
         return Err(bad(0, format!("the file is {} bytes, over the limit of {}", text.len(), limits.bytes)));
     }
-    let mut p = Parser { s: text.as_bytes(), i: 0, limits };
+    let mut p = Parser { bytes: text.as_bytes(), at: 0, limits };
     let mut file = File::default();
     loop {
         p.skip();
@@ -226,44 +226,56 @@ pub fn parse_within(text: &str, limits: Limits) -> Result<File> {
             let _ = p.string()?;
         } else {
             // Past one word (or one other byte), so that a keyword only matches a word's start.
-            let start = p.i;
-            while p.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
-                p.i += 1;
-            }
-            if p.i == start {
-                p.i += 1;
+            if p.take_while(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-').is_empty() {
+                p.at += 1;
             }
         }
     }
     Ok(file)
 }
 
+/// A cursor over the file's bytes.
 struct Parser<'a> {
-    s: &'a [u8],
-    i: usize,
+    bytes: &'a [u8],
+    /// The next byte to read.
+    at: usize,
     limits: Limits,
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
     fn done(&self) -> bool {
-        self.i >= self.s.len()
+        self.at >= self.bytes.len()
     }
 
     fn peek(&self) -> Option<u8> {
-        self.s.get(self.i).copied()
+        self.bytes.get(self.at).copied()
+    }
+
+    /// The byte after the next.
+    fn peek_second(&self) -> Option<u8> {
+        self.bytes.get(self.at + 1).copied()
+    }
+
+    /// The bytes from the cursor while `keep` holds, consumed.
+    fn take_while(&mut self, keep: impl Fn(u8) -> bool) -> &'a [u8] {
+        let start = self.at;
+        while self.peek().is_some_and(&keep) {
+            self.at += 1;
+        }
+        self.bytes.get(start..self.at).unwrap_or_default()
     }
 
     /// Skips white space and comments.
     fn skip(&mut self) {
         loop {
             match self.peek() {
-                Some(c) if c.is_ascii_whitespace() => self.i += 1,
-                Some(b'/') if self.s.get(self.i + 1) == Some(&b'*') => {
-                    self.i += 2;
-                    while !self.done() && !(self.peek() == Some(b'*') && self.s.get(self.i + 1) == Some(&b'/')) {
-                        self.i += 1;
+                Some(c) if c.is_ascii_whitespace() => self.at += 1,
+                Some(b'/') if self.peek_second() == Some(b'*') => {
+                    self.at += 2;
+                    while !self.done() && !(self.peek() == Some(b'*') && self.peek_second() == Some(b'/')) {
+                        self.at += 1;
                     }
-                    self.i = (self.i + 2).min(self.s.len());
+                    self.at = (self.at + 2).min(self.bytes.len());
                 }
                 _ => return,
             }
@@ -273,9 +285,9 @@ impl Parser<'_> {
     /// Consumes `word` if the text at the cursor is it (and not a longer word).
     fn keyword(&mut self, word: &str) -> bool {
         let w = word.as_bytes();
-        let end = self.i + w.len();
-        if self.s.get(self.i..end) == Some(w) && !self.s.get(end).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
-            self.i = end;
+        let end = self.at + w.len();
+        if self.bytes.get(self.at..end) == Some(w) && !self.bytes.get(end).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
+            self.at = end;
             true
         } else {
             false
@@ -285,10 +297,10 @@ impl Parser<'_> {
     fn expect(&mut self, c: u8) -> Result<()> {
         self.skip();
         if self.peek() == Some(c) {
-            self.i += 1;
+            self.at += 1;
             Ok(())
         } else {
-            Err(bad(self.i, format!("expected '{}'", c as char)))
+            Err(bad(self.at, format!("expected '{}'", c as char)))
         }
     }
 
@@ -301,20 +313,20 @@ impl Parser<'_> {
                 return Ok(());
             }
             if self.done() {
-                return Err(bad(self.i, "the HEADER section has no ENDSEC"));
+                return Err(bad(self.at, "the HEADER section has no ENDSEC"));
             }
             // A record `NAME(params);`; a bare word before ';' is no record and is passed over.
             let name = self.name()?;
             self.skip();
             if self.peek() == Some(b';') {
-                self.i += 1;
+                self.at += 1;
                 continue;
             }
             self.expect(b'(')?;
             let record = Record { name, params: self.params(1)? };
             self.expect(b';')?;
             if file.header.len() >= self.limits.entities {
-                return Err(bad(self.i, format!("over {} header records", self.limits.entities)));
+                return Err(bad(self.at, format!("over {} header records", self.limits.entities)));
             }
             file.header.push(record);
         }
@@ -328,19 +340,19 @@ impl Parser<'_> {
                 return Ok(());
             }
             if self.done() {
-                return Err(bad(self.i, "the DATA section has no ENDSEC"));
+                return Err(bad(self.at, "the DATA section has no ENDSEC"));
             }
             self.expect(b'#')?;
             let id = self.number_id()?;
             self.expect(b'=')?;
             self.skip();
             let entity = if self.peek() == Some(b'(') {
-                self.i += 1;
+                self.at += 1;
                 let mut records = Vec::new();
                 loop {
                     self.skip();
                     if self.peek() == Some(b')') {
-                        self.i += 1;
+                        self.at += 1;
                         break;
                     }
                     records.push(self.record(1)?);
@@ -351,21 +363,18 @@ impl Parser<'_> {
             };
             self.expect(b';')?;
             if file.entities.len() >= self.limits.entities {
-                return Err(bad(self.i, format!("over {} instances", self.limits.entities)));
+                return Err(bad(self.at, format!("over {} instances", self.limits.entities)));
             }
             if file.entities.insert(id, entity).is_some() {
-                return Err(bad(self.i, format!("#{id} is defined twice")));
+                return Err(bad(self.at, format!("#{id} is defined twice")));
             }
             file.order.push(id);
         }
     }
 
     fn number_id(&mut self) -> Result<u64> {
-        let start = self.i;
-        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
-            self.i += 1;
-        }
-        std::str::from_utf8(self.s.get(start..self.i).unwrap_or_default())
+        let start = self.at;
+        std::str::from_utf8(self.take_while(|c| c.is_ascii_digit()))
             .ok()
             .and_then(|t| t.parse().ok())
             .ok_or_else(|| bad(start, "expected an instance number"))
@@ -373,14 +382,12 @@ impl Parser<'_> {
 
     fn name(&mut self) -> Result<String> {
         self.skip();
-        let start = self.i;
-        while self.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'!') {
-            self.i += 1;
-        }
-        if self.i == start {
+        let start = self.at;
+        let name = self.take_while(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'!');
+        if name.is_empty() {
             return Err(bad(start, "expected an entity name"));
         }
-        Ok(String::from_utf8_lossy(self.s.get(start..self.i).unwrap_or_default()).into_owned())
+        Ok(String::from_utf8_lossy(name).into_owned())
     }
 
     fn record(&mut self, depth: usize) -> Result<Record> {
@@ -393,74 +400,66 @@ impl Parser<'_> {
     /// Parameters after an opening '(', through the closing ')'.
     fn params(&mut self, depth: usize) -> Result<Vec<Param>> {
         if depth > self.limits.depth {
-            return Err(bad(self.i, format!("nested deeper than {}", self.limits.depth)));
+            return Err(bad(self.at, format!("nested deeper than {}", self.limits.depth)));
         }
         let mut out = Vec::new();
         self.skip();
         if self.peek() == Some(b')') {
-            self.i += 1;
+            self.at += 1;
             return Ok(out);
         }
         loop {
             out.push(self.param(depth)?);
             self.skip();
             match self.peek() {
-                Some(b',') => self.i += 1,
+                Some(b',') => self.at += 1,
                 Some(b')') => {
-                    self.i += 1;
+                    self.at += 1;
                     return Ok(out);
                 }
-                _ => return Err(bad(self.i, "expected ',' or ')'")),
+                _ => return Err(bad(self.at, "expected ',' or ')'")),
             }
         }
     }
 
     fn param(&mut self, depth: usize) -> Result<Param> {
         self.skip();
-        let start = self.i;
+        let start = self.at;
         match self.peek() {
             Some(b'$') => {
-                self.i += 1;
+                self.at += 1;
                 Ok(Param::Unset)
             }
             Some(b'*') => {
-                self.i += 1;
+                self.at += 1;
                 Ok(Param::Derived)
             }
             Some(b'#') => {
-                self.i += 1;
+                self.at += 1;
                 Ok(Param::Ref(self.number_id()?))
             }
             Some(b'(') => {
-                self.i += 1;
+                self.at += 1;
                 Ok(Param::List(self.params(depth + 1)?))
             }
             Some(b'\'') => self.string(),
             Some(b'"') => {
-                self.i += 1;
-                let s = self.i;
-                while self.peek().is_some_and(|c| c != b'"') {
-                    self.i += 1;
-                }
+                self.at += 1;
+                let hex = String::from_utf8_lossy(self.take_while(|c| c != b'"')).into_owned();
                 if self.done() {
                     return Err(bad(start, "a binary without its closing '\"'"));
                 }
-                let hex = String::from_utf8_lossy(self.s.get(s..self.i).unwrap_or_default()).into_owned();
-                self.i += 1;
+                self.at += 1;
                 Ok(Param::Binary(hex))
             }
             Some(b'.') => {
-                self.i += 1;
-                let s = self.i;
-                while self.peek().is_some_and(|c| c != b'.') {
-                    self.i += 1;
-                }
-                let e = String::from_utf8_lossy(self.s.get(s..self.i).unwrap_or_default()).into_owned();
+                self.at += 1;
+                let value = String::from_utf8_lossy(self.take_while(|c| c != b'.')).into_owned();
                 if self.done() {
                     return Err(bad(start, "an enumeration without its closing '.'"));
                 }
-                self.i += 1;
-                Ok(Param::Enum(e))
+                self.at += 1;
+                Ok(Param::Enum(value))
             }
             Some(c) if c.is_ascii_digit() || c == b'-' || c == b'+' => self.number(),
             Some(c) if c.is_ascii_alphabetic() => {
@@ -475,48 +474,48 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) -> Result<Param> {
-        let start = self.i;
-        self.i += 1;
+        let start = self.at;
+        self.at += 1;
         let mut out = Vec::new();
         loop {
             match self.peek() {
                 None => return Err(bad(start, "a string without its closing quote")),
-                Some(b'\'') if self.s.get(self.i + 1) == Some(&b'\'') => {
+                Some(b'\'') if self.peek_second() == Some(b'\'') => {
                     out.push(b'\'');
-                    self.i += 2;
+                    self.at += 2;
                 }
                 Some(b'\'') => {
-                    self.i += 1;
+                    self.at += 1;
                     return Ok(Param::Str(String::from_utf8_lossy(&out).into_owned()));
                 }
                 Some(c) => {
                     out.push(c);
-                    self.i += 1;
+                    self.at += 1;
                 }
             }
         }
     }
 
     fn number(&mut self) -> Result<Param> {
-        let start = self.i;
+        let start = self.at;
         if matches!(self.peek(), Some(b'-' | b'+')) {
-            self.i += 1;
+            self.at += 1;
         }
         let mut real = false;
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
-                self.i += 1;
+                self.at += 1;
             } else if c == b'.' || c == b'E' || c == b'e' {
                 real = true;
-                self.i += 1;
+                self.at += 1;
                 if (c == b'E' || c == b'e') && matches!(self.peek(), Some(b'-' | b'+')) {
-                    self.i += 1;
+                    self.at += 1;
                 }
             } else {
                 break;
             }
         }
-        let t = std::str::from_utf8(self.s.get(start..self.i).unwrap_or_default()).unwrap_or("");
+        let t = std::str::from_utf8(self.bytes.get(start..self.at).unwrap_or_default()).unwrap_or("");
         if real {
             // `1.` and `1.E5` are reals in the encoding; Rust's parser wants a digit after the point.
             let fixed = t.replacen(".E", ".0E", 1).replacen(".e", ".0e", 1);
