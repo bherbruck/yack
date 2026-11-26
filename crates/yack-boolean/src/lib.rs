@@ -2,7 +2,8 @@
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); Work's phases and the
 // free helpers split out into modules (M3 hardening B0); paths and visibility only; the boolean's
-// entry points on checked access, the solid copies' id maps BTreeMaps, small literals named (M3 B8).
+// entry points on checked access, the solid copies' id maps BTreeMaps, small literals named (M3 B8);
+// the crate on checked access throughout, its indexing allow gone (M3 B14).
 //! Boolean union, difference and intersection of solids.
 //!
 //! The steps, each in its own module:
@@ -19,9 +20,6 @@
 //!    operation selects pieces, and `sew` joins them, merges faces on one surface, and checks the
 //!    result.
 
-// springrep's boolean code indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names the moved code uses.
 use yack_base::kernel::Error;

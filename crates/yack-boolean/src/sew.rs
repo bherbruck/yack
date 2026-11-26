@@ -67,18 +67,31 @@ impl OutFace {
     }
 }
 
-fn find(p: &mut [usize], i: usize) -> usize {
-    let mut r = i;
-    while p[r] != r {
-        r = p[r];
+/// The root of `i` in the union-find `parent`, every step on the way pointed straight at it.
+fn find(parent: &mut [usize], i: usize) -> usize {
+    let mut root = i;
+    while let Some(&up) = parent.get(root)
+        && up != root
+    {
+        root = up;
     }
     let mut k = i;
-    while p[k] != r {
-        let nx = p[k];
-        p[k] = r;
-        k = nx;
+    while let Some(slot) = parent.get_mut(k)
+        && *slot != root
+    {
+        k = std::mem::replace(slot, root);
     }
-    r
+    root
+}
+
+/// The trim a face's use names.
+fn trim_at(faces: &[OutFace], (f, l, t): Use) -> Option<&Trim> {
+    faces.get(f)?.loops.get(l)?.get(t)
+}
+
+/// Whether two uses run opposite ways along their piece.
+fn opposite(faces: &[OutFace], a: Use, b: Use) -> bool {
+    matches!((trim_at(faces, a), trim_at(faces, b)), (Some(x), Some(y)) if x.forward != y.forward)
 }
 
 /// Each piece's uses: `(face, loop, trim)`.
@@ -110,8 +123,8 @@ fn drop_lone_slits(faces: &mut [OutFace]) {
                 if n < 2 {
                     continue;
                 }
-                let back = (0..n).find(|&i| {
-                    let (a, b) = (&l[i], &l[(i + 1) % n]);
+                // each trim with the one after it, the last with the first
+                let back = l.iter().zip(l.iter().cycle().skip(1)).position(|(a, b)| {
                     a.piece == b.piece
                         && a.forward != b.forward
                         && all.get(&a.piece).is_some_and(|us| us.len() == 2)
@@ -152,12 +165,11 @@ fn around_uses(
     let mut beside = BTreeMap::new();
     let mut shared: Vec<(usize, Vec<Use>)> = uses(faces)
         .into_iter()
-        .filter(|(p, us)| us.len() > 2 && pieces[*p].curve.is_some())
+        .filter(|(p, us)| us.len() > 2 && pieces.get(*p).is_some_and(|pg| pg.curve.is_some()))
         .collect();
     shared.sort_by_key(|x| x.0);
     for (piece, us) in shared {
-        let pg = &pieces[piece];
-        let Some(c) = pg.curve.as_ref() else {
+        let Some((pg, c)) = pieces.get(piece).and_then(|pg| Some((pg, pg.curve.as_ref()?))) else {
             continue;
         };
         let (m, d) = c.d1(0.5 * (pg.range.0 + pg.range.1));
@@ -174,23 +186,25 @@ fn around_uses(
         let len = radial::length(c, pg.range);
         let sides: Vec<radial::Side> = us
             .iter()
-            .map(|&(fi, li, ti)| {
-                let tr = &faces[fi].loops[li][ti];
-                radial::Side {
-                    surface: &faces[fi].surface,
-                    reversed: faces[fi].reversed,
+            .map(|&u| {
+                let (face, tr) = (faces.get(u.0)?, trim_at(faces, u)?);
+                Some(radial::Side {
+                    surface: &face.surface,
+                    reversed: face.reversed,
                     travel: if tr.t1 >= tr.t0 { t } else { -t },
-                }
+                })
             })
-            .collect();
+            .collect::<Option<_>>()
+            .ok_or_else(refused)?;
         let (pairs, besides) = radial::round(m, t, len, &sides).ok_or_else(refused)?;
-        for (i, j) in pairs {
-            out.insert(us[i], us[j]);
-            out.insert(us[j], us[i]);
-        }
-        for (i, j) in besides {
-            beside.insert(us[i], us[j]);
-            beside.insert(us[j], us[i]);
+        for (into, found) in [(&mut out, pairs), (&mut beside, besides)] {
+            for (i, j) in found {
+                let (Some(&a), Some(&b)) = (us.get(i), us.get(j)) else {
+                    return Err(refused());
+                };
+                into.insert(a, b);
+                into.insert(b, a);
+            }
         }
     }
     Ok((out, beside))
@@ -303,19 +317,13 @@ fn merge_group(
     // An imported vertex's edges end anywhere in its sphere, so their images part by up to twice
     // its tolerance.
     let gap = |v: usize| vtol.get(v).map_or(MERGE_GAP, |&t| (2.0 * t).max(MERGE_GAP));
-    let base = &faces[group[0]];
+    let group: Vec<&OutFace> = group.iter().map(|&m| faces.get(m)).collect::<Option<_>>()?;
+    let base = *group.first()?;
     let s = &base.surface;
     let mut members: Vec<Vec<Trim>> = Vec::new();
-    for &m in group {
-        let map = uv_affine(s, &faces[m].surface)?;
-        members.push(
-            faces[m]
-                .loops
-                .iter()
-                .flatten()
-                .map(|t| map.trim(t))
-                .collect(),
-        );
+    for face in &group {
+        let map = uv_affine(s, &face.surface)?;
+        members.push(face.loops.iter().flatten().map(|t| map.trim(t)).collect());
     }
     let mut uses: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
     for (k, ts) in members.iter().enumerate() {
@@ -323,26 +331,27 @@ fn merge_group(
             uses.entry(t.piece).or_default().push((k, i));
         }
     }
+    // Each member's shift by whole periods, spread from the first across the pieces they share.
     let mut shift: Vec<Option<Vec2>> = vec![None; members.len()];
-    shift[0] = Some(Vec2::ZERO);
+    *shift.first_mut()? = Some(Vec2::ZERO);
     let mut queue = vec![0];
     while let Some(k) = queue.pop() {
-        let sk = shift[k]?;
-        for (i, t) in members[k].iter().enumerate() {
-            for &(j, ti) in &uses[&t.piece] {
-                if shift[j].is_some() || (j, ti) == (k, i) {
+        let sk = (*shift.get(k)?)?;
+        for (i, t) in members.get(k)?.iter().enumerate() {
+            for &(j, ti) in uses.get(&t.piece)? {
+                if shift.get(j)?.is_some() || (j, ti) == (k, i) {
                     continue;
                 }
                 let here = t.mid_uv(s) + sk;
-                let there = members[j][ti].mid_uv(s);
-                shift[j] = Some(period_shift(s, there, here));
+                let there = members.get(j)?.get(ti)?.mid_uv(s);
+                *shift.get_mut(j)? = Some(period_shift(s, there, here));
                 queue.push(j);
             }
         }
     }
     let mut trims: Vec<Trim> = Vec::new();
-    for (k, ts) in members.iter().enumerate() {
-        let d = shift[k]?;
+    for (ts, d) in members.iter().zip(&shift) {
+        let d = (*d)?;
         for t in ts {
             let mut t = t.clone();
             t.uv0 = t.uv0 + d;
@@ -358,15 +367,13 @@ fn merge_group(
     }
     let mids: Vec<Vec2> = trims.iter().map(|t| t.mid_uv(s)).collect();
     let mut inside = vec![false; trims.len()];
-    for i in 0..trims.len() {
-        for j in i + 1..trims.len() {
+    for (i, (ti, mi)) in trims.iter().zip(&mids).enumerate() {
+        for (j, (tj, mj)) in trims.iter().zip(&mids).enumerate().skip(i + 1) {
             // A contact stays: the merged face runs along it both ways, as along a seam.
-            if trims[i].piece == trims[j].piece
-                && !contact.contains(&trims[i].piece)
-                && uv_gap(s, mids[i], mids[j]) <= MERGE_GAP
-            {
-                inside[i] = true;
-                inside[j] = true;
+            if ti.piece == tj.piece && !contact.contains(&ti.piece) && uv_gap(s, *mi, *mj) <= MERGE_GAP {
+                for k in [i, j] {
+                    *inside.get_mut(k)? = true;
+                }
             }
         }
     }
@@ -378,18 +385,21 @@ fn merge_group(
     let mut used = vec![false; trims.len()];
     let mut loops: Vec<Vec<Trim>> = Vec::new();
     while let Some(first) = used.iter().position(|u| !u) {
-        used[first] = true;
-        let mut lp = vec![trims[first].clone()];
+        *used.get_mut(first)? = true;
+        let start = trims.get(first)?;
+        let mut lp = vec![start.clone()];
         loop {
             let last = lp.last()?;
             let (v, at) = (last.v1, last.uv1);
-            if v == lp[0].v0 && uv_gap(s, at, lp[0].uv0) <= gap(v) {
+            if v == start.v0 && uv_gap(s, at, start.uv0) <= gap(v) {
                 break;
             }
-            let next = (0..trims.len())
-                .find(|&k| !used[k] && trims[k].v0 == v && uv_gap(s, trims[k].uv0, at) <= gap(v))?;
-            used[next] = true;
-            lp.push(trims[next].clone());
+            let next = trims
+                .iter()
+                .zip(&used)
+                .position(|(t, &u)| !u && t.v0 == v && uv_gap(s, t.uv0, at) <= gap(v))?;
+            *used.get_mut(next)? = true;
+            lp.push(trims.get(next)?.clone());
         }
         loops.push(lp);
     }
@@ -400,33 +410,24 @@ fn merge_group(
             let mut pts = Vec::new();
             for t in l {
                 let pl = t.polyline(s, 16);
-                pts.extend(
-                    pl[..pl.len() - 1]
-                        .iter()
-                        .map(|p| Vec2::new(sigma * p.x, p.y)),
-                );
+                let (_, all_but_last) = pl.split_last()?;
+                pts.extend(all_but_last.iter().map(|p| Vec2::new(sigma * p.x, p.y)));
             }
-            polygon_area(&pts)
+            Some(polygon_area(&pts))
         })
-        .collect();
-    let outer: Vec<usize> = (0..loops.len()).filter(|&i| areas[i] > 0.0).collect();
-    if outer.len() != 1 {
+        .collect::<Option<_>>()?;
+    let outer: Vec<usize> = areas.iter().enumerate().filter(|&(_, &a)| a > 0.0).map(|(i, _)| i).collect();
+    let &[o] = outer.as_slice() else {
         return None;
-    }
-    let o = outer[0];
-    let mut ordered = vec![loops[o].clone()];
+    };
+    let mut ordered = vec![loops.get(o)?.clone()];
     for (i, l) in loops.into_iter().enumerate() {
         if i != o {
             ordered.push(l);
         }
     }
-    let names = group
-        .iter()
-        .flat_map(|&m| faces[m].names.iter().cloned())
-        .collect();
-    let side = base
-        .side
-        .filter(|&k| group.iter().all(|&m| faces[m].side == Some(k)));
+    let names = group.iter().flat_map(|face| face.names.iter().cloned()).collect();
+    let side = base.side.filter(|&k| group.iter().all(|face| face.side == Some(k)));
     Some(OutFace {
         surface: s.clone(),
         reversed: base.reversed,
@@ -447,9 +448,16 @@ pub(super) fn merge_same_domain(
     let n = faces.len();
     let mut parent: Vec<usize> = (0..n).collect();
     let domains: Vec<std::cell::OnceCell<Domain>> = (0..n).map(|_| Default::default()).collect();
-    let domain = |i: usize| domains[i].get_or_init(|| faces[i].domain());
+    let domain = |i: usize| {
+        let (cell, face) = (domains.get(i)?, faces.get(i)?);
+        Some(cell.get_or_init(|| face.domain()))
+    };
     let same = |f: usize, g: usize| {
-        same_domain(&faces[f].surface, &faces[g].surface) || same_domain_faces(domain(f), domain(g))
+        let (Some(a), Some(b)) = (faces.get(f), faces.get(g)) else {
+            return false;
+        };
+        same_domain(&a.surface, &b.surface)
+            || domain(f).zip(domain(g)).is_some_and(|(x, y)| same_domain_faces(x, y))
     };
     let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
     // Two faces merge across a piece they are partners on: its only two uses, or a pair of its
@@ -459,14 +467,14 @@ pub(super) fn merge_same_domain(
     let mut pairs: Vec<(usize, usize, usize)> = Vec::new();
     let mut contact: BTreeSet<usize> = BTreeSet::new();
     for (piece, us) in uses(&faces) {
-        let one_surface = us.iter().all(|u| same(us[0].0, u.0));
+        let one_surface = us.first().is_some_and(|first| us.iter().all(|u| same(first.0, u.0)));
         if us.len() > 2 && !one_surface {
             contact.insert(piece);
         }
         for (i, &x) in us.iter().enumerate() {
-            for &y in &us[i + 1..] {
+            for &y in us.iter().skip(i + 1) {
                 let partners = if us.len() == 2 {
-                    faces[x.0].loops[x.1][x.2].forward != faces[y.0].loops[y.1][y.2].forward
+                    opposite(&faces, x, y)
                 } else {
                     one_surface && partners.get(&x) == Some(&y)
                 };
@@ -481,10 +489,14 @@ pub(super) fn merge_same_domain(
         if !same(f, g) {
             continue;
         }
-        let pg = &pieces[piece];
-        let Some(c) = &pg.curve else { continue };
+        let Some((pg, c)) = pieces.get(piece).and_then(|pg| Some((pg, pg.curve.as_ref()?))) else {
+            continue;
+        };
         let m = c.eval(0.5 * (pg.range.0 + pg.range.1));
-        if outward_at(&faces[f], m).dot(outward_at(&faces[g], m)) <= 0.0 {
+        let (Some(face_f), Some(face_g)) = (faces.get(f), faces.get(g)) else {
+            continue;
+        };
+        if outward_at(face_f, m).dot(outward_at(face_g, m)) <= 0.0 {
             continue;
         }
         let (rf, rg) = (find(&mut parent, f), find(&mut parent, g));
@@ -494,30 +506,29 @@ pub(super) fn merge_same_domain(
         // The merged face lies on its root's surface, so every face joining it must lie on that
         // surface too: surfaces each within the tolerance of the next can drift apart along a run.
         let (root, other) = (rf.min(rg), rf.max(rg));
-        if !members[other].iter().all(|&x| same(root, x)) {
+        if !members.get(other).is_some_and(|ms| ms.iter().all(|&x| same(root, x))) {
             continue;
         }
-        parent[other] = root;
-        let moved = std::mem::take(&mut members[other]);
-        members[root].extend(moved);
+        if let Some(up) = parent.get_mut(other) {
+            *up = root;
+        }
+        let moved = members.get_mut(other).map(std::mem::take).unwrap_or_default();
+        if let Some(into) = members.get_mut(root) {
+            into.extend(moved);
+        }
     }
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for i in 0..n {
         let r = find(&mut parent, i);
         groups.entry(r).or_default().push(i);
     }
-    let mut roots: Vec<usize> = groups.keys().copied().collect();
-    roots.sort_unstable();
+    // in the roots' order
     let mut out = Vec::new();
-    for r in roots {
-        let g = &groups[&r];
-        if g.len() == 1 {
-            out.push(faces[g[0]].clone());
-            continue;
-        }
-        match merge_group(&faces, g, vtol, &contact) {
+    for g in groups.values() {
+        let merged = if g.len() == 1 { None } else { merge_group(&faces, g, vtol, &contact) };
+        match merged {
             Some(f) => out.push(f),
-            None => out.extend(g.iter().map(|&i| faces[i].clone())),
+            None => out.extend(g.iter().filter_map(|&i| faces.get(i)).cloned()),
         }
     }
     out
@@ -528,25 +539,27 @@ pub(super) fn merge_same_domain(
 fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &BTreeMap<Use, Use>) -> Result<()> {
     let mut issues = Vec::new();
     for (piece, us) in uses(faces) {
-        let pg = &pieces[piece];
+        let Some(pg) = pieces.get(piece) else {
+            issues.push(format!("a trim runs along piece {piece}, which does not exist"));
+            continue;
+        };
         if pg.curve.is_none() {
             if us.len() != 1 {
                 issues.push(format!("a pole is used {} times", us.len()));
             }
             continue;
         }
-        let dirs: Vec<bool> = us
-            .iter()
-            .map(|&(f, l, t)| faces[f].loops[l][t].forward)
-            .collect();
+        let Some(dirs) = us.iter().map(|&u| trim_at(faces, u).map(|t| t.forward)).collect::<Option<Vec<bool>>>()
+        else {
+            issues.push(format!("a use of piece {piece} names a trim that does not exist"));
+            continue;
+        };
         let paired = dirs.len() > 2
             && dirs.len().is_multiple_of(2)
-            && us.iter().all(|u| {
-                partners.get(u).is_some_and(|p| {
-                    faces[u.0].loops[u.1][u.2].forward != faces[p.0].loops[p.1][p.2].forward
-                })
-            });
-        if !paired && (dirs.len() != 2 || dirs[0] == dirs[1])
+            && us.iter().all(|&u| partners.get(&u).is_some_and(|&p| opposite(faces, u, p)));
+        // two uses running opposite ways are the one sound use of an edge besides pairs
+        let opposed = matches!(dirs.as_slice(), [a, b] if a != b);
+        if !paired && !opposed
             && let Some(c) = pg.curve.as_ref()
         {
             let p = c.eval(0.5 * (pg.range.0 + pg.range.1));
@@ -572,6 +585,9 @@ fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &BTreeMap<Use, 
     }
 }
 
+/// What [`build`] makes: the arena, each face's input side, and each face use's coedge.
+type Built = (Brep, Vec<Option<usize>>, BTreeMap<Use, CoedgeId>);
+
 /// A solid to build: its sheets, each a list of faces, the outer ones first, and how many are
 /// outer.
 type SolidPlan = (Vec<Vec<usize>>, usize);
@@ -586,7 +602,8 @@ fn build(
     vtol: &[f64],
     pieces: &[PieceGeom],
     share: bool,
-) -> (Brep, Vec<Option<usize>>, BTreeMap<Use, CoedgeId>) {
+) -> Result<Built> {
+    let missing = || Error::Numerical("a face to sew names a piece or vertex that does not exist".into());
     let mut b = Brep::new();
     let mut sides = Vec::new();
     let mut coedge_of: BTreeMap<Use, CoedgeId> = BTreeMap::new();
@@ -602,7 +619,7 @@ fn build(
             let key = if share { si } else { sheet };
             let mut face_ids = Vec::new();
             for &fi in faces_of {
-                let f = &faces[fi];
+                let f = faces.get(fi).ok_or_else(missing)?;
                 let id = b.add_face(f.surface.clone(), f.reversed, f.names.iter().cloned());
                 for (li, l) in f.loops.iter().enumerate() {
                     let mut specs = Vec::new();
@@ -610,15 +627,18 @@ fn build(
                         let e = match edges.get(&(t.piece, key)) {
                             Some(&e) => e,
                             None => {
-                                let pg = &pieces[t.piece];
-                                let mut vertex = |b: &mut Brep, i: usize| {
-                                    *verts.entry((i, key)).or_insert_with(|| {
-                                        let v = b.add_vertex(pool[i]);
-                                        b.set_vertex_tolerance(v, vtol[i]);
-                                        v
-                                    })
+                                let pg = pieces.get(t.piece).ok_or_else(missing)?;
+                                let mut vertex = |b: &mut Brep, i: usize| -> Result<VertexId> {
+                                    if let Some(&v) = verts.get(&(i, key)) {
+                                        return Ok(v);
+                                    }
+                                    let (&p, &t) = (pool.get(i).ok_or_else(missing)?, vtol.get(i).ok_or_else(missing)?);
+                                    let v = b.add_vertex(p);
+                                    b.set_vertex_tolerance(v, t);
+                                    verts.insert((i, key), v);
+                                    Ok(v)
                                 };
-                                let (v0, v1) = (vertex(&mut b, pg.v0), vertex(&mut b, pg.v1));
+                                let (v0, v1) = (vertex(&mut b, pg.v0)?, vertex(&mut b, pg.v1)?);
                                 let e = match &pg.curve {
                                     Some(c) => b.add_edge((**c).clone(), pg.range, v0, v1),
                                     None => b.add_degenerate_edge(v0, pg.range),
@@ -659,7 +679,7 @@ fn build(
         }
         b.add_solid_of(shell_ids, *outer);
     }
-    (b, sides, coedge_of)
+    Ok((b, sides, coedge_of))
 }
 
 /// The average thickness below which a separate sheet of a result holds no material.
@@ -685,17 +705,20 @@ pub(crate) fn assemble(
     check_uses(&faces, pieces, &partners)?;
     let n = faces.len();
     let all = uses(&faces);
+    // the smaller root of the two becomes the root of both
     let join = |parent: &mut [usize], a: usize, c: usize| {
         let (a, c) = (find(parent, a), find(parent, c));
-        if a != c {
-            parent[a.max(c)] = a.min(c);
+        if a != c
+            && let Some(up) = parent.get_mut(a.max(c))
+        {
+            *up = a.min(c);
         }
     };
     // Sheets: faces joined across each piece to their partners.
     let mut parent: Vec<usize> = (0..n).collect();
     for us in all.values() {
-        if us.len() == 2 {
-            join(&mut parent, us[0].0, us[1].0);
+        if let [x, y] = us.as_slice() {
+            join(&mut parent, x.0, y.0);
         } else {
             for u in us {
                 if let Some(p) = partners.get(u) {
@@ -713,7 +736,9 @@ pub(crate) fn assemble(
             sheets.push(Vec::new());
             sheets.len() - 1
         });
-        sheets[k].push(i);
+        if let Some(members) = sheets.get_mut(k) {
+            members.push(i);
+        }
         *sheet = k;
     }
     // Each sheet's own volume: positive where it bounds material from outside, negative a void.
@@ -721,7 +746,7 @@ pub(crate) fn assemble(
         vec![1.0]
     } else {
         let alone: Vec<SolidPlan> = sheets.iter().map(|s| (vec![s.clone()], 1)).collect();
-        let trial = build(&faces, &alone, pool, vtol, pieces, false).0;
+        let trial = build(&faces, &alone, pool, vtol, pieces, false)?.0;
         let volumes: Vec<f64> = trial
             .solid_ids()
             .map(|s| measure::solid_volume_sign(&trial, s))
@@ -748,7 +773,7 @@ pub(crate) fn assemble(
             let kept = faces
                 .into_iter()
                 .enumerate()
-                .filter(|(i, _)| !flat[sheet_of[*i]])
+                .filter(|(i, _)| sheet_of.get(*i).and_then(|&k| flat.get(k)) != Some(&true))
                 .map(|(_, f)| f)
                 .collect();
             return assemble(kept, pool, vtol, pieces);
@@ -759,20 +784,24 @@ pub(crate) fn assemble(
     // vertex both hold.
     let m = sheets.len();
     let mut group: Vec<usize> = (0..m).collect();
+    let sheet = |f: usize| sheet_of.get(f).copied();
     for us in all.values() {
         for w in us.windows(2) {
-            join(&mut group, sheet_of[w[0].0], sheet_of[w[1].0]);
+            if let [x, y] = w
+                && let (Some(a), Some(c)) = (sheet(x.0), sheet(y.0))
+            {
+                join(&mut group, a, c);
+            }
         }
     }
     let mut at_vertex: BTreeMap<usize, usize> = BTreeMap::new();
-    for (fi, f) in faces.iter().enumerate() {
-        for t in f.loops.iter().flatten() {
-            let pg = &pieces[t.piece];
+    for (f, &own) in faces.iter().zip(&sheet_of) {
+        for pg in f.loops.iter().flatten().filter_map(|t| pieces.get(t.piece)) {
             for v in [pg.v0, pg.v1] {
                 match at_vertex.get(&v) {
-                    Some(&other) => join(&mut group, other, sheet_of[fi]),
+                    Some(&other) => join(&mut group, other, own),
                     None => {
-                        at_vertex.insert(v, sheet_of[fi]);
+                        at_vertex.insert(v, own);
                     }
                 }
             }
@@ -782,48 +811,63 @@ pub(crate) fn assemble(
     for k in 0..m {
         members.entry(find(&mut group, k)).or_default().push(k);
     }
-    let mut roots: Vec<usize> = members.keys().copied().collect();
-    roots.sort_unstable();
+    // in the roots' order
     let mut solids: Vec<SolidPlan> = Vec::new();
     let mut stray: Vec<usize> = Vec::new();
-    for r in roots {
-        let ks = &members[&r];
-        let (outer, inner): (Vec<usize>, Vec<usize>) = ks.iter().partition(|&&k| volumes[k] > 0.0);
+    for ks in members.values() {
+        let (outer, inner): (Vec<usize>, Vec<usize>) =
+            ks.iter().partition(|&&k| volumes.get(k).is_some_and(|&v| v > 0.0));
         if outer.is_empty() {
             stray.extend(inner);
             continue;
         }
-        let mut plan: Vec<Vec<usize>> = outer.iter().map(|&k| sheets[k].clone()).collect();
-        plan.extend(inner.iter().map(|&k| sheets[k].clone()));
+        let sheet_faces = |k: &usize| sheets.get(*k).cloned();
+        let mut plan: Vec<Vec<usize>> = outer.iter().filter_map(sheet_faces).collect();
+        plan.extend(inner.iter().filter_map(sheet_faces));
         solids.push((plan, outer.len()));
     }
     // A void touching nothing lies in the smallest solid whose outer sheets hold it.
     let doms: Vec<std::cell::OnceCell<Domain>> = (0..n).map(|_| Default::default()).collect();
-    let dom = |i: usize| doms[i].get_or_init(|| faces[i].domain());
+    let missing = || Error::Numerical("a sheet names a face that does not exist".into());
+    let dom = |i: usize| -> Result<&Domain> {
+        let (cell, face) = (doms.get(i).ok_or_else(missing)?, faces.get(i).ok_or_else(missing)?);
+        Ok(cell.get_or_init(|| face.domain()))
+    };
+    // a solid's outer sheets' volumes, each read from its first face's sheet
     let size = |plan: &SolidPlan| -> f64 {
-        plan.0[..plan.1]
+        plan.0
             .iter()
-            .map(|sh| volumes[sheet_of[sh[0]]])
+            .take(plan.1)
+            .map(|sh| sh.first().and_then(|&f| sheet_of.get(f)).and_then(|&k| volumes.get(k)).copied().unwrap_or(0.0))
             .sum()
     };
     for k in stray {
-        let d = dom(sheets[k][0]);
+        let void = sheets.get(k).ok_or_else(missing)?;
+        let d = dom(*void.first().ok_or_else(missing)?)?;
         let probe = d
             .interior_point()
             .map(|uv| d.surface.eval(uv.x, uv.y))
             .ok_or_else(|| Error::Numerical("a void's face has no interior point".into()))?;
-        let host = (0..solids.len())
-            .filter(|&s| {
-                let shell: Vec<(&Domain, Aabb)> = solids[s].0[..solids[s].1]
-                    .iter()
-                    .flatten()
-                    .map(|&f| (dom(f), super::bounds::face_bbox(dom(f))))
-                    .collect();
-                classify::contains(&shell, probe) == Some(true)
-            })
-            .min_by(|&a, &b| size(&solids[a]).total_cmp(&size(&solids[b])));
-        match host {
-            Some(s) => solids[s].0.push(sheets[k].clone()),
+        let mut holds = Vec::with_capacity(solids.len());
+        for plan in &solids {
+            let shell: Vec<(&Domain, Aabb)> = plan
+                .0
+                .iter()
+                .take(plan.1)
+                .flatten()
+                .map(|&f| dom(f).map(|d| (d, super::bounds::face_bbox(d))))
+                .collect::<Result<_>>()?;
+            holds.push(classify::contains(&shell, probe) == Some(true));
+        }
+        let host = solids
+            .iter()
+            .zip(&holds)
+            .enumerate()
+            .filter(|&(_, (_, &h))| h)
+            .min_by(|(_, (a, _)), (_, (b, _))| size(a).total_cmp(&size(b)))
+            .map(|(s, _)| s);
+        match host.and_then(|s| solids.get_mut(s)) {
+            Some(plan) => plan.0.push(void.clone()),
             None => {
                 return Err(Error::InvalidResult(vec![
                     "a shell encloses negative volume and lies in no solid".into(),
@@ -831,7 +875,7 @@ pub(crate) fn assemble(
             }
         }
     }
-    let (mut b, sides, coedge_of) = build(&faces, &solids, pool, vtol, pieces, true);
+    let (mut b, sides, coedge_of) = build(&faces, &solids, pool, vtol, pieces, true)?;
     for (u, p) in &partners {
         if let (Some(&c), Some(&d)) = (coedge_of.get(u), coedge_of.get(p)) {
             b.pair(c, d);

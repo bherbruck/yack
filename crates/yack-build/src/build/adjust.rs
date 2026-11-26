@@ -2,7 +2,9 @@
 // Adapted from springrep@a03e8a1 src/step/adjust.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from step/adjust.rs to build/adjust.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
 // M3 hardening (w-h3): its maps are BTreeMaps (D26; audited: looked up only, and `vars` iterated
-// only to gather distinct faces' moves applied all or none, so its order reaches no output).
+// only to gather distinct faces' moves applied all or none, so its order reaches no output);
+// chunk E: faces through `Raw`'s accessors; the solver's vectors by iterators and checked access
+// (`add_at`, `set_at`, `value`), in the same order of arithmetic.
 //! Moving an imported solid's surfaces, as little as possible, where its faces miss each other.
 //!
 //! Where two faces touch rather than cross, or a B-spline face stops short of its corner, no
@@ -119,9 +121,11 @@ impl Target {
         }
     }
 
+    /// The move of its three unknowns `x` along its frame's axes.
     fn moved_by(&self, x: &[f64]) -> Vec3 {
         let f = &self.frame;
-        f[0] * x[0] + f[1] * x[1] + f[2] * x[2]
+        let &[a, b, c] = x else { return Vec3::ZERO };
+        f[0] * a + f[1] * b + f[2] * c
     }
 }
 
@@ -130,7 +134,7 @@ fn normals_at(raw: &Raw, faces: &[usize], at: Point3) -> Vec<Vec3> {
     faces
         .iter()
         .map(|&f| {
-            let s = &raw.faces[f].surface;
+            let s = &raw.face(f).surface;
             let uv = s.project(at);
             s.normal(uv.x, uv.y)
         })
@@ -197,23 +201,24 @@ fn with_sizes(s: &Surface, d: &[f64]) -> Option<Surface> {
     Some(match s {
         Surface::Cylinder(c) => {
             let mut c = c.clone();
-            c.radius = positive(c.radius + d[0])?;
+            c.radius = positive(c.radius + d.first()?)?;
             Surface::Cylinder(c)
         }
         Surface::Cone(c) => {
             let mut c = c.clone();
-            c.radius += d[0];
+            c.radius += d.first()?;
             Surface::Cone(c)
         }
         Surface::Sphere(c) => {
             let mut c = c.clone();
-            c.radius = positive(c.radius + d[0])?;
+            c.radius = positive(c.radius + d.first()?)?;
             Surface::Sphere(c)
         }
         Surface::Torus(t) => {
             let mut t = t.clone();
-            t.major += d[0];
-            t.minor = positive(t.minor + d[1])?;
+            let &[major, minor, ..] = d else { return None };
+            t.major += major;
+            t.minor = positive(t.minor + minor)?;
             Surface::Torus(t)
         }
         other => other.clone(),
@@ -283,21 +288,33 @@ fn insert_knot(
 ) -> (Vec<f64>, Vec<[f64; 4]>) {
     let k = (degree..pts.len())
         .rev()
-        .find(|&i| knots[i] <= t)
+        .find(|&i| knots.get(i).is_some_and(|&k| k <= t))
         .unwrap_or(degree);
+    // Points up to the span's first stay, from its last on they move up one place, and each
+    // between is its two neighbours mixed by where `t` falls in its knots. A curve whose knots and
+    // points do not fit is left as it is.
+    let unchanged = || (knots.to_vec(), pts.to_vec());
+    let Some(first_moved) = k.checked_sub(degree) else { return unchanged() };
+    let (Some(kept_before), Some(blended), Some(kept_after), Some(lows), Some(highs)) = (
+        pts.get(..=first_moved),
+        pts.get(first_moved..=k),
+        pts.get(k..),
+        knots.get(first_moved + 1..=k),
+        knots.get(k + 1..=k + degree),
+    ) else {
+        return unchanged();
+    };
     let mut q = Vec::with_capacity(pts.len() + 1);
-    for i in 0..=pts.len() {
-        if i + degree <= k {
-            q.push(pts[i]);
-        } else if i > k {
-            q.push(pts[i - 1]);
-        } else {
-            let den = knots[i + degree] - knots[i];
-            let a = if den > 0.0 { (t - knots[i]) / den } else { 0.0 };
-            let (p0, p1) = (pts[i - 1], pts[i]);
-            q.push(std::array::from_fn(|c| (1.0 - a) * p0[c] + a * p1[c]));
-        }
+    q.extend_from_slice(kept_before);
+    let neighbours = blended.iter().zip(blended.iter().skip(1));
+    for ((&p0, &p1), (&lo, &hi)) in neighbours.zip(lows.iter().zip(highs)) {
+        let den = hi - lo;
+        let a = if den > 0.0 { (t - lo) / den } else { 0.0 };
+        let mix = |x: f64, y: f64| (1.0 - a) * x + a * y;
+        let ([x0, y0, z0, w0], [x1, y1, z1, w1]) = (p0, p1);
+        q.push([mix(x0, x1), mix(y0, y1), mix(z0, z1), mix(w0, w1)]);
     }
+    q.extend_from_slice(kept_after);
     let mut kn = knots.to_vec();
     kn.insert(k + 1, t);
     (kn, q)
@@ -313,11 +330,15 @@ fn splits(knots: &[f64], domain: (f64, f64), spans: usize) -> Vec<f64> {
         .collect();
     cuts.dedup();
     let mut out = Vec::new();
-    while cuts.len() - 1 < spans {
-        let i = (0..cuts.len() - 1)
-            .max_by(|&a, &b| (cuts[a + 1] - cuts[a]).total_cmp(&(cuts[b + 1] - cuts[b])))
-            .unwrap_or(0);
-        let m = 0.5 * (cuts[i] + cuts[i + 1]);
+    while cuts.len().saturating_sub(1) < spans {
+        // The longest span left, the last of the longest.
+        let widest = cuts
+            .iter()
+            .zip(cuts.iter().skip(1))
+            .enumerate()
+            .max_by(|(_, (a0, a1)), (_, (b0, b1))| (*a1 - *a0).total_cmp(&(*b1 - *b0)))
+            .map(|(i, (&a, &b))| (i, 0.5 * (a + b)));
+        let Some((i, m)) = widest else { break };
         out.push(m);
         cuts.insert(i + 1, m);
     }
@@ -336,7 +357,8 @@ fn refined(n: &NurbsSurface, spans: usize) -> Option<NurbsSurface> {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let wi = w.map_or(1.0, |w| w[i]);
+            // A rational surface has a weight per control point.
+            let wi = w.map_or(1.0, |w| w.get(i).copied().unwrap_or(1.0));
             [p.x * wi, p.y * wi, p.z * wi, wi]
         })
         .collect();
@@ -345,10 +367,11 @@ fn refined(n: &NurbsSurface, spans: usize) -> Option<NurbsSurface> {
         let mut next = vec![[0.0; 4]; (nu + 1) * nv];
         let mut knots = Vec::new();
         for j in 0..nv {
-            let col: Vec<[f64; 4]> = (0..nu).map(|i| net[i * nv + j]).collect();
+            // Column `j` of the net, row by row in `u`.
+            let col: Vec<[f64; 4]> = net.iter().skip(j).step_by(nv).take(nu).copied().collect();
             let (k, q) = insert_knot(&ku, du, &col, t);
-            for (i, p) in q.into_iter().enumerate() {
-                next[i * nv + j] = p;
+            for (slot, p) in next.iter_mut().skip(j).step_by(nv).zip(q) {
+                *slot = p;
             }
             knots = k;
         }
@@ -360,7 +383,8 @@ fn refined(n: &NurbsSurface, spans: usize) -> Option<NurbsSurface> {
         let mut next = Vec::with_capacity(nu * (nv + 1));
         let mut knots = Vec::new();
         for i in 0..nu {
-            let (k, q) = insert_knot(&kv, dv, &net[i * nv..(i + 1) * nv], t);
+            let row = net.get(i * nv..(i + 1) * nv).unwrap_or_default();
+            let (k, q) = insert_knot(&kv, dv, row, t);
             next.extend(q);
             knots = k;
         }
@@ -380,19 +404,40 @@ fn refined(n: &NurbsSurface, spans: usize) -> Option<NurbsSurface> {
 fn control_groups(ctrl: &[Point3]) -> (Vec<usize>, usize) {
     let mut group_of = vec![usize::MAX; ctrl.len()];
     let mut groups = 0;
-    for i in 0..ctrl.len() {
-        if group_of[i] != usize::MAX {
-            continue;
+    for (i, &here) in ctrl.iter().enumerate() {
+        match group_of.get_mut(i) {
+            Some(g) if *g == usize::MAX => *g = groups,
+            _ => continue,
         }
-        group_of[i] = groups;
-        for j in i + 1..ctrl.len() {
-            if group_of[j] == usize::MAX && ctrl[i].dist(ctrl[j]) <= tol::LINEAR {
-                group_of[j] = groups;
+        // Every later point at this one, not yet in a group, joins its group.
+        for (g, &other) in group_of.iter_mut().zip(ctrl).skip(i + 1) {
+            if *g == usize::MAX && here.dist(other) <= tol::LINEAR {
+                *g = groups;
             }
         }
         groups += 1;
     }
     (group_of, groups)
+}
+
+/// Adds `x` to `v[i]`. Every index the solver uses is in range by its vectors' sizes: an unknown's
+/// column, a row's place, a block's entry.
+fn add_at(v: &mut [f64], i: usize, x: f64) {
+    if let Some(e) = v.get_mut(i) {
+        *e += x;
+    }
+}
+
+/// Sets `v[i]` to `x`, under [`add_at`]'s promise.
+fn set_at(v: &mut [f64], i: usize, x: f64) {
+    if let Some(e) = v.get_mut(i) {
+        *e = x;
+    }
+}
+
+/// `v[i]`, under [`add_at`]'s promise.
+fn value(v: &[f64], i: usize) -> f64 {
+    v.get(i).copied().unwrap_or_default()
 }
 
 /// A sparse system `A x = b`, solved for the `x` of least weighted norm `Σ wⱼ xⱼ²`.
@@ -413,31 +458,33 @@ impl System {
         self.blocks
             .iter()
             .map(|&(a, b)| {
-                let k = b - a;
+                let block = self.rows.get(a..b).unwrap_or_default();
+                let k = block.len();
                 let mut m = vec![0.0; k * k];
-                for i in 0..k {
-                    for &(j, x) in &self.rows[a + i] {
-                        dense[j] += x;
+                for (i, row_i) in block.iter().enumerate() {
+                    for &(j, x) in row_i {
+                        add_at(&mut dense, j, x);
                     }
-                    for l in 0..k {
-                        m[i * k + l] = self.rows[a + l]
+                    for (l, row_l) in block.iter().enumerate() {
+                        let dot = row_l
                             .iter()
-                            .map(|&(j, x)| x * dense[j] * self.inv_w[j])
+                            .map(|&(j, x)| x * value(&dense, j) * value(&self.inv_w, j))
                             .sum::<f64>();
+                        set_at(&mut m, i * k + l, dot);
                     }
-                    m[i * k + i] += lambda;
-                    for &(j, _) in &self.rows[a + i] {
-                        dense[j] = 0.0;
+                    add_at(&mut m, i * k + i, lambda);
+                    for &(j, _) in row_i {
+                        set_at(&mut dense, j, 0.0);
                     }
                 }
                 let mut eye = vec![0.0; k * k];
                 for i in 0..k {
-                    eye[i * k + i] = 1.0;
+                    set_at(&mut eye, i * k + i, 1.0);
                 }
                 solve_dense(m.clone(), eye, k, k).unwrap_or_else(|_| {
                     let mut d = vec![0.0; k * k];
                     for i in 0..k {
-                        d[i * k + i] = 1.0 / m[i * k + i].max(lambda);
+                        set_at(&mut d, i * k + i, 1.0 / value(&m, i * k + i).max(lambda));
                     }
                     d
                 })
@@ -454,7 +501,7 @@ impl System {
             let mut z = vec![0.0; n];
             for (row, &yi) in self.rows.iter().zip(y) {
                 for &(j, a) in row {
-                    z[j] += a * yi;
+                    add_at(&mut z, j, a * yi);
                 }
             }
             for (zj, w) in z.iter_mut().zip(&self.inv_w) {
@@ -467,7 +514,9 @@ impl System {
             self.rows
                 .iter()
                 .zip(y)
-                .map(|(row, &yi)| row.iter().map(|&(j, a)| a * z[j]).sum::<f64>() + lambda * yi)
+                .map(|(row, &yi)| {
+                    row.iter().map(|&(j, a)| a * value(&z, j)).sum::<f64>() + lambda * yi
+                })
                 .collect()
         };
         let inverses = self.block_inverses(lambda);
@@ -476,7 +525,8 @@ impl System {
             for (&(a, b), inv) in self.blocks.iter().zip(&inverses) {
                 let k = b - a;
                 for i in 0..k {
-                    z[a + i] = (0..k).map(|l| inv[i * k + l] * r[a + l]).sum();
+                    let zi = (0..k).map(|l| value(inv, i * k + l) * value(r, a + l)).sum();
+                    set_at(&mut z, a + i, zi);
                 }
             }
             z
@@ -509,16 +559,16 @@ impl System {
                 break;
             }
             let alpha = rz / pap;
-            for i in 0..m {
-                y[i] += alpha * p[i];
-                r[i] -= alpha * ap[i];
+            for ((yi, ri), (&pi, &api)) in y.iter_mut().zip(r.iter_mut()).zip(p.iter().zip(&ap)) {
+                *yi += alpha * pi;
+                *ri -= alpha * api;
             }
             z = precondition(&r);
             let rz_next: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
             let beta = rz_next / rz;
             rz = rz_next;
-            for i in 0..m {
-                p[i] = z[i] + beta * p[i];
+            for (pi, &zi) in p.iter_mut().zip(&z) {
+                *pi = zi + beta * *pi;
             }
         }
         at(&y)
@@ -535,7 +585,7 @@ pub(crate) fn adjust(
 ) -> (BTreeMap<usize, Point3>, bool) {
     let surfaces: Vec<Surface> = faces
         .iter()
-        .map(|&f| raw.faces[f].surface.clone())
+        .map(|&f| raw.face(f).surface.clone())
         .collect();
     let points: Vec<Point3> = targets.iter().map(|t| t.at).collect();
     let mut met = gauss_newton(raw, faces, targets);
@@ -544,17 +594,17 @@ pub(crate) fn adjust(
     // Only then: more control points also let a surface bend locally between the targets.
     if !met {
         for (&f, s) in faces.iter().zip(&surfaces) {
-            raw.faces[f].surface = s.clone();
+            raw.face_mut(f).surface = s.clone();
         }
         for (t, &p) in targets.iter_mut().zip(&points) {
             t.at = p;
         }
         let mut more = false;
         for &f in faces {
-            if let Surface::Nurbs(n) = &raw.faces[f].surface
+            if let Surface::Nurbs(n) = &raw.face(f).surface
                 && let Some(r) = refined(n, MIN_SPANS)
             {
-                raw.faces[f].surface = Surface::Nurbs(Box::new(r));
+                raw.face_mut(f).surface = Surface::Nurbs(Box::new(r));
                 more = true;
             }
         }
@@ -589,7 +639,7 @@ fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool 
             .map(|p| p.dist(center))
             .fold(0.0, f64::max)
             .max(1e-3);
-        let dofs = match &raw.faces[f].surface {
+        let dofs = match &raw.face(f).surface {
             Surface::Nurbs(n) => {
                 let (group_of, groups) = control_groups(n.control_points());
                 Dofs::Control { group_of, groups }
@@ -627,7 +677,7 @@ fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool 
         let mut taken = None;
         for (k, t) in targets.iter().enumerate() {
             for (i, c) in t.cost.iter().enumerate() {
-                sys.inv_w[3 * k + i] = 1.0 / c;
+                set_at(&mut sys.inv_w, 3 * k + i, 1.0 / c);
             }
         }
         for (damp, scale) in TRIALS {
@@ -639,22 +689,24 @@ fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool 
             };
             let mut faces_at: Vec<(usize, Surface)> = Vec::with_capacity(vars.len());
             for (&f, v) in &vars {
-                let xs: Vec<f64> = x[v.first..v.first + v.count()]
+                let xs: Vec<f64> = x
+                    .get(v.first..v.first + v.count())
+                    .unwrap_or_default()
                     .iter()
                     .map(|a| a * scale)
                     .collect();
-                match moved(&raw.faces[f].surface, &v.dofs, &xs) {
+                match moved(&raw.face(f).surface, &v.dofs, &xs) {
                     Some(m) => faces_at.push((f, m)),
                     None => return false,
                 }
             }
             let mut trial_raw_faces: Vec<(usize, Surface)> = Vec::with_capacity(faces_at.len());
             for (f, m) in faces_at {
-                trial_raw_faces.push((f, std::mem::replace(&mut raw.faces[f].surface, m)));
+                trial_raw_faces.push((f, std::mem::replace(&mut raw.face_mut(f).surface, m)));
             }
             let before: Vec<Point3> = targets.iter().map(|t| t.at).collect();
             for (k, t) in targets.iter_mut().enumerate() {
-                t.at += t.moved_by(&x[3 * k..3 * k + 3]) * scale;
+                t.at += t.moved_by(x.get(3 * k..3 * k + 3).unwrap_or_default()) * scale;
             }
             let mut trial_hints = hints.clone();
             let next = linearize(raw, targets, &vars, &mut trial_hints);
@@ -664,7 +716,7 @@ fn gauss_newton(raw: &mut Raw, faces: &[usize], targets: &mut [Target]) -> bool 
                 break;
             }
             for (f, old) in trial_raw_faces {
-                raw.faces[f].surface = old;
+                raw.face_mut(f).surface = old;
             }
             for (t, p) in targets.iter_mut().zip(before) {
                 t.at = p;
@@ -700,7 +752,7 @@ fn linearize(
         let first = rows.len();
         let fr = t.frame;
         for &f in &t.faces {
-            let s = &raw.faces[f].surface;
+            let s = &raw.face(f).surface;
             let uv = match hints.get(&(k, f)) {
                 Some(&h) => s.project_near(t.at, h),
                 None => s.project(t.at),
@@ -755,7 +807,9 @@ fn columns(s: &Surface, v: &Vars, uv: Vec2, q: Point3, d: Vec3, row: &mut Vec<(u
         Dofs::Control { group_of, .. } => {
             if let Surface::Nurbs(n) = s {
                 for (idx, b) in n.basis(uv.x, uv.y) {
-                    let g = v.first + 3 * group_of[idx];
+                    // The groups were found over this surface's own control points.
+                    let Some(&group) = group_of.get(idx) else { continue };
+                    let g = v.first + 3 * group;
                     for (i, x) in d.to_array().into_iter().enumerate() {
                         row.push((g + i, -b * x));
                     }
@@ -770,13 +824,14 @@ fn columns(s: &Surface, v: &Vars, uv: Vec2, q: Point3, d: Vec3, row: &mut Vec<(u
 fn moved(s: &Surface, dofs: &Dofs, xs: &[f64]) -> Option<Surface> {
     match dofs {
         Dofs::Rigid { center, lever, .. } => {
-            let sized = with_sizes(s, &xs[6..])?;
-            let w = Vec3::new(xs[3], xs[4], xs[5]) / *lever;
+            let &[x0, x1, x2, w0, w1, w2, ref sizes @ ..] = xs else { return None };
+            let sized = with_sizes(s, sizes)?;
+            let w = Vec3::new(w0, w1, w2) / *lever;
             let rot = match w.unit() {
                 Some(axis) => Transform::rotation(*center, axis, w.norm()),
                 None => Transform::IDENTITY,
             };
-            let t = rot.then(&Transform::translation(Vec3::new(xs[0], xs[1], xs[2])));
+            let t = rot.then(&Transform::translation(Vec3::new(x0, x1, x2)));
             Some(sized.transformed(&t))
         }
         Dofs::Control { group_of, .. } => {
@@ -785,8 +840,11 @@ fn moved(s: &Surface, dofs: &Dofs, xs: &[f64]) -> Option<Surface> {
                 .control_points()
                 .iter()
                 .zip(group_of)
-                .map(|(&p, &g)| p + Vec3::new(xs[3 * g], xs[3 * g + 1], xs[3 * g + 2]))
-                .collect();
+                .map(|(&p, &g)| {
+                    let &[a, b, c] = xs.get(3 * g..3 * g + 3)? else { return None };
+                    Some(p + Vec3::new(a, b, c))
+                })
+                .collect::<Option<_>>()?;
             let m = n.with_control_points(ctrl).ok()?;
             let same = m.u_period().is_some() == n.u_period().is_some()
                 && m.v_period().is_some() == n.v_period().is_some();

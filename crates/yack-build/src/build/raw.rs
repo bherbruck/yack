@@ -75,6 +75,16 @@ pub(crate) fn entity_mut<T>(items: &mut [T], index: usize) -> &mut T {
 }
 
 impl Raw {
+    /// Face `f`.
+    pub(crate) fn face(&self, f: usize) -> &RawFace {
+        entity(&self.faces, f)
+    }
+
+    /// Face `f`, mutably.
+    pub(crate) fn face_mut(&mut self, f: usize) -> &mut RawFace {
+        entity_mut(&mut self.faces, f)
+    }
+
     /// Edge `e`, mutably.
     pub(crate) fn edge_mut(&mut self, e: usize) -> &mut RawEdge {
         entity_mut(&mut self.edges, e)

@@ -1,6 +1,7 @@
 // yack: Faces of the second input lying a hair off a face of the first, moved onto that face's surface
 // Adapted from springrep@a03e8a1 src/boolean/snap.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/snap.rs to yack-boolean (M3 W8); paths and visibility only.
+// Its small literals named or marked (M3 B14).
 //! Faces of the second input lying a hair off a face of the first, moved onto that face's surface
 //! before the boolean: within [`SNAP`] all over, or within [`SNAP_GRAZING`] where the two cross at
 //! an angle below [`tol::TANGENT`], which the tolerance cannot place. A part placed by a rounded
@@ -36,11 +37,15 @@ pub(crate) enum Reach {
 }
 
 /// How far apart two faces may lie all over and still be moved onto one surface, in mm.
-pub(crate) const SNAP: f64 = 1e-6;
+pub(crate) const SNAP: f64 = 1e-6; // tol: the gap faces are snapped across, in mm
 
 /// How far apart two faces that cross below [`tol::TANGENT`] may lie and still be moved onto one
 /// surface, in mm: a cylinder of 100 mm radius off its seat's axis by this crosses it at that angle.
-pub(crate) const SNAP_GRAZING: f64 = 1e-4;
+pub(crate) const SNAP_GRAZING: f64 = 1e-4; // tol: the gap grazing faces are snapped across, in mm
+
+/// How far apart two directions may turn (the sine between them), or two cones' half-angles (in
+/// radians), for their surfaces to be candidates for one: a cheap screen before any sampling.
+const ALIKE_TURN: f64 = 1e-3; // tol: an angle, not a length
 
 /// How far moving faces may move a vertex, in multiples of how far they were moved: further means
 /// a neighbour meets the face at an angle so shallow that its corner slides along it.
@@ -48,7 +53,7 @@ const MOST_MOVED: f64 = 10.0;
 
 /// How far apart two axes may turn, in radians, and still be turned onto one: a pose's rounding
 /// leaves a part's axis 2e-10 off its seat's, which moves a point 100 mm along it by 2e-8 mm.
-const COAXIAL_TILT: f64 = 1e-8;
+const COAXIAL_TILT: f64 = 1e-8; // tol: an angle in radians, not a length
 
 /// Points along every edge of face `f`, where two surfaces of one kind a hair apart are furthest
 /// apart over the face: their gap is linear across a plane and varies round a cylinder's turn,
@@ -82,7 +87,7 @@ fn analytic(s: &Surface) -> bool {
 /// before any sampling.
 fn alike(s: &Surface, t: &Surface) -> bool {
     let near = |x: f64, y: f64| (x - y).abs() <= SNAP_GRAZING;
-    let parallel = |a: crate::math::Vec3, b: crate::math::Vec3| a.cross(b).norm() <= 1e-3;
+    let parallel = |a: crate::math::Vec3, b: crate::math::Vec3| a.cross(b).norm() <= ALIKE_TURN;
     match (s, t) {
         (Surface::Plane(p), Surface::Plane(q)) => parallel(p.frame.z, q.frame.z),
         (Surface::Cylinder(p), Surface::Cylinder(q)) => {
@@ -90,7 +95,7 @@ fn alike(s: &Surface, t: &Surface) -> bool {
         }
         (Surface::Sphere(p), Surface::Sphere(q)) => near(p.radius, q.radius),
         (Surface::Cone(p), Surface::Cone(q)) => {
-            (p.half_angle - q.half_angle).abs() <= 1e-3 && parallel(p.frame.z, q.frame.z)
+            (p.half_angle - q.half_angle).abs() <= ALIKE_TURN && parallel(p.frame.z, q.frame.z)
         }
         (Surface::Torus(p), Surface::Torus(q)) => {
             near(p.major, q.major) && near(p.minor, q.minor) && parallel(p.frame.z, q.frame.z)
