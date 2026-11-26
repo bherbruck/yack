@@ -23,6 +23,7 @@ use yack_profile as profile;
 use yack_build::sweep;
 mod geometry;
 mod part21;
+mod pcurve;
 mod read;
 mod topology;
 mod write;

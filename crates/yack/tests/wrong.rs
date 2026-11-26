@@ -126,7 +126,6 @@ fn dumbbell_neck_filled() {
 }
 
 #[test]
-#[ignore = "M3: springrep's sharp shell open at a step face (1430 vs 1448); no guard yet"]
 fn l_block_open_at_its_step_sharp() {
     not(
         (|| {

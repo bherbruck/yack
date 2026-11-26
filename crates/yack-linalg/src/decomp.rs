@@ -63,7 +63,7 @@ impl<K: ColKind> Grid for Dynamic<f64, K> {
 /// Factors `m` in place; `piv[i]` is the row swapped with row `i` at step `i` (or `i`).
 // (`i` indexes the matrix as well as `piv`: a range is the clearer loop.)
 #[allow(clippy::needless_range_loop)]
-fn lu_factor<G: Grid>(m: &mut G, piv: &mut [usize]) {
+#[allow(clippy::indexing_slicing)] fn lu_factor<G: Grid>(m: &mut G, piv: &mut [usize]) {
     let (nr, nc) = (m.rows(), m.cols());
     for i in 0..nr.min(nc) {
         let mut p = i;
@@ -212,7 +212,7 @@ where
         lu_determinant(&self.lu, &self.piv)
     }
     /// Whether the matrix is invertible.
-    pub fn is_invertible(&self) -> bool {
+    #[allow(clippy::indexing_slicing)] pub fn is_invertible(&self) -> bool {
         (0..D).all(|i| self.lu[(i, i)] != 0.0)
     }
 }
@@ -234,7 +234,9 @@ impl DMatrix<f64> {
     }
     /// The inverse, unless singular (closed form up to 3 × 3, LU past that, as nalgebra).
     pub fn try_inverse(&self) -> Option<DMatrix<f64>> {
-        assert_eq!(self.nrows(), self.ncols(), "try_inverse: not square");
+        if self.nrows() != self.ncols() {
+            return None;
+        }
         match self.nrows() {
             1 => Matrix::<f64, 1, 1>::from_column_slice(self.as_slice())
                 .try_inverse()
@@ -264,8 +266,9 @@ impl DMatrix<f64> {
 impl DLU<f64> {
     /// `x` with `A x = b`, unless `A` is singular.
     pub fn solve<C: ColKind>(&self, b: &Dynamic<f64, C>) -> Option<Dynamic<f64, C>> {
-        assert_eq!(self.lu.nrows(), b.nrows(), "LU solve: dimension mismatch");
-        assert_eq!(self.lu.nrows(), self.lu.ncols(), "LU solve: not square");
+        if self.lu.nrows() != b.nrows() || self.lu.nrows() != self.lu.ncols() {
+            return None;
+        }
         let mut x = b.clone();
         lu_solve(&self.lu, &self.piv, &mut x).then_some(x)
     }
@@ -289,7 +292,7 @@ impl DLU<f64> {
 
 /// Diagonalises the symmetric `n × n` matrix `a` (column-major, only its lower half read):
 /// returns the eigenvalues and the eigenvectors as columns (column-major).
-fn jacobi_eigen(n: usize, a: &[f64]) -> (Vec<f64>, Vec<f64>) {
+#[allow(clippy::indexing_slicing)] fn jacobi_eigen(n: usize, a: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let at = |r: usize, c: usize| r + c * n;
     // Symmetrise from the lower triangle, as nalgebra reads it.
     let mut m = vec![0.0; n * n];
@@ -382,7 +385,7 @@ where
         }
     }
     /// `V Λ Vᵀ`.
-    pub fn recompose(&self) -> Matrix<f64, D, D> {
+    #[allow(clippy::indexing_slicing)] pub fn recompose(&self) -> Matrix<f64, D, D> {
         Matrix::from_fn(|r, c| {
             let mut s = 0.0;
             for k in 0..D {
@@ -449,7 +452,7 @@ pub struct SVD<T, R, C> {
 
 /// One-sided Jacobi on the columns of `a` (`m × n`, `m >= n`): returns `U` (`m × n`), `σ` and
 /// `V` (`n × n`), sorted by `σ` from the largest down.
-fn jacobi_svd(m: usize, n: usize, a: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+#[allow(clippy::indexing_slicing)] fn jacobi_svd(m: usize, n: usize, a: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let mut u = a.to_vec();
     let mut v = vec![0.0; n * n];
     for i in 0..n {
@@ -546,7 +549,7 @@ impl DMatrix<f64> {
 
 impl SVD<f64, Dyn, Dyn> {
     /// The least-squares `x` of `A x = b` (singular values `<= eps` taken as zero), as nalgebra.
-    pub fn solve<C: ColKind>(&self, b: &Dynamic<f64, C>, eps: f64) -> Result<Dynamic<f64, C>, &'static str> {
+    #[allow(clippy::indexing_slicing)] pub fn solve<C: ColKind>(&self, b: &Dynamic<f64, C>, eps: f64) -> Result<Dynamic<f64, C>, &'static str> {
         if eps < 0.0 {
             return Err("SVD solve: the epsilon must be non-negative.");
         }
@@ -577,7 +580,7 @@ impl SVD<f64, Dyn, Dyn> {
         self.singular_values.iter().filter(|&&s| s > eps).count()
     }
     /// `U Σ Vᵀ`.
-    pub fn recompose(self) -> Result<DMatrix<f64>, &'static str> {
+    #[allow(clippy::indexing_slicing)] pub fn recompose(self) -> Result<DMatrix<f64>, &'static str> {
         let (Some(u), Some(v_t)) = (self.u, self.v_t) else {
             return Err("SVD recomposition: U and V^t have not been computed.");
         };

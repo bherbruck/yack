@@ -60,6 +60,8 @@ macro_rules! id {
                 self.0 as usize
             }
 
+            /// The id of the `i`-th entity. Panics past `u32::MAX` entities, which no arena
+            /// reaches: a contract counted in scores/lints.txt, as a silent clamp would be worse.
             #[allow(clippy::panic)] fn at(i: usize) -> $name {
                 $name(u32::try_from(i).unwrap_or_else(|e| panic!("arena index fits in u32: {e:?}")))
             }

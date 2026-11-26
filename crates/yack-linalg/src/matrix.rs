@@ -100,12 +100,12 @@ where
         Self::from_element(v)
     }
     /// The first `R × C` elements of `s`, column by column (panics if `s` is shorter).
-    pub fn from_column_slice(s: &[T]) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_column_slice(s: &[T]) -> Self {
         assert!(s.len() >= R * C, "from_column_slice: slice too short");
         Self { data: <Sh as Shape<T, R, C>>::S::from_lin(|i| s[i]) }
     }
     /// The first `R × C` elements of `s`, row by row (panics if `s` is shorter).
-    pub fn from_row_slice(s: &[T]) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_row_slice(s: &[T]) -> Self {
         assert!(s.len() >= R * C, "from_row_slice: slice too short");
         Self::from_fn(|r, c| s[r * C + c])
     }
@@ -328,7 +328,7 @@ impl<T: Scalar, const D: usize> From<[T; D]> for Matrix<T, D, 1>
 where
     Sh: Shape<T, D, 1>,
 {
-    fn from(a: [T; D]) -> Self {
+    #[allow(clippy::indexing_slicing)] fn from(a: [T; D]) -> Self {
         Self::from_fn(|r, _| a[r])
     }
 }
@@ -337,7 +337,7 @@ impl<T: Scalar, const D: usize> From<Matrix<T, D, 1>> for [T; D]
 where
     Sh: Shape<T, D, 1>,
 {
-    fn from(m: Matrix<T, D, 1>) -> Self {
+    #[allow(clippy::indexing_slicing)] fn from(m: Matrix<T, D, 1>) -> Self {
         core::array::from_fn(|i| m[i])
     }
 }
@@ -346,7 +346,7 @@ impl<T: Scalar, const R: usize, const C: usize> From<[[T; R]; C]> for Matrix<T, 
 where
     Sh: Shape<T, R, C>,
 {
-    fn from(a: [[T; R]; C]) -> Self {
+    #[allow(clippy::indexing_slicing)] fn from(a: [[T; R]; C]) -> Self {
         Self::from_fn(|r, c| a[c][r])
     }
 }
@@ -420,7 +420,7 @@ where
         Self::from_fn(|r, c| if r == c { 1.0 } else { 0.0 })
     }
     /// The columns `cols` side by side (panics if there are fewer than `C`).
-    pub fn from_columns(cols: &[Matrix<f64, R, 1>]) -> Self
+    #[allow(clippy::indexing_slicing)] pub fn from_columns(cols: &[Matrix<f64, R, 1>]) -> Self
     where
         Sh: Shape<f64, R, 1>,
     {
@@ -428,7 +428,7 @@ where
         Self::from_fn(|r, c| cols[c][r])
     }
     /// The rows `rows` one under another (panics if there are fewer than `R`).
-    pub fn from_rows(rows: &[Matrix<f64, 1, C>]) -> Self
+    #[allow(clippy::indexing_slicing)] pub fn from_rows(rows: &[Matrix<f64, 1, C>]) -> Self
     where
         Sh: Shape<f64, 1, C>,
     {

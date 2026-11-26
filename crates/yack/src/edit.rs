@@ -57,12 +57,9 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let b = self.need(op)?;
-                    let out = engine::made_from("offset", op, sr::offset(b, distance))?;
-                    if yack_topo::local::radius_collapses(b, None, distance, false) {
-                        return guard(out, "a round face would collapse at this distance (a hole closing, a rod vanishing)");
-                    }
-                    Ok(out)
+                    // the rung refuses a growth that closes a hole exactly, and an inward collapse, itself
+                    // (yack-edit glue::offset, OF1/OF2b); past a hole it answers, equal to cadrs
+                    engine::made_from("offset", op, sr::offset(self.need(op)?, distance))
                 },
                 &|| engine_cadrs::op(op, self, |k, id| glue::offset(k, id, distance)),
             )
@@ -275,8 +272,8 @@ impl Solid {
                         return Err(Error::invalid(op, "thickness", "the walls would meet: thicker than half the part"));
                     }
                     let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
-                    if yack_topo::local::radius_collapses(b, None, thickness, true) || yack_topo::local::open_at_concave_edge(b, &f) {
-                        return refuse(out, op, "a round face of radius under the thickness would close, or an open face meets a concave edge");
+                    if yack_topo::local::radius_collapses(b, None, thickness, true) {
+                        return refuse(out, op, "a round face of radius under the thickness would close");
                     }
                     Ok(out)
                 },
@@ -308,8 +305,8 @@ impl Solid {
                 op,
                 &|| {
                     let out = engine::made_from("shell", op, sr::shell_outward(self.need(op)?, &f, thickness))?;
-                    if yack_topo::local::radius_collapses(self.need(op)?, None, thickness, false) || yack_topo::local::open_at_concave_edge(self.need(op)?, &f) {
-                        return refuse(out, op, "a hole of radius under the thickness would close, or an open face meets a concave edge");
+                    if yack_topo::local::radius_collapses(self.need(op)?, None, thickness, false) {
+                        return refuse(out, op, "a hole of radius under the thickness would close");
                     }
                     Ok(out)
                 },

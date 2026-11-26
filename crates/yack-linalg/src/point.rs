@@ -41,7 +41,7 @@ impl<T: Scalar + fmt::Display, const D: usize> fmt::Display for Point<T, D>
 where
     Sh: Shape<T, D, 1>,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    #[allow(clippy::indexing_slicing)] fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;
         for i in 0..D {
             if i > 0 {
@@ -224,7 +224,7 @@ where
     Sh: Shape<T, D, 1>,
 {
     type Output = T;
-    fn index(&self, i: usize) -> &T {
+    #[allow(clippy::indexing_slicing)] fn index(&self, i: usize) -> &T {
         &self.coords[i]
     }
 }
@@ -232,7 +232,7 @@ impl<T: Scalar, const D: usize> IndexMut<usize> for Point<T, D>
 where
     Sh: Shape<T, D, 1>,
 {
-    fn index_mut(&mut self, i: usize) -> &mut T {
+    #[allow(clippy::indexing_slicing)] fn index_mut(&mut self, i: usize) -> &mut T {
         &mut self.coords[i]
     }
 }

@@ -1,9 +1,9 @@
 // yack: the swept solid as the start united with what each of its leading faces sweeps (M4.1 step 1).
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/sweep_faces.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
 // Changes: rewritten onto yack's crates, not ported: each leading face's sweep is a solid built from
-//   its parts (yack-build's `solid_of`), united with the start by yack-boolean, and checked; so far
-//   for a slide, where a cylinder or sphere the slide crosses is split along its contact (a plane)
-//   by yack-boolean's `split` first. Everything else declines.
+//   its parts (yack-build's `solid_of`), united with the start by yack-boolean, and checked; for a
+//   slide or a turn, a face the motion crosses split along its contact (a plane, or a torus's
+//   coaxial cylinder) by yack-boolean first. Screws and everything else decline.
 //! What any solid passes through as it slides, turns or screws: the solid where it starts, with
 //! what each of its *leading* faces sweeps.
 //!
@@ -13,12 +13,17 @@
 //! starts, the face where it ends, and the sides its edges sweep. The solid swept is the start
 //! united with those solids.
 //!
-//! Built so far: a slide. A plane leads, trails or runs along it all over, as does a cylinder slid
-//! along its axis. A cylinder the slide crosses touches it along the plane through its axis
-//! square to the slide's part across the axis, and a sphere along the plane through its centre
-//! square to the slide: the solid is split by that plane first, and each side's faces then lead or
-//! trail all over. The sweep of the whole is the union of its pieces' sweeps, so the pieces' prisms
-//! are united with the start at the end, all at once. Cones, tori and splines decline.
+//! A turn short of a whole one goes the same way (each point moves on a circle about the axis):
+//! see [`turn`] for which faces it builds.
+//!
+//! Built so far for a slide: a plane leads, trails or runs along it all over, as does a cylinder
+//! slid along its axis. A cylinder the slide crosses touches it along the plane through its axis
+//! square to the slide's part across the axis, a sphere along the plane through its centre square
+//! to the slide, a cone along the plane of its two contact generators, and a torus slid along or
+//! square to its axis along a plane and its major radius's cylinder: the solid is split there
+//! first, and each side's faces then lead or trail all over. The sweep of the whole is the union
+//! of its pieces' sweeps, so the pieces' prisms are united with the start at the end, all at once.
+//! A torus slid aslant, and splines, decline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use yack_base::kernel::{Error, Result};
@@ -29,6 +34,8 @@ use yack_math::kernel::{Frame, Point3, Transform, Vec3};
 use yack_topo::{Brep, FaceName};
 
 use crate::Motion;
+
+mod turn;
 
 /// How a face stands to a slide.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +78,28 @@ impl Cut {
         }
     }
 
+    /// Whether all of `piece` lies on one side of `self` already (touching it at most), so that a
+    /// split would leave one side empty: its bounding box's corners say, for a plane.
+    fn misses(&self, piece: &Brep) -> bool {
+        let Cut::Plane { origin, normal } = *self else {
+            return false;
+        };
+        let b = yack_topo::bbox::bbox(piece);
+        let (mut above, mut below) = (false, false);
+        for i in 0..8 {
+            let pick = |bit: usize, lo: f64, hi: f64| if i & bit == 0 { lo } else { hi };
+            let corner = Point3::new(
+                pick(1, b.min.x, b.max.x),
+                pick(2, b.min.y, b.max.y),
+                pick(4, b.min.z, b.max.z),
+            );
+            let h = (corner - origin).dot(normal);
+            above |= h > yack_tol::LINEAR;
+            below |= h < -yack_tol::LINEAR;
+        }
+        !(above && below)
+    }
+
     /// `piece` cut along `self`: the two sides, either of which may be empty.
     fn split(&self, piece: &Brep) -> Result<(Brep, Brep)> {
         match *self {
@@ -98,32 +127,117 @@ const MAX_SPLITS: usize = 24;
 /// contact, and a face whose samples lean both ways past it declines.
 const CLEAR: f64 = 1e-3; // tol: a cosine, not a length; samples sit a quarter of an edge from its ends
 
-/// A slide: by `by`, along the unit `dir`, the faces it makes named under `feature`.
-struct Slide<'a> {
-    by: Vec3,
-    dir: Vec3,
+/// How the solid moves from where its sweep starts.
+#[derive(Clone, Copy, Debug)]
+enum How {
+    /// A slide by `by`, along the unit `dir`.
+    Slide { by: Vec3, dir: Vec3 },
+    /// A turn by `angle` (strictly between 0 and a whole turn), counter-clockwise looking down the
+    /// unit `axis`, about the line through `origin`.
+    Turn { origin: Point3, axis: Vec3, angle: f64 },
+}
+
+/// A sweep: how the solid moves, and the feature its new faces are named under.
+struct Sweep<'a> {
+    how: How,
     feature: &'a str,
 }
 
-/// [`crate::swept`] by faces: so far a slide only.
-pub(crate) fn swept(body: &Brep, motion: &Motion, feature: &str) -> Result<Brep> {
-    match motion {
-        Motion::Slide { by } => slid(body, *by, feature),
-        Motion::Turn { .. } | Motion::Screw { .. } => {
-            Err(Error::Unsupported("by faces: turns and screws are not built yet".into()))
+impl Sweep<'_> {
+    /// How fast `p` moves (for a turn, per radian).
+    fn velocity(&self, p: Point3) -> Vec3 {
+        match self.how {
+            How::Slide { dir, .. } => dir,
+            How::Turn { origin, axis, .. } => axis.cross(p - origin),
+        }
+    }
+
+    /// Where the motion takes the solid at its end.
+    fn moved(&self) -> Transform {
+        match self.how {
+            How::Slide { by, .. } => Transform::translation(by),
+            How::Turn { origin, axis, angle } => Transform::rotation(origin, axis, angle),
+        }
+    }
+
+    /// The path `p` takes, from where it starts to where it ends: none for a point that stays.
+    fn rail(&self, p: Point3) -> Result<Option<Curve>> {
+        match self.how {
+            How::Slide { dir, .. } => Ok(Some(Curve::Line(Line { origin: p, dir }))),
+            How::Turn { origin, axis, .. } => {
+                let foot = origin + axis * axis.dot(p - origin);
+                let out = p - foot;
+                if out.norm() <= yack_tol::LINEAR {
+                    return Ok(None);
+                }
+                let frame = Frame::new(foot, axis, out)?;
+                Ok(Some(Curve::Circle(Circle { frame, radius: out.norm() })))
+            }
+        }
+    }
+
+    /// How `face` of `parts` stands to the motion.
+    fn stand(&self, face: &PartFace, parts: &Parts) -> Result<Stand> {
+        match self.how {
+            How::Slide { dir, .. } => stand(face, parts, dir),
+            How::Turn { origin, axis, .. } => turn::stand(face, origin, axis),
+        }
+    }
+
+    /// The surface a piece of boundary sweeps, and whether the side faces against it.
+    fn side(
+        &self,
+        curve: &Curve,
+        ends: (Point3, Point3),
+        reversed: bool,
+    ) -> Result<(Surface, bool)> {
+        match self.how {
+            How::Slide { dir, .. } => side_surface(curve, ends, reversed, dir),
+            How::Turn { origin, axis, angle } => {
+                turn::side(&seam_safe(curve, ends)?, ends, reversed, origin, axis, angle)
+            }
         }
     }
 }
 
-/// Everything `body` passes through as it slides by `by`.
-fn slid(body: &Brep, by: Vec3, feature: &str) -> Result<Brep> {
-    let length = by.norm();
-    if length <= yack_tol::LINEAR {
-        return Err(Error::InvalidInput(format!("a slide of {length:e} mm moves nothing")));
+/// [`crate::swept`] by faces: a slide, or a turn short of a whole one.
+pub(crate) fn swept(body: &Brep, motion: &Motion, feature: &str) -> Result<Brep> {
+    match motion {
+        Motion::Slide { by } => {
+            let length = by.norm();
+            if length <= yack_tol::LINEAR {
+                return Err(Error::InvalidInput(format!("a slide of {length:e} mm moves nothing")));
+            }
+            let how = How::Slide { by: *by, dir: *by * (1.0 / length) };
+            built(body, &Sweep { how, feature })
+        }
+        Motion::Turn { axis_point, axis, from, to } => {
+            let axis =
+                axis.unit().ok_or_else(|| Error::InvalidInput("a turn needs an axis".into()))?;
+            let (a0, a1) = (from.min(*to), from.max(*to));
+            let angle = a1 - a0;
+            if angle <= yack_tol::ANGULAR {
+                return Err(Error::InvalidInput("a turn through no angle moves nothing".into()));
+            }
+            if angle >= std::f64::consts::TAU - yack_tol::ANGULAR {
+                return Err(Error::Unsupported("by faces: a whole turn is not built yet".into()));
+            }
+            // The solid as given is at angle 0: the sweep starts where it is at the lesser angle.
+            let mut start = body.clone();
+            start.transform(&Transform::rotation(*axis_point, axis, a0));
+            let how = How::Turn { origin: *axis_point, axis, angle };
+            built(&start, &Sweep { how, feature })
+        }
+        Motion::Screw { .. } => {
+            Err(Error::Unsupported("by faces: screws are not built yet".into()))
+        }
     }
-    let slide = Slide { by, dir: by * (1.0 / length), feature };
+}
+
+/// Everything `body` passes through on `sweep`.
+fn built(body: &Brep, sweep: &Sweep) -> Result<Brep> {
     let mut prisms = Vec::new();
-    let built = prisms_of(body, &slide, &[], &mut prisms).and_then(|()| {
+    let built = prisms_of(body, sweep, &[], &mut prisms).and_then(|()| {
         let mut all: Vec<&Brep> = vec![body];
         all.extend(prisms.iter());
         yack_boolean::union_all(&all)
@@ -139,7 +253,7 @@ fn slid(body: &Brep, by: Vec3, feature: &str) -> Result<Brep> {
 /// Adds to `prisms` what each leading face of each solid of `body` sweeps on `slide`, splitting a
 /// solid along a curved face's contact first; `sides` are the cuts earlier splits left `body` on
 /// one side of.
-fn prisms_of(body: &Brep, slide: &Slide, sides: &[Cut], prisms: &mut Vec<Brep>) -> Result<()> {
+fn prisms_of(body: &Brep, sweep: &Sweep, sides: &[Cut], prisms: &mut Vec<Brep>) -> Result<()> {
     let solids: Vec<_> = body.solid_ids().collect();
     for &solid in &solids {
         let piece =
@@ -148,7 +262,7 @@ fn prisms_of(body: &Brep, slide: &Slide, sides: &[Cut], prisms: &mut Vec<Brep>) 
         let mut leading = Vec::new();
         let mut cut = None;
         for (k, face) in parts.faces.iter().enumerate() {
-            match settled(face, &parts, stand(face, &parts, slide.dir)?, sides, slide.dir)? {
+            match settled(face, &parts, sweep.stand(face, &parts)?, sides, sweep)? {
                 Stand::Leads => leading.push(k),
                 Stand::Trails | Stand::Along => {}
                 Stand::Contact(next, _) => {
@@ -163,16 +277,22 @@ fn prisms_of(body: &Brep, slide: &Slide, sides: &[Cut], prisms: &mut Vec<Brep>) 
                     "by faces: a solid with more than {MAX_SPLITS} contacts on a slide"
                 )));
             }
+            if cut.misses(&piece) {
+                let mut more = sides.to_vec();
+                more.push(cut);
+                prisms_of(&piece, sweep, &more, prisms)?;
+                continue;
+            }
             let (above, below) = cut.split(&piece)?;
             for half in [above, below] {
                 let mut more = sides.to_vec();
                 more.push(cut);
-                prisms_of(&half, slide, &more, prisms)?;
+                prisms_of(&half, sweep, &more, prisms)?;
             }
             continue;
         }
         for k in leading {
-            prisms.push(prism(&parts, k, slide)?);
+            prisms.push(prism(&parts, k, sweep)?);
         }
     }
     Ok(())
@@ -187,7 +307,7 @@ fn settled(
     parts: &Parts,
     stand: Stand,
     sides: &[Cut],
-    dir: Vec3,
+    sweep: &Sweep,
 ) -> Result<Stand> {
     let Stand::Contact(first, second) = stand else {
         return Ok(stand);
@@ -195,7 +315,7 @@ fn settled(
     let done = |c: &Cut| sides.iter().any(|side| side.same(c));
     match [Some(first), second].into_iter().flatten().find(|c| !done(c)) {
         Some(next) => Ok(Stand::Contact(next, None)),
-        None => leans(face, parts, dir),
+        None => leans(face, parts, sweep),
     }
 }
 
@@ -203,7 +323,7 @@ fn settled(
 /// normal a little inside it from a quarter, a half and three quarters along each piece of its
 /// boundary. Inside, not on it: a face's whole boundary can lie on its contacts (a quarter of a
 /// torus cut along both of its contacts), where every normal is square to the slide.
-fn leans(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
+fn leans(face: &PartFace, parts: &Parts, sweep: &Sweep) -> Result<Stand> {
     let outward = |p: Point3| {
         let uv = face.surface.project(p);
         let n = face.surface.normal(uv.x, uv.y);
@@ -238,7 +358,11 @@ fn leans(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
         let Some(inward) = outward(p).cross(travel).unit() else {
             continue;
         };
-        let s = outward(p + inward * step).dot(dir);
+        let q = p + inward * step;
+        let Some(v) = sweep.velocity(q).unit() else {
+            continue;
+        };
+        let s = outward(q).dot(v);
         most = most.max(s);
         least = least.min(s);
     }
@@ -252,6 +376,12 @@ fn leans(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
             face.surface.kind()
         )))
     }
+}
+
+/// [`leans`] for a slide along the unit `dir`.
+fn leans_along(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
+    let how = How::Slide { by: dir, dir };
+    leans(face, parts, &Sweep { how, feature: "" })
 }
 
 /// How `face` stands to a slide along the unit `dir`: whole, or a decline where it would have to
@@ -304,14 +434,14 @@ fn cone_stand(face: &PartFace, parts: &Parts, c: &yack_geom::Cone, dir: Vec3) ->
     let across = dir - z * along;
     let (sin, cos) = c.half_angle.sin_cos();
     let Some(e) = across.unit() else {
-        return leans(face, parts, dir);
+        return leans_along(face, parts, dir);
     };
     if sin.abs() <= yack_tol::ANGULAR {
         return Err(Error::Unsupported("by faces: a cone with no half angle".into()));
     }
     let k = sin * along / (cos * across.norm());
     if k.abs() >= 1.0 {
-        return leans(face, parts, dir);
+        return leans_along(face, parts, dir);
     }
     let w = z.cross(e);
     let r1 = e * k + w * (1.0 - k * k).sqrt();
@@ -370,50 +500,77 @@ struct Piece {
 /// and each piece of boundary once, closed edges cut in two so that no side face meets itself.
 struct Prism<'a> {
     parts: &'a Parts,
+    sweep: &'a Sweep<'a>,
     moved: Transform,
     out: Parts,
     /// For each point of `parts` the face uses, its index among the pairs.
     point_at: BTreeMap<usize, usize>,
-    /// Each pair's index into `out.points` where it starts (the slid copy follows it), and its rail.
-    pairs: Vec<(usize, usize)>,
+    /// Each pair: its point's index in `out.points` where it starts and where it ends (the same
+    /// for a point on a turn's axis), and its rail's in `out.edges` (none there).
+    pairs: Vec<Pair>,
     /// For each edge of `parts` the face uses, its pieces in its curve's direction, and each
     /// piece's edge where it starts and where it ends in `out`.
     pieces: BTreeMap<usize, Vec<(Piece, usize, usize)>>,
 }
 
-impl Prism<'_> {
-    /// The pair for `p` (a new point when `of` is `None`), with its rail along `dir`.
-    fn pair(&mut self, of: Option<usize>, p: Point3, dir: Vec3) -> usize {
-        if let Some(at) = of.and_then(|v| self.point_at.get(&v)) {
-            return *at;
+/// A boundary point of a prism: where it starts and ends, and the rail between.
+#[derive(Clone, Copy, Debug)]
+struct Pair {
+    start: usize,
+    end: usize,
+    rail: Option<usize>,
+}
+
+impl<'a> Prism<'a> {
+    fn new(parts: &'a Parts, sweep: &'a Sweep<'a>) -> Prism<'a> {
+        Prism {
+            parts,
+            sweep,
+            moved: sweep.moved(),
+            out: Parts::default(),
+            point_at: BTreeMap::new(),
+            pairs: Vec::new(),
+            pieces: BTreeMap::new(),
         }
-        let k = self.out.points.len();
+    }
+
+    /// The pair for `p` (a new point when `of` is `None`), with its rail.
+    fn pair(&mut self, of: Option<usize>, p: Point3) -> Result<usize> {
+        if let Some(at) = of.and_then(|v| self.point_at.get(&v)) {
+            return Ok(*at);
+        }
+        let start = self.out.points.len();
         self.out.points.push(p);
-        self.out.points.push(self.moved.point(p));
-        let rail = self.out.edges.len();
-        self.out.edges.push((Curve::Line(Line { origin: p, dir }), k, k + 1));
-        self.pairs.push((k, rail));
+        let pair = match self.sweep.rail(p)? {
+            Some(rail) => {
+                self.out.points.push(self.moved.point(p));
+                self.out.edges.push((rail, start, start + 1));
+                Pair { start, end: start + 1, rail: Some(self.out.edges.len() - 1) }
+            }
+            None => Pair { start, end: start, rail: None },
+        };
+        self.pairs.push(pair);
         let at = self.pairs.len() - 1;
         if let Some(v) = of {
             self.point_at.insert(v, at);
         }
-        at
+        Ok(at)
     }
 
-    /// Pair `k`: its start point's index in `out.points` and its rail's in `out.edges`.
-    fn at(&self, k: usize) -> Result<(usize, usize)> {
+    /// Pair `k`.
+    fn at(&self, k: usize) -> Result<Pair> {
         self.pairs.get(k).copied().ok_or_else(|| missing("pair"))
     }
 
     /// Edge `e`'s pieces, made on first use: the edge, or its two halves where it is closed.
-    fn pieces(&mut self, e: usize, dir: Vec3) -> Result<Vec<(Piece, usize, usize)>> {
+    fn pieces(&mut self, e: usize) -> Result<Vec<(Piece, usize, usize)>> {
         if let Some(p) = self.pieces.get(&e) {
             return Ok(p.clone());
         }
         let (curve, a, b) = self.parts.edges.get(e).ok_or_else(|| missing("edge"))?;
         let pa = *self.parts.points.get(*a).ok_or_else(|| missing("point"))?;
         let pb = *self.parts.points.get(*b).ok_or_else(|| missing("point"))?;
-        let (ka, kb) = (self.pair(Some(*a), pa, dir), self.pair(Some(*b), pb, dir));
+        let (ka, kb) = (self.pair(Some(*a), pa)?, self.pair(Some(*b), pb)?);
         let mut list = vec![Piece { curve: curve.clone(), start: ka, end: kb }];
         let long = match curve.period() {
             Some(period) => {
@@ -432,7 +589,7 @@ impl Prism<'_> {
             } else {
                 middle_param(curve, (pa, pb))
             };
-            let km = self.pair(None, curve.eval(middle), dir);
+            let km = self.pair(None, curve.eval(middle))?;
             list = vec![
                 Piece { curve: curve.clone(), start: ka, end: km },
                 Piece { curve: curve.clone(), start: km, end: kb },
@@ -440,10 +597,15 @@ impl Prism<'_> {
         }
         let mut made = Vec::new();
         for piece in list {
-            let ((s0, _), (t0, _)) = (self.at(piece.start)?, self.at(piece.end)?);
+            let (s, t) = (self.at(piece.start)?, self.at(piece.end)?);
             let e0 = self.out.edges.len();
-            self.out.edges.push((piece.curve.clone(), s0, t0));
-            self.out.edges.push((piece.curve.transformed(&self.moved), s0 + 1, t0 + 1));
+            self.out.edges.push((piece.curve.clone(), s.start, t.start));
+            // A piece that stays where it is (on a turn's axis) is one edge both caps share.
+            if s.rail.is_none() && t.rail.is_none() {
+                made.push((piece, e0, e0));
+                continue;
+            }
+            self.out.edges.push((piece.curve.transformed(&self.moved), s.end, t.end));
             made.push((piece, e0, e0 + 1));
         }
         self.pieces.insert(e, made.clone());
@@ -455,34 +617,27 @@ fn missing(what: &str) -> Error {
     Error::Unsupported(format!("by faces: no such {what}"))
 }
 
-/// The solid face `k` of `parts` sweeps on `slide`, the face leading all over: the face where it
+/// The solid face `k` of `parts` sweeps on `sweep`, the face leading all over: the face where it
 /// starts (facing back), where it ends, and the side each piece of its boundary sweeps; named
-/// `start`, `end` and `side` under the slide's feature.
-fn prism(parts: &Parts, k: usize, slide: &Slide) -> Result<Brep> {
-    let (by, dir) = (slide.by, slide.dir);
+/// `start`, `end` and `side` under the sweep's feature.
+fn prism(parts: &Parts, k: usize, sweep: &Sweep) -> Result<Brep> {
     let face = parts.faces.get(k).ok_or_else(|| missing("face"))?;
-    let mut p = Prism {
-        parts,
-        moved: Transform::translation(by),
-        out: Parts::default(),
-        point_at: BTreeMap::new(),
-        pairs: Vec::new(),
-        pieces: BTreeMap::new(),
-    };
+    let mut p = Prism::new(parts, sweep);
     // A seam the face uses both ways sweeps no side: its two sides would cancel.
     let uses = |e: usize| face.loops.iter().flatten().filter(|&&(x, _)| x == e).count();
     let (mut start_loops, mut end_loops, mut sides) = (Vec::new(), Vec::new(), Vec::new());
     for lp in &face.loops {
         let (mut start_loop, mut end_loop) = (Vec::new(), Vec::new());
         for &(e, reversed) in lp {
-            let mut pieces = p.pieces(e, dir)?;
+            let mut pieces = p.pieces(e)?;
             if reversed {
                 pieces.reverse();
             }
             for (piece, e0, e1) in pieces {
                 start_loop.push((e0, !reversed));
                 end_loop.push((e1, reversed));
-                if uses(e) == 1 {
+                // A seam sweeps no side, nor a piece that stays where it is.
+                if uses(e) == 1 && e0 != e1 {
                     sides.push((piece, reversed, e0, e1));
                 }
             }
@@ -492,7 +647,7 @@ fn prism(parts: &Parts, k: usize, slide: &Slide) -> Result<Brep> {
         start_loops.push(start_loop);
         end_loops.push(end_loop);
     }
-    let named = |part: &str| BTreeSet::from([FaceName::new(slide.feature, part)]);
+    let named = |part: &str| BTreeSet::from([FaceName::new(sweep.feature, part)]);
     let mut faces = vec![
         PartFace {
             surface: face.surface.clone(),
@@ -514,14 +669,18 @@ fn prism(parts: &Parts, k: usize, slide: &Slide) -> Result<Brep> {
         // piece back, the rail down to its start; the face's material lies on the loop's left.
         let (first, last) =
             if reversed { (piece.end, piece.start) } else { (piece.start, piece.end) };
-        let ((_, ra), (_, rb)) = (p.at(first)?, p.at(last)?);
+        let (ra, rb) = (p.at(first)?.rail, p.at(last)?.rail);
         let point = |k: usize| -> Result<Point3> {
-            let (at, _) = p.at(k)?;
+            let at = p.at(k)?.start;
             p.out.points.get(at).copied().ok_or_else(|| missing("point"))
         };
         let ends = (point(piece.start)?, point(piece.end)?);
-        let loop_ = vec![(e0, reversed), (rb, false), (e1, !reversed), (ra, true)];
-        let (surface, flip) = side_surface(&piece.curve, ends, reversed, dir)?;
+        // A point that stays (on a turn's axis) has no rail: the side closes there.
+        let mut loop_ = vec![(e0, reversed)];
+        loop_.extend(rb.map(|r| (r, false)));
+        loop_.push((e1, !reversed));
+        loop_.extend(ra.map(|r| (r, true)));
+        let (surface, flip) = sweep.side(&piece.curve, ends, reversed)?;
         faces.push(PartFace {
             surface,
             reversed: flip,
@@ -539,41 +698,14 @@ fn prism(parts: &Parts, k: usize, slide: &Slide) -> Result<Brep> {
 /// cylinder for a circle square to the slide, an extrusion otherwise. `ends` are where the piece
 /// starts and ends along its curve, `reversed` whether the leading face's loop runs against the
 /// curve. Its outward normal is taken at the piece's middle, where the piece does not run along
-/// the slide (its ends may: a contact's ends on a circle do). A circle's surface has its seam
-/// opposite the piece's middle, so no side face crosses its own seam; other closed curves decline.
+/// the slide (its ends may: a contact's ends on a circle do). The curve is [`seam_safe`] first.
 fn side_surface(
     curve: &Curve,
     ends: (Point3, Point3),
     reversed: bool,
     dir: Vec3,
 ) -> Result<(Surface, bool)> {
-    let curve = &match curve {
-        Curve::Circle(c) => {
-            let middle = curve.eval(middle_param(curve, ends));
-            let frame = Frame::new(c.frame.origin, c.frame.z, c.frame.origin - middle)?;
-            Curve::Circle(Circle { frame, radius: c.radius })
-        }
-        // An ellipse's parameter starts on its major axis; turned half round (its frame's x and y
-        // reversed) it is the same ellipse, its parameter starting on the other end. A piece goes
-        // at most half way round, so one of the two keeps the seam off it.
-        Curve::Ellipse(el) => {
-            let t0 = param_of(curve, ends.0);
-            let t1 = 2.0 * middle_param(curve, ends) - t0;
-            let seam_inside = t1 > std::f64::consts::TAU;
-            if seam_inside {
-                let frame = Frame::new(el.frame.origin, el.frame.z, -el.frame.x)?;
-                Curve::Ellipse(Ellipse { frame, ..el.clone() })
-            } else {
-                curve.clone()
-            }
-        }
-        other if other.period().is_some() => {
-            return Err(Error::Unsupported(
-                "by faces: the side of a closed curve other than a circle or an ellipse".into(),
-            ));
-        }
-        other => other.clone(),
-    };
+    let curve = &seam_safe(curve, ends)?;
     let (mid, d) = curve.d1(middle_param(curve, ends));
     let travel = if reversed { -d } else { d };
     // The side's outward normal is square to the edge and the slide, away from the face's
@@ -600,6 +732,40 @@ fn side_surface(
     Ok((surface, natural.dot(out) < 0.0))
 }
 
+/// `curve` reparametrised, where it is periodic, so that its seam lies off the piece from
+/// `ends.0` to `ends.1`: a surface it sweeps then has no seam across the side face. A circle's
+/// seam goes opposite the piece's middle; an ellipse's to whichever end of its major axis the
+/// piece misses. Other periodic curves decline.
+fn seam_safe(curve: &Curve, ends: (Point3, Point3)) -> Result<Curve> {
+    Ok(match curve {
+        Curve::Circle(c) => {
+            let middle = curve.eval(middle_param(curve, ends));
+            let frame = Frame::new(c.frame.origin, c.frame.z, c.frame.origin - middle)?;
+            Curve::Circle(Circle { frame, radius: c.radius })
+        }
+        // An ellipse's parameter starts on its major axis; turned half round (its frame's x and y
+        // reversed) it is the same ellipse, its parameter starting on the other end. A piece goes
+        // at most half way round, so one of the two keeps the seam off it.
+        Curve::Ellipse(el) => {
+            let t0 = param_of(curve, ends.0);
+            let t1 = 2.0 * middle_param(curve, ends) - t0;
+            let seam_inside = t1 > std::f64::consts::TAU;
+            if seam_inside {
+                let frame = Frame::new(el.frame.origin, el.frame.z, -el.frame.x)?;
+                Curve::Ellipse(Ellipse { frame, ..el.clone() })
+            } else {
+                curve.clone()
+            }
+        }
+        other if other.period().is_some() => {
+            return Err(Error::Unsupported(
+                "by faces: the side of a closed curve other than a circle or an ellipse".into(),
+            ));
+        }
+        other => other.clone(),
+    })
+}
+
 /// The parameter halfway along `curve` from `ends.0` to `ends.1`; on a closed curve the way
 /// forward, all the way round where the two meet.
 fn middle_param(curve: &Curve, ends: (Point3, Point3)) -> f64 {
@@ -618,14 +784,27 @@ mod tests {
 
     /// Every prism a slide makes passes the checker on its own, before any union.
     fn prisms_check(body: &Brep, by: Vec3) {
-        let slide = Slide { by, dir: by.unit().unwrap(), feature: "f" };
+        let sweep = Sweep { how: How::Slide { by, dir: by.unit().unwrap() }, feature: "f" };
         let mut prisms = Vec::new();
-        prisms_of(body, &slide, &[], &mut prisms).unwrap();
+        prisms_of(body, &sweep, &[], &mut prisms).unwrap();
         assert!(!prisms.is_empty());
         for (i, p) in prisms.iter().enumerate() {
             let issues = yack_check::check(p);
             let kinds: Vec<_> = p.face_ids().map(|f| p.face(f).surface.kind()).collect();
             assert!(issues.is_empty(), "prism {i} {kinds:?}: {issues:?}");
+        }
+    }
+
+    #[test]
+    fn a_turned_boxs_prisms_are_valid() {
+        let b =
+            yack_build::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
+        let how = How::Turn { origin: Point3::ZERO, axis: Vec3::Z, angle: 1.0 };
+        let mut prisms = Vec::new();
+        prisms_of(&b, &Sweep { how, feature: "f" }, &[], &mut prisms).unwrap();
+        assert!(!prisms.is_empty());
+        for p in &prisms {
+            assert!(yack_check::check(p).is_empty(), "{:?}", yack_check::check(p));
         }
     }
 

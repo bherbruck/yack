@@ -75,6 +75,16 @@ pub(crate) fn entity_mut<T>(items: &mut [T], index: usize) -> &mut T {
 }
 
 impl Raw {
+    /// Point `v`.
+    pub(crate) fn point(&self, v: usize) -> Point3 {
+        *entity(&self.points, v)
+    }
+
+    /// Edge `e`.
+    pub(crate) fn edge(&self, e: usize) -> &RawEdge {
+        entity(&self.edges, e)
+    }
+
     /// Face `f`.
     pub(crate) fn face(&self, f: usize) -> &RawFace {
         entity(&self.faces, f)

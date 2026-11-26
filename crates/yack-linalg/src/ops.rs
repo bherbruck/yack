@@ -15,7 +15,7 @@ macro_rules! elementwise {
             Sh: Shape<f64, R, C>,
         {
             type Output = Matrix<f64, R, C>;
-            fn $f(self, b: Matrix<f64, R, C>) -> Matrix<f64, R, C> {
+            #[allow(clippy::indexing_slicing)] fn $f(self, b: Matrix<f64, R, C>) -> Matrix<f64, R, C> {
                 Matrix::from_fn(|r, c| self[(r, c)] $op b[(r, c)])
             }
         }

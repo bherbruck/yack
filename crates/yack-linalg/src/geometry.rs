@@ -57,7 +57,7 @@ where
         self.inverse()
     }
     /// The homogeneous matrix.
-    pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4>
+    #[allow(clippy::indexing_slicing)] pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4>
     where
         Sh: Shape<f64, 4, 4>,
     {
@@ -106,7 +106,7 @@ where
     Sh: Shape<f64, D, D>,
 {
     type Output = f64;
-    fn index(&self, i: (usize, usize)) -> &f64 {
+    #[allow(clippy::indexing_slicing)] fn index(&self, i: (usize, usize)) -> &f64 {
         &self.matrix[i]
     }
 }
@@ -118,7 +118,7 @@ impl Rotation<f64, 2> {
         Self { matrix: Matrix::<f64, 2, 2>::new(c, -s, s, c) }
     }
     /// The angle, in (−π, π].
-    pub fn angle(&self) -> f64 {
+    #[allow(clippy::indexing_slicing)] pub fn angle(&self) -> f64 {
         self.matrix[(1, 0)].atan2(self.matrix[(0, 0)])
     }
 }
@@ -180,7 +180,7 @@ impl Rotation<f64, 3> {
         Some(Self::identity())
     }
     /// The angle, in [0, π].
-    pub fn angle(&self) -> f64 {
+    #[allow(clippy::indexing_slicing)] pub fn angle(&self) -> f64 {
         ((self.matrix[(0, 0)] + self.matrix[(1, 1)] + self.matrix[(2, 2)] - 1.0) / 2.0).acos()
     }
     /// The axis (`None` for the identity, and for half turns).
@@ -319,7 +319,7 @@ impl Neg for Quaternion<f64> {
 }
 
 /// nalgebra's quaternion product, term for term.
-fn qmul(a: &Quaternion<f64>, b: &Quaternion<f64>) -> Quaternion<f64> {
+#[allow(clippy::indexing_slicing)] fn qmul(a: &Quaternion<f64>, b: &Quaternion<f64>) -> Quaternion<f64> {
     let (a0, a1, a2, a3) = (a.coords[0], a.coords[1], a.coords[2], a.coords[3]);
     let (b0, b1, b2, b3) = (b.coords[0], b.coords[1], b.coords[2], b.coords[3]);
     Quaternion::new(
@@ -363,7 +363,7 @@ impl Unit<Quaternion<f64>> {
         Unit::new_normalize(q)
     }
     /// The quaternion of rotation matrix `r` (nalgebra's trace-branching conversion).
-    pub fn from_rotation_matrix(r: &Rotation<f64, 3>) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_rotation_matrix(r: &Rotation<f64, 3>) -> Self {
         let m = |i: usize, j: usize| r.matrix[(i, j)];
         let tr = m(0, 0) + m(1, 1) + m(2, 2);
         let quarter = 0.25;
@@ -487,7 +487,7 @@ impl Unit<Quaternion<f64>> {
         self.try_slerp(other, t, EPS).unwrap_or(*self)
     }
     /// Spherical interpolation, `None` when the arc is ill-defined.
-    pub fn try_slerp(&self, other: &Self, t: f64, epsilon: f64) -> Option<Self> {
+    #[allow(clippy::indexing_slicing)] pub fn try_slerp(&self, other: &Self, t: f64, epsilon: f64) -> Option<Self> {
         let a = self.value.coords;
         let b = if a.dot(&other.value.coords) < 0.0 {
             -other.value.coords
@@ -652,7 +652,7 @@ impl Translation<f64, 3> {
         Self { vector: Matrix::<f64, 3, 1>::new(x, y, z) }
     }
     /// The homogeneous matrix.
-    pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4> {
+    #[allow(clippy::indexing_slicing)] pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4> {
         Matrix::from_fn(|r, c| match (r, c) {
             (r, 3) if r < 3 => self.vector[r],
             (r, c) if r == c => 1.0,
@@ -758,7 +758,7 @@ impl Iso3 {
         self.rotation.inverse_transform_vector(v)
     }
     /// The homogeneous matrix.
-    pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4> {
+    #[allow(clippy::indexing_slicing)] pub fn to_homogeneous(&self) -> Matrix<f64, 4, 4> {
         let r = self.rotation.to_rotation_matrix();
         Matrix::from_fn(|i, j| match (i, j) {
             (i, 3) if i < 3 => self.translation.vector[i],

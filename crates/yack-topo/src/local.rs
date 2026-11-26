@@ -101,8 +101,8 @@ pub fn rims_square(b: &Brep, faces: &[FaceId]) -> bool {
     true
 }
 
-/// Whether an open face of a shell meets a concave edge (springrep's sharp shell of an L block open
-/// at its step face comes out wrong, inward and outward).
+/// Whether an open face of a shell meets a concave edge: there the cavity's open face stays at the
+/// solid's own plane, as moved out it would cut the wall that rises past the edge back from the opening.
 pub fn open_at_concave_edge(b: &Brep, open: &[FaceId]) -> bool {
     open.iter().any(|&f| {
         b.face(f).loops.iter().any(|&l| b.lp(l).coedges.iter().any(|&c| convexity(b, b.coedge(c).edge) == Some(false)))

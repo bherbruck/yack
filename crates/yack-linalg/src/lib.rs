@@ -8,8 +8,9 @@
 //! nalgebra's do: counted debt in scores/lints.txt, gone when M5 moves the callers onto
 //! yack-math's checked types.
 #![forbid(unsafe_code)]
-// Until M5, alongside the counted contract panics: nalgebra's shape indexes by position.
-#![allow(clippy::indexing_slicing)]
+// nalgebra's shape indexes by position: each fn or impl that does carries its own allow, its
+// indices bounded by the dimensions fixed at construction, until M5 moves the callers onto
+// yack-math's checked types.
 
 pub mod decomp;
 pub mod dmatrix;

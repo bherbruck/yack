@@ -46,7 +46,7 @@ impl<T: fmt::Debug, C: ColKind> fmt::Debug for Dynamic<T, C> {
 }
 
 impl<T: fmt::Display, C: ColKind> fmt::Display for Dynamic<T, C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    #[allow(clippy::indexing_slicing)] fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for r in 0..self.nrows {
             write!(f, "[")?;
             for c in 0..self.ncols {
@@ -122,7 +122,7 @@ impl<T: Copy, C: ColKind> Dynamic<T, C> {
         }
     }
     /// The transpose.
-    pub fn transpose(&self) -> Dynamic<T, Dyn> {
+    #[allow(clippy::indexing_slicing)] pub fn transpose(&self) -> Dynamic<T, Dyn> {
         let (r, c) = (self.nrows, self.ncols);
         let mut data = Vec::with_capacity(r * c);
         for i in 0..r {
@@ -133,24 +133,24 @@ impl<T: Copy, C: ColKind> Dynamic<T, C> {
         Dynamic::raw(c, r, data)
     }
     /// Column `j`, as a vector of its own.
-    pub fn column(&self, j: usize) -> Dynamic<T, U1> {
+    #[allow(clippy::indexing_slicing)] pub fn column(&self, j: usize) -> Dynamic<T, U1> {
         assert!(j < self.ncols, "column {j} out of bounds");
         let r = self.nrows;
         Dynamic::raw(r, 1, self.data[j * r..(j + 1) * r].to_vec())
     }
     /// Row `i`, as a 1-row matrix.
-    pub fn row(&self, i: usize) -> Dynamic<T, Dyn> {
+    #[allow(clippy::indexing_slicing)] pub fn row(&self, i: usize) -> Dynamic<T, Dyn> {
         assert!(i < self.nrows, "row {i} out of bounds");
         Dynamic::raw(1, self.ncols, (0..self.ncols).map(|j| self.data[i + j * self.nrows]).collect())
     }
     /// Sets column `j`.
-    pub fn set_column<C2: ColKind>(&mut self, j: usize, v: &Dynamic<T, C2>) {
+    #[allow(clippy::indexing_slicing)] pub fn set_column<C2: ColKind>(&mut self, j: usize, v: &Dynamic<T, C2>) {
         assert!(j < self.ncols && v.len() == self.nrows, "set_column: shape mismatch");
         let r = self.nrows;
         self.data[j * r..(j + 1) * r].copy_from_slice(&v.data);
     }
     /// Sets row `i`.
-    pub fn set_row<C2: ColKind>(&mut self, i: usize, v: &Dynamic<T, C2>) {
+    #[allow(clippy::indexing_slicing)] pub fn set_row<C2: ColKind>(&mut self, i: usize, v: &Dynamic<T, C2>) {
         assert!(i < self.nrows && v.len() == self.ncols, "set_row: shape mismatch");
         for j in 0..self.ncols {
             self.data[i + j * self.nrows] = v.data[j];
@@ -208,11 +208,11 @@ impl<T: Copy> Dynamic<T, Dyn> {
         Self::raw(r, c, vec![v; r * c])
     }
     /// The first `r c` elements of `s`, column by column.
-    pub fn from_column_slice(r: usize, c: usize, s: &[T]) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_column_slice(r: usize, c: usize, s: &[T]) -> Self {
         Self::raw(r, c, s[..r * c].to_vec())
     }
     /// The first `r c` elements of `s`, row by row.
-    pub fn from_row_slice(r: usize, c: usize, s: &[T]) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_row_slice(r: usize, c: usize, s: &[T]) -> Self {
         Self::from_fn(r, c, |i, j| s[i * c + j])
     }
     /// `v`, column by column.
@@ -274,7 +274,7 @@ impl Dynamic<f64, Dyn> {
         Self::from_fn(r, c, |i, j| if i == j { 1.0 } else { 0.0 })
     }
     /// The square diagonal matrix of `d`.
-    pub fn from_diagonal(d: &Dynamic<f64, U1>) -> Self {
+    #[allow(clippy::indexing_slicing)] pub fn from_diagonal(d: &Dynamic<f64, U1>) -> Self {
         let n = d.len();
         Self::from_fn(n, n, |i, j| if i == j { d.data[i] } else { 0.0 })
     }
@@ -333,7 +333,7 @@ impl<C: ColKind> Dynamic<f64, C> {
         self.data.iter().fold(first, |m, &v| if v < m { v } else { m })
     }
     /// The index of the first largest element.
-    pub fn imax(&self) -> usize {
+    #[allow(clippy::indexing_slicing)] pub fn imax(&self) -> usize {
         let mut best = 0;
         for i in 1..self.data.len() {
             if self.data[i] > self.data[best] {
@@ -343,7 +343,7 @@ impl<C: ColKind> Dynamic<f64, C> {
         best
     }
     /// The index of the first smallest element.
-    pub fn imin(&self) -> usize {
+    #[allow(clippy::indexing_slicing)] pub fn imin(&self) -> usize {
         let mut best = 0;
         for i in 1..self.data.len() {
             if self.data[i] < self.data[best] {
@@ -365,7 +365,7 @@ impl<C: ColKind> Dynamic<f64, C> {
         self.data.iter().all(|v| v.is_finite())
     }
     /// `selfᵀ b`.
-    pub fn tr_mul<C2: ColKind>(&self, b: &Dynamic<f64, C2>) -> Dynamic<f64, C2> {
+    #[allow(clippy::indexing_slicing)] pub fn tr_mul<C2: ColKind>(&self, b: &Dynamic<f64, C2>) -> Dynamic<f64, C2> {
         assert_eq!(self.nrows, b.nrows, "tr_mul: shape mismatch");
         let (n, m, p) = (self.nrows, self.ncols, b.ncols);
         let mut data = Vec::with_capacity(m * p);
@@ -384,24 +384,24 @@ impl<C: ColKind> Dynamic<f64, C> {
 
 impl<T: Copy, C: ColKind> Index<usize> for Dynamic<T, C> {
     type Output = T;
-    fn index(&self, i: usize) -> &T {
+    #[allow(clippy::indexing_slicing)] fn index(&self, i: usize) -> &T {
         &self.data[i]
     }
 }
 impl<T: Copy, C: ColKind> IndexMut<usize> for Dynamic<T, C> {
-    fn index_mut(&mut self, i: usize) -> &mut T {
+    #[allow(clippy::indexing_slicing)] fn index_mut(&mut self, i: usize) -> &mut T {
         &mut self.data[i]
     }
 }
 impl<T: Copy, C: ColKind> Index<(usize, usize)> for Dynamic<T, C> {
     type Output = T;
-    fn index(&self, (r, c): (usize, usize)) -> &T {
+    #[allow(clippy::indexing_slicing)] fn index(&self, (r, c): (usize, usize)) -> &T {
         assert!(r < self.nrows && c < self.ncols, "index ({r}, {c}) out of bounds");
         &self.data[r + c * self.nrows]
     }
 }
 impl<T: Copy, C: ColKind> IndexMut<(usize, usize)> for Dynamic<T, C> {
-    fn index_mut(&mut self, (r, c): (usize, usize)) -> &mut T {
+    #[allow(clippy::indexing_slicing)] fn index_mut(&mut self, (r, c): (usize, usize)) -> &mut T {
         assert!(r < self.nrows && c < self.ncols, "index ({r}, {c}) out of bounds");
         &mut self.data[r + c * self.nrows]
     }
@@ -519,7 +519,7 @@ impl<C: ColKind> core::ops::DivAssign<f64> for Dynamic<f64, C> {
 }
 
 /// `a b`, each element summed over `k` in order (nalgebra's gemm order).
-pub(crate) fn dmatmul<C1: ColKind, C2: ColKind>(a: &Dynamic<f64, C1>, b: &Dynamic<f64, C2>) -> Dynamic<f64, C2> {
+#[allow(clippy::indexing_slicing)] pub(crate) fn dmatmul<C1: ColKind, C2: ColKind>(a: &Dynamic<f64, C1>, b: &Dynamic<f64, C2>) -> Dynamic<f64, C2> {
     assert_eq!(a.ncols, b.nrows, "matrix product: shape mismatch");
     let (n, k, p) = (a.nrows, a.ncols, b.ncols);
     let mut data = vec![0.0; n * p];

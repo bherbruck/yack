@@ -1,7 +1,9 @@
 // yack: Making a file's geometry agree with itself within the kernel tolerance.
 // Adapted from springrep@a03e8a1 src/step/heal.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from step/heal.rs to build/heal.rs (M2 T5); paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
-// M3 hardening (w-h3): its maps are BTreeMaps (D26; audited: looked up, filled and cleared only).
+// M3 hardening (w-h3): its maps are BTreeMaps (D26; audited: looked up, filled and cleared only);
+// chunk E: `Raw`'s accessors and the `entity` contract for every look-up by id and every list kept
+// beside the raw lists; samples, chords and the normal equations by iterators and checked access.
 //! Making a file's geometry agree with itself within the kernel tolerance.
 //!
 //! Exporters write each vertex, edge curve and surface separately, and many hold them together
@@ -18,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::adjust::{Target, adjust};
-use super::raw::{Raw, edge_range, param_of};
+use super::raw::{Raw, edge_range, entity, entity_mut, param_of};
 use crate::{
     Error, Result,
     geom::{BSpline, Curve, IntersectionCurve, Surface, refine_onto_both},
@@ -79,9 +81,9 @@ fn sample_params(c: &Curve, r: (f64, f64), per_span: usize) -> Vec<f64> {
         per_span.max(16 / (cuts.len() - 1))
     };
     let mut ts = Vec::new();
-    for w in cuts.windows(2) {
+    for (&from, &to) in cuts.iter().zip(cuts.iter().skip(1)) {
         for k in 0..per {
-            ts.push(w[0] + (w[1] - w[0]) * k as f64 / per as f64);
+            ts.push(from + (to - from) * k as f64 / per as f64);
         }
     }
     // The checker samples every edge at even steps; an edge that fits must fit there too.
@@ -96,10 +98,10 @@ fn sample_params(c: &Curve, r: (f64, f64), per_span: usize) -> Vec<f64> {
 /// Whether edge `e` over `range` ends at its vertices and lies on each of its faces.
 fn edge_fits(raw: &Raw, e: usize, range: Option<(f64, f64)>) -> bool {
     let Some(r) = range else { return false };
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let c = &edge.curve;
-    if c.eval(r.0).dist(raw.points[edge.start]) > tol::LINEAR
-        || c.eval(r.1).dist(raw.points[edge.end]) > tol::LINEAR
+    if c.eval(r.0).dist(raw.point(edge.start)) > tol::LINEAR
+        || c.eval(r.1).dist(raw.point(edge.end)) > tol::LINEAR
     {
         return false;
     }
@@ -107,8 +109,9 @@ fn edge_fits(raw: &Raw, e: usize, range: Option<(f64, f64)>) -> bool {
     let mut faces = edge.faces.clone();
     faces.dedup();
     faces.iter().all(|&f| {
-        let s = &raw.faces[f].surface;
-        let mut hint = s.project(c.eval(ts[0]));
+        let s = &raw.face(f).surface;
+        // The samples start at the range's start.
+        let mut hint = s.project(c.eval(ts.first().copied().unwrap_or(r.0)));
         ts.iter().all(|&t| {
             let p = c.eval(t);
             let uv = s.project_near(p, hint);
@@ -175,15 +178,17 @@ fn solve_vertex(p0: Point3, on: &[On], reach: Option<f64>) -> Option<Point3> {
         if worst <= 1e-3 * tol::LINEAR {
             break;
         }
-        let mut a = vec![0.0; 9];
-        let mut b = vec![0.0; 3];
+        // The normal equations, `a` row-major 3 × 3.
+        let mut a = [0.0; 9];
+        let mut b = [0.0; 3];
         for (n, r) in &rows {
             let n = n.to_array();
-            for i in 0..3 {
-                for j in 0..3 {
-                    a[i * 3 + j] += n[i] * n[j];
+            let (rows_of_a, _) = a.as_chunks_mut::<3>();
+            for ((row, bi), &ni) in rows_of_a.iter_mut().zip(b.iter_mut()).zip(&n) {
+                for (aij, &nj) in row.iter_mut().zip(&n) {
+                    *aij += ni * nj;
                 }
-                b[i] -= n[i] * r;
+                *bi -= ni * r;
             }
         }
         // Where the constraints nearly agree in direction (faces that touch), the plain step runs
@@ -191,12 +196,16 @@ fn solve_vertex(p0: Point3, on: &[On], reach: Option<f64>) -> Option<Point3> {
         let trace = a[0] + a[4] + a[8];
         let mut damp = 1e-10 * trace + 1e-300;
         let step = loop {
-            let mut ad = a.clone();
-            for i in 0..3 {
-                ad[i * 3 + i] += damp;
+            let mut ad = a;
+            let (rows_of_ad, _) = ad.as_chunks_mut::<3>();
+            for (i, row) in rows_of_ad.iter_mut().enumerate() {
+                if let Some(diagonal) = row.get_mut(i) {
+                    *diagonal += damp;
+                }
             }
-            let st = solve_dense(ad, b.clone(), 3, 1).ok()?;
-            let st = Vec3::new(st[0], st[1], st[2]);
+            let st = solve_dense(ad.to_vec(), b.to_vec(), 3, 1).ok()?;
+            let &[sx, sy, sz] = st.as_slice() else { return None };
+            let st = Vec3::new(sx, sy, sz);
             if (x + st).dist(p0) <= reach || damp > trace {
                 break st;
             }
@@ -269,10 +278,12 @@ fn onto_both(a: &Surface, b: &Surface, same: bool, p: Point3, along: Vec3) -> Op
 
 fn chord_params(points: &[Point3], closed: bool) -> Vec<f64> {
     let n = points.len();
-    let count = if closed { n } else { n - 1 };
+    let count = if closed { n } else { n.saturating_sub(1) };
     let mut params = vec![0.0];
-    for i in 0..count {
-        params.push(params[i] + points[i].dist(points[(i + 1) % n]));
+    let mut total = 0.0;
+    for (a, &b) in points.iter().zip(points.iter().cycle().skip(1)).take(count) {
+        total += a.dist(b);
+        params.push(total);
     }
     params
 }
@@ -285,16 +296,16 @@ fn refit(
     range: Option<(f64, f64)>,
     samples: Option<&Vec<Point3>>,
 ) -> std::result::Result<(Curve, (f64, f64)), String> {
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let mut faces = edge.faces.clone();
     faces.sort_unstable();
-    if faces.len() != 2 {
+    let &[fa, fb] = faces.as_slice() else {
         return Err(format!("the edge is used by {} faces, not 2", faces.len()));
-    }
-    let (a, b) = (&raw.faces[faces[0]].surface, &raw.faces[faces[1]].surface);
-    let same = faces[0] == faces[1];
+    };
+    let (a, b) = (&raw.face(fa).surface, &raw.face(fb).surface);
+    let same = fa == fb;
     let closed = edge.start == edge.end;
-    let (ps, pe) = (raw.points[edge.start], raw.points[edge.end]);
+    let (ps, pe) = (raw.point(edge.start), raw.point(edge.end));
     let c = &edge.curve;
     let r = match range {
         Some(r) => r,
@@ -309,7 +320,7 @@ fn refit(
     };
     let length: f64 = {
         let ts = sample_params(c, r, 8);
-        ts.windows(2).map(|w| c.eval(w[0]).dist(c.eval(w[1]))).sum()
+        ts.iter().zip(ts.iter().skip(1)).map(|(&t0, &t1)| c.eval(t0).dist(c.eval(t1))).sum()
     };
     let n = ((length / (100.0 * tol::LINEAR)) as usize).clamp(1, 8);
     // Where the surface step placed points along the edge, they lie on both faces already: two
@@ -343,9 +354,11 @@ fn refit(
     for (i, p) in pts.iter_mut().enumerate() {
         if closed || (i != 0 && i != last) {
             let t = r.0 + (r.1 - r.0) * i as f64 / (if closed { count } else { last }) as f64;
-            let along = match placed {
-                Some(_) => before[(i + 1) % count] - before[(i + count - 1) % count],
-                None => c.d1(t).1,
+            // Along the placed points, from the one before to the one after, round a closed edge.
+            let neighbours = (before.get((i + 1) % count), before.get((i + count - 1) % count));
+            let along = match (placed, neighbours) {
+                (Some(_), (Some(&next), Some(&prev))) => next - prev,
+                _ => c.d1(t).1,
             };
             *p = refine(*p, along)
                 .ok_or_else(|| format!("its {kinds} faces do not meet near it"))?;
@@ -365,14 +378,15 @@ fn refit(
             return Err("its points on both faces could not be interpolated".into());
         };
         let params = chord_params(&pts, closed);
-        let n_seg = params.len() - 1;
+        // Each chord's parameter span, one to a pair of neighbouring points.
+        let spans = || params.iter().copied().zip(params.iter().copied().skip(1));
         let (mut on_a, mut on_b) = (Along::new(a), Along::new(b));
-        let err: Vec<f64> = (0..n_seg)
-            .map(|i| {
+        let err: Vec<f64> = spans()
+            .map(|(p0, p1)| {
                 [0.25, 0.5, 0.75]
                     .iter()
                     .map(|f| {
-                        let m = approx.eval(params[i] + (params[i + 1] - params[i]) * f);
+                        let m = approx.eval(p0 + (p1 - p0) * f);
                         on_a.gap(m).max(on_b.gap(m))
                     })
                     .fold(0.0, f64::max)
@@ -383,9 +397,9 @@ fn refit(
             // A spline that stays on both faces everywhere is the edge as it is: evaluating it
             // costs nothing, where an intersection curve refines every point onto both faces.
             let (mut on_a, mut on_b) = (Along::new(a), Along::new(b));
-            let on_both = (0..n_seg).all(|i| {
+            let on_both = spans().all(|(p0, p1)| {
                 (1..8).all(|k| {
-                    let m = approx.eval(params[i] + (params[i + 1] - params[i]) * k as f64 / 8.0);
+                    let m = approx.eval(p0 + (p1 - p0) * k as f64 / 8.0);
                     on_a.gap(m).max(on_b.gap(m)) <= 0.5 * tol::LINEAR
                 })
             }) && {
@@ -406,28 +420,27 @@ fn refit(
             return Ok((curve, dom));
         }
         let mut next = Vec::with_capacity(pts.len() * 2);
-        for i in 0..n_seg {
-            next.push(pts[i]);
-            if err[i] > 0.125 * tol::LINEAR {
-                let m = approx.eval(0.5 * (params[i] + params[i + 1]));
-                let along = pts[(i + 1) % pts.len()] - pts[i];
+        // Each chord, from a point to the next round a closed edge, with its gap and span.
+        let chords = pts.iter().zip(pts.iter().cycle().skip(1)).zip(err.iter().zip(spans()));
+        for ((&here, &after), (&gap, (p0, p1))) in chords {
+            next.push(here);
+            if gap > 0.125 * tol::LINEAR {
+                let m = approx.eval(0.5 * (p0 + p1));
+                let along = after - here;
                 let q =
                     refine(m, along).ok_or_else(|| format!("its {kinds} faces part along it"))?;
                 // A midpoint that lands on its neighbours means the faces meet along no single
                 // curve here: they touch, or meet the file's curve somewhere else.
-                if q.dist(pts[i]) <= 4.0 * tol::LINEAR
-                    || q.dist(pts[(i + 1) % pts.len()]) <= 4.0 * tol::LINEAR
-                {
+                if q.dist(here) <= 4.0 * tol::LINEAR || q.dist(after) <= 4.0 * tol::LINEAR {
                     return Err(format!(
-                        "its {kinds} faces meet {:.1e} mm off the curve through its ends",
-                        err[i]
+                        "its {kinds} faces meet {gap:.1e} mm off the curve through its ends"
                     ));
                 }
                 next.push(q);
             }
         }
         if !closed {
-            next.push(pts[pts.len() - 1]);
+            next.extend(pts.last());
         }
         pts = next;
         let worst = err.iter().copied().fold(0.0, f64::max);
@@ -448,7 +461,7 @@ fn refit(
 /// The range of edge `e` between its (moved) vertices nearest its range `old` before they moved:
 /// on a periodic curve a vertex moved back past its end must not turn a short arc into a long one.
 fn range_near(raw: &Raw, e: usize, old: (f64, f64)) -> (f64, f64) {
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let c = &edge.curve;
     let near = |p: Point3, to: f64| {
         let t = param_of(c, p);
@@ -457,10 +470,10 @@ fn range_near(raw: &Raw, e: usize, old: (f64, f64)) -> (f64, f64) {
             None => t,
         }
     };
-    let t0 = near(raw.points[edge.start], old.0);
+    let t0 = near(raw.point(edge.start), old.0);
     match c.period() {
         Some(per) if edge.start == edge.end => (t0, t0 + per),
-        _ => (t0, near(raw.points[edge.end], old.1)),
+        _ => (t0, near(raw.point(edge.end), old.1)),
     }
 }
 
@@ -490,11 +503,11 @@ enum Failure {
 }
 
 fn range_of(raw: &Raw, e: usize) -> Option<(f64, f64)> {
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     edge_range(
         &edge.curve,
-        raw.points[edge.start],
-        raw.points[edge.end],
+        raw.point(edge.start),
+        raw.point(edge.end),
         edge.start == edge.end,
     )
 }
@@ -510,50 +523,52 @@ fn attempt(
 ) -> std::result::Result<Vec<(f64, f64)>, Vec<Failure>> {
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
     let fits: Vec<bool> = (0..raw.edges.len())
-        .map(|e| edge_fits(raw, e, ranges[e]))
+        .map(|e| edge_fits(raw, e, *entity(&ranges, e)))
         .collect();
     let mut at_vertex: Vec<Vec<usize>> = vec![Vec::new(); raw.points.len()];
     for (e, edge) in raw.edges.iter().enumerate() {
-        at_vertex[edge.start].push(e);
+        entity_mut(&mut at_vertex, edge.start).push(e);
         if edge.end != edge.start {
-            at_vertex[edge.end].push(e);
+            entity_mut(&mut at_vertex, edge.end).push(e);
         }
     }
     let mut failures = Vec::new();
     let mut moved = raw.points.clone();
     let mut stuck = vec![false; raw.points.len()];
     for (v, edges) in at_vertex.iter().enumerate() {
-        let p0 = start.get(&v).copied().unwrap_or(raw.points[v]);
-        if edges.iter().all(|&e| fits[e]) && p0 == raw.points[v] {
+        let p0 = start.get(&v).copied().unwrap_or(raw.point(v));
+        if edges.iter().all(|&e| *entity(&fits, e)) && p0 == raw.point(v) {
             continue;
         }
         let mut faces: Vec<usize> = edges
             .iter()
-            .flat_map(|&e| raw.edges[e].faces.iter().copied())
+            .flat_map(|&e| raw.edge(e).faces.iter().copied())
             .collect();
         faces.sort_unstable();
         faces.dedup();
         let mut on: Vec<On> = faces
             .iter()
-            .map(|&f| On::Surface(&raw.faces[f].surface))
+            .map(|&f| On::Surface(&raw.face(f).surface))
             .collect();
         let surfaces_only = on.len();
         on.extend(
             edges
                 .iter()
-                .filter(|&&e| fits[e])
-                .map(|&e| On::Curve(&raw.edges[e].curve)),
+                .filter(|&&e| *entity(&fits, e))
+                .map(|&e| On::Curve(&raw.edge(e).curve)),
         );
         let p =
-            solve_vertex(p0, &on, None).or_else(|| solve_vertex(p0, &on[..surfaces_only], None));
+            solve_vertex(p0, &on, None).or_else(|| {
+                solve_vertex(p0, on.get(..surfaces_only).unwrap_or_default(), None)
+            });
         match p {
-            Some(p) => moved[v] = p,
+            Some(p) => *entity_mut(&mut moved, v) = p,
             None => {
                 let gap = faces
                     .iter()
-                    .map(|&f| surface_gap(&raw.faces[f].surface, p0))
+                    .map(|&f| surface_gap(&raw.face(f).surface, p0))
                     .fold(0.0, f64::max);
-                stuck[v] = true;
+                *entity_mut(&mut stuck, v) = true;
                 failures.push(Failure::Vertex(
                     v,
                     format!(
@@ -570,19 +585,19 @@ fn attempt(
     // close by: a face's pcurves meet there only as closely as the curves' ends, measured in
     // parameters, which on a thin cylinder is stricter than the tolerance in space.
     let ends_close = |raw: &Raw, e: usize, r: Option<(f64, f64)>| {
-        let edge = &raw.edges[e];
+        let edge = &raw.edge(e);
         r.is_some_and(|r| {
             [(r.0, edge.start), (r.1, edge.end)].iter().all(|&(t, v)| {
-                raw.points[v] == before[v]
-                    || edge.curve.eval(t).dist(raw.points[v]) <= 0.25 * tol::LINEAR
+                raw.point(v) == *entity(&before, v)
+                    || edge.curve.eval(t).dist(raw.point(v)) <= 0.25 * tol::LINEAR
             })
         })
     };
 
     let mut out = Vec::with_capacity(raw.edges.len());
     for (e, &old) in ranges.iter().enumerate() {
-        let edge = &raw.edges[e];
-        if !loose && (stuck[edge.start] || stuck[edge.end]) {
+        let edge = &raw.edge(e);
+        if !loose && (*entity(&stuck, edge.start) || *entity(&stuck, edge.end)) {
             out.push((0.0, 0.0));
             continue;
         }
@@ -602,7 +617,7 @@ fn attempt(
         };
         match rf {
             Ok((curve, r)) => {
-                raw.edges[e].curve = curve;
+                raw.edge_mut(e).curve = curve;
                 out.push(r);
             }
             Err(why) => {
@@ -623,11 +638,11 @@ fn curve_range(raw: &Raw, e: usize) -> (f64, f64) {
     if let Some(r) = range_of(raw, e) {
         return r;
     }
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let c = &edge.curve;
     let (t0, t1) = (
-        param_of(c, raw.points[edge.start]),
-        param_of(c, raw.points[edge.end]),
+        param_of(c, raw.point(edge.start)),
+        param_of(c, raw.point(edge.end)),
     );
     match c.period() {
         Some(p) if edge.start == edge.end => (t0, t0 + p),
@@ -638,7 +653,7 @@ fn curve_range(raw: &Raw, e: usize) -> (f64, f64) {
 
 /// Points along edge `e` strictly between its ends.
 fn inner_samples(raw: &Raw, e: usize, count: usize) -> Vec<Point3> {
-    let c = &raw.edges[e].curve;
+    let c = &raw.edge(e).curve;
     let r = curve_range(raw, e);
     (1..=count)
         .map(|i| c.eval(r.0 + (r.1 - r.0) * i as f64 / (count + 1) as f64))
@@ -657,8 +672,12 @@ fn bent(c: &Curve, r: (f64, f64), n: usize, ends: (Point3, Point3)) -> Vec<Point
             c.eval(r.0 + (r.1 - r.0) * s) + d0 * (1.0 - s) + d1 * s
         })
         .collect();
-    pts[0] = ends.0;
-    pts[n] = ends.1;
+    if let Some(first) = pts.first_mut() {
+        *first = ends.0;
+    }
+    if let Some(last) = pts.last_mut() {
+        *last = ends.1;
+    }
     pts
 }
 
@@ -692,33 +711,32 @@ fn targets(
         } else {
             3
         };
-        let at = |v: usize| start.get(&v).copied().unwrap_or(raw.points[v]);
+        let at = |v: usize| start.get(&v).copied().unwrap_or(raw.point(v));
         let pts = bent(
             &edge.curve,
             curve_range(raw, e),
             count + 1,
             (at(edge.start), at(edge.end)),
         );
-        for i in 1..=count {
-            out.push(Target::sample(
-                raw,
-                pts[i],
-                fs.clone(),
-                e,
-                pts[i + 1] - pts[i - 1],
-            ));
+        // Each point between the ends, along the way from the point before it to the one after.
+        let inner = pts.iter().zip(pts.iter().skip(1)).zip(pts.iter().skip(2));
+        for ((&prev, &here), &next) in inner {
+            out.push(Target::sample(raw, here, fs.clone(), e, next - prev));
         }
     }
     for v in vertices {
-        let mut fs: Vec<usize> = at_vertex[&v]
-            .iter()
-            .flat_map(|&e| raw.edges[e].faces.iter().copied())
+        // Every vertex taken here ends an edge, so it has its list.
+        let mut fs: Vec<usize> = at_vertex
+            .get(&v)
+            .into_iter()
+            .flatten()
+            .flat_map(|&e| raw.edge(e).faces.iter().copied())
             .collect();
         fs.sort_unstable();
         fs.dedup();
         out.push(Target::vertex(
             raw,
-            start.get(&v).copied().unwrap_or(raw.points[v]),
+            start.get(&v).copied().unwrap_or(raw.point(v)),
             fs,
             v,
         ));
@@ -742,10 +760,10 @@ fn movement(file: &Raw, healed: &Raw, faces: &BTreeSet<usize>) -> Option<Healed>
         }
     };
     for (v, (&a, &b)) in file.points.iter().zip(&healed.points).enumerate() {
-        note(a.dist(b), b, format!("vertex #{}", file.vertex_ids[v]));
+        note(a.dist(b), b, format!("vertex #{}", *entity(&file.vertex_ids, v)));
     }
     for &f in faces {
-        let (s0, s1) = (&file.faces[f].surface, &healed.faces[f].surface);
+        let (s0, s1) = (&file.face(f).surface, &healed.face(f).surface);
         for (e, edge) in file.edges.iter().enumerate() {
             if !edge.faces.contains(&f) {
                 continue;
@@ -759,7 +777,7 @@ fn movement(file: &Raw, healed: &Raw, faces: &BTreeSet<usize>) -> Option<Healed>
                 note(
                     a.dist(b),
                     b,
-                    format!("the surface of face #{}", file.faces[f].id),
+                    format!("the surface of face #{}", file.face(f).id),
                 );
             }
         }
@@ -797,6 +815,7 @@ pub(crate) fn fits_as_written(raw: &Raw) -> bool {
 /// as before), states no uncertainty, or misses by more.
 pub fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tolerated) -> Option<B>) -> Option<B> {
     let w = within?;
+    file.check_ids().ok()?;
     if fits_as_written(file) {
         return None;
     }
@@ -807,8 +826,9 @@ pub fn as_written<B>(file: &Raw, within: Option<f64>, build: impl Fn(&Raw, &Tole
 }
 
 pub fn heal(raw: &mut Raw) -> Result<Ranges> {
+    raw.check_ids()?;
     let ranges: Vec<Option<(f64, f64)>> = (0..raw.edges.len()).map(|e| range_of(raw, e)).collect();
-    if (0..raw.edges.len()).all(|e| edge_fits(raw, e, ranges[e])) {
+    if (0..raw.edges.len()).all(|e| edge_fits(raw, e, *entity(&ranges, e))) {
         let ranges = ranges
             .into_iter()
             .map(|r| r.unwrap_or((0.0, 0.0)))
@@ -861,7 +881,7 @@ pub fn heal(raw: &mut Raw) -> Result<Ranges> {
                 }
                 Failure::Edge(e, _) => {
                     failing.insert(*e);
-                    chosen.extend(file.edges[*e].faces.iter().copied());
+                    chosen.extend(file.edge(*e).faces.iter().copied());
                 }
             }
         }
@@ -872,15 +892,17 @@ pub fn heal(raw: &mut Raw) -> Result<Ranges> {
         failed_before = failures.len();
         let stuck = round > 0 && chosen.len() == before && !settled;
         if round == ADJUST_ROUNDS || stuck || worse {
-            let (id, why) = match &failures[0] {
-                Failure::Vertex(v, why) => (
+            // An attempt that fails names what failed.
+            let (id, why) = match failures.first() {
+                Some(Failure::Vertex(v, why)) => (
                     file.edges
                         .iter()
                         .find(|e| e.start == *v || e.end == *v)
                         .map_or(0, |e| e.id),
                     why.clone(),
                 ),
-                Failure::Edge(e, why) => (file.edges[*e].id, why.clone()),
+                Some(Failure::Edge(e, why)) => (file.edge(*e).id, why.clone()),
+                None => (file.edges.first().map_or(0, |e| e.id), "it could not be healed".into()),
             };
             return fail(id, &why);
         }
@@ -907,6 +929,8 @@ pub fn heal(raw: &mut Raw) -> Result<Ranges> {
 /// other by far less than the file's uncertainty, healing fails, but an edge elsewhere may still
 /// be further off than the file promises until it is refitted. Returns how far it moved.
 pub fn heal_loosely(raw: &mut Raw) -> Option<Healed> {
+    // Topology that names what it lacks is none to heal.
+    raw.check_ids().ok()?;
     let file = raw.clone();
     let _ = attempt(raw, &BTreeMap::new(), &BTreeMap::new(), true);
     movement(&file, raw, &BTreeSet::new())
@@ -927,14 +951,14 @@ const GAP_MARGIN: f64 = 1.5;
 /// The range of edge `e` between its vertices as the file places them, which may lie off its
 /// curve; `None` where they give no stretch of it.
 fn file_range(raw: &Raw, e: usize) -> Option<(f64, f64)> {
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let c = &edge.curve;
     if let Some(r) = range_of(raw, e) {
         return Some(r);
     }
     let (t0, t1) = (
-        param_of(c, raw.points[edge.start]),
-        param_of(c, raw.points[edge.end]),
+        param_of(c, raw.point(edge.start)),
+        param_of(c, raw.point(edge.end)),
     );
     let r = match c.period() {
         Some(p) if edge.start == edge.end => (t0, t0 + p),
@@ -954,15 +978,14 @@ fn curve_gap(c: &Curve, r: (f64, f64), s: &Surface) -> f64 {
     // The walk starts in the middle: an edge's end may sit at a pole of the surface, where the
     // point nearest it is found only by arriving from along the edge.
     let mid = ts.len() / 2;
-    let start = s.project(c.eval(ts[mid]));
+    let (before, after) = ts.split_at(mid);
+    let Some(&t_mid) = after.first() else { return 0.0 };
+    let start = s.project(c.eval(t_mid));
     let mut worst: f64 = 0.0;
-    for half in [&ts[mid..], &ts[..=mid]] {
+    // From the middle to the end, then from the middle back to the start.
+    let back: Vec<f64> = before.iter().chain(after.first()).rev().copied().collect();
+    for walk in [after.to_vec(), back] {
         let mut hint = start;
-        let walk: Vec<f64> = if std::ptr::eq(half.as_ptr(), ts[mid..].as_ptr()) {
-            half.to_vec()
-        } else {
-            half.iter().rev().copied().collect()
-        };
         for t in walk {
             let p = c.eval(t);
             hint = s.project_near(p, hint);
@@ -983,14 +1006,14 @@ fn curve_gap(c: &Curve, r: (f64, f64), s: &Surface) -> f64 {
 /// vertices as they are: where the faces lie apart along it rather than crossing, the file's curve
 /// on one of them misses the other by the whole gap, and this one by half.
 fn midway(raw: &Raw, e: usize, r: (f64, f64)) -> Option<Curve> {
-    let edge = &raw.edges[e];
+    let edge = &raw.edge(e);
     let mut faces = edge.faces.clone();
     faces.sort_unstable();
     faces.dedup();
     let [fa, fb] = faces.as_slice() else {
         return None;
     };
-    let (a, b) = (&raw.faces[*fa].surface, &raw.faces[*fb].surface);
+    let (a, b) = (&raw.face(*fa).surface, &raw.face(*fb).surface);
     let closed = edge.start == edge.end;
     let mut ts = sample_params(&edge.curve, r, 8);
     ts.sort_by(f64::total_cmp);
@@ -1003,8 +1026,8 @@ fn midway(raw: &Raw, e: usize, r: (f64, f64)) -> Option<Curve> {
         .iter()
         .enumerate()
         .map(|(i, &t)| match i {
-            0 => raw.points[edge.start],
-            i if i == last => raw.points[edge.end],
+            0 => raw.point(edge.start),
+            i if i == last => raw.point(edge.end),
             _ => {
                 let mut p = edge.curve.eval(t);
                 for _ in 0..50 {
@@ -1067,29 +1090,29 @@ pub fn tolerate(
         let Some(mut r) = file_range(raw, e) else {
             return Err(format!(
                 "edge #{} has no stretch between its vertices",
-                raw.edges[e].id
+                raw.edge(e).id
             ));
         };
-        let mut faces = raw.edges[e].faces.clone();
+        let mut faces = raw.edge(e).faces.clone();
         faces.sort_unstable();
         faces.dedup();
         let gap_of = |c: &Curve, r: (f64, f64)| {
             faces
                 .iter()
-                .map(|&f| curve_gap(c, r, &raw.faces[f].surface))
+                .map(|&f| curve_gap(c, r, &raw.face(f).surface))
                 .fold(0.0, f64::max)
         };
-        let mut gap = gap_of(&raw.edges[e].curve, r);
+        let mut gap = gap_of(&raw.edge(e).curve, r);
         if gap > stated.unwrap_or(tol::LINEAR)
             && let Some(c) = midway(raw, e, r)
         {
             let (rm, gm) = (c.domain(), gap_of(&c, c.domain()));
             if gm < gap {
                 (r, gap) = (rm, gm);
-                raw.edges[e].curve = c;
+                raw.edge_mut(e).curve = c;
             }
         }
-        let edge = &raw.edges[e];
+        let edge = &raw.edge(e);
         let length = edge_length(&edge.curve, r);
         let t = widened(gap);
         if t > tol::LINEAR && t > MAX_SHARE * length {
@@ -1099,25 +1122,25 @@ pub fn tolerate(
             ));
         }
         for (v, at) in [(edge.start, r.0), (edge.end, r.1)] {
-            let p = raw.points[v];
+            let p = raw.point(v);
             let far = faces
                 .iter()
-                .map(|&f| surface_gap(&raw.faces[f].surface, p))
+                .map(|&f| surface_gap(&raw.face(f).surface, p))
                 .fold(edge.curve.eval(at).dist(p), f64::max);
-            vertices[v] = vertices[v].max(t).max(widened(far));
-            shortest[v] = shortest[v].min(length);
+            *entity_mut(&mut vertices, v) = entity(&vertices, v).max(t).max(widened(far));
+            *entity_mut(&mut shortest, v) = entity(&shortest, v).min(length);
         }
         ranges.push(r);
         edges.push(t);
     }
     for (v, &t) in vertices.iter().enumerate() {
-        if t > tol::LINEAR && t > MAX_SHARE * shortest[v] {
+        if t > tol::LINEAR && t > MAX_SHARE * *entity(&shortest, v) {
             return Err(format!(
                 "vertex #{} lies {:.1e} mm off its edges and faces, too far for an edge {:.1e} mm \
                  long that ends at it",
-                raw.vertex_ids[v],
+                *entity(&raw.vertex_ids, v),
                 t / GAP_MARGIN,
-                shortest[v]
+                *entity(&shortest, v)
             ));
         }
     }

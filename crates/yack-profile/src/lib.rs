@@ -256,8 +256,9 @@ impl Segment {
     }
 
     /// The segment as a curve on `frame`'s plane, sketch `(x, y)` at `frame.at(x, y)`.
-    // A Bézier whose knots and weights do not fit its points is a contract break (counted in
-    // scores/lints.txt): `place` is infallible for its callers in yack-springrep.
+    // A Bézier whose weights do not fit its points is a contract break (counted in
+    // scores/lints.txt): `Segment::Bezier` is built as a literal, with no constructor to check
+    // it, and `place` is infallible for its callers in yack-build and yack-blend.
     #[allow(clippy::panic)]
     pub fn place(&self, frame: &Frame) -> PlacedSegment {
         let at = |p: Vec2| frame.at(p.x, p.y);

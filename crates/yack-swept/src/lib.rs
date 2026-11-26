@@ -185,6 +185,36 @@ mod tests {
     }
 
     #[test]
+    fn a_box_turned_a_quarter_about_its_edge() {
+        // The 10 mm cube [0, 10]³ a quarter turn about the z axis (its edge): its square sweeps two
+        // half-squares' triangles (50 each) and a quarter of the disc through its far corner
+        // (radius 10√2, 50π), 10 tall.
+        let turn = Motion::Turn {
+            axis_point: Point3::ZERO,
+            axis: Vec3::Z,
+            from: 0.0,
+            to: std::f64::consts::FRAC_PI_2,
+        };
+        let s = swept(&cube(), &turn, "f").unwrap();
+        near(yack_measure::volume(&s), 1000.0 + 500.0 * std::f64::consts::PI);
+    }
+
+    #[test]
+    fn a_ball_turned_half_round_is_half_a_ring_with_round_ends() {
+        // r 2 about (5, 0, 0), half a turn about z: half the torus R 5, r 2 (π²Rr²) and the ball.
+        let pi = std::f64::consts::PI;
+        let frame = Frame::new(Point3::new(5.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap();
+        let ball = yack_build::primitive::sphere(&frame, 2.0, "ball").unwrap();
+        let want = 20.0 * pi * pi + 32.0 * pi / 3.0;
+        let half = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: pi };
+        near(yack_measure::volume(&swept(&ball, &half, "f").unwrap()), want);
+        // The same half turn from −90° to 90°, given backwards.
+        let back =
+            Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: pi / 2.0, to: -pi / 2.0 };
+        near(yack_measure::volume(&swept(&ball, &back, "f").unwrap()), want);
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
@@ -197,8 +227,16 @@ mod tests {
 
     #[test]
     fn what_is_not_built_yet_declines() {
-        let turn = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 1.0 };
-        assert!(matches!(swept(&cube(), &turn, "f"), Err(Error::Unsupported(_))));
+        let screw = Motion::Screw {
+            axis_point: Point3::ZERO,
+            axis: Vec3::Z,
+            from: 0.0,
+            to: 1.0,
+            rise: Rise::PerTurn(1.0),
+        };
+        assert!(matches!(swept(&cube(), &screw, "f"), Err(Error::Unsupported(_))));
+        let whole = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 7.0 };
+        assert!(matches!(swept(&cube(), &whole, "f"), Err(Error::Unsupported(_))));
         let nothing = Motion::Slide { by: Vec3::ZERO };
         assert!(matches!(swept(&cube(), &nothing, "f"), Err(Error::InvalidInput(_))));
     }

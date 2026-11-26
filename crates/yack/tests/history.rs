@@ -416,3 +416,21 @@ fn the_native_drafted_extrusion_names_its_faces_for_history() -> Result<()> {
     eprintln!("native extrude_drafted: {} faces, every one with an origin", f.faces().len());
     Ok(())
 }
+
+
+/// yack-build's native `spindle_torus` under `force_op`: the apple's one face traces to its tube
+/// (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_spindle_torus_names_its_face_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    force_op("spindle_torus", Engine::Native);
+    let made = spindle_torus(&Frame::WORLD, 1.0, 2.0);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    let found = audit("native spindle_torus", &[], &s);
+    assert!(found.is_empty(), "native spindle_torus: {found:?}");
+    eprintln!("native spindle_torus: {} faces, every one with an origin", s.faces().len());
+    Ok(())
+}

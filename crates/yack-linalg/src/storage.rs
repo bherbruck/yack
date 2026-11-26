@@ -138,13 +138,13 @@ impl<T: Scalar, const R: usize, const C: usize> Storage<T> for [[T; R]; C] {
     fn from_lin(mut f: impl FnMut(usize) -> T) -> Self {
         core::array::from_fn(|c| core::array::from_fn(|r| f(c * R + r)))
     }
-    fn at(&self, i: usize) -> &T {
+    #[allow(clippy::indexing_slicing)] fn at(&self, i: usize) -> &T {
         if i >= R * C {
             out_of_bounds(i, R * C)
         }
         &self[i / R][i % R]
     }
-    fn at_mut(&mut self, i: usize) -> &mut T {
+    #[allow(clippy::indexing_slicing)] fn at_mut(&mut self, i: usize) -> &mut T {
         if i >= R * C {
             out_of_bounds(i, R * C)
         }

@@ -142,9 +142,14 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
         return Err(Error::invalid(op, "minor", format!("tube radius {minor} clears the axis (major {major}): that is make::torus")));
     }
     let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
-    firewall::op(op, &[], || {
-        ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::make(op, |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor)) }])
-    })
+    let cadrs = || engine_cadrs::make(op, |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor));
+    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
+    // its one face is `tube`, as a ring torus's
+    let native = || {
+        let feature = engine::feature();
+        engine::made(&feature, op, yack_build::spindle::spindle_torus(&engine::frame(frame), major, minor, &feature))
+    };
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
 }
 
 /// A cone (or frustum) on the frame's z axis: radius `bottom` at z = 0, `top` at z = `height`.
@@ -689,14 +694,14 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: Ang
     }
     let d = draft.radians();
     let cadrs = || engine_cadrs::extrude_drafted(op, frame, profile, height, d, both_ways);
-    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
-    // its sides are `seg:side` (beside their segments' own names), as a loft's
+    // yack-build's native rung first (bake-off doc/donors.md: 3 bench cases equal, 0 wrong); cadrs
+    // answers what it declines. Its sides are `seg:side` (beside their segments' own names), as a loft's
     let native = || {
         let feature = engine::feature();
         let made = yack_build::drafted::extrude_drafted(&engine::frame(frame), &engine::profile(op, profile, None)?, height, d, both_ways, &feature);
         engine::made_as(&feature, op, &[("side", "seg:side")], made)
     };
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }]))
 }
 
 /// The solid whose sides are straight lines from `bottom_profile` (drawn in `bottom`) to

@@ -18,9 +18,30 @@ fn split(m: [[f64; 4]; 3]) -> ([[f64; 3]; 3], Vec3) {
     (m.map(|r| [r[0], r[1], r[2]]), Vec3::new(m[0][3], m[1][3], m[2][3]))
 }
 
-/// Offsets every face by `distance` (positive grows).
+/// Offsets every face by `distance` (positive grows). Declines a growth that closes a hole exactly,
+/// which this offset builds wrong: the hole's faces meet at its axis, the solid touching itself
+/// along it. (A growth past a hole fills it and dimples its rims; an inward offset declines its own
+/// collapses.)
 pub fn offset(b: &Brep, distance: f64) -> Result<Brep> {
+    if distance > 0.0 && closes_exactly(b, distance) {
+        return Err(Error::Unsupported("an offset that closes a hole exactly (its faces meet at its axis)".into()));
+    }
     crate::offset(b, distance, "offset")
+}
+
+/// Whether `b` has a hole of radius `distance`: a concave cylinder, sphere or torus tube.
+fn closes_exactly(b: &Brep, distance: f64) -> bool {
+    use crate::geom::Surface;
+    b.face_ids().any(|f| {
+        let face = b.face(f);
+        let r = match &face.surface {
+            Surface::Cylinder(c) => c.radius,
+            Surface::Sphere(s) => s.radius,
+            Surface::Torus(t) => t.minor,
+            _ => return false,
+        };
+        face.reversed && (r - distance).abs() <= crate::tol::LINEAR
+    })
 }
 
 /// Offsets each of `faces` by the same `distance`.
@@ -158,6 +179,21 @@ mod tests {
         b.face_ids()
             .find(|&f| crate::measure::face_bbox(b, f).center().dot(n) > 2.9)
             .unwrap()
+    }
+
+    #[test]
+    fn an_offset_that_closes_a_hole_declines() {
+        // brep-bench offset/drilled-plate-grown-by-its-hole: a 20 × 20 × 4 plate with a bore of
+        // radius 3, grown by 3, closes the bore, which this offset would build wrong (V 6317.2
+        // where the case is 6300.9).
+        let plate = crate::primitive::block(&Frame::WORLD.translated(Vec3::new(-10.0, -10.0, 0.0)), Vec3::new(20.0, 20.0, 4.0), "p").unwrap();
+        let bore = crate::primitive::cylinder(&Frame::WORLD.translated(Vec3::new(0.0, 0.0, -1.0)), 3.0, 6.0, "b").unwrap();
+        let drilled = crate::boolean::difference(&plate, &bore).unwrap();
+        assert!(matches!(super::offset(&drilled, 3.0), Err(crate::Error::Unsupported(_))));
+        // Short of the bore's radius it still answers, and past it (the bore filled, its rims
+        // dimpled).
+        assert!(super::offset(&drilled, 2.0).is_ok());
+        assert!(super::offset(&drilled, 4.0).is_ok());
     }
 
     #[test]
