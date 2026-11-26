@@ -2405,8 +2405,10 @@ pub fn orient_shells(b: &mut Body, always: bool) -> usize {
     for si in 0..b.shells.len() {
         let faces = b.shells[si].faces.clone();
         // Edge → uses (face position in the shell, along the edge), seams within a face aside.
-        let mut uses: std::collections::HashMap<usize, Vec<(usize, bool)>> =
-            std::collections::HashMap::new();
+        // (By edge: the neighbours, and so the walk below, in the same order on every run;
+        // where the shell's links contradict each other the first one met decides.)
+        let mut uses: std::collections::BTreeMap<usize, Vec<(usize, bool)>> =
+            std::collections::BTreeMap::new();
         for (k, &fi) in faces.iter().enumerate() {
             let mut own: std::collections::HashMap<usize, Vec<bool>> =
                 std::collections::HashMap::new();
