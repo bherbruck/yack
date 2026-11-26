@@ -17,7 +17,7 @@ mod tweak_moved {
     use yack_topo::Brep;
     use yack_topo::FaceId;
     use yack_topo::FaceName;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::f64::consts::TAU;
 
     fn face(b: &Brep, name: &str) -> FaceId {
@@ -44,7 +44,7 @@ mod tweak_moved {
         let b = sweep::extrude(&p, &Frame::WORLD, 10.0, "can").unwrap();
         let area = measure::volume(&b) / 10.0;
         let perimeter = (measure::area(&b) - 2.0 * area) / 10.0;
-        let by: HashMap<FaceId, f64> = b.face_ids().map(|f| (f, -1.0)).collect();
+        let by: BTreeMap<FaceId, f64> = b.face_ids().map(|f| (f, -1.0)).collect();
         let moved = offset_faces(&b, &by).unwrap();
         assert!(check::check(&moved).is_empty());
         let want = (area - perimeter + std::f64::consts::PI) * 8.0;
@@ -90,7 +90,7 @@ mod tweak_moved {
         .map(|(x, y)| Vec2::new(x, y));
         let names = ["e0", "e1", "e2", "e3", "e4", "e5"];
         let b = sweep::extrude(&Profile::polygon(&pts, &names), &Frame::WORLD, 3.0, "box").unwrap();
-        let out = offset_faces(&b, &HashMap::from([(face(&b, "e2"), 4.0)])).unwrap();
+        let out = offset_faces(&b, &BTreeMap::from([(face(&b, "e2"), 4.0)])).unwrap();
         assert!(check::check(&out).is_empty());
         assert!((measure::volume(&out) - 180.0).abs() < 1e-9);
         assert_eq!(out.face_count(), 6);
@@ -111,7 +111,7 @@ mod tweak_moved {
         .map(|(x, y)| Vec2::new(x, y));
         let names = ["e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7"];
         let b = sweep::extrude(&Profile::polygon(&pts, &names), &Frame::WORLD, 3.0, "box").unwrap();
-        let out = offset_faces(&b, &HashMap::from([(face(&b, "e5"), 4.0)])).unwrap();
+        let out = offset_faces(&b, &BTreeMap::from([(face(&b, "e5"), 4.0)])).unwrap();
         assert!(check::check(&out).is_empty());
         assert!((measure::volume(&out) - 180.0).abs() < 1e-9);
         assert_eq!(out.face_count(), 6);
@@ -164,7 +164,7 @@ mod tweak_moved {
         let want = 4.0 / 3.0 * std::f64::consts::PI * (r + d).powi(3);
         for (k, f) in turned_frames().iter().enumerate() {
             let b = ball(f, r);
-            let by: HashMap<FaceId, f64> = b.face_ids().map(|f| (f, d)).collect();
+            let by: BTreeMap<FaceId, f64> = b.face_ids().map(|f| (f, d)).collect();
             let grown = offset_faces(&b, &by).unwrap_or_else(|e| panic!("frame {k}: {e}"));
             let got = measure::volume(&grown);
             assert!(

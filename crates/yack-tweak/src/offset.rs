@@ -6,15 +6,15 @@
 //! Faces offset along their normals: onto the same kind of surface where one exists, and otherwise onto
 //! a spline fitted to the true offset within [`OFFSET_FIT`].
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 use crate::{Error, Result, entry, geom::Cone, geom::Curve, geom::Cylinder, geom::Plane, geom::Sphere, geom::Surface, geom::Torus, math::Point3, math::Vec2, math::Vec3, topo::Brep, topo::FaceId, unsupported, plane_of, near_uv, followed, Moved, through, tol, planes::planes_or_faces, surfaces::move_faces};
 
 /// `b` with each face of `by` moved that far along its outward normal, onto its offset surface.
-#[allow(clippy::disallowed_types)] pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Moved> { // D26: BTree* in hardening, proven by digests
+pub fn offset_faces(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Moved> {
     // Where a face closes on the way, a round offset past its radius or a riser between two faces
     // brought level, the offset is followed there.
     followed(offset_kept(b, by), || {
-        let mut paths: HashMap<FaceId, through::Path> = HashMap::new();
+        let mut paths: BTreeMap<FaceId, through::Path> = BTreeMap::new();
         for (&f, &d) in by {
             let face = b.face(f);
             let natural = if face.reversed { -d } else { d };
@@ -32,13 +32,11 @@ use crate::{Error, Result, entry, geom::Cone, geom::Curve, geom::Cylinder, geom:
 }
 
 /// [`offset_faces`] with the solid's topology kept.
-#[allow(clippy::disallowed_types)] fn offset_kept(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
-    let mut planes = HashMap::new();
-    let mut surfaces = HashMap::new();
-    // In face-id order, so that of two faces whose offsets fail the same one speaks every run.
-    let mut by_id: Vec<(&FaceId, &f64)> = by.iter().collect();
-    by_id.sort_unstable_by_key(|&(f, _)| *f);
-    for (&f, &d) in by_id {
+fn offset_kept(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Brep> {
+    let mut planes = BTreeMap::new();
+    let mut surfaces = BTreeMap::new();
+    // In face-id order (the map's), so that of two faces whose offsets fail the same one speaks.
+    for (&f, &d) in by {
         let face = b.face(f);
         let natural = if face.reversed { -d } else { d };
         if let Some(fr) = plane_of(&face.surface) {

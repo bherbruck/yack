@@ -1,7 +1,9 @@
 // yack: faces of one solid that share no edge but meet: where, and how deep.
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); split out of lib.rs into its
-// own module (M3 hardening); its maps and sets are BTreeMap/BTreeSet (no order reaches an output).
+// own module (M3 hardening); its maps and sets are BTreeMap/BTreeSet (no order reaches an output);
+// face pairs walk the faces sorted with their boxes, and boxes compare coordinate arrays, instead
+// of indexing.
 //! Faces of one solid that share no edge but meet: where, and how deep.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,18 +54,24 @@ pub(crate) fn padded_box(bb: Aabb) -> Aabb {
 }
 
 fn boxes_meet(a: &Aabb, b: &Aabb) -> bool {
-    (0..3).all(|k| a.min[k] <= b.max[k] && b.min[k] <= a.max[k])
+    let ((a_min, a_max), (b_min, b_max)) =
+        ((a.min.to_array(), a.max.to_array()), (b.min.to_array(), b.max.to_array()));
+    a_min
+        .into_iter()
+        .zip(b_max)
+        .zip(b_min.into_iter().zip(a_max))
+        .all(|((a0, b1), (b0, a1))| a0 <= b1 && b0 <= a1)
 }
 
 pub(crate) fn in_box(p: Point3, bb: &Aabb) -> bool {
-    (0..3).all(|k| p[k] >= bb.min[k] && p[k] <= bb.max[k])
+    let (min, max) = (bb.min.to_array(), bb.max.to_array());
+    p.to_array().into_iter().zip(min.into_iter().zip(max)).all(|(x, (lo, hi))| x >= lo && x <= hi)
 }
 
 /// What the pair tests of one check share: each face's domain, built when a point is first
 /// located in it, each edge's box, and each edge's meeting with each face.
 #[derive(Default)]
 struct PairCache {
-    // D26: BTree* in hardening, proven by digests
     domains: BTreeMap<FaceId, Domain>,
     edge_boxes: BTreeMap<EdgeId, Aabb>,
     meetings: BTreeMap<(EdgeId, FaceId), Option<Point3>>,
@@ -125,13 +133,18 @@ impl PairCache {
 /// rest on one another. Two curved faces that meet only along a closed curve inside both are not
 /// found: no edge reaches it.
 pub(crate) fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -> Vec<Crossing> {
-    // D26: BTree* in hardening, proven by digests
     let faces: Vec<FaceId> = b.face_ids().collect();
     let solid_of = |f: FaceId| b.face(f).shell.and_then(|s| b.shell(s).solid);
     let mut cache = PairCache::default();
-    let boxes: Vec<Aabb> = faces.iter().map(|&f| cache.face_box(b, f)).collect();
-    let mut order: Vec<usize> = (0..faces.len()).collect();
-    order.sort_by(|&i, &j| boxes[i].min.x.total_cmp(&boxes[j].min.x));
+    // Each face with its box, sorted along x (a stable sort: ties keep the faces' order).
+    let mut sorted: Vec<(FaceId, Aabb)> =
+        faces.iter().map(|&f| (f, cache.face_box(b, f))).collect();
+    sorted.sort_by(|x, y| x.1.min.x.total_cmp(&y.1.min.x));
+    debug_assert!(
+        sides.is_none_or(|s| faces.iter().all(|f| f.index() < s.len())),
+        "a boolean's sides name every face"
+    );
+    let side = |s: &[Option<usize>], f: FaceId| s.get(f.index()).copied().flatten();
 
     let mut by_edge: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
     let mut verts: BTreeMap<FaceId, Vec<VertexId>> = BTreeMap::new();
@@ -151,19 +164,18 @@ pub(crate) fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -
         .flat_map(|fs| fs.iter().flat_map(|&x| fs.iter().map(move |&y| (x, y))))
         .collect();
     let mut out = Vec::new();
-    for (k, &i) in order.iter().enumerate() {
-        for &j in &order[k + 1..] {
-            if boxes[j].min.x > boxes[i].max.x {
+    for (k, &(fa, box_a)) in sorted.iter().enumerate() {
+        for &(fb, box_b) in sorted.iter().skip(k + 1) {
+            if box_b.min.x > box_a.max.x {
                 break;
             }
-            let (fa, fb) = (faces[i], faces[j]);
-            if !boxes_meet(&boxes[i], &boxes[j])
+            if !boxes_meet(&box_a, &box_b)
                 || adjacent.contains(&(fa, fb))
                 || (each && solid_of(fa) != solid_of(fb))
             {
                 continue;
             }
-            if sides.is_some_and(|s| s[fa.index()].is_some() && s[fa.index()] == s[fb.index()]) {
+            if sides.is_some_and(|s| side(s, fa).is_some() && side(s, fa) == side(s, fb)) {
                 b.mark_apart(fa, fb);
                 continue;
             }
@@ -172,14 +184,12 @@ pub(crate) fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -
             }
             // Where either face's box is clear of the other's surface, they cannot meet.
             let (sa, sb) = (&b.face(fa).surface, &b.face(fb).surface);
-            if (analytic(sb) && clear_of(&boxes[i], sb))
-                || (analytic(sa) && clear_of(&boxes[j], sa))
-            {
+            if (analytic(sb) && clear_of(&box_a, sb)) || (analytic(sa) && clear_of(&box_b, sa)) {
                 b.mark_apart(fa, fb);
                 continue;
             }
             let mut hit = None;
-            'pair: for (x, y, ybox) in [(fa, fb, &boxes[j]), (fb, fa, &boxes[i])] {
+            'pair: for (x, y, ybox) in [(fa, fb, &box_b), (fb, fa, &box_a)] {
                 for &lp in &b.face(x).loops {
                     for &c in &b.lp(lp).coedges {
                         let e = b.coedge(c).edge;
@@ -192,7 +202,12 @@ pub(crate) fn crossings(b: &Brep, sides: Option<&[Option<usize>]>, each: bool) -
                         hit = match cache.meetings.get(&(e, y)) {
                             Some(&m) => m,
                             None => {
-                                let m = edge_meets_face(b, e, y, ybox, &verts[&y], &mut cache);
+                                debug_assert!(
+                                    verts.contains_key(&y),
+                                    "every face's vertices are listed"
+                                );
+                                let own = verts.get(&y).map_or(&[][..], Vec::as_slice);
+                                let m = edge_meets_face(b, e, y, ybox, own, &mut cache);
                                 cache.meetings.insert((e, y), m);
                                 m
                             }

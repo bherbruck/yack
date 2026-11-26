@@ -234,7 +234,7 @@ impl Solid {
             ladder::two(
                 op,
                 &|| {
-                    let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, engine::PROVISIONAL))?;
+                    let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, join == Join::Round, engine::PROVISIONAL))?;
                     if !yack_topo::local::rims_square(self.need(op)?, &f) {
                         return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
                         );

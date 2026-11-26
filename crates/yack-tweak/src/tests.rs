@@ -61,17 +61,17 @@ fn frame(b: &Brep, f: FaceId) -> Frame {
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn raising_the_top_stretches_the_sides() { // D26: BTree* in hardening, proven by digests
+fn raising_the_top_stretches_the_sides() {
     let b = cube();
     let top = face(&b, "end");
     let fr = frame(&b, top).translated(Vec3::Z * 5.0);
-    let out = move_planes(&b, &HashMap::from([(top, fr)])).unwrap();
+    let out = move_planes(&b, &BTreeMap::from([(top, fr)])).unwrap();
     assert!((measure::volume(&out) - 1500.0).abs() < 1e-9);
     assert_eq!(out.face_count(), 6);
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn tilting_a_side_about_its_foot_takes_off_a_wedge() { // D26: BTree* in hardening, proven by digests
+fn tilting_a_side_about_its_foot_takes_off_a_wedge() {
     let b = cube();
     let side = face(&b, "u_max");
     let old = frame(&b, side);
@@ -79,16 +79,16 @@ fn frame(b: &Brep, f: FaceId) -> Frame {
     let tilted = (n * 10.0 + Vec3::Z * 2.0).unit().unwrap();
     let foot = old.origin - Vec3::Z * old.origin.z;
     let fr = Frame::new(foot, tilted, old.x).unwrap();
-    let out = move_planes(&b, &HashMap::from([(side, fr)])).unwrap();
+    let out = move_planes(&b, &BTreeMap::from([(side, fr)])).unwrap();
     assert!((measure::volume(&out) - 900.0).abs() < 1e-9);
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn a_draft_past_the_apex_is_refused() { // D26: BTree* in hardening, proven by digests
+fn a_draft_past_the_apex_is_refused() {
     // box20 fixture: sweep::extrude's 20 x 20 x 10 box, proven by w-m04-fix-2.
     let b = fixture("box20");
     let drafted = |a: f64| {
-        let mut moved = HashMap::new();
+        let mut moved = BTreeMap::new();
         for name in ["u_min", "u_max", "v_min", "v_max"] {
             let f = face(&b, name);
             let fr = frame(&b, f);
@@ -109,25 +109,25 @@ fn frame(b: &Brep, f: FaceId) -> Frame {
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn a_curved_face_at_a_moved_corner_is_unsupported() { // D26: BTree* in hardening, proven by digests
+fn a_curved_face_at_a_moved_corner_is_unsupported() {
     // rod10 fixture: sweep::extrude's rod of radius 10, 10 long, proven by w-m04-fix-2.
     let b = fixture("rod10");
     let top = face(&b, "end");
     let fr = frame(&b, top).translated(Vec3::Z * 5.0);
     assert!(matches!(
-        move_planes(&b, &HashMap::from([(top, fr)])),
+        move_planes(&b, &BTreeMap::from([(top, fr)])),
         Err(Error::Unsupported(_))
     ));
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn a_tip_moved_through_the_other_tip_is_refused() { // D26: BTree* in hardening, proven by digests
+fn a_tip_moved_through_the_other_tip_is_refused() {
     // tip fixture: sweep::extrude's 14-sided prism, 5 tall, proven by w-m04-fix-2.
     let b = fixture("tip");
     let tip = face(&b, "e2");
     let raised = |dy: f64| {
         let fr = frame(&b, tip).translated(Vec3::Y * dy);
-        move_planes(&b, &HashMap::from([(tip, fr)]))
+        move_planes(&b, &BTreeMap::from([(tip, fr)]))
     };
     let v0 = measure::volume(&b);
     assert!((measure::volume(&raised(5.0).unwrap()) - v0 - 200.0).abs() < 1e-9);
@@ -159,16 +159,16 @@ fn a_spline_sphere_octant_offset_is_the_octant_of_the_grown_sphere() {
 }
 
 #[test]
-#[allow(clippy::disallowed_types)] fn two_faces_refused_two_ways_refuse_by_the_lower_face_id_every_run() { // D26: BTree* in hardening, proven by digests
+fn two_faces_refused_two_ways_refuse_by_the_lower_face_id_every_run() {
     // rod10: its side is a cylinder, which no plane move takes (Unsupported); its end turned over
-    // faces the wrong way (InvalidInput). Each new HashMap iterates in its own order.
+    // faces the wrong way (InvalidInput). The refusal is the lower face id's, every run.
     let b = fixture("rod10");
     let end = face(&b, "end");
     let side = b.face_ids().find(|&f| plane_of(&b.face(f).surface).is_none()).unwrap();
     let fr = frame(&b, end);
     let over = Frame::new(fr.origin, -fr.z, fr.x).unwrap();
     for _ in 0..16 {
-        let moved: HashMap<FaceId, Frame> = [(side, fr), (end, over)].into_iter().collect();
+        let moved: BTreeMap<FaceId, Frame> = [(side, fr), (end, over)].into_iter().collect();
         let got = move_planes(&b, &moved);
         if side < end {
             assert!(matches!(got, Err(Error::Unsupported(_))), "{:?}", got.err());

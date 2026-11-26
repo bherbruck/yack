@@ -25,7 +25,7 @@ use yack_tweak as tweak;
 use yack_check as check;
 #[cfg(test)]
 use yack_build::primitive;
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
 
@@ -54,7 +54,7 @@ pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<
 }
 
 /// `b` with each face of `by` moved that far along its outward normal, onto its offset surface.
-#[allow(clippy::disallowed_types)] pub fn offset_faces(b: &Brep, by: &HashMap<FaceId, f64>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub fn offset_faces(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Brep> {
     merged(crate::tweak::offset_faces(b, by)?)
 }
 
@@ -116,7 +116,7 @@ pub enum Wall {
 /// are `<feature>.inner`. An inward wall leaves every face of `s` in place with its names. An
 /// outward wall's outside is new and carries no name, and each face of `s` is the wall's inside,
 /// keeping its names beside `inner`.
-#[allow(clippy::disallowed_types)] pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &str) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &str) -> Result<Brep> {
     if thickness.is_nan() || thickness <= tol::LINEAR {
         return Err(Error::InvalidInput(
             "a shell's wall must be thicker than the tolerance".into(),
@@ -125,7 +125,7 @@ pub enum Wall {
     let inner = FaceName::new(feature, FaceName::INNER);
     // Every face moved `by` along its outward normal, the open ones `open_by`.
     let moved = |by: f64, open_by: f64| {
-        let by: HashMap<FaceId, f64> = s
+        let by: BTreeMap<FaceId, f64> = s
             .face_ids()
             .map(|f| (f, if open.contains(&f) { open_by } else { by }))
             .filter(|&(_, d)| d != 0.0)
@@ -169,14 +169,14 @@ pub enum Wall {
 /// The points within `distance` of `s`: every face moved out that far, a hole that closes on the
 /// way followed there, each convex edge rounded at `distance` (which leaves a ball's patch at each
 /// convex corner), and over each end of a hole that closed, the dimple its rim leaves.
-#[allow(clippy::disallowed_types)] pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
     if distance == 0.0 {
         return Ok(s.clone());
     }
     if distance < 0.0 {
         return Err(Error::Unsupported("an inward offset".into()));
     }
-    let by: HashMap<FaceId, f64> = s.face_ids().map(|f| (f, distance)).collect();
+    let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, distance)).collect();
     let moved = offset_faces(s, &by)?;
     let edges = convex_edges(&moved)?;
     let kept = same_topology(s, &moved);
@@ -278,8 +278,8 @@ fn dimple(o: Point3, up: Vec3, r: f64, d: f64, feature: &str) -> Result<Brep> {
 
 /// The solid `faces` sweep moving from 0 to `thickness` along their outward normals, inward where
 /// it is negative: `s` with them moved, less `s`, or `s` less `s` with them moved in.
-#[allow(clippy::disallowed_types)] pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
-    let by: HashMap<FaceId, f64> = faces.iter().map(|&f| (f, thickness)).collect();
+pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
+    let by: BTreeMap<FaceId, f64> = faces.iter().map(|&f| (f, thickness)).collect();
     let moved = offset_faces(s, &by)?;
     if thickness > 0.0 {
         boolean::difference(&moved, s)

@@ -5,15 +5,15 @@
 //! A draft: each face tilted about the line where it meets the neutral plane, a cylinder along the pull
 //! made the cone through its circle there, and followed through where faces close on the way.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 use crate::{Error, Result, geom::Cone, geom::Plane, geom::Surface, math::Frame, topo::Brep, topo::FaceId, unsupported, plane_of, followed, Moved, through, tol, planes::planes_or_faces, surfaces::move_faces};
 
 /// `b` with each of `faces` tilted by `angle` about the line where it meets the `neutral` plane, its
 /// outward normal turned towards the plane's normal: positive angles narrow the part along it.
-#[allow(clippy::disallowed_types)] pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<Moved> { // D26: BTree* in hardening, proven by digests
+pub fn draft(b: &Brep, faces: &[FaceId], neutral: &Frame, angle: f64) -> Result<Moved> {
     let k = neutral.z;
-    let mut moved = HashMap::new();
-    let mut cones = HashMap::new();
+    let mut moved = BTreeMap::new();
+    let mut cones = BTreeMap::new();
     for &g in faces {
         let face = b.face(g);
         // A cylinder along the pull becomes the cone through its circle on the neutral plane:
@@ -49,7 +49,7 @@ use crate::{Error, Result, geom::Cone, geom::Plane, geom::Surface, math::Frame, 
         moved.insert(g, Frame::new(hinge, z, fr.x)?);
     }
     // Where a face closes on the way, walls leaning until they meet, the draft is followed there.
-    let mut paths: HashMap<FaceId, through::Path> = HashMap::new();
+    let mut paths: BTreeMap<FaceId, through::Path> = BTreeMap::new();
     for (&g, &to) in &moved {
         let Some(from) = plane_of(&b.face(g).surface) else {
             return Err(Error::InvalidResult(vec!["a drafted plane is no longer a plane".into()]));

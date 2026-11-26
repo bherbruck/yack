@@ -13,7 +13,7 @@
 //! taken out, the two edges one. The move then goes on from there. An event that needs more, as an
 //! edge that would turn through a vertex of four faces, ends it with the error the move gave.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use super::{move_faces_pinned, near_uv};
 use crate::{
@@ -54,15 +54,15 @@ const CLOSED: f64 = 10.0 * tol::LINEAR;
 /// `b` with the faces of `paths` moved to the ends of their paths, its topology changed where a
 /// face closes on the way, and whether one did: the faces round it are then for the caller to merge
 /// (`boolean::unify`, which this layer may not call).
-#[allow(clippy::disallowed_types)] pub fn through(b: &Brep, paths: &HashMap<FaceId, Path>) -> Result<(Brep, bool)> { // D26: BTree* in hardening, proven by digests
+pub fn through(b: &Brep, paths: &BTreeMap<FaceId, Path>) -> Result<(Brep, bool)> {
     let mut cur = b.clone();
     // The face of `b` each face of `cur` comes from.
-    let mut from: HashMap<FaceId, FaceId> = b.face_ids().map(|f| (f, f)).collect();
+    let mut from: BTreeMap<FaceId, FaceId> = b.face_ids().map(|f| (f, f)).collect();
     let mut s0 = 0.0;
     let mut changed = false;
     loop {
         let at = |s: f64| -> Result<Brep> {
-            let mut moved = HashMap::new();
+            let mut moved = BTreeMap::new();
             for f in cur.face_ids() {
                 if let Some(p) = from.get(&f).and_then(|g| paths.get(g)) {
                     moved.insert(f, p(s)?);
@@ -72,7 +72,7 @@ const CLOSED: f64 = 10.0 * tol::LINEAR;
                     moved.insert(f, cur.face(f).surface.clone());
                 }
             }
-            move_faces_pinned(&cur, &moved, &HashMap::new())
+            move_faces_pinned(&cur, &moved, &BTreeMap::new())
         };
         let last = match at(1.0) {
             Ok(out) => return Ok((out, changed)),
@@ -129,7 +129,7 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 /// or lying on each other face to face, taken out; and a face left running along an edge and back
 /// that nothing else uses rid of it. With, for each face of `b`, its face in the result. `None`
 /// where nothing has closed.
-#[allow(clippy::disallowed_types)] fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> { // D26: BTree* in hardening, proven by digests
+fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> {
     let eids: Vec<EdgeId> = b.edge_ids().collect();
     let vids: Vec<VertexId> = b.vertex_ids().collect();
     let nv = vids.len();
@@ -175,7 +175,7 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
             changed = true;
         }
     }
-    let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    let mut by_ends: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
     for e in b.edge_ids() {
         let x = b.edge(e);
         if into.get(e.index()).copied().flatten().is_none() || x.curve.is_none() {
@@ -273,7 +273,7 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
         }
     }
     // A face running along an edge and back that no other face uses: a slit, which is no edge.
-    let mut uses: HashMap<usize, usize> = HashMap::new();
+    let mut uses: BTreeMap<usize, usize> = BTreeMap::new();
     for (l, _) in loops.iter().zip(&gone).filter(|(_, g)| !**g) {
         for &(e, _, _) in l.iter().flatten() {
             *uses.entry(e).or_default() += 1;
@@ -306,13 +306,13 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
         .flat_map(|(l, _)| l.iter().flatten().map(|x| x.0).collect::<Vec<_>>())
         .collect();
     let mut out = Brep::new();
-    let mut verts: HashMap<usize, VertexId> = HashMap::new();
+    let mut verts: BTreeMap<usize, VertexId> = BTreeMap::new();
     let mut vertex = |out: &mut Brep, p: &mut Vec<usize>, v: VertexId| -> Option<VertexId> {
         let r = root(p, v.index());
         let point = b.vertex(*vids.get(r)?).point;
         Some(*verts.entry(r).or_insert_with(|| out.add_vertex(point)))
     };
-    let mut edges: HashMap<usize, EdgeId> = HashMap::new();
+    let mut edges: BTreeMap<usize, EdgeId> = BTreeMap::new();
     for &i in &used {
         let x = b.edge(*eids.get(i)?);
         let s = vertex(&mut out, &mut parent, x.start)?;

@@ -14,12 +14,12 @@
 use std::f64::consts::TAU;
 
 use crate::{
-    Error, Result,
-    loft::{Section, loft},
-    math::{Frame, Vec2},
-    profile::{NamedSegment, Profile, ProfileLoop, Segment},
+    Error, Result, check,
+    geom::{Cone, Curve, Line, Plane, Surface},
+    math::{Frame, Point3, Vec2},
+    profile::{NamedSegment, PlacedSegment, Profile, ProfileLoop, Segment},
     tol,
-    topo::Brep,
+    topo::{Brep, CoedgeSpec, EdgeId, FaceName, PCurve, VertexId},
 };
 
 /// The steepest draft accepted, in radians: a side leaning further than this from the frame's
@@ -48,18 +48,14 @@ pub fn extrude_drafted(frame: &Frame, profile: &Profile, height: f64, draft: f64
     // In by h·tan(draft) at the top: the outer loop runs counter-clockwise, so its inside is to
     // the left of travel and an inward move is a move to the left.
     let inward = height * draft.tan();
-    let top = Profile { loops: vec![offset(outer, inward)?] };
+    let top = offset(outer, inward)?;
     let lift = |d: f64| frame.translated(frame.z * d);
-    let sections = if both_ways {
-        vec![
-            Section { profile: top.clone(), frame: lift(-height) },
-            Section { profile: base.clone(), frame: *frame },
-            Section { profile: top, frame: lift(height) },
-        ]
+    let rings = if both_ways {
+        vec![(lift(-height), top.clone()), (*frame, outer.clone()), (lift(height), top)]
     } else {
-        vec![Section { profile: base.clone(), frame: *frame }, Section { profile: top, frame: lift(height) }]
+        vec![(*frame, outer.clone()), (lift(height), top)]
     };
-    loft(&sections, true, feature)
+    build(&rings, feature)
 }
 
 fn decline<T>(why: &str) -> Result<T> {
@@ -96,12 +92,15 @@ fn offset(lp: &ProfileLoop, d: f64) -> Result<ProfileLoop> {
     let sides: Vec<(&NamedSegment, Carrier)> = segs.iter().zip(carriers.iter().copied()).collect();
     let befores = sides.iter().cycle().skip(n.saturating_sub(1));
     let mut corners = Vec::with_capacity(n);
+    let mut tangents = Vec::with_capacity(n);
     for (&(prev, a), &(next, b)) in befores.zip(sides.iter()) {
         let at = next.segment.start();
         let end_a = moved_end(&prev.segment, a, true);
         let start_b = moved_end(&next.segment, b, false);
         // Tangent sides move together: their moved ends coincide, and that is the corner.
-        let corner = if end_a.dist(start_b) <= tol::LINEAR {
+        let tangent = end_a.dist(start_b) <= tol::LINEAR;
+        tangents.push(tangent);
+        let corner = if tangent {
             start_b
         } else {
             nearest_meet(a, b, at).ok_or_else(|| Error::Unsupported("two drafted sides that no longer meet near their corner".into()))?
@@ -115,7 +114,14 @@ fn offset(lp: &ProfileLoop, d: f64) -> Result<ProfileLoop> {
     }
     let mut out = Vec::with_capacity(n);
     // Segment k runs from corner k to corner k + 1.
-    for ((&(s, carrier), &from), &to) in sides.iter().zip(&corners).zip(corners.iter().cycle().skip(1)) {
+    let ends = tangents.iter().zip(tangents.iter().cycle().skip(1));
+    for (((&(s, carrier), &from), &to), (&smooth_in, &smooth_out)) in sides.iter().zip(&corners).zip(corners.iter().cycle().skip(1)).zip(ends) {
+        // A drafted arc is a cone only between rulings: where it meets its neighbours tangent, its
+        // moved ends stay on its own radii. At a sharp corner the cone meets the next side in a
+        // conic, not along the straight rise this builds.
+        if matches!(s.segment, Segment::Arc { .. }) && !(smooth_in && smooth_out) {
+            return decline("a drafted arc that meets a neighbour at a sharp corner");
+        }
         let segment = match (s.segment.clone(), carrier) {
             (Segment::Line { a, b }, Carrier::Line { .. }) => {
                 // The moved side must run the way the side did, and not shrink to nothing.
@@ -227,6 +233,157 @@ fn nearest_meet(a: Carrier, b: Carrier, near: Vec2) -> Option<Vec2> {
     pts.into_iter().min_by(|x, y| x.dist(near).total_cmp(&y.dist(near)))
 }
 
+/// The solid between `rings` (each a frame and a counter-clockwise loop on it, every loop with the
+/// same segments in order, their corners joined by straight rises): a side face for each segment
+/// in each band between two rings, a plane through a line's two edges or the exact cone through an
+/// arc's, caps on the first and last rings.
+fn build(rings: &[(Frame, ProfileLoop)], feature: &str) -> Result<Brep> {
+    let (Some((first, _)), Some((last, _))) = (rings.first(), rings.last()) else {
+        return decline("a drafted extrusion with no sections");
+    };
+    let n = first.z;
+    let mut b = Brep::new();
+    let lo = b.add_face(Surface::Plane(Plane { frame: *first }), true, [FaceName::new(feature, FaceName::START)]);
+    let hi = b.add_face(Surface::Plane(Plane { frame: *last }), false, [FaceName::new(feature, FaceName::END)]);
+    let mut faces = vec![lo, hi];
+    // Each ring's placed segments, the corners where each starts, and its edges.
+    let mut placed: Vec<Vec<PlacedSegment>> = Vec::with_capacity(rings.len());
+    let mut corners: Vec<Vec<Point3>> = Vec::with_capacity(rings.len());
+    let mut edges: Vec<Vec<EdgeId>> = Vec::with_capacity(rings.len());
+    for (frame, lp) in rings {
+        let segs: Vec<PlacedSegment> = lp.segments.iter().map(|s| s.segment.place(frame)).collect();
+        let pts: Vec<Point3> = segs.iter().map(|s| s.curve.eval(traversal(s).0)).collect();
+        let vs: Vec<VertexId> = pts.iter().map(|&p| b.add_vertex(p)).collect();
+        let es: Vec<EdgeId> = segs
+            .iter()
+            .zip(vs.iter().zip(vs.iter().cycle().skip(1)))
+            .map(|(s, (&v0, &v1))| {
+                let (a, z) = if s.forward { (v0, v1) } else { (v1, v0) };
+                b.add_edge(s.curve.clone(), s.range, a, z)
+            })
+            .collect();
+        placed.push(segs);
+        corners.push(pts);
+        edges.push(es);
+    }
+    let names: Vec<&crate::profile::Names> = rings.first().map(|(_, lp)| lp.segments.iter().map(|s| &s.names).collect()).unwrap_or_default();
+    // Each band: its rises (corner k of one ring to corner k of the next), then its side faces.
+    for band in 0..rings.len().saturating_sub(1) {
+        let (Some(below), Some(above), Some(lo_pts), Some(hi_pts)) = (placed.get(band), placed.get(band + 1), corners.get(band), corners.get(band + 1)) else {
+            return decline("a drafted extrusion's rings do not pair");
+        };
+        let (Some(lo_e), Some(hi_e)) = (edges.get(band), edges.get(band + 1)) else {
+            return decline("a drafted extrusion's rings do not pair");
+        };
+        let mut rises = Vec::with_capacity(lo_pts.len());
+        for (&p, &q) in lo_pts.iter().zip(hi_pts) {
+            let Some((line, len)) = Line::through(p, q) else { return decline("a drafted rise of no length") };
+            let (Some(v0), Some(v1)) = (vertex_at(&b, lo_e, below, p), vertex_at(&b, hi_e, above, q)) else {
+                return decline("a drafted rise without its corners");
+            };
+            rises.push((b.add_edge(Curve::Line(line.clone()), (0.0, len), v0, v1), line));
+        }
+        let sides = below.iter().zip(above).zip(lo_e.iter().zip(hi_e)).zip(rises.iter().zip(rises.iter().cycle().skip(1))).zip(&names);
+        for ((((s, t), (&bottom_edge, &top_edge)), ((rise, rl), (next_rise, nl))), name) in sides {
+            let (rise, next_rise) = (*rise, *next_rise);
+            let mut fnames = vec![FaceName::new(feature, FaceName::SIDE)];
+            fnames.extend(FaceName::all(feature, name.iter().filter(|x| !x.is_empty())));
+            let (ta, tb) = traversal(s);
+            let (face, loop_) = match (&s.curve, &t.curve) {
+                (Curve::Line(l), Curve::Line(_)) => {
+                    // The plane through the bottom line and its rise, its natural normal outward.
+                    let up = rl.dir;
+                    let Some(z) = l.dir.cross(up).unit() else { return decline("a drafted side that is not a plane") };
+                    let x = l.dir;
+                    let frame = Frame { origin: l.origin, x, y: z.cross(x), z };
+                    // Outward is to the right of the loop's travel, away from its left (the inside).
+                    let travel = if s.forward { l.dir } else { -l.dir };
+                    let outward = travel.cross(n);
+                    let reversed = frame.z.dot(outward) < 0.0;
+                    let face = b.add_face(Surface::Plane(Plane { frame }), reversed, fnames);
+                    let at = |c: &Curve, s0: f64| c.eval(s0);
+                    let lp = vec![
+                        coedge(bottom_edge, !s.forward, plane_pcurve(&frame, &s.curve, at(&s.curve, ta))),
+                        coedge(next_rise, false, plane_pcurve(&frame, &Curve::Line(nl.clone()), nl.origin)),
+                        coedge(top_edge, t.forward, plane_pcurve(&frame, &t.curve, at(&t.curve, traversal(t).0))),
+                        coedge(rise, true, plane_pcurve(&frame, &Curve::Line(rl.clone()), rl.origin)),
+                    ];
+                    (face, lp)
+                }
+                (Curve::Circle(c), Curve::Circle(c1)) => {
+                    // The cone on the arc's own frame: its u is the arc's parameter, its v the
+                    // length along a ruling, up the band's height h from radius r0 to r1.
+                    let h = (c1.frame.origin - c.frame.origin).dot(c.frame.z);
+                    if h <= tol::LINEAR {
+                        return decline("a drafted band of no height");
+                    }
+                    let half_angle = ((c1.radius - c.radius) / h).atan();
+                    let slant = h / half_angle.cos();
+                    let cone = Cone { frame: c.frame, radius: c.radius, half_angle };
+                    let face = b.add_face(Surface::Cone(cone), !s.forward, fnames);
+                    let lp = vec![
+                        coedge(bottom_edge, !s.forward, affine(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0))),
+                        coedge(next_rise, false, affine(Vec2::new(tb, 0.0), Vec2::new(0.0, 1.0))),
+                        coedge(top_edge, s.forward, affine(Vec2::new(0.0, slant), Vec2::new(1.0, 0.0))),
+                        coedge(rise, true, affine(Vec2::new(ta, 0.0), Vec2::new(0.0, 1.0))),
+                    ];
+                    (face, lp)
+                }
+                _ => return decline("a drafted side that is neither a plane nor a cone"),
+            };
+            b.add_loop(face, loop_);
+            faces.push(face);
+        }
+    }
+    // The caps: the first ring's edges against its travel, the last ring's along it.
+    if let (Some(segs), Some(es)) = (placed.first(), edges.first()) {
+        let lp: Vec<CoedgeSpec> = segs.iter().zip(es).rev().map(|(s, &e)| coedge(e, s.forward, plane_pcurve(first, &s.curve, s.curve.eval(traversal(s).1)))).collect();
+        b.add_loop(lo, lp);
+    }
+    if let (Some(segs), Some(es)) = (placed.last(), edges.last()) {
+        let lp: Vec<CoedgeSpec> = segs.iter().zip(es).map(|(s, &e)| coedge(e, !s.forward, plane_pcurve(last, &s.curve, s.curve.eval(traversal(s).0)))).collect();
+        b.add_loop(hi, lp);
+    }
+    let shell = b.add_shell(faces);
+    b.add_solid(vec![shell]);
+    let issues = check::check(&b);
+    if issues.is_empty() { Ok(b) } else { Err(Error::InvalidResult(issues.into_iter().map(|i| i.to_string()).collect())) }
+}
+
+/// The vertex of ring `es` at point `p`: the start of the edge whose segment starts there.
+fn vertex_at(b: &Brep, es: &[EdgeId], segs: &[PlacedSegment], p: Point3) -> Option<VertexId> {
+    es.iter().zip(segs).find_map(|(&e, s)| {
+        let edge = b.edge(e);
+        let v = if s.forward { edge.start } else { edge.end };
+        (b.vertex(v).point.dist(p) <= tol::LINEAR).then_some(v)
+    })
+}
+
+/// The parameters a placed segment starts and ends at, in the loop's direction.
+fn traversal(s: &PlacedSegment) -> (f64, f64) {
+    if s.forward { s.range } else { (s.range.1, s.range.0) }
+}
+
+fn affine(origin: Vec2, dir: Vec2) -> PCurve {
+    PCurve::Affine { origin, dir }
+}
+
+/// The pcurve of `curve` on the plane of `frame`, starting at `start`.
+fn plane_pcurve(frame: &Frame, curve: &Curve, start: Point3) -> PCurve {
+    let uv = |p: Point3| {
+        let l = frame.to_local(p);
+        Vec2::new(l.x, l.y)
+    };
+    match curve {
+        Curve::Line(l) => affine(uv(l.origin), Vec2::new(l.dir.dot(frame.x), l.dir.dot(frame.y))),
+        _ => PCurve::Projected { seed: uv(start) },
+    }
+}
+
+fn coedge(edge: EdgeId, reversed: bool, pcurve: PCurve) -> CoedgeSpec {
+    CoedgeSpec { edge, reversed, pcurve }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +448,17 @@ mod tests {
         let named = |n: &str| f.face_ids().filter(|&g| f.face(g).names.iter().any(|x| x.face == n)).count();
         assert_eq!((named("a"), named("b"), named("c"), named("d")), (1, 1, 1, 1));
         assert_eq!((named("start"), named("end")), (1, 1));
+    }
+
+    #[test]
+    fn a_drafted_rectangles_sides_are_planes_both_ways() {
+        // PROBE-ish check (w-m11): the kinds of the faces a drafted rectangle gets, one way and both.
+        for both in [false, true] {
+            let f = extrude_drafted(&world(), &Profile::rect(Vec2::new(11.5, 0.0), 3.0, 4.0), 4.0, 2f64.to_radians(), both, "x").unwrap();
+            let kinds: Vec<&str> = f.face_ids().map(|g| f.face(g).surface.kind()).collect();
+            eprintln!("KINDS both {both}: {kinds:?}");
+            assert!(kinds.iter().all(|k| *k == "plane"), "both {both}: {kinds:?}");
+        }
     }
 
     #[test]

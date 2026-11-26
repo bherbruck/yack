@@ -189,6 +189,9 @@ pub(super) fn mesh_face(
     fm.classify(&segs)?;
     fm.refine(b, f, opt)?;
     fm.unflatten();
+    if fm.cdt.is_broken() {
+        return Err(Error::Numerical("the face's triangulation lost track of its own neighbours".into()));
+    }
     Ok(fm)
 }
 
@@ -601,6 +604,7 @@ impl FaceMesh {
                 .cdt
                 .around(v)
                 .into_iter()
+                .flatten()
                 .map(|(x, _)| x)
                 .chain(std::iter::once(t))
             {

@@ -12,7 +12,7 @@
 // TODO(api-owner, hardening, D26): rewrite these tests to the lints, test by test, and drop this allow.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{PI, TAU};
 
 use yack_base::kernel::Error;
@@ -441,8 +441,8 @@ fn moving_a_face_at_a_contact_is_refused() {
             })
             .unwrap()
     };
-    refused_as_touching(offset_faces(&u, &HashMap::from([(face("u_max"), 1.0)])));
-    let moved = offset_faces(&u, &HashMap::from([(face("u_min"), 1.0)])).unwrap();
+    refused_as_touching(offset_faces(&u, &BTreeMap::from([(face("u_max"), 1.0)])));
+    let moved = offset_faces(&u, &BTreeMap::from([(face("u_min"), 1.0)])).unwrap();
     assert!(check::check(&moved).is_empty());
     assert!((measure::volume(&moved) - 2100.0).abs() < 1e-9);
 }

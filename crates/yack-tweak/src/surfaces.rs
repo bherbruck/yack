@@ -6,7 +6,7 @@
 //! Faces moved onto any new surfaces with the solid's topology kept: each vertex settles where its
 //! faces' new surfaces meet, and each edge is their meeting between its moved ends.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 use std::f64::consts::TAU;
 use crate::{Error, Result, error::invalid, geom::Curve, geom::Line, geom::Surface, math::Frame, math::Point3, math::Transform, math::Vec2, math::Vec3, numeric::solve_dense, topo::Brep, topo::CoedgeSpec, topo::FaceId, topo::PCurve, topo::VertexId, unsupported, vertex_faces, clear_of_contacts, near_uv, tol, edge_faces, entry, finished};
 
@@ -92,8 +92,8 @@ fn circle_through(a: Point3, b: Point3, c: Point3) -> Option<crate::geom::Circle
 /// its topology kept: every vertex goes where its faces' surfaces meet, and every edge becomes the
 /// meeting of its two faces' surfaces between its new vertices (a straight one stays a line where
 /// that line lies on both), found in closed form where one exists and traced otherwise.
-#[allow(clippy::disallowed_types)] pub fn move_faces(b: &Brep, moved: &HashMap<FaceId, Surface>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
-    move_faces_pinned(b, moved, &HashMap::new())
+pub fn move_faces(b: &Brep, moved: &BTreeMap<FaceId, Surface>) -> Result<Brep> {
+    move_faces_pinned(b, moved, &BTreeMap::new())
 }
 
 /// `b` with each face of `faces` carried by the rigid motion `motion`, as [`move_faces`] puts
@@ -122,10 +122,10 @@ pub fn move_faces_by(b: &Brep, faces: &[FaceId], motion: &Transform) -> Result<B
 /// [`move_faces`], with each vertex of `pins` put at its point where that lies on every new surface
 /// at the vertex. A vertex its surfaces leave free to slide (a seam's end, on a circle) otherwise
 /// moves the least distance onto them, which keeps how far along the curve it was.
-#[allow(clippy::disallowed_types)] pub fn move_faces_pinned( // D26: BTree* in hardening, proven by digests
+pub fn move_faces_pinned(
     b: &Brep,
-    moved: &HashMap<FaceId, Surface>,
-    pins: &HashMap<VertexId, Point3>,
+    moved: &BTreeMap<FaceId, Surface>,
+    pins: &BTreeMap<VertexId, Point3>,
 ) -> Result<Brep> {
     clear_of_contacts(b, moved.keys())?;
     let surface_of = |f: FaceId| moved.get(&f).unwrap_or(&b.face(f).surface);
@@ -134,7 +134,7 @@ pub fn move_faces_by(b: &Brep, faces: &[FaceId], motion: &Transform) -> Result<B
     // A pole (a degenerate edge's vertex) goes to its surface's new pole exactly: its parameters
     // there are the old ones, while a point settled onto the surface sits off the pole by about √ε
     // in angle, where u is no longer free and projection gives any u at all.
-    let mut poles: HashMap<VertexId, Point3> = HashMap::new();
+    let mut poles: BTreeMap<VertexId, Point3> = BTreeMap::new();
     for c in b.coedge_ids() {
         let co = b.coedge(c);
         let edge = b.edge(co.edge);

@@ -98,6 +98,9 @@ pub(super) struct Cdt {
     /// One triangle at each vertex.
     vt: Vec<u32>,
     hint: u32,
+    /// Whether an edit found the adjacency inconsistent (a neighbour without the shared edge, a
+    /// vertex's triangle without the vertex): it then stops short, and the face's mesh is refused.
+    broken: bool,
 }
 
 fn nx(k: usize) -> usize {
@@ -123,7 +126,13 @@ impl Cdt {
             tris,
             vt: vec![0, 0, 0, 1],
             hint: 0,
+            broken: false,
         }
+    }
+
+    /// Whether an edit found the adjacency inconsistent; the mesh is then not to be used.
+    pub(super) fn is_broken(&self) -> bool {
+        self.broken
     }
 
     /// The number of triangles, the box's included.
@@ -185,52 +194,56 @@ impl Cdt {
     }
 
     /// Makes edge `k` of `t` face `n` (whose edge runs the other way), with the given flag.
-    #[allow(clippy::panic)] fn link(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
+    fn link(&mut self, t: u32, k: usize, n: u32, fixed: bool) {
         self.set_side(t, k, n, fixed);
         if n == NONE {
             return;
         }
         let tri = self.tri(t);
         let (a, b) = (tri.corner(k), tri.corner(nx(k)));
-        let back = self.tri(n).edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        let Some(back) = self.tri(n).edge(b, a) else {
+            self.broken = true;
+            return;
+        };
         self.set_side(n, back, t, fixed);
     }
 
     /// The triangle and edge index of the directed edge `a → b`, if it exists.
     pub(super) fn find_edge(&self, a: u32, b: u32) -> Option<(u32, usize)> {
-        self.around(a)
+        self.around(a)?
             .into_iter()
             .find_map(|(t, i)| (self.tri(t).corner(nx(i)) == b).then_some((t, i)))
     }
 
-    /// Every triangle at `v`, with `v`'s corner index in it.
-    #[allow(clippy::panic)] pub(super) fn around(&self, v: u32) -> Vec<(u32, usize)> {
+    /// Every triangle at `v`, with `v`'s corner index in it; `None` where the fan does not hold
+    /// `v` all round, which a consistent triangulation never does.
+    pub(super) fn around(&self, v: u32) -> Option<Vec<(u32, usize)>> {
         let start = self.vertex_tri(v);
         let mut out = Vec::new();
         let mut t = start;
         // Clockwise: across the edge leaving `v`.
         loop {
-            let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
+            let i = self.corner(t, v)?;
             out.push((t, i));
             let n = self.tri(t).across(i);
             if n == NONE {
                 break;
             }
             if n == start {
-                return out;
+                return Some(out);
             }
             t = n;
         }
         // Open fan on the box: go the other way from the start.
         let mut t = start;
         loop {
-            let i = self.corner(t, v).unwrap_or_else(|| panic!("vertex triangle holds it"));
+            let i = self.corner(t, v)?;
             let n = self.tri(t).across(pv(i));
             if n == NONE {
-                return out;
+                return Some(out);
             }
             t = n;
-            let j = self.corner(t, v).unwrap_or_else(|| panic!("fan triangle holds it"));
+            let j = self.corner(t, v)?;
             out.push((t, j));
         }
     }
@@ -349,7 +362,7 @@ impl Cdt {
     }
 
     /// Splits edge `k` of `t` at the new vertex `v`, which lies on it.
-    #[allow(clippy::panic)] pub(super) fn split_edge(&mut self, t: u32, k: usize, v: u32) {
+    pub(super) fn split_edge(&mut self, t: u32, k: usize, v: u32) {
         let tri = self.tri(t);
         let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
         let (n_bc, f_bc) = (tri.across(nx(k)), tri.is_fixed(nx(k)));
@@ -357,7 +370,10 @@ impl Cdt {
         let fab = tri.is_fixed(k);
         let u = tri.across(k);
         let other = self.tri(u);
-        let j = other.edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        let Some(j) = other.edge(b, a) else {
+            self.broken = true;
+            return;
+        };
         let d = other.corner(pv(j));
         let (n_ad, f_ad) = (other.across(nx(j)), other.is_fixed(nx(j)));
         let (n_db, f_db) = (other.across(pv(j)), other.is_fixed(pv(j)));
@@ -379,7 +395,7 @@ impl Cdt {
 
     /// Flips edge `k` of `t` when the two triangles that would replace it are both
     /// counter-clockwise; returns the two triangles, or `None` when the quad is not convex.
-    #[allow(clippy::panic)] pub(super) fn flip(&mut self, t: u32, k: usize) -> Option<(u32, u32)> {
+    pub(super) fn flip(&mut self, t: u32, k: usize) -> Option<(u32, u32)> {
         let tri = self.tri(t);
         let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
         let u = tri.across(k);
@@ -387,7 +403,10 @@ impl Cdt {
             return None;
         }
         let other = self.tri(u);
-        let j = other.edge(b, a).unwrap_or_else(|| panic!("neighbour shares the edge"));
+        let Some(j) = other.edge(b, a) else {
+            self.broken = true;
+            return None;
+        };
         let d = other.corner(pv(j));
         if orient(self.point(c), self.point(a), self.point(d)) <= 0.0
             || orient(self.point(d), self.point(b), self.point(c)) <= 0.0
@@ -408,21 +427,29 @@ impl Cdt {
         Some((t, u))
     }
 
-    /// Whether edge `k` of `t` should be flipped to restore the Delaunay property.
-    #[allow(clippy::panic)] fn illegal(&self, t: u32, k: usize) -> bool {
+    /// Whether edge `k` of `t` should be flipped to restore the Delaunay property; a neighbour
+    /// without a third corner marks the triangulation broken and flips nothing.
+    fn illegal(&mut self, t: u32, k: usize) -> bool {
         let tri = self.tri(t);
         let u = tri.across(k);
         if u == NONE || tri.is_fixed(k) {
             return false;
         }
         let (a, b, c) = (tri.corner(k), tri.corner(nx(k)), tri.corner(pv(k)));
-        let d = self.tri(u).other(a, b).unwrap_or_else(|| panic!("neighbour has a third corner"));
+        let Some(d) = self.tri(u).other(a, b) else {
+            self.broken = true;
+            return false;
+        };
         in_circle(self.point(a), self.point(b), self.point(c), self.point(d))
     }
 
     /// Lawson flips of the edges opposite a new vertex, spreading as they flip.
     fn legalize_around(&mut self, v: u32) {
-        let mut stack: Vec<u32> = self.around(v).into_iter().map(|(t, _)| t).collect();
+        let Some(fan) = self.around(v) else {
+            self.broken = true;
+            return;
+        };
+        let mut stack: Vec<u32> = fan.into_iter().map(|(t, _)| t).collect();
         let mut budget = 64 + 16 * stack.len();
         while let Some(t) = stack.pop() {
             if budget == 0 {
@@ -472,7 +499,7 @@ impl Cdt {
         }
         let (pa, pb) = (self.point(a), self.point(b));
         let mut first = None;
-        for (t, i) in self.around(a) {
+        for (t, i) in self.around(a).ok_or("a vertex's fan of triangles does not hold it")? {
             let tri = self.tri(t);
             let (c1, c2) = (tri.corner(nx(i)), tri.corner(pv(i)));
             if c1 == b {

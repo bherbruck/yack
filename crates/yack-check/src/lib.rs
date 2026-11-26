@@ -2,15 +2,13 @@
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); paths and visibility only;
 // M3 hardening (w-h3): face pairs found apart are kept by Brep::mark_apart / known_apart;
-// M3 hardening (w-h2): its parts split out into edges, loops, solids, crossings and vertices.
+// M3 hardening (w-h2): its parts split out into edges, loops, solids, crossings and vertices,
+// and every loop's neighbours come by iterators instead of indexing; no indexing allow.
 //! The validity checker: a solid is valid when its shells are closed oriented 2-manifolds, every
 //! edge lies on both its faces within tolerance, and each loop closes in its face's parameters.
 
-// springrep's check indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
-
 // springrep's foundation modules (D26), under the names check's code uses.
+use std::fmt;
 use yack_geom as geom;
 use yack_intersect as intersect;
 use yack_locate as locate;
@@ -18,7 +16,6 @@ use yack_math::kernel as math;
 use yack_measure as measure;
 use yack_tol as tol;
 use yack_topo as topo;
-use std::fmt;
 
 mod crossings;
 mod edges;
@@ -26,16 +23,16 @@ mod loops;
 mod solids;
 mod vertices;
 
+pub(crate) use edges::fold;
 pub use solids::{turned_shells, void_hosts};
 pub use vertices::{contacts, faces_at_contacts};
-pub(crate) use edges::fold;
 
 use crate::{
     crossings::{Crossing, crossings, depth},
     loops::{stray_loop, uv_gap, within_vertex},
     math::{Point3, Vec2},
     solids::{nested, stray_voids},
-    topo::{Brep, FaceId, VertexId, coedge_params, face_domain},
+    topo::{Brep, CoedgeId, FaceId, VertexId, coedge_params, face_domain},
     vertices::{coincident_vertices, vertex_shells},
 };
 
@@ -53,7 +50,10 @@ impl fmt::Display for Issue {
 const SAMPLES: usize = 16;
 /// A loop whose sampled outline encloses less than this times its perimeter squared is a sliver: a
 /// circle encloses 1/4π of it, a strip a hundred times longer than it is wide 1/400.
-const SLIVER_AREA: f64 = 1e-3;
+const SLIVER_AREA: f64 = 1e-3; // tol: a ratio of area to perimeter squared
+/// The slowest a surface parameter is taken to move, in mm per unit, when spreading a tolerant
+/// vertex's sphere over the parameters.
+const SLOWEST_SPEED: f64 = 1e-12; // tol: a speed at rounding, not a length
 
 /// Checks every solid of `b` as one shape: solids of one result may touch, at vertices or along
 /// faces within the tolerance, as two pieces of a cut that meet at a point do; one passing into
@@ -108,7 +108,11 @@ pub fn check_distances(b: &Brep) -> Vec<Issue> {
                     (!crate::math::within(d, within, want)).then_some(d)
                 });
                 if let Some(d) = far {
-                    issue(format!("coedge {} of face {} is {d:e} mm off its surface", c.index(), f.index()));
+                    issue(format!(
+                        "coedge {} of face {} is {d:e} mm off its surface",
+                        c.index(),
+                        f.index()
+                    ));
                 }
             }
         }
@@ -186,11 +190,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
             for (t, v) in [(edge.range.0, edge.start), (edge.range.1, edge.end)] {
                 let d = c.eval(t).dist(b.vertex(v).point);
                 if d > b.vertex_tolerance(v) {
-                    issue(format!(
-                        "edge {} ends {d:e} mm from vertex {}",
-                        e.index(),
-                        v.index()
-                    ));
+                    issue(format!("edge {} ends {d:e} mm from vertex {}", e.index(), v.index()));
                 }
             }
         }
@@ -205,9 +205,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
     // Vertices of different shells may coincide: the shells touch there.
     let solid_of = Some(vertex_shells(b));
     let apart = |v: VertexId, w: VertexId| {
-        solid_of
-            .as_ref()
-            .is_some_and(|m| m.get(&v).is_some() && m.get(&v) != m.get(&w))
+        solid_of.as_ref().is_some_and(|m| m.get(&v).is_some() && m.get(&v) != m.get(&w))
     };
     for (v, w) in coincident_vertices(b) {
         if apart(v, w) {
@@ -225,12 +223,10 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         let ts: Vec<f64> = (0..=SAMPLES)
             .map(|i| edge.range.0 + (edge.range.1 - edge.range.0) * i as f64 / SAMPLES as f64)
             .collect();
-        let len: f64 = ts.windows(2).map(|w| c.eval(w[0]).dist(c.eval(w[1]))).sum();
+        let len: f64 =
+            ts.iter().zip(ts.iter().skip(1)).map(|(&t0, &t1)| c.eval(t0).dist(c.eval(t1))).sum();
         if len.is_nan() || len <= tol::LINEAR {
-            issue(format!(
-                "edge {} is {len:e} mm long, within the tolerance",
-                e.index()
-            ));
+            issue(format!("edge {} is {len:e} mm long, within the tolerance", e.index()));
         }
     }
 
@@ -239,11 +235,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         let u = b.edge_uses(e);
         if b.edge(e).is_degenerate() {
             if u.len() != 1 {
-                issue(format!(
-                    "degenerate edge {} is used {} times",
-                    e.index(),
-                    u.len()
-                ));
+                issue(format!("degenerate edge {} is used {} times", e.index(), u.len()));
             }
             continue;
         }
@@ -270,16 +262,10 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                 continue;
             }
             if b.coedge(c).reversed == b.coedge(p).reversed {
-                issue(format!(
-                    "edge {} is used twice in the same direction",
-                    e.index()
-                ));
+                issue(format!("edge {} is used twice in the same direction", e.index()));
             }
             if b.face(b.coedge_face(c)).shell != b.face(b.coedge_face(p)).shell {
-                issue(format!(
-                    "edge {} joins faces of different shells",
-                    e.index()
-                ));
+                issue(format!("edge {} joins faces of different shells", e.index()));
             }
         }
     }
@@ -299,12 +285,10 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         // A face's own geometry, once found sound, stays sound while the memo lives. A pole's
         // vertex is not part of that geometry, so a face with one is sampled every time.
         let memo = b.memo(f);
-        let has_pole = face.loops.iter().any(|&lp| {
-            b.lp(lp)
-                .coedges
-                .iter()
-                .any(|&c| b.edge(b.coedge(c).edge).is_degenerate())
-        });
+        let has_pole = face
+            .loops
+            .iter()
+            .any(|&lp| b.lp(lp).coedges.iter().any(|&c| b.edge(b.coedge(c).edge).is_degenerate()));
         let sampled = has_pole || memo.clean.get().is_none();
         let before = found.get();
         for (li, &lp) in face.loops.iter().enumerate() {
@@ -313,8 +297,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                 issue(format!("face {} loop {li} is empty", f.index()));
                 continue;
             }
-            for (k, &c) in cs.iter().enumerate() {
-                let next = cs[(k + 1) % cs.len()];
+            for (&c, &next) in cs.iter().zip(cs.iter().cycle().skip(1)) {
                 if b.coedge_end(c) != b.coedge_start(next) {
                     issue(format!(
                         "face {} loop {li} breaks after coedge {}",
@@ -326,12 +309,16 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
             if !sampled {
                 continue;
             }
-            let mut ends: Vec<(Vec2, Vec2)> = Vec::new();
+            let mut ends: Vec<(Vec2, Vec2, CoedgeId)> = Vec::new();
             let mut ring: Vec<Vec2> = Vec::new();
             for &c in cs {
                 let ts = coedge_params(b, c, SAMPLES);
                 let uvs = b.coedge_uvs(c, &ts);
-                ring.extend_from_slice(&uvs[..uvs.len() - 1]);
+                debug_assert!(uvs.len() >= 2, "a coedge is sampled at both its ends");
+                let (Some(&first), Some((&last, inner))) = (uvs.first(), uvs.split_last()) else {
+                    continue;
+                };
+                ring.extend_from_slice(inner);
                 let e = b.coedge(c).edge;
                 let edge = b.edge(e);
                 let within = match edge.curve {
@@ -353,27 +340,27 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                         break;
                     }
                 }
-                ends.push((uvs[0], uvs[uvs.len() - 1]));
+                ends.push((first, last, c));
             }
-            for k in 0..ends.len() {
-                let (end, start) = (ends[k].1, ends[(k + 1) % ends.len()].0);
+            // Each coedge's end against the next one's start.
+            for (&(_, end, c), &(start, _, _)) in ends.iter().zip(ends.iter().cycle().skip(1)) {
                 // Two coedges' images of a tolerant vertex are each within its sphere, which
                 // spans more parameter where the surface moves slower than one mm per unit.
-                let mut spread = 2.0 * (b.vertex_tolerance(b.coedge_end(cs[k])) - tol::LINEAR);
+                let mut spread = 2.0 * (b.vertex_tolerance(b.coedge_end(c)) - tol::LINEAR);
                 if spread > 0.0 {
                     let (_, su, sv) = face.surface.d1(end.x, end.y);
-                    let slowest = su.norm().min(sv.norm()).clamp(1e-12, 1.0);
+                    let slowest = su.norm().min(sv.norm()).clamp(SLOWEST_SPEED, 1.0);
                     spread *= std::f64::consts::SQRT_2 / slowest;
                 }
                 if uv_gap(b, f, end, start) > 10.0 * tol::LINEAR + spread
-                    && !within_vertex(b, f, cs[k], end, start)
+                    && !within_vertex(b, f, c, end, start)
                 {
                     issue(format!(
                         "face {} ({}) loop {li} does not close in parameters after coedge {}: \
                          ({:.6}, {:.6}) to ({:.6}, {:.6})",
                         f.index(),
                         face.surface.kind(),
-                        cs[k].index(),
+                        c.index(),
                         end.x,
                         end.y,
                         start.x,
@@ -381,14 +368,11 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                     ));
                 }
             }
-            let area: f64 = (0..ring.len())
-                .map(|i| ring[i].cross(ring[(i + 1) % ring.len()]))
-                .sum();
+            let edges = || ring.iter().zip(ring.iter().cycle().skip(1));
+            let area: f64 = edges().map(|(p, q)| p.cross(*q)).sum();
             // A sliver's chords sag further than it is wide, so its sampled outline can enclose
             // either sign: there the exact parameter curves decide.
-            let perimeter: f64 = (0..ring.len())
-                .map(|i| ring[i].dist(ring[(i + 1) % ring.len()]))
-                .sum();
+            let perimeter: f64 = edges().map(|(p, q)| p.dist(*q)).sum();
             let area = if area.abs() < SLIVER_AREA * perimeter * perimeter {
                 crate::measure::loop_area(b, lp)
             } else {
@@ -424,9 +408,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         for s in b.solid_ids() {
             let v = measure::solid_volume_sign(b, s);
             if v.is_nan() || v <= 0.0 {
-                out.push(Issue {
-                    message: format!("solid {} has volume {v}", s.index()),
-                });
+                out.push(Issue { message: format!("solid {} has volume {v}", s.index()) });
             }
         }
     }
@@ -447,16 +429,12 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
         // points or along curves. Faces on one surface meeting inside either share an area, which
         // makes the two shells one: the regularized result has that area inside it.
         let inside = |f: FaceId, p: Point3| {
-            matches!(
-                face_domain(b, f).locate(p),
-                crate::topo::domain::Where::Inside(_)
-            )
+            matches!(face_domain(b, f).locate(p), crate::topo::domain::Where::Inside(_))
         };
         // Whether some point inside face `f` lies inside face `g` too.
         let overlaps = |f: FaceId, g: FaceId| {
             let d = face_domain(b, f);
-            d.interior_point()
-                .is_some_and(|uv| inside(g, d.surface.eval(uv.x, uv.y)))
+            d.interior_point().is_some_and(|uv| inside(g, d.surface.eval(uv.x, uv.y)))
         };
         let touching = |x: &Crossing| {
             b.face(x.a).shell != b.face(x.b).shell
@@ -467,10 +445,7 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                         || overlaps(x.a, x.b)
                         || overlaps(x.b, x.a)))
         };
-        for x in crossings(b, sides, each)
-            .into_iter()
-            .filter(|x| !touching(x))
-        {
+        for x in crossings(b, sides, each).into_iter().filter(|x| !touching(x)) {
             out.push(Issue {
                 message: format!(
                     "faces {} and {} share no edge but meet at ({:.6}, {:.6}, {:.6}): the solid \

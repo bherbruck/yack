@@ -1,7 +1,8 @@
 // yack: coincident vertices, the shell each vertex is in, and where a solid touches itself.
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); split out of lib.rs into its
-// own module (M3 hardening); its maps and sets are BTreeMap/BTreeSet (no order reaches an output).
+// own module (M3 hardening); its maps and sets are BTreeMap/BTreeSet (no order reaches an output);
+// the sweep skips instead of slicing.
 //! Coincident vertices, the shell each vertex is in, and where a solid touches itself.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,7 +14,6 @@ use crate::{
 
 /// The shell each vertex belongs to, by the faces whose edges end there.
 pub(crate) fn vertex_shells(b: &Brep) -> BTreeMap<VertexId, ShellId> {
-    // D26: BTree* in hardening, proven by digests
     let mut out = BTreeMap::new();
     for f in b.face_ids() {
         let Some(sh) = b.face(f).shell else { continue };
@@ -30,7 +30,6 @@ pub(crate) fn vertex_shells(b: &Brep) -> BTreeMap<VertexId, ShellId> {
 
 /// Pairs of distinct vertices closer than the linear tolerance.
 pub(crate) fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
-    // D26: BTree* in hardening, proven by digests
     let cell = |x: f64| (x / (4.0 * tol::LINEAR)).floor() as i64;
     let mut grid: BTreeMap<[i64; 3], Vec<VertexId>> = BTreeMap::new();
     let mut out = Vec::new();
@@ -67,7 +66,7 @@ pub(crate) fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
         let p = b.vertex(v).point;
         let reach = tol::coincidence(tv, widest);
         let from = by_x.partition_point(|&(x, _)| x < p.x - reach);
-        for &(x, w) in &by_x[from..] {
+        for &(x, w) in by_x.iter().skip(from) {
             if x > p.x + reach {
                 break;
             }
@@ -87,14 +86,12 @@ pub(crate) fn coincident_vertices(b: &Brep) -> Vec<(VertexId, VertexId)> {
 /// leaves by, to its partner, reaches the corners of one fan. More than one is a point where
 /// pieces of the solid touch.
 pub(crate) fn vertex_fans(b: &Brep) -> BTreeMap<VertexId, usize> {
-    // D26: BTree* in hardening, proven by digests
     fans_at_vertices(b).into_iter().map(|(v, fs)| (v, fs.len())).collect()
 }
 
 /// Where the solid touches itself: the edges more than two faces use, and the vertices those end
 /// at or that more than one fan of faces meets at.
 pub fn contacts(b: &Brep) -> (BTreeSet<EdgeId>, BTreeSet<VertexId>) {
-    // D26: BTree* in hardening, proven by digests
     let edges: BTreeSet<EdgeId> = b.radial_edges().collect();
     let mut vertices: BTreeSet<VertexId> =
         vertex_fans(b).into_iter().filter(|&(_, n)| n > 1).map(|(v, _)| v).collect();

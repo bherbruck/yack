@@ -10,7 +10,7 @@
 //! in its seat is meant to be, and the volume moved is at most the gap times the face's area. Faces
 //! that cross at a steeper angle are left for the boolean, which places their crossing.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use crate::{
     check,
@@ -123,12 +123,12 @@ fn facing(s: &Surface, like: &Surface) -> Surface {
 /// would otherwise keep how far along the curve the move left it: a cylinder moved across its axis
 /// by 1.1e-7 mm onto its seat's surface has its seam 1.1e-7 mm round the circle from the seat's,
 /// and the boolean would cut a piece of edge just over the tolerance long between the two.
-#[allow(clippy::disallowed_types)] fn pins( // D26: BTree* in hardening, proven by digests
+fn pins(
     a: &Brep,
     b: &Brep,
-    moved: &HashMap<FaceId, Surface>,
+    moved: &BTreeMap<FaceId, Surface>,
     reach: f64,
-) -> HashMap<VertexId, Point3> {
+) -> BTreeMap<VertexId, Point3> {
     let mut on_moved: Vec<VertexId> = Vec::new();
     for &f in moved.keys() {
         for &lp in &b.face(f).loops {
@@ -313,7 +313,7 @@ fn overlap(a: &Aabb, b: &Aabb) -> bool {
 /// `b` with each of its faces that lies within [`SNAP`] of a face of `a` all over moved onto that
 /// face's surface; `None` where none does, or where moving them would not keep `b` a valid solid
 /// with every vertex within [`MOST_MOVED`] of where it was.
-#[allow(clippy::disallowed_types)] pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
+pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> {
     // A face of `a` whose hull box, which holds its box, misses every face of `b` by the reach
     // cannot pair with one, and its box is not worked out.
     let mut reach = Aabb::EMPTY;
@@ -326,12 +326,12 @@ fn overlap(a: &Aabb, b: &Aabb) -> bool {
         .filter(|&f| overlap(&measure::face_hull_box(a, f), &reach))
         .map(|f| (f, padded(&measure::face_box(a, f), SNAP_GRAZING)))
         .collect();
-    let mut moved: HashMap<FaceId, Surface> = HashMap::new();
+    let mut moved: BTreeMap<FaceId, Surface> = BTreeMap::new();
     let mut gap: f64 = SNAP;
     // Faces already within the tolerance of a face of `a`, moved onto it only when other faces
     // move: two nearly parallel faces meet at a vertex that slides along their line by the gap
     // over the angle between them, so one left a hair off would carry it past the tolerance.
-    let mut within: HashMap<FaceId, Surface> = HashMap::new();
+    let mut within: BTreeMap<FaceId, Surface> = BTreeMap::new();
     for fb in b.face_ids() {
         let sb = &b.face(fb).surface;
         let bb = measure::face_box(b, fb);
@@ -414,7 +414,7 @@ fn overlap(a: &Aabb, b: &Aabb) -> bool {
     }
     let mut order: Vec<FaceId> = moved.keys().copied().collect();
     order.sort();
-    let mut kept: HashMap<FaceId, Surface> = HashMap::new();
+    let mut kept: BTreeMap<FaceId, Surface> = BTreeMap::new();
     let mut out = None;
     for f in order {
         let mut trial = kept.clone();
@@ -429,7 +429,7 @@ fn overlap(a: &Aabb, b: &Aabb) -> bool {
 
 /// `b` with the faces of `moved` on their new surfaces, where that keeps it a valid solid with no
 /// vertex moved further than [`MOST_MOVED`] times `gap`.
-#[allow(clippy::disallowed_types)] fn moved_whole(a: &Brep, b: &Brep, moved: &HashMap<FaceId, Surface>, gap: f64) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
+fn moved_whole(a: &Brep, b: &Brep, moved: &BTreeMap<FaceId, Surface>, gap: f64) -> Option<Brep> {
     let out = tweak::move_faces_pinned(b, moved, &pins(a, b, moved, MOST_MOVED * gap)).ok()?;
     let far = b
         .vertex_ids()

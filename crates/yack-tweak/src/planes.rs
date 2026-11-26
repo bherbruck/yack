@@ -6,7 +6,7 @@
 //! Planar faces moved onto new planes with the solid's topology kept: each vertex goes where its faces'
 //! planes meet, and each straight edge becomes the line between its moved ends.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use crate::{
     Error, Result, clear_of_contacts, edge_faces, entry, finished,
@@ -62,7 +62,7 @@ fn affine_on(frame: &Frame, line: &Line) -> PCurve {
 }
 
 /// [`move_planes`], or [`move_faces`] where a curved face meets the moved planes.
-#[allow(clippy::disallowed_types)] pub(crate) fn planes_or_faces(b: &Brep, moved: &HashMap<FaceId, Frame>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub(crate) fn planes_or_faces(b: &Brep, moved: &BTreeMap<FaceId, Frame>) -> Result<Brep> {
     match move_planes(b, moved) {
         Err(Error::Unsupported(_)) => {
             let surfaces = moved
@@ -77,12 +77,10 @@ fn affine_on(frame: &Frame, line: &Line) -> PCurve {
 
 /// `b` with each face of `moved` on its new plane, given by a frame whose `z` is the face's new
 /// natural normal (on the side of its old one).
-#[allow(clippy::disallowed_types)] pub(crate) fn move_planes(b: &Brep, moved: &HashMap<FaceId, Frame>) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
+pub(crate) fn move_planes(b: &Brep, moved: &BTreeMap<FaceId, Frame>) -> Result<Brep> {
     clear_of_contacts(b, moved.keys())?;
-    // In face-id order, so that of two faces refused two ways the same one speaks every run.
-    let mut by_id: Vec<(&FaceId, &Frame)> = moved.iter().collect();
-    by_id.sort_unstable_by_key(|&(f, _)| *f);
-    for (&f, fr) in by_id {
+    // In face-id order (the map's), so that of two faces refused two ways the same one speaks.
+    for (&f, fr) in moved {
         let Some(old) = plane_of(&b.face(f).surface) else {
             return unsupported("moving a face that is not a plane");
         };

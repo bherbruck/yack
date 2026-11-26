@@ -1,7 +1,7 @@
 // yack: whether a fitted intersection curve turns back on itself.
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); split out of lib.rs into its
-// own module (M3 hardening); paths and visibility only.
+// own module (M3 hardening); iterators instead of indexing, named constants.
 //! Whether a fitted intersection curve turns back on itself.
 
 use crate::geom::Curve;
@@ -10,6 +10,9 @@ use crate::geom::Curve;
 /// neighbouring samples, a quarter of a knot span apart, more than a right angle apart. A fitted
 /// branch turns little across one span, so that is a fold, and a face bounded by it touches itself.
 /// Only fitted curves are tested; an imported spline may have a cusp its designer drew.
+/// A curve moving slower than this has no direction to fold back on.
+const STILL: f64 = 1e-12; // tol: a speed at rounding, not a length
+
 pub(crate) fn fold(c: &Curve, range: (f64, f64)) -> Option<crate::math::Point3> {
     let Curve::Intersection(ic) = c else {
         return None;
@@ -21,14 +24,14 @@ pub(crate) fn fold(c: &Curve, range: (f64, f64)) -> Option<crate::math::Point3> 
     cuts.push(t1);
     cuts.dedup();
     let mut prev: Option<crate::math::Vec3> = None;
-    for w in cuts.windows(2) {
+    for (lo, hi) in cuts.iter().copied().zip(cuts.iter().copied().skip(1)) {
         for j in 0..4 {
-            let t = w[0] + (w[1] - w[0]) * j as f64 / 4.0;
+            let t = lo + (hi - lo) * j as f64 / 4.0;
             let [p, d] = {
                 let [p, d, _] = sp.eval_ders(t, 1);
                 [p, d]
             };
-            if d.norm() <= 1e-12 {
+            if d.norm() <= STILL {
                 continue;
             }
             if prev.is_some_and(|q| q.dot(d) < 0.0) {

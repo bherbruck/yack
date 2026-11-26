@@ -7,9 +7,9 @@
 // kernel crates directly and compute their expected values, so the facade's maths ban and the
 // workspace lints' test-only exemptions (which reach only #[test] fns) do not fit them.
 // TODO(api-owner, hardening, D26): rewrite these tests to the lints, test by test, and drop this allow.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 
 use yack_boolean::difference;
@@ -54,7 +54,7 @@ fn block() -> Brep {
 /// `solid` with each face named in `faces`, and every face on the surface of one, moved `d` along
 /// its outward normal.
 fn thickened(solid: &Brep, faces: &[&str], d: f64) -> Brep {
-    let mut by: HashMap<FaceId, f64> = HashMap::new();
+    let mut by: BTreeMap<FaceId, f64> = BTreeMap::new();
     for &name in faces {
         let found = faces_named(solid, name);
         assert!(!found.is_empty(), "no face is named {name}");

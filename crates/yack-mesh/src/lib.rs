@@ -661,6 +661,9 @@ fn faces(b: &Brep, opt: &MeshOptions, samples: &[Vec<(f64, u32)>], mesh: &mut Me
         })?);
     }
     split_shared_chords(b, &ids, &mut meshes);
+    if meshes.iter().any(|fm| fm.cdt.is_broken()) {
+        return Err(Error::Numerical("a face's triangulation lost track of its own neighbours".into()));
+    }
     for (fm, &f) in meshes.iter().zip(&ids) {
         let start = mesh.triangles.len();
         let local: Vec<u32> = fm

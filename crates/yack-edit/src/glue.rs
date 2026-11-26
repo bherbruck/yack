@@ -1,12 +1,12 @@
 // yack: glue for yack's edits: offsets, face moves, drafts and transforms over this crate's edits (moved from springrep's facade/edit.rs, M3 W10).
 //! The edits `yack::Solid` exposes, as springrep calls with the protocol's argument shapes.
 
-#[allow(clippy::disallowed_types)] use std::collections::HashMap; // D26: BTree* in hardening, proven by digests
+use std::collections::BTreeMap;
 
 use crate::{
-    Result,
+    Error, Result,
     math::{Frame, Transform, Vec3},
-    topo::{Brep, FaceId},
+    topo::{Brep, EdgeId, FaceId},
 };
 
 fn v3(a: [f64; 3]) -> Vec3 {
@@ -24,8 +24,8 @@ pub fn offset(b: &Brep, distance: f64) -> Result<Brep> {
 }
 
 /// Offsets each of `faces` by the same `distance`.
-#[allow(clippy::disallowed_types)] fn offset_faces(b: &Brep, faces: &[FaceId], distance: f64) -> Result<Brep> { // D26: BTree* in hardening, proven by digests
-    let by: HashMap<FaceId, f64> = faces.iter().map(|&f| (f, distance)).collect();
+fn offset_faces(b: &Brep, faces: &[FaceId], distance: f64) -> Result<Brep> {
+    let by: BTreeMap<FaceId, f64> = faces.iter().map(|&f| (f, distance)).collect();
     crate::offset_faces(b, &by)
 }
 
@@ -103,8 +103,35 @@ pub fn move_faces_named(b: &Brep, faces: &[FaceId], m: [[f64; 4]; 3], feature: &
 }
 
 /// [`thicken`], naming the faces it makes `<feature>.side`.
-pub fn thicken_named(b: &Brep, faces: &[FaceId], thickness: f64, feature: &str) -> Result<Brep> {
+///
+/// This rung only mitres the sheet's creases: asked to round them (`round`) where a crease opens, it
+/// declines, as the round would change the solid.
+pub fn thicken_named(b: &Brep, faces: &[FaceId], thickness: f64, round: bool, feature: &str) -> Result<Brep> {
+    if round && opens_a_crease(b, faces, thickness) {
+        return Err(Error::Unsupported(
+            "a round join where the thickened sheet's faces part at a crease (this rung only mitres)".into(),
+        ));
+    }
     thicken(b, faces, thickness).map(|r| name_new(r, feature, "side"))
+}
+
+/// Whether thickening `faces` by `thickness` opens a gap at a crease between two of them, which a
+/// round join fills with a cylinder where a mitre extends the faces: a convex crease when the
+/// sheet grows outward, a concave one when it grows inward. Tangent creases open nothing.
+fn opens_a_crease(b: &Brep, faces: &[FaceId], thickness: f64) -> bool {
+    let mut edges: Vec<EdgeId> = Vec::new();
+    for &f in faces {
+        for &lp in &b.face(f).loops {
+            edges.extend(b.lp(lp).coedges.iter().map(|&c| b.coedge(c).edge));
+        }
+    }
+    edges.sort();
+    edges.dedup();
+    edges.into_iter().any(|e| {
+        let on: Vec<FaceId> = b.edge_uses(e).iter().map(|&c| b.coedge_face(c)).collect();
+        matches!(*on.as_slice(), [f, g] if f != g && faces.contains(&f) && faces.contains(&g))
+            && crate::topo::local::convexity(b, e) == Some(thickness > 0.0)
+    })
 }
 
 /// [`draft`], naming the faces it makes `<feature>.side`.
@@ -117,4 +144,30 @@ pub fn draft_named(
     feature: &str,
 ) -> Result<Brep> {
     draft(b, faces, origin, pull, angle).map(|r| name_new(r, feature, "side"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opens_a_crease;
+    use crate::{
+        math::{Frame, Vec3},
+        topo::{Brep, FaceId},
+    };
+
+    fn face_toward(b: &Brep, n: Vec3) -> FaceId {
+        b.face_ids()
+            .find(|&f| crate::measure::face_bbox(b, f).center().dot(n) > 2.9)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_round_join_is_asked_only_where_the_sheet_opens_a_crease() {
+        // A 6 mm cube about the origin: its top and a side meet at a convex crease.
+        let cube = crate::primitive::block(&Frame::WORLD.translated(Vec3::new(-3.0, -3.0, -3.0)), Vec3::new(6.0, 6.0, 6.0), "c").unwrap();
+        let (top, side) = (face_toward(&cube, Vec3::Z), face_toward(&cube, Vec3::X));
+        assert!(opens_a_crease(&cube, &[top, side], 1.0));
+        // Grown inward the two faces close over the crease; one face alone has none.
+        assert!(!opens_a_crease(&cube, &[top, side], -1.0));
+        assert!(!opens_a_crease(&cube, &[top], 1.0));
+    }
 }

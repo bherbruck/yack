@@ -346,7 +346,7 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
 
 /// `∮ G dv` (or `−∮ H du`) along one coedge, in its direction, each value to its own tolerance.
 /// `table` is its entry of [`pcurve_tables`].
-#[allow(clippy::panic)] fn coedge_integral<const K: usize>(
+fn coedge_integral<const K: usize>(
     b: &Brep,
     co: CoedgeId,
     table: &[Vec2],
@@ -357,6 +357,10 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
 ) -> [f64; K] {
     let coedge = b.coedge(co);
     let edge = b.edge(coedge.edge);
+    // A projected pcurve follows its edge's curve: a degenerate edge, which has none, adds nothing.
+    if matches!(coedge.pcurve, PCurve::Projected { .. }) && edge.curve.is_none() {
+        return [0.0; K];
+    }
     let surface = &b.face(b.coedge_face(co)).surface;
     let (t0, t1) = edge.range;
     let (a, z) = if coedge.reversed { (t1, t0) } else { (t0, t1) };
@@ -378,12 +382,15 @@ fn uv_rate(su: Vec3, sv: Vec3, dp: Vec3) -> Vec2 {
         match &coedge.pcurve {
             PCurve::Affine { origin, dir } => (*origin + *dir * t, *dir),
             PCurve::Fitted { .. } => coedge.pcurve.fitted_d1(t).unwrap_or_default(),
-            PCurve::Projected { .. } => {
-                let curve = edge.curve.as_ref().unwrap_or_else(|| panic!("projected pcurves have curves"));
-                let (p, dp) = curve.d1(t);
-                let (uv, su, sv) = surface.project_near_d1(p, hint(t));
-                (uv, uv_rate(su, sv, dp))
-            }
+            PCurve::Projected { .. } => match edge.curve.as_ref() {
+                Some(curve) => {
+                    let (p, dp) = curve.d1(t);
+                    let (uv, su, sv) = surface.project_near_d1(p, hint(t));
+                    (uv, uv_rate(su, sv, dp))
+                }
+                // Returned above.
+                None => (Vec2::default(), Vec2::default()),
+            },
         }
     };
     let f = |t: f64| -> [f64; K] {

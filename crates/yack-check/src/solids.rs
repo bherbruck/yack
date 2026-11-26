@@ -1,7 +1,8 @@
 // yack: shells turned inside out, voids outside their solid, and solids inside one another.
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); split out of lib.rs into its
-// own module (M3 hardening); paths and visibility only.
+// own module (M3 hardening); the outer shells and voids by split_at_checked, solids zipped with
+// their parts and boxes, instead of indexing.
 //! Shells turned inside out, voids outside their solid, and solids inside one another.
 
 use crate::{
@@ -19,16 +20,19 @@ pub(crate) fn stray_voids(b: &Brep) -> Vec<(SolidId, ShellId)> {
     for s in b.solid_ids() {
         let shells = &b.solid(s).shells;
         let n_outer = b.solid(s).outer;
-        if shells.len() <= n_outer {
+        let Some((outer, voids)) = shells.split_at_checked(n_outer) else {
+            continue;
+        };
+        if voids.is_empty() {
             continue;
         }
-        let outer: Vec<(Domain, Aabb)> = shells[..n_outer]
+        let outer: Vec<(Domain, Aabb)> = outer
             .iter()
             .flat_map(|&sh| b.shell(sh).faces.iter())
             .map(|&f| (face_domain(b, f), padded_box(measure::face_box(b, f))))
             .collect();
         let faces: Vec<(&Domain, Aabb)> = outer.iter().map(|(d, bb)| (d, *bb)).collect();
-        for &sh in &shells[n_outer..] {
+        for &sh in voids {
             let probe = b.shell(sh).faces.iter().find_map(|&f| {
                 let d = face_domain(b, f);
                 d.interior_point().map(|uv| d.surface.eval(uv.x, uv.y))
@@ -62,8 +66,11 @@ pub fn turned_shells(b: &Brep) -> Vec<(SolidId, ShellId, bool)> {
 /// shells: found by a point inside one of its faces, the first sheet where that is not found.
 pub fn void_hosts(b: &Brep, s: SolidId) -> Vec<usize> {
     let shells = &b.solid(s).shells;
-    let n_outer = b.solid(s).outer;
-    let sheets: Vec<Vec<(Domain, Aabb)>> = shells[..n_outer]
+    debug_assert!(b.solid(s).outer <= shells.len(), "a solid's outer shells are among its shells");
+    let Some((outer, voids)) = shells.split_at_checked(b.solid(s).outer) else {
+        return Vec::new();
+    };
+    let sheets: Vec<Vec<(Domain, Aabb)>> = outer
         .iter()
         .map(|&sh| {
             b.shell(sh)
@@ -73,19 +80,18 @@ pub fn void_hosts(b: &Brep, s: SolidId) -> Vec<usize> {
                 .collect()
         })
         .collect();
-    shells[n_outer..]
+    voids
         .iter()
         .map(|&sh| {
             let probe = b.shell(sh).faces.iter().find_map(|&f| {
                 let d = face_domain(b, f);
                 d.interior_point().map(|uv| d.surface.eval(uv.x, uv.y))
             });
-            let inside = |k: &usize| {
-                let faces: Vec<(&Domain, Aabb)> =
-                    sheets[*k].iter().map(|(d, bb)| (d, *bb)).collect();
+            let inside = |sheet: &Vec<(Domain, Aabb)>| {
+                let faces: Vec<(&Domain, Aabb)> = sheet.iter().map(|(d, bb)| (d, *bb)).collect();
                 probe.is_some_and(|p| classify::contains(&faces, p) == Some(true))
             };
-            (0..n_outer).find(inside).unwrap_or(0)
+            sheets.iter().position(inside).unwrap_or(0)
         })
         .collect()
 }
@@ -116,19 +122,19 @@ pub(crate) fn nested(b: &Brep) -> Vec<(SolidId, SolidId)> {
         })
         .collect();
     let mut out = Vec::new();
-    for (i, inner) in parts.iter().enumerate() {
+    for (i, (&si, inner)) in solids.iter().zip(&parts).enumerate() {
         let Some(probe) =
             inner.iter().find_map(|(d, _)| d.interior_point().map(|uv| d.surface.eval(uv.x, uv.y)))
         else {
             continue;
         };
-        for (j, outer) in parts.iter().enumerate() {
-            if i == j || !in_box(probe, &boxes[j]) {
+        for (j, ((&sj, outer), bbox)) in solids.iter().zip(&parts).zip(&boxes).enumerate() {
+            if i == j || !in_box(probe, bbox) {
                 continue;
             }
             let faces: Vec<(&Domain, Aabb)> = outer.iter().map(|(d, bb)| (d, *bb)).collect();
             if classify::contains(&faces, probe) == Some(true) {
-                out.push((solids[i], solids[j]));
+                out.push((si, sj));
             }
         }
     }

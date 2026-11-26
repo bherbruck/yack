@@ -1,7 +1,7 @@
 // yack: a loop's closure in its face's parameters, and inner loops outside their face.
 // Adapted from springrep@a03e8a1 src/check.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/check.rs to yack-check (M3 W6); split out of lib.rs into its
-// own module (M3 hardening); paths and visibility only.
+// own module (M3 hardening); iterators and checked access instead of indexing, named constants.
 //! A loop's closure in its face's parameters, and inner loops outside their face.
 
 use crate::{
@@ -11,14 +11,17 @@ use crate::{
     topo::{Brep, CoedgeId, FaceId, face_domain},
 };
 
+/// A parameter moving this much slower than the other stands still beside it: a pole.
+const STANDING_STILL: f64 = 1e-9; // tol: a ratio of speeds
+
 pub(crate) fn uv_gap(b: &Brep, face: FaceId, p: Vec2, q: Vec2) -> f64 {
     let (_, su, sv) = b.face(face).surface.d1(p.x, p.y);
     // Each parameter at its own speed, so a gap is measured alike at any scale; where one stands
     // still beside the other, at a pole, a gap in it still opens the loop in the parameter plane
     // and is measured at the other's.
     let (a, c) = (su.norm(), sv.norm());
-    let wu = if a <= 1e-9 * c { c } else { a };
-    let wv = if c <= 1e-9 * a { a } else { c };
+    let wu = if a <= STANDING_STILL * c { c } else { a };
+    let wv = if c <= STANDING_STILL * a { a } else { c };
     (p.x - q.x).abs() * wu + (p.y - q.y).abs() * wv
 }
 
@@ -46,22 +49,30 @@ fn carried(s: &Surface, p: Vec2, q: Vec2) -> f64 {
 /// region to test.
 pub(crate) fn stray_loop(b: &Brep, f: FaceId) -> Option<usize> {
     let d = face_domain(b, f);
-    let periods = [d.surface.u_period(), d.surface.v_period()];
+    let (u_period, v_period) = (d.surface.u_period(), d.surface.v_period());
     let wraps = d.samples().iter().any(|l| {
-        let mut run = [0.0f64; 2];
+        // How far the loop runs in each parameter, piece by piece.
+        let (mut run_u, mut run_v) = (0.0f64, 0.0f64);
         for pl in l {
-            let (a, z) = (pl[0], pl[pl.len() - 1]);
-            run[0] += z.x - a.x;
-            run[1] += z.y - a.y;
+            debug_assert!(!pl.is_empty(), "a sampled piece of a loop has points");
+            if let (Some(a), Some(z)) = (pl.first(), pl.last()) {
+                run_u += z.x - a.x;
+                run_v += z.y - a.y;
+            }
         }
-        (0..2).any(|k| periods[k].is_some_and(|p| run[k].abs() > 0.5 * p))
+        [(u_period, run_u), (v_period, run_v)]
+            .into_iter()
+            .any(|(period, run)| period.is_some_and(|p| run.abs() > 0.5 * p))
     });
     if wraps {
         return None;
     }
+    debug_assert_eq!(d.samples().len(), d.loops.len(), "a domain samples each of its loops");
     (1..d.loops.len()).find(|&li| {
-        let pl = &d.samples()[li][0];
-        !d.inside_without(pl[pl.len() / 2], li)
+        // Halfway along the loop's first coedge.
+        let halfway =
+            d.samples().get(li).and_then(|l| l.first()).and_then(|pl| pl.get(pl.len() / 2));
+        halfway.is_some_and(|&p| !d.inside_without(p, li))
     })
 }
 

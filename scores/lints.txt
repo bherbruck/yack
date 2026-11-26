@@ -6,8 +6,8 @@ yack-cadrs 127
 yack-geom 0
 yack-intersect 0
 yack-linalg 24
-yack-measure 1
-yack-mesh 7
+yack-measure 0
+yack-mesh 0
 yack-profile 1
 yack-shim 1
 yack-step 0

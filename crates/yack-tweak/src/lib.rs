@@ -21,7 +21,7 @@ use yack_math::kernel as math;
 use yack_numeric as numeric;
 use yack_tol as tol;
 use yack_topo as topo;
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     geom::Surface,
@@ -30,8 +30,8 @@ use crate::{
 };
 
 /// The faces round each vertex.
-#[allow(clippy::disallowed_types)] fn vertex_faces(b: &Brep) -> HashMap<VertexId, BTreeSet<FaceId>> { // D26: BTree* in hardening, proven by digests
-    let mut out: HashMap<VertexId, BTreeSet<FaceId>> = HashMap::new();
+fn vertex_faces(b: &Brep) -> BTreeMap<VertexId, BTreeSet<FaceId>> {
+    let mut out: BTreeMap<VertexId, BTreeSet<FaceId>> = BTreeMap::new();
     for f in b.face_ids() {
         for &lp in &b.face(f).loops {
             for &c in &b.lp(lp).coedges {
@@ -45,8 +45,8 @@ use crate::{
 }
 
 /// The faces on each edge, one entry per use.
-#[allow(clippy::disallowed_types)] fn edge_faces(b: &Brep) -> HashMap<EdgeId, Vec<FaceId>> { // D26: BTree* in hardening, proven by digests
-    let mut out: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+fn edge_faces(b: &Brep) -> BTreeMap<EdgeId, Vec<FaceId>> {
+    let mut out: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
     for f in b.face_ids() {
         for &lp in &b.face(f).loops {
             for &c in &b.lp(lp).coedges {
