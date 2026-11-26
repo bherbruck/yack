@@ -25,4 +25,5 @@ use yack_measure as measure;
 pub mod build;
 pub mod loft;
 pub mod primitive;
+pub mod ruled;
 pub mod sweep;
