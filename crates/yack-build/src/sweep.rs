@@ -1,9 +1,13 @@
 // yack: Sweeps of planar profiles into solids: straight, turned about an axis, along a path of legs
 // Adapted from springrep@a03e8a1 src/sweep.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: `along` takes the join of its pieces from the caller (M2 T7), so sweep names no boolean; then to yack-build (M3 W7), paths and visibility only.
+// Changes: `along` takes the join of its pieces from the caller (M2 T7), so sweep names no boolean; then to yack-build (M3 W7), paths and visibility only;
+// M3 hardening (w-h3): extrude and revolve walk each loop's corners by iterators, each with the
+// next, a revolution's corners as records; a profile edge a face needs and lacks is an error, not
+// a panic. Every entity is added in the same order.
 //! Sweeps of planar profiles into solids: straight, turned about an axis, along a path of legs
 //! and bends, along a helix, and along a space curve. Every side face takes the names of the
 //! profile segment that sweeps it; caps are `start` (on the sketch plane) and `end`.
+#![warn(clippy::indexing_slicing)]
 
 mod curve;
 mod helix;
@@ -245,93 +249,70 @@ pub fn extrude(profile: &Profile, frame: &Frame, distance: f64, feature: &str) -
     let mut hi_loops = Vec::new();
 
     for lp in place(&profile, &base) {
-        let k = lp.segs.len();
-        let start_pts: Vec<Point3> = lp
-            .segs
-            .iter()
-            .map(|(s, _)| s.curve.eval(traversal(s).0))
-            .collect();
+        let start_pts: Vec<Point3> =
+            lp.segs.iter().map(|(s, _)| s.curve.eval(traversal(s).0)).collect();
         let bottom_v: Vec<VertexId> = start_pts.iter().map(|&p| b.add_vertex(p)).collect();
         let top_v: Vec<VertexId> = start_pts.iter().map(|&p| b.add_vertex(p + up)).collect();
-        let mut bottom_e = Vec::with_capacity(k);
-        let mut top_e = Vec::with_capacity(k);
-        for (i, (s, _)) in lp.segs.iter().enumerate() {
-            let (va, vb) = (i, (i + 1) % k);
-            let (s0, s1) = if s.forward { (va, vb) } else { (vb, va) };
-            bottom_e.push(b.add_edge(s.curve.clone(), s.range, bottom_v[s0], bottom_v[s1]));
-            top_e.push(b.add_edge(s.curve.transformed(&lift), s.range, top_v[s0], top_v[s1]));
+        // Each segment runs from its corner to the next one's, or back where it is reversed.
+        let mut bottom_e = Vec::with_capacity(lp.segs.len());
+        let mut top_e = Vec::with_capacity(lp.segs.len());
+        for ((s, _), (bottom_ends, top_ends)) in
+            lp.segs.iter().zip(round(&bottom_v).zip(round(&top_v)))
+        {
+            let (b0, b1) = directed(s.forward, bottom_ends);
+            let (t0, t1) = directed(s.forward, top_ends);
+            bottom_e.push(b.add_edge(s.curve.clone(), s.range, b0, b1));
+            top_e.push(b.add_edge(s.curve.transformed(&lift), s.range, t0, t1));
         }
-        let vertical_e: Vec<EdgeId> = (0..k)
-            .map(|i| {
-                let line = Line {
-                    origin: start_pts[i],
-                    dir: n,
-                };
-                b.add_edge(Curve::Line(line), (0.0, h), bottom_v[i], top_v[i])
+        let vertical_e: Vec<EdgeId> = start_pts
+            .iter()
+            .zip(bottom_v.iter().zip(&top_v))
+            .map(|(&origin, (&bottom, &top))| {
+                b.add_edge(Curve::Line(Line { origin, dir: n }), (0.0, h), bottom, top)
             })
             .collect();
-        for (i, (s, name)) in lp.segs.iter().enumerate() {
+        let sides = lp.segs.iter().zip(bottom_e.iter().zip(&top_e)).zip(round(&vertical_e));
+        for (((s, name), (&bottom_edge, &top_edge)), (&rise, &next_rise)) in sides {
             let surface = match &s.curve {
                 Curve::Line(l) => Surface::Plane(Plane {
-                    frame: Frame {
-                        origin: l.origin,
-                        x: l.dir,
-                        y: n,
-                        z: l.dir.cross(n),
-                    },
+                    frame: Frame { origin: l.origin, x: l.dir, y: n, z: l.dir.cross(n) },
                 }),
-                Curve::Circle(c) => Surface::Cylinder(Cylinder {
-                    frame: c.frame,
-                    radius: c.radius,
-                }),
-                other => Surface::Extrusion(Box::new(Extrusion {
-                    curve: other.clone(),
-                    dir: n,
-                })),
+                Curve::Circle(c) => {
+                    Surface::Cylinder(Cylinder { frame: c.frame, radius: c.radius })
+                }
+                other => Surface::Extrusion(Box::new(Extrusion { curve: other.clone(), dir: n })),
             };
             let face = b.add_face(surface, !s.forward, FaceName::all(feature, name));
             let (ta, tb) = traversal(s);
             b.add_loop(
                 face,
                 vec![
-                    coedge(
-                        bottom_e[i],
-                        !s.forward,
-                        affine(Vec2::ZERO, Vec2::new(1.0, 0.0)),
-                    ),
-                    coedge(
-                        vertical_e[(i + 1) % k],
-                        false,
-                        affine(Vec2::new(tb, 0.0), Vec2::new(0.0, 1.0)),
-                    ),
-                    coedge(
-                        top_e[i],
-                        s.forward,
-                        affine(Vec2::new(0.0, h), Vec2::new(1.0, 0.0)),
-                    ),
-                    coedge(
-                        vertical_e[i],
-                        true,
-                        affine(Vec2::new(ta, 0.0), Vec2::new(0.0, 1.0)),
-                    ),
+                    coedge(bottom_edge, !s.forward, affine(Vec2::ZERO, Vec2::new(1.0, 0.0))),
+                    coedge(next_rise, false, affine(Vec2::new(tb, 0.0), Vec2::new(0.0, 1.0))),
+                    coedge(top_edge, s.forward, affine(Vec2::new(0.0, h), Vec2::new(1.0, 0.0))),
+                    coedge(rise, true, affine(Vec2::new(ta, 0.0), Vec2::new(0.0, 1.0))),
                 ],
             );
             faces.push(face);
         }
-        let lo_loop: Vec<CoedgeSpec> = (0..k)
+        let lo_loop: Vec<CoedgeSpec> = lp
+            .segs
+            .iter()
+            .zip(&bottom_e)
             .rev()
-            .map(|i| {
-                let s = &lp.segs[i].0;
+            .map(|((s, _), &edge)| {
                 let at = s.curve.eval(traversal(s).1);
-                coedge(bottom_e[i], s.forward, plane_pcurve(&base, &s.curve, at))
+                coedge(edge, s.forward, plane_pcurve(&base, &s.curve, at))
             })
             .collect();
-        let hi_loop: Vec<CoedgeSpec> = (0..k)
-            .map(|i| {
-                let s = &lp.segs[i].0;
+        let hi_loop: Vec<CoedgeSpec> = lp
+            .segs
+            .iter()
+            .zip(&top_e)
+            .map(|((s, _), &edge)| {
                 let c = s.curve.transformed(&lift);
                 let at = c.eval(traversal(s).0);
-                coedge(top_e[i], !s.forward, plane_pcurve(&top, &c, at))
+                coedge(edge, !s.forward, plane_pcurve(&top, &c, at))
             })
             .collect();
         lo_loops.push(lo_loop);
@@ -346,6 +327,31 @@ pub fn extrude(profile: &Profile, frame: &Frame, distance: f64, feature: &str) -
     let shell = b.add_shell(faces);
     b.add_solid(vec![shell]);
     finish(b)
+}
+
+/// Each item with the one after it round the loop, the last with the first.
+fn round<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    items.iter().zip(items.iter().cycle().skip(1))
+}
+
+/// A segment's ends `(here, next)` in the direction it runs: reversed when it runs backwards.
+fn directed<T: Copy>(forward: bool, (here, next): (&T, &T)) -> (T, T) {
+    if forward { (*here, *next) } else { (*next, *here) }
+}
+
+/// A profile corner of a revolution: where it is, its vertex at angle 0, and the circle it turns
+/// along, none for a corner on the axis.
+#[derive(Clone, Copy)]
+struct Corner {
+    point: Point3,
+    start: VertexId,
+    ring: Option<EdgeId>,
+}
+
+/// The error of a swept face whose profile edges were not made, which every face that needs
+/// them rules out.
+fn missing_edges() -> Error {
+    Error::Numerical("a swept face has no profile edges".into())
 }
 
 /// How a swept face's surface parameterises the profile curve at angle 0: `v = v0 + dv·t`. A
@@ -451,7 +457,7 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
 /// Turns `profile`, drawn on `frame`'s xy plane, by `angle` (radians, right-handed) about the line
 /// through `origin` along `dir`, which must lie in the sketch plane and not cross the profile. A
 /// partial turn has `start` and `end` caps; a full one has none.
-#[allow(clippy::panic)] pub fn revolve(
+pub fn revolve(
     profile: &Profile,
     frame: &Frame,
     origin: Point3,
@@ -539,52 +545,42 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
             ),
         )
     });
+    // With caps the whole solid is one shell; a full turn makes a shell of each loop.
+    let mut capped: Option<Vec<FaceId>> = caps.map(|(s, e)| vec![s, e]);
     let mut shells: Vec<Vec<FaceId>> = Vec::new();
-    if let Some((s, e)) = caps {
-        shells.push(vec![s, e]);
-    }
 
     for lp in place(&profile, frame) {
-        let k = lp.segs.len();
-        let pts: Vec<Point3> = lp
-            .segs
-            .iter()
-            .map(|(s, _)| s.curve.eval(traversal(s).0))
-            .collect();
+        let pts: Vec<Point3> = lp.segs.iter().map(|(s, _)| s.curve.eval(traversal(s).0)).collect();
         let v0: Vec<VertexId> = pts.iter().map(|&p| b.add_vertex(p)).collect();
-        let v1: Vec<VertexId> = (0..k)
-            .map(|i| {
-                if full || on_axis(pts[i]) {
-                    v0[i]
-                } else {
-                    b.add_vertex(turn.point(pts[i]))
-                }
-            })
+        let v1: Vec<VertexId> = pts
+            .iter()
+            .zip(&v0)
+            .map(|(&p, &v)| if full || on_axis(p) { v } else { b.add_vertex(turn.point(p)) })
             .collect();
-        let rings: Vec<Option<EdgeId>> = (0..k)
-            .map(|i| {
-                (!on_axis(pts[i])).then(|| {
-                    let h = axis.height(pts[i]);
-                    let circle = crate::geom::Circle {
-                        frame: axis.at_height(h),
-                        radius: axis.radius(pts[i]),
-                    };
-                    b.add_edge(Curve::Circle(circle), (0.0, angle), v0[i], v1[i])
+        let rings: Vec<Option<EdgeId>> = pts
+            .iter()
+            .zip(v0.iter().zip(&v1))
+            .map(|(&p, (&start, &end))| {
+                (!on_axis(p)).then(|| {
+                    let h = axis.height(p);
+                    let circle =
+                        crate::geom::Circle { frame: axis.at_height(h), radius: axis.radius(p) };
+                    b.add_edge(Curve::Circle(circle), (0.0, angle), start, end)
                 })
             })
             .collect();
-        let ends = |i: usize, s: &PlacedSegment, v: &[VertexId]| {
-            let (va, vb) = (v[i], v[(i + 1) % k]);
-            if s.forward { (va, vb) } else { (vb, va) }
-        };
+        let corners: Vec<Corner> = pts
+            .iter()
+            .zip(&v0)
+            .zip(&rings)
+            .map(|((&point, &start), &ring)| Corner { point, start, ring })
+            .collect();
         let on_axis_seg: Vec<bool> = lp
             .segs
             .iter()
             .map(|(s, _)| {
                 let (t0, t1) = s.range;
-                [t0, 0.5 * (t0 + t1), t1]
-                    .iter()
-                    .all(|&t| on_axis(s.curve.eval(t)))
+                [t0, 0.5 * (t0 + t1), t1].iter().all(|&t| on_axis(s.curve.eval(t)))
             })
             .collect();
         let sweeps: Vec<Option<Sweep>> = lp
@@ -593,28 +589,33 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
             .zip(&on_axis_seg)
             .map(|((s, _), &ax)| (!ax).then(|| classify(&axis, s)))
             .collect();
-        // Profile edges at angle 0 and at the end angle; a full turn needs them only as seams.
-        let mut e0: Vec<Option<EdgeId>> = vec![None; k];
-        let mut e1: Vec<Option<EdgeId>> = vec![None; k];
-        for (i, (s, _)) in lp.segs.iter().enumerate() {
-            let needed = !full || matches!(sweeps[i], Some(Sweep::Curved { .. }));
-            if !needed {
-                continue;
-            }
-            let (s0, s1) = ends(i, s, &v0);
-            let first = b.add_edge(s.curve.clone(), s.range, s0, s1);
-            e0[i] = Some(first);
-            e1[i] = Some(if full || on_axis_seg[i] {
-                first
-            } else {
-                let (s0, s1) = ends(i, s, &v1);
-                b.add_edge(s.curve.transformed(&turn), s.range, s0, s1)
-            });
-        }
+        // Each segment's profile edges at angle 0 and at the end angle; a full turn needs them
+        // only as seams.
+        let edges: Vec<Option<(EdgeId, EdgeId)>> = lp
+            .segs
+            .iter()
+            .zip(sweeps.iter().zip(&on_axis_seg))
+            .zip(round(&v0).zip(round(&v1)))
+            .map(|(((s, _), (sweep, &along_axis)), (start_ends, end_ends))| {
+                let needed = !full || matches!(sweep, Some(Sweep::Curved { .. }));
+                if !needed {
+                    return None;
+                }
+                let (s0, s1) = directed(s.forward, start_ends);
+                let first = b.add_edge(s.curve.clone(), s.range, s0, s1);
+                let last = if full || along_axis {
+                    first
+                } else {
+                    let (s0, s1) = directed(s.forward, end_ends);
+                    b.add_edge(s.curve.transformed(&turn), s.range, s0, s1)
+                };
+                Some((first, last))
+            })
+            .collect();
         let mut loop_faces = Vec::new();
-        for (i, (s, name)) in lp.segs.iter().enumerate() {
-            let Some(sweep) = &sweeps[i] else { continue };
-            let j = (i + 1) % k;
+        let segments = lp.segs.iter().zip(sweeps.iter().zip(&edges)).zip(round(&corners));
+        for (((s, name), (sweep, &profile_edges)), (here, next)) in segments {
+            let Some(sweep) = sweep else { continue };
             let (ta, tb) = traversal(s);
             let tm = 0.5 * (s.range.0 + s.range.1);
             let (_, tangent) = s.curve.d1(tm);
@@ -622,11 +623,7 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
             let half = Transform::rotation(origin, a, 0.5 * angle);
             let outward = half.vector(tangent.cross(e_theta));
             match sweep {
-                Sweep::Curved {
-                    surface,
-                    v0: vo,
-                    dv,
-                } => {
+                Sweep::Curved { surface, v0: vo, dv } => {
                     let v_at = |t: f64| vo + dv * t;
                     let natural = surface.normal(0.5 * angle, v_at(tm));
                     let face = b.add_face(
@@ -634,41 +631,23 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
                         natural.dot(outward) < 0.0,
                         FaceName::all(feature, name),
                     );
-                    let ring_or_pole = |b: &mut Brep, idx: usize| -> EdgeId {
-                        match rings[idx] {
+                    let ring_or_pole = |b: &mut Brep, corner: &Corner| -> EdgeId {
+                        match corner.ring {
                             Some(r) => r,
-                            None => b.add_degenerate_edge(v0[idx], (0.0, angle)),
+                            None => b.add_degenerate_edge(corner.start, (0.0, angle)),
                         }
                     };
-                    let rb = ring_or_pole(&mut b, j);
-                    let ra = ring_or_pole(&mut b, i);
-                    let (e0i, e1i) = (
-                        e0[i].unwrap_or_else(|| panic!("curved sweep has edges")),
-                        e1[i].unwrap_or_else(|| panic!("curved sweep has edges")),
-                    );
+                    let rb = ring_or_pole(&mut b, next);
+                    let ra = ring_or_pole(&mut b, here);
+                    let (first, last) = profile_edges.ok_or_else(missing_edges)?;
+                    let (along_u, along_v) = (Vec2::new(1.0, 0.0), Vec2::new(0.0, *dv));
                     b.add_loop(
                         face,
                         vec![
-                            coedge(
-                                e0i,
-                                !s.forward,
-                                affine(Vec2::new(0.0, *vo), Vec2::new(0.0, *dv)),
-                            ),
-                            coedge(
-                                rb,
-                                false,
-                                affine(Vec2::new(0.0, v_at(tb)), Vec2::new(1.0, 0.0)),
-                            ),
-                            coedge(
-                                e1i,
-                                s.forward,
-                                affine(Vec2::new(angle, *vo), Vec2::new(0.0, *dv)),
-                            ),
-                            coedge(
-                                ra,
-                                true,
-                                affine(Vec2::new(0.0, v_at(ta)), Vec2::new(1.0, 0.0)),
-                            ),
+                            coedge(first, !s.forward, affine(Vec2::new(0.0, *vo), along_v)),
+                            coedge(rb, false, affine(Vec2::new(0.0, v_at(tb)), along_u)),
+                            coedge(last, s.forward, affine(Vec2::new(angle, *vo), along_v)),
+                            coedge(ra, true, affine(Vec2::new(0.0, v_at(ta)), along_u)),
                         ],
                     );
                     loop_faces.push(face);
@@ -680,27 +659,17 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
                         natural.dot(outward) < 0.0,
                         FaceName::all(feature, name),
                     );
-                    let ring_coedge = |idx: usize, reversed: bool| {
-                        rings[idx].map(|r| {
-                            let p = if reversed {
-                                turn.point(pts[idx])
-                            } else {
-                                pts[idx]
-                            };
-                            coedge(
-                                r,
-                                reversed,
-                                PCurve::Projected {
-                                    seed: plane_uv(pf, p),
-                                },
-                            )
+                    let ring_coedge = |corner: &Corner, reversed: bool| {
+                        corner.ring.map(|r| {
+                            let p = if reversed { turn.point(corner.point) } else { corner.point };
+                            coedge(r, reversed, PCurve::Projected { seed: plane_uv(pf, p) })
                         })
                     };
                     if full {
                         let mut loops: Vec<(f64, CoedgeSpec)> = Vec::new();
-                        for (idx, rev) in [(j, false), (i, true)] {
-                            if let Some(c) = ring_coedge(idx, rev) {
-                                loops.push((axis.radius(pts[idx]), c));
+                        for (corner, rev) in [(next, false), (here, true)] {
+                            if let Some(c) = ring_coedge(corner, rev) {
+                                loops.push((axis.radius(corner.point), c));
                             }
                         }
                         loops.sort_by(|x, y| y.0.total_cmp(&x.0));
@@ -708,62 +677,62 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
                             b.add_loop(face, vec![c]);
                         }
                     } else {
+                        let (first, last) = profile_edges.ok_or_else(missing_edges)?;
                         let start = s.curve.eval(s.range.0);
                         let sr = axis.radius(start);
                         let (_, d) = s.curve.d1(s.range.0);
                         let dr = d.dot(e_rho);
                         let (c, sn) = (angle.cos(), angle.sin());
                         let mut l = vec![coedge(
-                            e0[i].unwrap_or_else(|| panic!("partial sweep has edges")),
+                            first,
                             !s.forward,
                             affine(Vec2::new(sr, 0.0), Vec2::new(dr, 0.0)),
                         )];
-                        l.extend(ring_coedge(j, false));
+                        l.extend(ring_coedge(next, false));
                         l.push(coedge(
-                            e1[i].unwrap_or_else(|| panic!("partial sweep has edges")),
+                            last,
                             s.forward,
                             affine(Vec2::new(sr * c, sr * sn), Vec2::new(dr * c, dr * sn)),
                         ));
-                        l.extend(ring_coedge(i, true));
+                        l.extend(ring_coedge(here, true));
                         b.add_loop(face, l);
                     }
                     loop_faces.push(face);
                 }
             }
         }
-        if let Some((sc, ec)) = caps {
-            let lo_loop: Vec<CoedgeSpec> = (0..k)
+        if let Some((start_cap, end_cap)) = caps {
+            let lo_loop = lp
+                .segs
+                .iter()
+                .zip(&edges)
                 .rev()
-                .map(|i| {
-                    let s = &lp.segs[i].0;
-                    let e = e0[i].unwrap_or_else(|| panic!("partial sweep has edges"));
-                    coedge(
-                        e,
-                        s.forward,
-                        plane_pcurve(&start_frame, &s.curve, s.curve.eval(traversal(s).1)),
-                    )
+                .map(|((s, _), edges)| {
+                    let (first, _) = edges.ok_or_else(missing_edges)?;
+                    let at = s.curve.eval(traversal(s).1);
+                    Ok(coedge(first, s.forward, plane_pcurve(&start_frame, &s.curve, at)))
                 })
-                .collect();
-            b.add_loop(sc, lo_loop);
-            let hi_loop: Vec<CoedgeSpec> = (0..k)
-                .map(|i| {
-                    let s = &lp.segs[i].0;
-                    let e = e1[i].unwrap_or_else(|| panic!("partial sweep has edges"));
+                .collect::<Result<Vec<_>>>()?;
+            b.add_loop(start_cap, lo_loop);
+            let hi_loop = lp
+                .segs
+                .iter()
+                .zip(&edges)
+                .map(|((s, _), edges)| {
+                    let (_, last) = edges.ok_or_else(missing_edges)?;
                     let c = s.curve.transformed(&turn);
-                    coedge(
-                        e,
-                        !s.forward,
-                        plane_pcurve(&end_frame, &c, c.eval(traversal(s).0)),
-                    )
+                    let at = c.eval(traversal(s).0);
+                    Ok(coedge(last, !s.forward, plane_pcurve(&end_frame, &c, at)))
                 })
-                .collect();
-            b.add_loop(ec, hi_loop);
-            shells[0].extend(loop_faces);
-        } else {
-            shells.push(loop_faces);
+                .collect::<Result<Vec<_>>>()?;
+            b.add_loop(end_cap, hi_loop);
+        }
+        match &mut capped {
+            Some(faces) => faces.extend(loop_faces),
+            None => shells.push(loop_faces),
         }
     }
-    let shell_ids: Vec<_> = shells.into_iter().map(|f| b.add_shell(f)).collect();
+    let shell_ids: Vec<_> = capped.into_iter().chain(shells).map(|f| b.add_shell(f)).collect();
     b.add_solid(shell_ids);
     finish(b)
 }

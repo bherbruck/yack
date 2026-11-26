@@ -1,6 +1,9 @@
 // yack: A planar profile swept along a helix, its frame turning with the helix: the profile screwed
 // Adapted from springrep@a03e8a1 src/sweep/helix.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/sweep/helix.rs to yack-build (M3 W7); paths and visibility only.
+// Changes: moved from springrep's src/sweep/helix.rs to yack-build (M3 W7); paths and visibility only;
+// M3 hardening (w-h3): the sweep's cuts are a `Cut` enum (start, a screw's whole turn, end) instead
+// of indices with an unreachable arm; each profile corner is a record of its vertex at every cut and
+// its helix pieces, walked with the next by iterators; a rail that makes no curve is an error.
 //! A planar profile swept along a helix, its frame turning with the helix: the profile screwed
 //! about the helix's axis. Each side face is a rational B-spline surface, `u` the turn and `v` the
 //! profile segment's own rational parameter, so its edges are the surface's parameter lines.
@@ -10,6 +13,7 @@
 //! derivatives at evenly spaced turns. The pieces are spaced so the column stays within
 //! `SCREW_FIT` of the helix, and a rational surface is a convex mix of its columns, so the surface
 //! stays as close to the exact screw surface.
+#![warn(clippy::indexing_slicing)]
 
 use std::f64::consts::TAU;
 
@@ -71,13 +75,14 @@ impl Helix {
     }
 }
 
-/// Knots of a curve in Hermite pieces between `nodes`.
+/// Knots of a curve in Hermite pieces between `nodes`, at least two of them (none otherwise).
 fn knots(nodes: &[f64]) -> Vec<f64> {
-    let mut k = vec![nodes[0]; DEGREE + 1];
-    for &n in &nodes[1..nodes.len() - 1] {
+    let &[first, ref inner @ .., last] = nodes else { return Vec::new() };
+    let mut k = vec![first; DEGREE + 1];
+    for &n in inner {
         k.extend(std::iter::repeat_n(n, DEGREE));
     }
-    k.extend(std::iter::repeat_n(nodes[nodes.len() - 1], DEGREE + 1));
+    k.extend(std::iter::repeat_n(last, DEGREE + 1));
     k
 }
 
@@ -96,10 +101,10 @@ fn hermite(a: [Vec3; 4], b: [Vec3; 4], h: f64) -> [Point3; 7] {
 
 /// The control points of `p`'s helix in Hermite pieces between `nodes`.
 fn column(screw: &Helix, p: Point3, nodes: &[f64]) -> Vec<Point3> {
-    let mut out = vec![screw.at(p, nodes[0])];
-    for w in nodes.windows(2) {
-        let (a, b) = (screw.d3(p, w[0]), screw.d3(p, w[1]));
-        out.extend(hermite(a, b, w[1] - w[0]));
+    let mut out: Vec<Point3> = nodes.first().map(|&t| screw.at(p, t)).into_iter().collect();
+    for (&t0, &t1) in nodes.iter().zip(nodes.iter().skip(1)) {
+        let (a, b) = (screw.d3(p, t0), screw.d3(p, t1));
+        out.extend(hermite(a, b, t1 - t0));
     }
     out
 }
@@ -339,22 +344,22 @@ pub fn assemble(
         Ok(Curve::Nurbs(Box::new(c)))
     };
     // The turns the sweep is cut at: its ends, and each whole turn of a screw between them.
-    let mut cuts = vec![m.range.0];
-    if m.screw.is_some() {
+    let mut cuts = vec![Cut::Start(m.range.0)];
+    if let Some(sc) = m.screw {
         let mut t = m.range.0 + TAU;
         while t < m.range.1 - tol::ANGULAR {
-            cuts.push(t);
+            cuts.push(Cut::Turn(sc, t));
             t += TAU;
         }
     }
-    cuts.push(m.range.1);
-    let pieces = cuts.len() - 1;
-    let at = |p: Point3, k: usize| -> Point3 {
-        match (&m.screw, k) {
-            (_, 0) => p,
-            (_, k) if k == pieces => (m.at_end)(p),
-            (Some(sc), k) => sc.at(p, cuts[k]),
-            (None, _) => unreachable!("only a screw is cut between its ends"),
+    cuts.push(Cut::End(m.range.1));
+    let spans: Vec<(Cut, Cut)> = cuts.iter().copied().zip(cuts.iter().copied().skip(1)).collect();
+    // Where profile point `p` is at a cut.
+    let place = |p: Point3, cut: Cut| -> Point3 {
+        match cut {
+            Cut::Start(_) => p,
+            Cut::Turn(sc, t) => sc.at(p, t),
+            Cut::End(_) => (m.at_end)(p),
         }
     };
     let line = |a: Point3, b: Point3| -> Result<Curve> {
@@ -379,55 +384,50 @@ pub fn assemble(
     );
     let mut faces = vec![start, end];
     for segs in loops {
-        let k = segs.len();
-        let corners: Vec<Point3> = segs.iter().map(|s| s.rail.start()).collect();
+        let starts: Vec<Point3> = segs.iter().map(|s| s.rail.start()).collect();
         // Each corner's vertex at every cut, and its helix in a piece between each two.
-        let verts: Vec<Vec<VertexId>> = corners
+        let verts: Vec<Vec<VertexId>> = starts
             .iter()
-            .map(|&p| (0..=pieces).map(|c| b.add_vertex(at(p, c))).collect())
+            .map(|&p| cuts.iter().map(|&cut| b.add_vertex(place(p, cut))).collect())
             .collect();
-        let rings: Vec<Vec<EdgeId>> = (0..k)
-            .map(|i| {
-                let curve = helix(corners[i])?;
-                Ok((0..pieces)
-                    .map(|c| {
-                        b.add_edge(
-                            curve.clone(),
-                            (cuts[c], cuts[c + 1]),
-                            verts[i][c],
-                            verts[i][c + 1],
-                        )
+        let rings: Vec<Vec<EdgeId>> = starts
+            .iter()
+            .zip(&verts)
+            .map(|(&p, vs)| {
+                let curve = helix(p)?;
+                Ok(spans
+                    .iter()
+                    .zip(vs.iter().zip(vs.iter().skip(1)))
+                    .map(|((from, to), (&v0, &v1))| {
+                        b.add_edge(curve.clone(), (from.t(), to.t()), v0, v1)
                     })
                     .collect())
             })
             .collect::<Result<_>>()?;
-        let mut e0 = Vec::with_capacity(k);
-        let mut e1 = Vec::with_capacity(k);
-        for (i, s) in segs.iter().enumerate() {
+        let corners: Vec<Corner> = starts
+            .into_iter()
+            .zip(verts)
+            .zip(rings)
+            .map(|((point, verts), rings)| Corner { point, verts, rings })
+            .collect();
+        let mut e0 = Vec::with_capacity(segs.len());
+        let mut e1 = Vec::with_capacity(segs.len());
+        for (s, (here, next)) in segs.iter().zip(round(&corners)) {
             let r = &s.rail;
             let (pts, w) = split(&r.pw);
             let at_end: Vec<Hom> =
-                r.pw.iter()
-                    .map(|&h| hom((m.at_end)(point(h)), h[3]))
-                    .collect();
+                r.pw.iter().map(|&h| hom((m.at_end)(point(h)), h[3])).collect();
             let (end_pts, _) = split(&at_end);
-            let j = (i + 1) % k;
             let c0 = NurbsCurve::new(r.degree, r.knots.clone(), pts.clone(), w.clone())?;
             let c1 = NurbsCurve::new(r.degree, r.knots.clone(), end_pts, w.clone())?;
-            e0.push(b.add_edge(
-                Curve::Nurbs(Box::new(c0)),
-                (0.0, 1.0),
-                verts[i][0],
-                verts[j][0],
-            ));
-            e1.push(b.add_edge(
-                Curve::Nurbs(Box::new(c1)),
-                (0.0, 1.0),
-                verts[i][pieces],
-                verts[j][pieces],
-            ));
+            let first_edge =
+                b.add_edge(Curve::Nurbs(Box::new(c0)), (0.0, 1.0), here.first()?, next.first()?);
+            e0.push(first_edge);
+            let last_edge =
+                b.add_edge(Curve::Nurbs(Box::new(c1)), (0.0, 1.0), here.last()?, next.last()?);
+            e1.push(last_edge);
             let name = FaceName::all(feature, &s.name);
-            let widest = cuts.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max);
+            let widest = spans.iter().map(|(from, to)| to.t() - from.t()).fold(0.0, f64::max);
             let strip = m.screw.as_ref().and_then(|sc| {
                 along_axis(sc, &pts, &w)
                     .map(|(h0, dh, radius)| (sc, h0, dh, radius, 0.0))
@@ -445,34 +445,33 @@ pub fn assemble(
                 // turned by s) and the height along z `sign·(h0 + rise·t + s·dh)`.
                 let z = sc.axis * sc.sign;
                 let (sign, rise) = (sc.sign, sc.rise);
-                let seps: Vec<EdgeId> = (0..=pieces)
-                    .map(|c| match c {
-                        0 => Ok(e0[i]),
-                        c if c == pieces => Ok(e1[i]),
-                        c if round == 0.0 => Ok(b.add_edge(
-                            line(at(corners[i], c), at(corners[j], c))?,
+                let seps: Vec<EdgeId> = cuts
+                    .iter()
+                    .zip(here.verts.iter().zip(&next.verts))
+                    .map(|(&cut, (&v_here, &v_next))| match cut {
+                        Cut::Start(_) => Ok(first_edge),
+                        Cut::End(_) => Ok(last_edge),
+                        Cut::Turn(..) if round == 0.0 => Ok(b.add_edge(
+                            line(place(here.point, cut), place(next.point, cut))?,
                             (0.0, 1.0),
-                            verts[i][c],
-                            verts[j][c],
+                            v_here,
+                            v_next,
                         )),
-                        c => {
+                        Cut::Turn(_, t) => {
                             let turned: Vec<Hom> =
-                                r.pw.iter()
-                                    .map(|&h| hom(sc.at(point(h), cuts[c]), h[3]))
-                                    .collect();
+                                r.pw.iter().map(|&h| hom(sc.at(point(h), t), h[3])).collect();
                             let (ctrl, wts) = split(&turned);
                             let arc = NurbsCurve::new(r.degree, r.knots.clone(), ctrl, wts)?;
-                            Ok(b.add_edge(
-                                Curve::Nurbs(Box::new(arc)),
-                                (0.0, 1.0),
-                                verts[i][c],
-                                verts[j][c],
-                            ))
+                            Ok(b.add_edge(Curve::Nurbs(Box::new(arc)), (0.0, 1.0), v_here, v_next))
                         }
                     })
                     .collect::<Result<_>>()?;
-                for c in 0..pieces {
-                    let p = at(corners[i], c) - sc.origin;
+                let pieces = spans
+                    .iter()
+                    .zip(seps.iter().zip(seps.iter().skip(1)))
+                    .zip(next.rings.iter().zip(&here.rings));
+                for (((from, to), (&sep0, &sep1)), (&ring_next, &ring_here)) in pieces {
+                    let p = place(here.point, *from) - sc.origin;
                     let x = (p - sc.axis * p.dot(sc.axis)).unit().ok_or_else(|| {
                         Error::InvalidInput("a screw's crest lies on its axis".into())
                     })?;
@@ -480,7 +479,7 @@ pub fn assemble(
                         frame: Frame::new(sc.origin, z, x)?,
                         radius,
                     });
-                    let (t0, t1) = (cuts[c], cuts[c + 1]);
+                    let (t0, t1) = (from.t(), to.t());
                     let v = |t: f64, s: f64| sign * (h0 + rise * t + s * dh);
                     // A line's end is affine in its parameter; an arc's angle is not in its
                     // rational one, so its end is placed by projection.
@@ -488,34 +487,26 @@ pub fn assemble(
                         if round == 0.0 {
                             affine(Vec2::new(t - t0, v(t, 0.0)), Vec2::new(0.0, sign * dh))
                         } else {
-                            PCurve::Projected {
-                                seed: Vec2::new(t - t0, v(t, 0.0)),
-                            }
+                            PCurve::Projected { seed: Vec2::new(t - t0, v(t, 0.0)) }
                         }
                     };
                     // Outward where the motion and the segment's direction say, as below.
                     let (_, su, sv) = surface.d1(0.5 * round, v(t0, 0.5));
-                    let (pm, d) = r_mid(r);
+                    let (pm, d) = r_mid(r)?;
                     let outward = d.cross((m.velocity)(pm));
                     let face = b.add_face(surface, su.cross(sv).dot(outward) < 0.0, name.clone());
+                    let turning = Vec2::new(1.0, sign * rise);
                     b.add_loop(
                         face,
                         vec![
-                            coedge(seps[c], false, across(t0)),
+                            coedge(sep0, false, across(t0)),
                             coedge(
-                                rings[j][c],
+                                ring_next,
                                 false,
-                                affine(
-                                    Vec2::new(round - t0, v(0.0, 1.0)),
-                                    Vec2::new(1.0, sign * rise),
-                                ),
+                                affine(Vec2::new(round - t0, v(0.0, 1.0)), turning),
                             ),
-                            coedge(seps[c + 1], true, across(t1)),
-                            coedge(
-                                rings[i][c],
-                                true,
-                                affine(Vec2::new(-t0, v(0.0, 0.0)), Vec2::new(1.0, sign * rise)),
-                            ),
+                            coedge(sep1, true, across(t1)),
+                            coedge(ring_here, true, affine(Vec2::new(-t0, v(0.0, 0.0)), turning)),
                         ],
                     );
                     faces.push(face);
@@ -525,10 +516,11 @@ pub fn assemble(
             let nv = pts.len();
             let mut net = Vec::with_capacity(nv * (m.knots.len() - m.degree - 1));
             let cols: Vec<Vec<Point3>> = pts.iter().map(|&p| (m.column)(p)).collect();
-            for row in 0..cols[0].len() {
-                net.extend(cols.iter().map(|c| c[row]));
+            // Every column has the same length: the net row by row along the motion.
+            let nu = cols.first().map_or(0, Vec::len);
+            for row in 0..nu {
+                net.extend(cols.iter().filter_map(|c| c.get(row).copied()));
             }
-            let nu = cols[0].len();
             let weights = w.map(|w| (0..nu).flat_map(|_| w.iter().copied()).collect());
             let surface = Surface::Nurbs(Box::new(NurbsSurface::new(
                 (m.degree, r.degree),
@@ -539,26 +531,26 @@ pub fn assemble(
             )?));
             // At the start turn, where the surface's column points are the profile's own.
             let (_, su, sv) = surface.d1(m.range.0, 0.5);
-            let (p, d) = r_mid(r);
+            let (p, d) = r_mid(r)?;
             let outward = d.cross((m.velocity)(p));
             let face = b.add_face(surface, su.cross(sv).dot(outward) < 0.0, name);
             let mut lp = vec![coedge(
-                e0[i],
+                first_edge,
                 false,
                 affine(Vec2::new(m.range.0, 0.0), Vec2::new(0.0, 1.0)),
             )];
             lp.extend(
-                rings[j]
+                next.rings
                     .iter()
                     .map(|&e| coedge(e, false, affine(Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0)))),
             );
             lp.push(coedge(
-                e1[i],
+                last_edge,
                 true,
                 affine(Vec2::new(m.range.1, 0.0), Vec2::new(0.0, 1.0)),
             ));
             lp.extend(
-                rings[i]
+                here.rings
                     .iter()
                     .rev()
                     .map(|&e| coedge(e, true, affine(Vec2::ZERO, Vec2::new(1.0, 0.0)))),
@@ -566,13 +558,18 @@ pub fn assemble(
             b.add_loop(face, lp);
             faces.push(face);
         }
-        let lo: Vec<CoedgeSpec> = (0..k)
+        // Each segment's first edge with the corner it ends at, run backwards round the cap.
+        let ends: Vec<(EdgeId, &Corner)> = e0.iter().copied().zip(following(&corners)).collect();
+        let lo: Vec<CoedgeSpec> = ends
+            .into_iter()
             .rev()
-            .map(|i| coedge(e0[i], true, plane_seed(&frame, corners[(i + 1) % k])))
+            .map(|(e, next)| coedge(e, true, plane_seed(&frame, next.point)))
             .collect();
         b.add_loop(start, lo);
-        let hi: Vec<CoedgeSpec> = (0..k)
-            .map(|i| coedge(e1[i], false, plane_seed(&end_frame, (m.at_end)(corners[i]))))
+        let hi: Vec<CoedgeSpec> = e1
+            .iter()
+            .zip(&corners)
+            .map(|(&e, corner)| coedge(e, false, plane_seed(&end_frame, (m.at_end)(corner.point))))
             .collect();
         b.add_loop(end, hi);
     }
@@ -591,13 +588,13 @@ pub fn assemble(
 /// Where a rail is a straight run along the screw's axis at a radius off it: its height along
 /// the axis at its start, how far it rises, and the radius.
 fn along_axis(sc: &Helix, pts: &[Point3], w: &Option<Vec<f64>>) -> Option<(f64, f64, f64)> {
-    if pts.len() != 2
-        || w.as_ref()
-            .is_some_and(|w| w.iter().any(|&x| (x - w[0]).abs() > 1e-12))
-    {
+    let &[start, end] = pts else { return None };
+    let uneven =
+        |w: &Vec<f64>| w.first().is_some_and(|&w0| w.iter().any(|&x| (x - w0).abs() > 1e-12));
+    if w.as_ref().is_some_and(uneven) {
         return None;
     }
-    let (a, b) = (pts[0] - sc.origin, pts[1] - sc.origin);
+    let (a, b) = (start - sc.origin, end - sc.origin);
     let d = b - a;
     if d.cross(sc.axis).norm() > tol::LINEAR * 1e-3 {
         return None;
@@ -636,11 +633,63 @@ fn about_axis(sc: &Helix, r: &Rail) -> Option<(f64, f64, f64)> {
 }
 
 /// The rail's middle point and its direction there.
-#[allow(clippy::panic)] fn r_mid(r: &Rail) -> (Point3, Vec3) {
-    let c = NurbsCurve::new(r.degree, r.knots.clone(), split(&r.pw).0, split(&r.pw).1)
-        .unwrap_or_else(|e| panic!("a rail is a valid curve: {e:?}"));
+fn r_mid(r: &Rail) -> Result<(Point3, Vec3)> {
+    let (ctrl, weights) = split(&r.pw);
+    let c = NurbsCurve::new(r.degree, r.knots.clone(), ctrl, weights)?;
     let (p, d, _) = c.d2(0.5);
-    (p, d)
+    Ok((p, d))
+}
+
+/// Where a sweep is cut across, at its parameter: its start, each whole turn of its screw between
+/// its ends, and its end.
+#[derive(Clone, Copy)]
+enum Cut {
+    Start(f64),
+    Turn(Helix, f64),
+    End(f64),
+}
+
+impl Cut {
+    fn t(self) -> f64 {
+        match self {
+            Cut::Start(t) | Cut::Turn(_, t) | Cut::End(t) => t,
+        }
+    }
+}
+
+/// A profile corner of a sweep: where it starts, its vertex at every cut, and its helix's piece
+/// between each two.
+struct Corner {
+    point: Point3,
+    verts: Vec<VertexId>,
+    rings: Vec<EdgeId>,
+}
+
+impl Corner {
+    /// Its vertex at the sweep's start.
+    fn first(&self) -> Result<VertexId> {
+        self.verts.first().copied().ok_or_else(no_cuts)
+    }
+
+    /// Its vertex at the sweep's end.
+    fn last(&self) -> Result<VertexId> {
+        self.verts.last().copied().ok_or_else(no_cuts)
+    }
+}
+
+/// The error of a corner with no vertices, which a sweep's two end cuts at least rule out.
+fn no_cuts() -> Error {
+    Error::Numerical("a swept corner has no vertices".into())
+}
+
+/// Each item with the one after it round the loop, the last with the first.
+fn round<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    items.iter().zip(items.iter().cycle().skip(1))
+}
+
+/// The item after each one round the loop.
+fn following<T>(items: &[T]) -> impl Iterator<Item = &T> {
+    round(items).map(|(_, next)| next)
 }
 
 #[cfg(test)]
