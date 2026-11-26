@@ -3550,11 +3550,13 @@ fn round_corners(
                 *count.entry(v).or_default() += 1;
             }
         }
-        let tips: Vec<usize> = count
+        let mut tips: Vec<usize> = count
             .iter()
             .filter(|(_, n)| **n == 1)
             .map(|(v, _)| *v)
             .collect();
+        // (In vertex order: which way round is tried first is the same on every run.)
+        tips.sort_unstable();
         if tips.len() != 2 {
             return Err(err);
         }
