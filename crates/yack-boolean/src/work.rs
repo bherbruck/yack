@@ -1,14 +1,34 @@
 // yack: the boolean's working state: vertices, trims, faces' domains and the near-pair queries.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; hardened (M3 B12): checked access in place of indexing (the
+// working state's constructor and its trim builders return a Result), BTreeMaps for its maps.
 //! The boolean's working state: vertices, trims, faces' domains and the near-pair queries.
 
 use super::*;
 use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
 
-#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
-    pub(super) fn new(breps: [&'a Brep; 2]) -> Work<'a> {
+/// A piece of the working state that is not there: a bug in the steps before.
+fn missing(what: &str) -> Error {
+    Error::Numerical(format!("boolean: no {what} at that index"))
+}
+
+/// The root of `i` in the union-find `parent`, halving the path on the way.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&up) = parent.get(i)
+        && up != i
+    {
+        let grand = parent.get(up).copied().unwrap_or(up);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = grand;
+        }
+        i = grand;
+    }
+    i
+}
+
+impl<'a> Work<'a> {
+    pub(super) fn new(breps: [&'a Brep; 2]) -> Result<Work<'a>> {
         let mut w = Work {
             breps,
             pool: Vec::new(),
@@ -16,7 +36,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             widest: tol::LINEAR,
             tolerant: Vec::new(),
             cap: tol::LINEAR,
-            grid: HashMap::new(),
+            grid: BTreeMap::new(),
             vmap: [Vec::new(), Vec::new()],
             faces: Vec::new(),
             face_of: [Vec::new(), Vec::new()],
@@ -32,8 +52,8 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             inputs: 0,
             met: Vec::new(),
             touch_points: Vec::new(),
-            unplaced: HashMap::new(),
-            meetings: HashMap::new(),
+            unplaced: BTreeMap::new(),
+            meetings: BTreeMap::new(),
             near: None,
         };
         for b in breps {
@@ -43,10 +63,11 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             }
         }
         for (side, &b) in breps.iter().enumerate() {
-            w.vmap[side] = b
+            let ids: Vec<usize> = b
                 .vertex_ids()
                 .map(|v| w.vertex_with(b.vertex(v).point, b.vertex_tolerance(v)))
                 .collect();
+            *w.vmap.get_mut(side).ok_or_else(|| missing("solid"))? = ids;
             for e in b.edge_ids() {
                 let edge = b.edge(e);
                 let curve = edge.curve.clone().map(Rc::new);
@@ -58,12 +79,18 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                         bb
                     }
                 };
-                w.edge_base[side].push(w.bases.len());
+                let next = w.bases.len();
+                w.edge_base.get_mut(side).ok_or_else(|| missing("solid"))?.push(next);
+                let vmap = w.vmap.get(side).ok_or_else(|| missing("solid"))?;
+                let (v0, v1) = (vmap.get(edge.start.index()).copied(), vmap.get(edge.end.index()).copied());
+                if v0.is_none() || v1.is_none() {
+                    return Err(missing("vertex"));
+                }
                 w.bases.push(Base {
                     curve,
                     range: edge.range,
-                    v0: Some(w.vmap[side][edge.start.index()]),
-                    v1: Some(w.vmap[side][edge.end.index()]),
+                    v0,
+                    v1,
                     pole: b.vertex(edge.start).point,
                     closed: edge.start == edge.end,
                     bbox,
@@ -72,7 +99,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                 });
             }
             for f in b.face_ids() {
-                let (mut dom, mut bbox) = w.original_domain(side, f);
+                let (mut dom, mut bbox) = w.original_domain(side, f)?;
                 if b.has_tolerances() {
                     let tols: Vec<Vec<f64>> = b
                         .face(f)
@@ -88,7 +115,8 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                     dom.set_tolerances(tols);
                     bbox = padded(&bbox, dom.widest());
                 }
-                w.face_of[side].push(w.faces.len());
+                let next = w.faces.len();
+                w.face_of.get_mut(side).ok_or_else(|| missing("solid"))?.push(next);
                 w.faces.push(Face {
                     side,
                     id: f,
@@ -98,7 +126,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             }
         }
         w.inputs = w.pool.len();
-        w
+        Ok(w)
     }
 
     pub(super) fn vertex(&mut self, p: Point3) -> usize {
@@ -129,8 +157,11 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
     pub(super) fn coincident_vertex(&mut self, p: Point3, t: f64) -> Option<usize> {
         let mut best: Option<(f64, usize)> = None;
         let mut consider = |i: usize| {
-            let d = self.pool[i].dist(p);
-            if d <= tol::coincidence(t, self.vtol[i]) && best.is_none_or(|b| d < b.0) {
+            let (Some(q), Some(&vt)) = (self.pool.get(i), self.vtol.get(i)) else {
+                return;
+            };
+            let d = q.dist(p);
+            if d <= tol::coincidence(t, vt) && best.is_none_or(|b| d < b.0) {
                 best = Some((d, i));
             }
         };
@@ -152,28 +183,27 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             self.tolerant.iter().for_each(|&i| consider(i));
         }
         let (d, i) = best?;
-        if t > tol::LINEAR || self.vtol[i] > tol::LINEAR {
-            self.vtol[i] = self.vtol[i].max(d + t).min(self.cap);
+        let vt = *self.vtol.get(i)?;
+        if t > tol::LINEAR || vt > tol::LINEAR {
+            let grown = vt.max(d + t).min(self.cap);
+            *self.vtol.get_mut(i)? = grown;
             if !self.tolerant.contains(&i) {
                 self.tolerant.push(i);
             }
-            self.widest = self.widest.max(self.vtol[i]);
+            self.widest = self.widest.max(grown);
         }
         Some(i)
     }
 
     /// A trim for an input coedge, whole.
-    pub(super) fn coedge_trim(&self, side: usize, c: CoedgeId, piece: usize) -> Trim {
-        let b = self.breps[side];
+    pub(super) fn coedge_trim(&self, side: usize, c: CoedgeId, piece: usize) -> Result<Trim> {
+        let b = *self.breps.get(side).ok_or_else(|| missing("solid"))?;
         let ts = coedge_params(b, c, 16);
         let uvs = coedge_uv_at(b, c, &ts);
-        self.trim_of(
-            side,
-            c,
-            piece,
-            (ts[0], ts[ts.len() - 1]),
-            (uvs[0], uvs[uvs.len() - 1]),
-        )
+        let (Some(&t0), Some(&t1), Some(&uv0), Some(&uv1)) = (ts.first(), ts.last(), uvs.first(), uvs.last()) else {
+            return Err(missing("coedge sample"));
+        };
+        self.trim_of(side, c, piece, (t0, t1), (uv0, uv1))
     }
 
     /// A trim for an input coedge from its parameter range and parameter-plane ends.
@@ -184,19 +214,24 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
         piece: usize,
         t: (f64, f64),
         uv: (Vec2, Vec2),
-    ) -> Trim {
-        let b = self.breps[side];
-        let base = &self.bases[self.edge_base[side][b.coedge(c).edge.index()]];
-        let v = (
-            self.vmap[side][b.coedge_start(c).index()],
-            self.vmap[side][b.coedge_end(c).index()],
-        );
-        coedge_trim_with(b, c, piece, base.curve.clone(), t, uv, v)
+    ) -> Result<Trim> {
+        let b = *self.breps.get(side).ok_or_else(|| missing("solid"))?;
+        let base = self
+            .edge_base
+            .get(side)
+            .and_then(|bases| bases.get(b.coedge(c).edge.index()))
+            .and_then(|&bi| self.bases.get(bi))
+            .ok_or_else(|| missing("edge base"))?;
+        let vmap = self.vmap.get(side).ok_or_else(|| missing("solid"))?;
+        let (Some(&v0), Some(&v1)) = (vmap.get(b.coedge_start(c).index()), vmap.get(b.coedge_end(c).index())) else {
+            return Err(missing("vertex"));
+        };
+        Ok(coedge_trim_with(b, c, piece, base.curve.clone(), t, uv, (v0, v1)))
     }
 
     /// An input face's domain and box, from its memo when an earlier boolean worked them out.
-    pub(super) fn original_domain(&self, side: usize, f: FaceId) -> (Domain, Aabb) {
-        let b = self.breps[side];
+    pub(super) fn original_domain(&self, side: usize, f: FaceId) -> Result<(Domain, Aabb)> {
+        let b = *self.breps.get(side).ok_or_else(|| missing("solid"))?;
         let face = b.face(f);
         let coedges = |lp: &crate::topo::LoopId| b.lp(*lp).coedges.iter();
         if let Some(img) = b.memo(f).slot::<FaceImages>() {
@@ -210,7 +245,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                         .map(|(&c, im)| self.trim_of(side, c, usize::MAX, im.t, im.uv))
                         .collect()
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let dom = Domain::from_samples(
                 face.surface.clone(),
                 face.reversed,
@@ -218,7 +253,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                 img.samples.clone(),
                 img.boxes.clone(),
             );
-            return (dom, img.bbox);
+            return Ok((dom, img.bbox));
         }
         let loops: Vec<Vec<Trim>> = face
             .loops
@@ -228,7 +263,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                     .map(|&c| self.coedge_trim(side, c, usize::MAX))
                     .collect()
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let ends = face
             .loops
             .iter()
@@ -241,12 +276,14 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                         } else {
                             [t0, t1]
                         };
-                        let uvs = coedge_uv_at(b, c, &ts);
-                        (uvs[0], uvs[1])
+                        match coedge_uv_at(b, c, &ts).as_slice() {
+                            &[uv0, uv1, ..] => Ok((uv0, uv1)),
+                            _ => Err(missing("coedge sample")),
+                        }
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>>>()
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let trims = loops
             .iter()
             .zip(&ends)
@@ -269,7 +306,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             boxes: dom.boxes().to_vec(),
             bbox,
         });
-        (dom, bbox)
+        Ok((dom, bbox))
     }
 
     /// `e`, saying which faces it arose on: one boolean of many solids otherwise fails without a
@@ -277,16 +314,16 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
     pub(super) fn at_faces(&self, e: Error, faces: &[usize]) -> Error {
         let named: Vec<String> = faces
             .iter()
-            .map(|&f| {
-                let face = &self.faces[f];
+            .filter_map(|&f| {
+                let face = self.faces.get(f)?;
                 let c = (face.bbox.min + face.bbox.max) * 0.5;
-                let b = self.breps[face.side];
+                let b = *self.breps.get(face.side)?;
                 let solid = b
                     .face(face.id)
                     .shell
                     .and_then(|sh| b.shell(sh).solid)
                     .map_or(String::new(), |s| format!(" of solid {}", s.index()));
-                format!(
+                Some(format!(
                     "{} face {}{solid} of input {} about ({:.4}, {:.4}, {:.4})",
                     face.dom.surface.kind(),
                     face.id.index(),
@@ -294,7 +331,7 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                     c.x,
                     c.y,
                     c.z
-                )
+                ))
             })
             .collect();
         let at = named.join(" and ");
@@ -305,28 +342,22 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
     }
 
     pub(super) fn other(&self, side: usize) -> &[usize] {
-        &self.face_of[1 - side]
+        self.face_of.get(1 - side).map_or(&[], Vec::as_slice)
     }
 
     /// Step 1a: where each edge of one solid crosses a face of the other, kept to be placed once
     /// every other meeting point is known.
     pub(super) fn find_near(&mut self) {
-        let faces = [0, 1].map(|s| -> Vec<Aabb> {
-            self.face_of[s]
-                .iter()
-                .map(|&f| self.faces[f].bbox)
-                .collect()
+        let [faces_a, faces_b] = self.face_of.each_ref().map(|ids| -> Vec<Aabb> {
+            ids.iter().filter_map(|&f| self.faces.get(f)).map(|f| f.bbox).collect()
         });
-        let edges = [0, 1].map(|s| -> Vec<Aabb> {
-            self.edge_base[s]
-                .iter()
-                .map(|&e| self.bases[e].bbox)
-                .collect()
+        let [edges_a, edges_b] = self.edge_base.each_ref().map(|ids| -> Vec<Aabb> {
+            ids.iter().filter_map(|&e| self.bases.get(e)).map(|b| b.bbox).collect()
         });
         self.near = near::Near::new(
             self.breps,
-            [&faces[0], &faces[1]],
-            [&edges[0], &edges[1]],
+            [&faces_a, &faces_b],
+            [&edges_a, &edges_b],
             2.0 * self.cap + csi::GRAZE_GAP,
         );
     }
@@ -360,16 +391,10 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
             false
         };
         let faces = |side: usize| {
-            self.face_of[side]
-                .iter()
-                .map(|&f| &self.faces[f].bbox)
-                .collect()
+            self.face_of.get(side).into_iter().flatten().filter_map(|&f| self.faces.get(f)).map(|f| &f.bbox).collect()
         };
         let edges = |side: usize| {
-            self.edge_base[side]
-                .iter()
-                .map(|&e| &self.bases[e].bbox)
-                .collect()
+            self.edge_base.get(side).into_iter().flatten().filter_map(|&e| self.bases.get(e)).map(|b| &b.bbox).collect()
         };
         count(faces(0), faces(1), MANY_FACE_PAIRS) || count(edges(0), edges(1), MANY_EDGE_PAIRS)
     }
@@ -383,28 +408,25 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
         let Some(near) = &self.near else {
             return vec![None; n];
         };
-        let clear: Vec<bool> = (0..n)
-            .map(|fi| {
-                let side = self.faces[fi].side;
-                near.face_clear(side, fi - self.face_of[side][0])
+        let clear: Vec<bool> = self
+            .faces
+            .iter()
+            .enumerate()
+            .map(|(fi, face)| {
+                let first = self.face_of.get(face.side).and_then(|ids| ids.first());
+                first.is_some_and(|&f0| near.face_clear(face.side, fi - f0))
             })
             .collect();
-        fn root(p: &mut [usize], mut i: usize) -> usize {
-            while p[i] != i {
-                p[i] = p[p[i]];
-                i = p[i];
-            }
-            i
-        }
+        let is_clear = |f: usize| clear.get(f) == Some(&true);
         let mut parent: Vec<usize> = (0..n).collect();
-        for side in 0..2 {
-            let b = self.breps[side];
-            let mut users: Vec<Vec<usize>> = vec![Vec::new(); self.edge_base[side].len()];
-            for (k, f) in b.face_ids().enumerate() {
-                let fi = self.face_of[side][k];
+        for (side, ((&b, own_faces), own_bases)) in self.breps.iter().zip(&self.face_of).zip(&self.edge_base).enumerate() {
+            let mut users: Vec<Vec<usize>> = vec![Vec::new(); own_bases.len()];
+            for (f, &fi) in b.face_ids().zip(own_faces) {
                 for &lp in &b.face(f).loops {
                     for &c in &b.lp(lp).coedges {
-                        users[b.coedge(c).edge.index()].push(fi);
+                        if let Some(u) = users.get_mut(b.coedge(c).edge.index()) {
+                            u.push(fi);
+                        }
                     }
                 }
             }
@@ -413,40 +435,50 @@ use super::bounds::{cell, overlap, padded, curve_bbox, face_bbox};
                     continue;
                 }
                 for w in faces.windows(2) {
-                    if clear[w[0]] && clear[w[1]] {
-                        let (x, y) = (root(&mut parent, w[0]), root(&mut parent, w[1]));
-                        parent[x] = y;
+                    if let &[a, c] = w
+                        && is_clear(a)
+                        && is_clear(c)
+                    {
+                        let (x, y) = (root(&mut parent, a), root(&mut parent, c));
+                        if let Some(up) = parent.get_mut(x) {
+                            *up = y;
+                        }
                     }
                 }
             }
         }
-        (0..n)
-            .map(|fi| clear[fi].then(|| root(&mut parent, fi)))
-            .collect()
+        clear.iter().enumerate().map(|(fi, &c)| c.then(|| root(&mut parent, fi))).collect()
     }
 
     /// Whether faces `fa` and `fb`, of the first solid and the second, may meet.
     pub(super) fn faces_near(&self, fa: usize, fb: usize) -> bool {
         self.near
             .as_ref()
-            .is_none_or(|n| n.faces(fa - self.face_of[0][0], fb - self.face_of[1][0]))
+            .is_none_or(|n| match (self.face_of[0].first(), self.face_of[1].first()) {
+                (Some(&a0), Some(&b0)) => n.faces(fa - a0, fb - b0),
+                _ => true,
+            })
     }
 
     /// Whether edge bases `ba` and `bb`, of the first solid and the second, may meet.
     pub(super) fn edges_near(&self, ba: usize, bb: usize) -> bool {
         self.near
             .as_ref()
-            .is_none_or(|n| n.edges(ba - self.edge_base[0][0], bb - self.edge_base[1][0]))
+            .is_none_or(|n| match (self.edge_base[0].first(), self.edge_base[1].first()) {
+                (Some(&a0), Some(&b0)) => n.edges(ba - a0, bb - b0),
+                _ => true,
+            })
     }
 
     /// Whether edge base `bi` of solid `side` may meet face `fi` of the other.
     pub(super) fn edge_face_near(&self, side: usize, bi: usize, fi: usize) -> bool {
-        self.near.as_ref().is_none_or(|n| {
-            n.edge_face(
-                side,
-                bi - self.edge_base[side][0],
-                fi - self.face_of[1 - side][0],
-            )
+        let firsts = (
+            self.edge_base.get(side).and_then(|ids| ids.first()),
+            self.face_of.get(1 - side).and_then(|ids| ids.first()),
+        );
+        self.near.as_ref().is_none_or(|n| match firsts {
+            (Some(&b0), Some(&f0)) => n.edge_face(side, bi - b0, fi - f0),
+            _ => true,
         })
     }
 }

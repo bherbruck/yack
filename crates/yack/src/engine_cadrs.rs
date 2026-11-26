@@ -769,6 +769,20 @@ pub(crate) fn held_check(h: &Held) -> Vec<String> {
     }
 }
 
+/// A cadrs-held body's dense p-curve scan (cadrs's `yack_glue::pcurve_scan`, measure-only; for the
+/// bake-off), as one line: `coedges=N over_tol=N pcurve_off=E at=(f,e,t) tol=E edge_off=E outside=E`.
+#[cfg(feature = "bakeoff")]
+pub(crate) fn held_pcurve_scan(h: &Held) -> String {
+    let k = lock(&h.cadrs.session);
+    match yack_glue::pcurve_scan(&k, h.cadrs.id) {
+        Ok(s) => format!(
+            "coedges={} over_tol={} pcurve_off={:.3e} at=({},{},{:.3e}) tol={:.3e} edge_off={:.3e} outside={:.3e}",
+            s.coedges, s.over_tol, s.pcurve_off, s.pcurve_at.0, s.pcurve_at.1, s.pcurve_at.2, s.tol_there, s.edge_off, s.outside
+        ),
+        Err(e) => format!("error: {e}"),
+    }
+}
+
 /// A cadrs-held body's Betti numbers (pieces, tunnels, voids): its solids, each solid's genus
 /// summed over its closed shells (χ = V − E + F less each face's holes; point edges are their
 /// vertex), and its void shells.

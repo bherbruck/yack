@@ -418,7 +418,7 @@ pub(crate) fn snapped(a: &Brep, b: &Brep, how: Reach) -> Option<Brep> {
     let mut out = None;
     for f in order {
         let mut trial = kept.clone();
-        trial.insert(f, moved[&f].clone());
+        trial.insert(f, moved.get(&f)?.clone());
         if let Some(o) = moved_whole(a, b, &trial, gap) {
             kept = trial;
             out = Some(o);

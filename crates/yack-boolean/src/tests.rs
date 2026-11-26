@@ -41,7 +41,7 @@ fn rod(base: [f64; 3], axis: [f64; 3], r: f64, len: f64) -> Brep {
 
 /// The work of a boolean of `a` and `b` up to splitting faces.
 fn staged<'a>(a: &'a Brep, b: &'a Brep) -> (Work<'a>, Vec<Vec<Vec<Vec<Trim>>>>) {
-    let mut w = Work::new([a, b]);
+    let mut w = Work::new([a, b]).unwrap();
     w.meet().unwrap();
     w.split_curves();
     w.dedup();
@@ -201,7 +201,7 @@ fn a_cut_through_a_pole_splits_the_pole() {
     let frame = Frame::new(Vec3::ZERO, -Vec3::Y, Vec3::X).unwrap();
     let ball = revolve(&p, &frame, Vec3::ZERO, Vec3::Z, TAU, "b").unwrap();
     let half = block([0.0, -9.0, -9.0], [9.0, 9.0, 9.0]);
-    let mut w = Work::new([&ball, &half]);
+    let mut w = Work::new([&ball, &half]).unwrap();
     w.meet().unwrap();
     w.split_curves();
     w.dedup();
@@ -302,7 +302,7 @@ fn an_edge_touching_a_face_meets_it_at_the_vertex_already_there() {
     // (10, 0, 20), where the ruling pierces the box's floor. Rounding hides the gap for 3e-7 mm
     // either side, and the touch used to be found 1.3e-7 mm from the ruling's vertex.
     let b = block([0.0, -10.0, 20.0], [10.0, 10.0, 30.0]);
-    let mut w = Work::new([&lofted, &b]);
+    let mut w = Work::new([&lofted, &b]).unwrap();
     w.meet().unwrap();
     let at = Vec3::new(10.0, 0.0, 20.0);
     let close: Vec<Point3> = w
@@ -347,7 +347,7 @@ fn a_copy_moved_obliquely_by_a_hair_combines_with_its_original() {
 fn edges_meetings_are_placed_whatever_order_they_were_found_in() {
     let (a, b) = hair_moved();
     let placed = |reverse: bool| {
-        let mut w = Work::new([&a, &b]);
+        let mut w = Work::new([&a, &b]).unwrap();
         w.pierce();
         w.cross_edges();
         w.intersect_faces().unwrap();
@@ -476,7 +476,7 @@ fn sides_that_touch_at_a_known_vertex_meet_only_there() {
         a.vertex_ids()
             .any(|v| a.vertex(v).point.dist(Point3::ZERO) <= tol::LINEAR)
     );
-    let mut w = Work::new([&a, &b]);
+    let mut w = Work::new([&a, &b]).unwrap();
     w.meet().unwrap();
     let (sa, sb) = (face_named(&w, 0, "side"), face_named(&w, 1, "side"));
     let cuts: Vec<f64> = w
@@ -530,7 +530,7 @@ fn top_face(b: &Brep) -> FaceId {
 fn an_edge_lying_on_a_face_imprints_it() {
     // The groove takes the triangle (5, 10), (8, 7), (8, 10), 4.5 in area, along the box's 10: 45.
     let (a, b) = box_and_grooving_prism();
-    let mut w = Work::new([&a, &b]);
+    let mut w = Work::new([&a, &b]).unwrap();
     w.meet().unwrap();
     let edge = w.edge_base[1][edge_at(&b, 5.0, 10.0).index()];
     let top = w.face_of[0][top_face(&a).index()];
@@ -1187,7 +1187,7 @@ fn near_pairs_are_the_faces_and_edges_that_come_within_reach() {
     // block's other faces and edges.
     let a = block([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
     let b = rod([5.0, 5.0, 5.0], [0.0, 0.0, 1.0], 2.0, 10.0);
-    let mut w = Work::new([&a, &b]);
+    let mut w = Work::new([&a, &b]).unwrap();
     w.find_near();
     let near = w.near.as_ref().unwrap();
     let at = |x: f64, y: f64| (x - y).abs() < 1e-3;
@@ -1226,7 +1226,7 @@ fn ruling_out_far_pairs_leaves_every_result_as_it_was() {
     for (a, b) in [hair_moved(), rodded, box_and_grooving_prism()] {
         for op in [Op::Union, Op::Intersection, Op::Difference] {
             let run = |find: bool| {
-                let mut w = Work::new([&a, &b]);
+                let mut w = Work::new([&a, &b]).unwrap();
                 if find {
                     w.find_near();
                     assert!(w.near.is_some());

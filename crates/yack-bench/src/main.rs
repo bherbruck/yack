@@ -9,6 +9,7 @@
 //! yack-bench --digests [PREFIX]  (each case whose id starts with PREFIX: `<id> <digest hex>` or `<id> refused`)
 //! yack-bench --strategy CASE  (`<strategy> <built_by>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
+//! yack-bench --pcurve-scan [CASE]  (with `--features bakeoff`: cadrs's dense p-curve scan of each case's held body)
 //! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only; springrep, cadrs, native or both)
 //! yack-bench --engine native@swept CASE ...  (the engine for op `swept` only; every other op runs its whole ladder)
 //! ```
@@ -289,6 +290,34 @@ fn roundtrip(_: Option<&str>) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// `--pcurve-scan [CASE]` (w-m17's measure-only scan): every case, or one, built and its cadrs-held
+/// body scanned by `yack::bakeoff::pcurve_scan`, a line each: `pcurve <case> refused`,
+/// `pcurve <case> springrep` (not held in cadrs form, so nothing to scan), or `pcurve <case> <line>`.
+#[cfg(feature = "bakeoff")]
+fn pcurve_scan(only: Option<&str>) -> ExitCode {
+    let chosen: Vec<_> = cases::CASES.iter().filter(|(id, _)| only.is_none_or(|c| c == *id)).collect();
+    if chosen.is_empty() {
+        eprintln!("no implementation of `{}`", only.unwrap_or_default());
+        return ExitCode::from(2);
+    }
+    for (id, build) in chosen {
+        match build() {
+            Err(_) => println!("pcurve {id} refused"),
+            Ok(solid) => match yack::bakeoff::pcurve_scan(&solid) {
+                None => println!("pcurve {id} springrep"),
+                Some(line) => println!("pcurve {id} {line}"),
+            },
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(feature = "bakeoff"))]
+fn pcurve_scan(_: Option<&str>) -> ExitCode {
+    eprintln!("--pcurve-scan needs a build with `--features bakeoff`");
+    ExitCode::from(2)
+}
+
 /// `--engine springrep|cadrs|native|both[@OP]` ahead of the usual arguments (bake-off builds only): every op of
 /// the run is forced onto that engine's ladder rung (`yack::bakeoff::force`), on this thread; with
 /// `@OP`, only the op named OP is (`yack::bakeoff::force_op`), every other op running its whole ladder.
@@ -335,6 +364,9 @@ fn main() -> ExitCode {
     }
     // Every case built in order, one line each: its id and its solid's digest, or `refused`
     // (for `cargo xtask digest`, scores/digests/bench.txt). Nothing written, no pauses.
+    if args.get(1).map(String::as_str) == Some("--pcurve-scan") {
+        return pcurve_scan(args.get(2).map(String::as_str));
+    }
     if args.get(1).map(String::as_str) == Some("--roundtrip") {
         return roundtrip(args.get(2).map(String::as_str));
     }

@@ -1,7 +1,8 @@
 // yack: Boolean union, difference and intersection of solids.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); Work's phases and the
-// free helpers split out into modules (M3 hardening B0); paths and visibility only.
+// free helpers split out into modules (M3 hardening B0); paths and visibility only; the boolean's
+// entry points on checked access, the solid copies' id maps BTreeMaps, small literals named (M3 B8).
 //! Boolean union, difference and intersection of solids.
 //!
 //! The steps, each in its own module:
@@ -65,7 +66,7 @@ pub use plane::{half_space, split};
 pub use section::{SectionEdge, section, section_area, section_curves};
 pub use unify::unify;
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap, HashSet}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
 use std::rc::Rc;
 
@@ -121,10 +122,8 @@ pub fn apart_groups(parts: &[&Brep]) -> Vec<Vec<usize>> {
         .iter()
         .map(|p| padded(&measure::bbox(p), tol::LINEAR))
         .collect();
-    let meet = |a: &Aabb, b: &Aabb| {
-        (0..3).all(|k| a.min.to_array()[k] <= b.max.to_array()[k])
-            && (0..3).all(|k| b.min.to_array()[k] <= a.max.to_array()[k])
-    };
+    let below = |lo: Vec3, hi: Vec3| lo.to_array().iter().zip(&hi.to_array()).all(|(l, h)| l <= h);
+    let meet = |a: &Aabb, b: &Aabb| below(a.min, b.max) && below(b.min, a.max);
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for (i, bx) in boxes.iter().enumerate() {
         if bx.is_empty() {
@@ -132,7 +131,7 @@ pub fn apart_groups(parts: &[&Brep]) -> Vec<Vec<usize>> {
         }
         match groups
             .iter_mut()
-            .find(|g| g.iter().all(|&j| !meet(bx, &boxes[j])))
+            .find(|g| g.iter().all(|&j| boxes.get(j).is_none_or(|bj| !meet(bx, bj))))
         {
             Some(g) => g.push(i),
             None => groups.push(vec![i]),
@@ -144,8 +143,8 @@ pub fn apart_groups(parts: &[&Brep]) -> Vec<Vec<usize>> {
 /// One arena holding every solid of the operands named.
 fn gathered(parts: &[&Brep], group: &[usize]) -> Brep {
     let mut out = Brep::new();
-    for &i in group {
-        out.append(parts[i]);
+    for p in group.iter().filter_map(|&i| parts.get(i)) {
+        out.append(p);
     }
     out
 }
@@ -273,7 +272,7 @@ fn without_coincident(
             .fold(tol::LINEAR, f64::max)
     };
     // A copy's box moves with it; this only keeps the topology comparisons to likely pairs.
-    let reach = 2.0 * (widest(a) + widest(b)) + 1e-6;
+    let reach = 2.0 * (widest(a) + widest(b)) + COPY_REACH;
     let close = |x: &Aabb, y: &Aabb| {
         (0..3).all(|k| (x.min[k] - y.min[k]).abs() <= reach && (x.max[k] - y.max[k]).abs() <= reach)
     };
@@ -283,16 +282,17 @@ fn without_coincident(
         let mut one: Option<Brep> = None;
         for (j, sb) in bb.ids.iter().enumerate() {
             // Boxes that close overlap, so solids whose cheap boxes miss cannot match.
-            if taken[j]
-                || !overlap(&ba.hulls[i], &bb.hulls[j])
-                || !close(&ba.loose(i), &bb.loose(j))
+            if taken.get(j) == Some(&true)
+                || !ba.hulls.get(i).zip(bb.hulls.get(j)).is_some_and(|(x, y)| overlap(x, y))
+                || !ba.loose(i).zip(bb.loose(j)).is_some_and(|(x, y)| close(&x, &y))
             {
                 continue;
             }
             let x = one.get_or_insert_with(|| solids_of(a, &[*sa]));
             if same::same_solid(x, &solids_of(b, &[*sb])) {
-                taken[j] = true;
-                matched[i] = true;
+                if let (Some(t), Some(m)) = (taken.get_mut(j), matched.get_mut(i)) {
+                    (*t, *m) = (true, true);
+                }
                 break;
             }
         }
@@ -399,22 +399,34 @@ impl<'a> SolidBoxes<'a> {
         }
     }
 
-    fn loose(&self, i: usize) -> Aabb {
-        *self.loose[i].get_or_init(|| {
+    fn loose(&self, i: usize) -> Option<Aabb> {
+        let (cell, &id) = (self.loose.get(i)?, self.ids.get(i)?);
+        Some(*cell.get_or_init(|| {
             let bb = if self.ids.len() == 1 {
                 measure::loose_bbox(self.x)
             } else {
-                measure::loose_bbox(&solids_of(self.x, &[self.ids[i]]))
+                measure::loose_bbox(&solids_of(self.x, &[id]))
             };
             padded(&bb, tol::LINEAR)
-        })
+        }))
     }
 
-    /// Whether solid `i` of these and solid `j` of `other` have loose boxes that meet.
+    /// Whether solid `i` of these and solid `j` of `other` have loose boxes that meet; a solid not
+    /// among them meets everything.
     fn meet(&self, i: usize, other: &SolidBoxes, j: usize) -> bool {
-        overlap(&self.hulls[i], &other.hulls[j]) && overlap(&self.loose(i), &other.loose(j))
+        let (Some(h), Some(g)) = (self.hulls.get(i), other.hulls.get(j)) else {
+            return true;
+        };
+        overlap(h, g)
+            && match (self.loose(i), other.loose(j)) {
+                (Some(x), Some(y)) => overlap(&x, &y),
+                _ => true,
+            }
     }
 }
+
+/// Added to the two inputs' widest tolerances when copies' boxes are compared, in mm.
+const COPY_REACH: f64 = 1e-6; // tol: slack on a box comparison that only shortlists pairs
 
 /// A new arena holding copies of `solids` of `x`: one piece of a result that came apart, say, to
 /// measure or cut on its own.
@@ -422,14 +434,15 @@ pub fn solids_of(x: &Brep, solids: &[SolidId]) -> Brep {
     copy_solids(x, solids).0
 }
 
-#[allow(clippy::disallowed_types)] type Copied = (Brep, HashMap<EdgeId, EdgeId>, HashMap<FaceId, FaceId>); // D26: BTree* in hardening, proven by digests
+type Copied = (Brep, BTreeMap<EdgeId, EdgeId>, BTreeMap<FaceId, FaceId>);
 
 /// [`solids_of`], with the copy's id of each edge and face copied.
-#[allow(clippy::disallowed_types)] fn copy_solids(x: &Brep, solids: &[SolidId]) -> Copied { // D26: BTree* in hardening, proven by digests
+fn copy_solids(x: &Brep, solids: &[SolidId]) -> Copied {
     let mut out = Brep::new();
-    let mut verts: HashMap<VertexId, VertexId> = HashMap::new();
-    let mut edges: HashMap<EdgeId, EdgeId> = HashMap::new();
-    let mut face_ids: HashMap<FaceId, FaceId> = HashMap::new();
+    // all three looked up only: the copy is built in `x`'s own order
+    let mut verts: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    let mut edges: BTreeMap<EdgeId, EdgeId> = BTreeMap::new();
+    let mut face_ids: BTreeMap<FaceId, FaceId> = BTreeMap::new();
     for &s in solids {
         let mut shells = Vec::new();
         for &sh in &x.solid(s).shells {
@@ -483,7 +496,7 @@ pub fn solids_of(x: &Brep, solids: &[SolidId]) -> Brep {
 }
 
 fn combine(a: &Brep, b: &Brep, op: Op, facts: &Facts) -> Result<Brep> {
-    let mut w = Work::new([a, b]);
+    let mut w = Work::new([a, b])?;
     if w.many_pairs() {
         w.find_near();
     }
@@ -554,7 +567,7 @@ struct Piece {
     rank: u8,
 }
 
-#[allow(clippy::disallowed_types)] struct Work<'a> { // D26: BTree* in hardening, proven by digests
+struct Work<'a> {
     breps: [&'a Brep; 2],
     pool: Vec<Point3>,
     /// Each pool vertex's tolerance: an input vertex's own, [`tol::LINEAR`] for a meeting, and a
@@ -566,7 +579,7 @@ struct Piece {
     tolerant: Vec<usize>,
     /// The widest tolerance of the inputs, which no tolerance grows past.
     cap: f64,
-    grid: HashMap<[i64; 3], Vec<usize>>,
+    grid: BTreeMap<[i64; 3], Vec<usize>>,
     vmap: [Vec<usize>; 2],
     faces: Vec<Face>,
     face_of: [Vec<usize>; 2],
@@ -591,10 +604,10 @@ struct Piece {
     touch_points: Vec<usize>,
     /// Vertices a hit made where it was found, on no intersection curve: anywhere in the band
     /// where its edge grazes the face, as far from where they stand as the meeting fixes them.
-    unplaced: HashMap<usize, f64>,
+    unplaced: BTreeMap<usize, f64>,
     /// Each vertex an edge of one face met another face at: the two faces, and how far along the
     /// graze the meeting may lie from where their intersection curve runs.
-    meetings: HashMap<usize, Vec<(usize, usize, f64)>>,
+    meetings: BTreeMap<usize, Vec<(usize, usize, f64)>>,
     /// Which faces and edges of the two inputs come near each other; every pair where unknown.
     near: Option<near::Near>,
 }
@@ -614,7 +627,8 @@ struct Hit {
     sine: f64,
 }
 
-const CELL: f64 = 1e-3;
+/// The side of a vertex-grid cell, in mm.
+const CELL: f64 = 1e-3; // tol: a bucket size for finding coincident vertices, not a tolerance
 
 /// The furthest a grazing meeting is taken to lie from the intersection curve it belongs to.
 const GRAZE_REACH: f64 = 100.0 * tol::LINEAR;
@@ -622,7 +636,7 @@ const GRAZE_REACH: f64 = 100.0 * tol::LINEAR;
 /// The sine between a piece's way in from a cut and the other face's normal below which the cut
 /// does not settle the piece's side. It is a guard against rounding, not a tolerance: where the
 /// surfaces cross more shallowly a ray decides.
-const LOCAL_SINE: f64 = 1e-3;
+const LOCAL_SINE: f64 = 1e-3; // tol: a sine, not a length
 
 #[cfg(test)]
 mod tests;

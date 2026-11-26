@@ -1,31 +1,77 @@
 // yack: step 1c-2: face pairs' intersection curves, and every edge and curve split at its vertices.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; hardened (M3 B11): checked access in place of indexing, the
+// two HashMaps BTreeMaps (each walked only into a min-root union-find or disjoint updates), its
+// three contract panics a skip, its small literals named.
 //! Step 1c-2: face pairs' intersection curves, and every edge and curve split at its vertices.
+
+use std::collections::BTreeMap;
 
 use super::*;
 use super::bounds::{overlap, padded, curve_bbox, locate_piece};
 use super::split::{known_touches, seeds_for};
 
-#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
+/// The region two faces' intersection is traced in: their boxes' overlap, grown by this share of
+/// their diagonals and [`REGION_PAD`] mm.
+const REGION_SLACK: f64 = 1e-3; // tol: a share of the boxes' size, not a feature size
+
+/// See [`REGION_SLACK`].
+const REGION_PAD: f64 = 1e-4; // tol: slack on a search box, not a tolerance
+
+/// The root of `i` in the union-find `parent`, every step on the way pointed straight at it.
+fn find(parent: &mut [usize], i: usize) -> usize {
+    let mut root = i;
+    while let Some(&up) = parent.get(root)
+        && up != root
+    {
+        root = up;
+    }
+    let mut k = i;
+    while let Some(slot) = parent.get_mut(k)
+        && *slot != root
+    {
+        k = std::mem::replace(slot, root);
+    }
+    root
+}
+
+/// The root of `i` in the union-find `parent`, halving the path on the way.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&up) = parent.get(i)
+        && up != i
+    {
+        let grand = parent.get(up).copied().unwrap_or(up);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = grand;
+        }
+        i = grand;
+    }
+    i
+}
+
+impl<'a> Work<'a> {
     /// Step 1c: every face pair's intersection curves, and coincident pairs.
     pub(super) fn intersect_faces(&mut self) -> Result<()> {
         let pairs: Vec<(usize, usize)> = self.face_of[0]
             .iter()
             .flat_map(|&fa| self.face_of[1].iter().map(move |&fb| (fa, fb)))
             .filter(|&(fa, fb)| {
-                overlap(&self.faces[fa].bbox, &self.faces[fb].bbox) && self.faces_near(fa, fb)
+                self.faces.get(fa).zip(self.faces.get(fb)).is_some_and(|(a, b)| overlap(&a.bbox, &b.bbox))
+                    && self.faces_near(fa, fb)
             })
             .collect();
         let owners = self.edge_faces();
         for (fa, fb) in pairs {
-            let (sa, sb) = (&self.faces[fa].dom.surface, &self.faces[fb].dom.surface);
-            if same_domain_faces(&self.faces[fa].dom, &self.faces[fb].dom) {
+            let (Some(face_a), Some(face_b)) = (self.faces.get(fa), self.faces.get(fb)) else {
+                continue;
+            };
+            let (sa, sb) = (&face_a.dom.surface, &face_b.dom.surface);
+            if same_domain_faces(&face_a.dom, &face_b.dom) {
                 self.coincident.push((fa, fb));
                 continue;
             }
-            let (ba, bb) = (&self.faces[fa].bbox, &self.faces[fb].bbox);
+            let (ba, bb) = (&face_a.bbox, &face_b.bbox);
             let mut region = Aabb {
                 min: Vec3::new(
                     ba.min.x.max(bb.min.x),
@@ -38,7 +84,7 @@ use super::split::{known_touches, seeds_for};
                     ba.max.z.min(bb.max.z),
                 ),
             };
-            region = padded(&region, 1e-3 * (ba.diagonal() + bb.diagonal()) + 1e-4);
+            region = padded(&region, REGION_SLACK * (ba.diagonal() + bb.diagonal()) + REGION_PAD);
             // Edges of one face lying on the other's surface: the faces' contact along each is that
             // edge.
             let on_edges: Vec<usize> = self
@@ -53,10 +99,11 @@ use super::split::{known_touches, seeds_for};
             // On the edge, or where the faces are tangent along it, within the band either side
             // of it where they stay within the tolerance of each other: a trace there is noise.
             let along = |bi: usize, p: Point3| {
-                let base = &self.bases[bi];
-                base.curve.as_ref().is_some_and(|c| {
-                    let (d, t) = csi::curve_distance(c, base.range, p);
-                    d <= base.tol || d <= contact::band(sa, sb, c.eval(t), c.d1(t).1)
+                self.bases.get(bi).is_some_and(|base| {
+                    base.curve.as_ref().is_some_and(|c| {
+                        let (d, t) = csi::curve_distance(c, base.range, p);
+                        d <= base.tol || d <= contact::band(sa, sb, c.eval(t), c.d1(t).1)
+                    })
                 })
             };
             // A tolerant edge lying on the other face is where the two faces meet; within its tube
@@ -75,7 +122,7 @@ use super::split::{known_touches, seeds_for};
             };
             let tubes: Vec<(Rc<Curve>, (f64, f64), f64)> = on_edges
                 .iter()
-                .map(|&bi| &self.bases[bi])
+                .filter_map(|&bi| self.bases.get(bi))
                 .filter_map(|b| {
                     let width = if b.tol > tol::LINEAR {
                         2.0 * b.tol
@@ -94,7 +141,7 @@ use super::split::{known_touches, seeds_for};
                     .iter()
                     .chain(self.hits.iter().map(|h| &h.p))
                     .chain(found);
-                let (da, db) = (&self.faces[fa].dom, &self.faces[fb].dom);
+                let (da, db) = (&face_a.dom, &face_b.dom);
                 let pool = &self.pool;
                 let touches = &mut touches;
                 let mut seeds = || {
@@ -146,9 +193,10 @@ use super::split::{known_touches, seeds_for};
                 })
             });
             for p in points {
-                if self.faces[fa].dom.locate(p) != Where::Outside
-                    && self.faces[fb].dom.locate(p) != Where::Outside
-                {
+                let inside = self.faces.get(fa).zip(self.faces.get(fb)).is_some_and(|(a, b)| {
+                    a.dom.locate(p) != Where::Outside && b.dom.locate(p) != Where::Outside
+                });
+                if inside {
                     let v = self.vertex(p);
                     self.touch_points.push(v);
                 }
@@ -179,7 +227,9 @@ use super::split::{known_touches, seeds_for};
     /// The pool vertices within reach of base `bi`'s box: those `points` (a hierarchy over the
     /// first `indexed` of the pool) finds there, and every vertex added since.
     pub(super) fn splits(&self, bi: usize, points: &Bvh, indexed: usize) -> Vec<(f64, usize, f64)> {
-        let base = &self.bases[bi];
+        let Some(base) = self.bases.get(bi) else {
+            return Vec::new();
+        };
         let Some(curve) = &base.curve else {
             return Vec::new();
         };
@@ -202,7 +252,9 @@ use super::split::{known_touches, seeds_for};
         near.sort_unstable();
         let mut out: Vec<(f64, usize, f64)> = Vec::new();
         for vi in near {
-            let p = self.pool[vi];
+            let (Some(&p), Some(&vt)) = (self.pool.get(vi), self.vtol.get(vi)) else {
+                continue;
+            };
             if Some(vi) == base.v0 || Some(vi) == base.v1 {
                 continue;
             }
@@ -210,7 +262,7 @@ use super::split::{known_touches, seeds_for};
                 continue;
             }
             let (d, t) = csi::curve_distance(curve, base.range, p);
-            if d <= tol::coincidence(base.tol, self.vtol[vi]).max(grazing(vi)) {
+            if d <= tol::coincidence(base.tol, vt).max(grazing(vi)) {
                 out.push((t, vi, d));
             }
         }
@@ -221,7 +273,7 @@ use super::split::{known_touches, seeds_for};
 
     /// Step 2a: every base split at its vertices into pieces; intersection pieces outside either
     /// face are dropped.
-    #[allow(clippy::panic)] pub(super) fn split_curves(&mut self) {
+    pub(super) fn split_curves(&mut self) {
         self.base_pieces = vec![Vec::new(); self.bases.len()];
         let mut plans: Vec<(usize, Vec<f64>, Vec<usize>)> = Vec::new();
         let indexed = self.pool.len();
@@ -232,12 +284,15 @@ use super::split::{known_touches, seeds_for};
                 .into_iter()
                 .map(|(t, v, d)| {
                     // The piece ends where the curve passes the vertex, which must hold it.
-                    if d > self.vtol[v] {
+                    if self.vtol.get(v).is_some_and(|&vt| d > vt) {
                         // A grazing meeting is known only to its reach: the vertex says so.
                         let met = self.meetings.get(&v).into_iter().flatten();
                         let reach = met.map(|m| m.2).fold(0.0, f64::max);
-                        self.vtol[v] = d.min(self.cap.max(reach));
-                        self.widest = self.widest.max(self.vtol[v]);
+                        let held = d.min(self.cap.max(reach));
+                        if let Some(vt) = self.vtol.get_mut(v) {
+                            *vt = held;
+                        }
+                        self.widest = self.widest.max(held);
                         if !self.tolerant.contains(&v) {
                             self.tolerant.push(v);
                         }
@@ -245,7 +300,9 @@ use super::split::{known_touches, seeds_for};
                     (t, v)
                 })
                 .collect();
-            let base = &self.bases[bi];
+            let Some(base) = self.bases.get(bi) else {
+                continue;
+            };
             let mut ts: Vec<f64> = Vec::new();
             let mut vs: Vec<usize> = Vec::new();
             match (base.v0, base.v1) {
@@ -263,11 +320,11 @@ use super::split::{known_touches, seeds_for};
                     let period = base.range.1 - base.range.0;
                     if sp.is_empty() {
                         let t = base.range.0;
-                        let mid = base
-                            .curve
-                            .as_ref()
-                            .unwrap_or_else(|| panic!("cut has a curve"))
-                            .eval(t + 0.5 * period);
+                        // a closed base is a cut, and a cut has a curve
+                        let Some(curve) = base.curve.as_ref() else {
+                            continue;
+                        };
+                        let mid = curve.eval(t + 0.5 * period);
                         if !self.cut_inside_both(bi, mid) {
                             continue;
                         }
@@ -281,8 +338,10 @@ use super::split::{known_touches, seeds_for};
                             ts.push(t);
                             vs.push(v);
                         }
-                        ts.push(sp[0].0 + period);
-                        vs.push(sp[0].1);
+                        if let Some(&(t0, v0)) = sp.first() {
+                            ts.push(t0 + period);
+                            vs.push(v0);
+                        }
                     }
                 }
                 _ => {
@@ -298,20 +357,17 @@ use super::split::{known_touches, seeds_for};
         // it: faces lying within the tolerance of each other can put two corners there whose
         // points are just over it apart, and the piece between them would have no direction.
         let mut parent: Vec<usize> = (0..self.pool.len()).collect();
-        fn root(p: &mut [usize], mut i: usize) -> usize {
-            while p[i] != i {
-                p[i] = p[p[i]];
-                i = p[i];
-            }
-            i
-        }
+        // each piece of each plan: whether it is shorter than the tolerance
         let shorts: Vec<Vec<bool>> = plans
             .iter()
             .map(|(bi, ts, _)| {
-                (0..ts.len().saturating_sub(1))
-                    .map(|k| {
-                        self.bases[*bi].curve.as_ref().is_some_and(|c| {
-                            let (t0, t1) = (ts[k], ts[k + 1]);
+                let curve = self.bases.get(*bi).and_then(|b| b.curve.as_ref());
+                ts.windows(2)
+                    .map(|w| {
+                        let &[t0, t1] = w else {
+                            return false;
+                        };
+                        curve.is_some_and(|c| {
                             let a = c.eval(t0);
                             a.dist(c.eval(t1)) <= tol::LINEAR
                                 && a.dist(c.eval(0.5 * (t0 + t1))) <= tol::LINEAR
@@ -320,17 +376,23 @@ use super::split::{known_touches, seeds_for};
                     .collect()
             })
             .collect();
-        for ((_, ts, vs), short) in plans.iter().zip(&shorts) {
-            for k in 0..ts.len().saturating_sub(1) {
-                if vs[k] != vs[k + 1] && short[k] {
-                    let (a, b) = (root(&mut parent, vs[k]), root(&mut parent, vs[k + 1]));
-                    parent[a.max(b)] = a.min(b);
+        for ((_, _, vs), short) in plans.iter().zip(&shorts) {
+            for (w, &is_short) in vs.windows(2).zip(short) {
+                if let &[a, b] = w
+                    && a != b
+                    && is_short
+                {
+                    let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                    if let Some(up) = parent.get_mut(ra.max(rb)) {
+                        *up = ra.min(rb);
+                    }
                 }
             }
         }
         // Each merged vertex at its members' centroid where that holds them all: two corners just
         // over the tolerance apart are each within it of their middle.
-        let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+        // classes are disjoint, so each moves its own root alone: their order reaches nothing
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for v in 0..parent.len() {
             let r = root(&mut parent, v);
             if r != v {
@@ -338,22 +400,31 @@ use super::split::{known_touches, seeds_for};
             }
         }
         for (r, members) in &groups {
-            let sum = members
-                .iter()
-                .fold(Vec3::ZERO, |acc, &m| acc + self.pool[m]);
+            let points: Vec<Point3> = members.iter().filter_map(|&m| self.pool.get(m).copied()).collect();
+            let sum = points.iter().fold(Vec3::ZERO, |acc, &q| acc + q);
             let c = sum * (1.0 / members.len() as f64);
-            if members.iter().all(|&m| self.pool[m].dist(c) <= tol::LINEAR) {
-                self.pool[*r] = c;
+            if points.iter().all(|q| q.dist(c) <= tol::LINEAR)
+                && let Some(at) = self.pool.get_mut(*r)
+            {
+                *at = c;
             }
         }
         for v in 0..parent.len() {
             let r = root(&mut parent, v);
             if r != v {
-                let gap = self.pool[r].dist(self.pool[v]) + self.vtol[v];
-                if gap > self.vtol[r] {
-                    self.vtol[r] = gap.min(self.cap);
-                    self.widest = self.widest.max(self.vtol[r]);
-                    if self.vtol[r] > tol::LINEAR && !self.tolerant.contains(&r) {
+                let (Some(&pr), Some(&pv), Some(&tv), Some(&tr)) =
+                    (self.pool.get(r), self.pool.get(v), self.vtol.get(v), self.vtol.get(r))
+                else {
+                    continue;
+                };
+                let gap = pr.dist(pv) + tv;
+                if gap > tr {
+                    let held = gap.min(self.cap);
+                    if let Some(t) = self.vtol.get_mut(r) {
+                        *t = held;
+                    }
+                    self.widest = self.widest.max(held);
+                    if held > tol::LINEAR && !self.tolerant.contains(&r) {
                         self.tolerant.push(r);
                     }
                 }
@@ -361,25 +432,30 @@ use super::split::{known_touches, seeds_for};
         }
         for ((bi, ts, vs), short) in plans.into_iter().zip(shorts) {
             let vs: Vec<usize> = vs.into_iter().map(|v| root(&mut parent, v)).collect();
-            for k in 0..ts.len().saturating_sub(1) {
-                if vs[k] == vs[k + 1] && short[k] {
+            for ((tw, vw), &is_short) in ts.windows(2).zip(vs.windows(2)).zip(&short) {
+                let (&[t0, t1], &[v0, v1]) = (tw, vw) else {
+                    continue;
+                };
+                if v0 == v1 && is_short {
                     continue;
                 }
-                self.add_piece(bi, (ts[k], ts[k + 1]), vs[k], vs[k + 1]);
+                self.add_piece(bi, (t0, t1), v0, v1);
             }
         }
     }
 
     pub(super) fn cut_inside_both(&self, bi: usize, p: Point3) -> bool {
-        let BaseKind::Cut { fa, fb, .. } = self.bases[bi].kind else {
+        let Some(&BaseKind::Cut { fa, fb, .. }) = self.bases.get(bi).map(|b| &b.kind) else {
             return true;
         };
-        self.faces[fa].dom.locate(p) != Where::Outside
-            && self.faces[fb].dom.locate(p) != Where::Outside
+        let inside = |f: usize| self.faces.get(f).is_some_and(|face| face.dom.locate(p) != Where::Outside);
+        inside(fa) && inside(fb)
     }
 
-    #[allow(clippy::panic)] pub(super) fn add_piece(&mut self, bi: usize, range: (f64, f64), v0: usize, v1: usize) {
-        let base = &self.bases[bi];
+    pub(super) fn add_piece(&mut self, bi: usize, range: (f64, f64), v0: usize, v1: usize) {
+        let Some(base) = self.bases.get(bi) else {
+            return;
+        };
         let mut inside = Vec::new();
         let rank = match base.kind {
             BaseKind::Edge => self.edge_side(bi) as u8,
@@ -387,12 +463,13 @@ use super::split::{known_touches, seeds_for};
             // pieces touch along it, an edge four faces use; where it keeps one, the two halves of
             // that face merge again across it.
             BaseKind::Cut { fa, fb, .. } => {
-                let c = base.curve.as_ref().unwrap_or_else(|| panic!("cut has a curve"));
+                // a cut has a curve, and its faces are taken in
+                let (Some(c), Some(face_a), Some(face_b)) = (base.curve.as_ref(), self.faces.get(fa), self.faces.get(fb))
+                else {
+                    return;
+                };
                 let ends = [0.0, 0.5, 1.0].map(|f| c.eval(range.0 + (range.1 - range.0) * f));
-                let (la, lb) = (
-                    locate_piece(&self.faces[fa].dom, ends),
-                    locate_piece(&self.faces[fb].dom, ends),
-                );
+                let (la, lb) = (locate_piece(&face_a.dom, ends), locate_piece(&face_b.dom, ends));
                 if la == Where::Outside || lb == Where::Outside {
                     return;
                 }
@@ -413,7 +490,9 @@ use super::split::{known_touches, seeds_for};
             rank,
         });
         self.cut_faces.push(inside);
-        self.base_pieces[bi].push(id);
+        if let Some(pieces) = self.base_pieces.get_mut(bi) {
+            pieces.push(id);
+        }
     }
 
     /// Which input an edge base came from: the first input's edges come first.
@@ -422,8 +501,10 @@ use super::split::{known_touches, seeds_for};
     }
 
     pub(super) fn piece_point(&self, pi: usize, f: f64) -> Point3 {
-        let p = &self.pieces[pi];
-        let b = &self.bases[p.base];
+        // a piece not taken in has no point: NaN, which every test of a place reads as nowhere
+        let Some((p, b)) = self.pieces.get(pi).and_then(|p| Some((p, self.bases.get(p.base)?))) else {
+            return Point3::new(f64::NAN, f64::NAN, f64::NAN);
+        };
         match &b.curve {
             Some(c) => c.eval(p.range.0 + (p.range.1 - p.range.0) * f),
             None => b.pole,
@@ -431,25 +512,14 @@ use super::split::{known_touches, seeds_for};
     }
 
     /// Step 2b: pieces that run along each other become one, the lowest-ranked.
-    #[allow(clippy::panic)] pub(super) fn dedup(&mut self) {
+    pub(super) fn dedup(&mut self) {
         let n = self.pieces.len();
         let mut parent: Vec<usize> = (0..n).collect();
-        fn find(p: &mut [usize], i: usize) -> usize {
-            let mut r = i;
-            while p[r] != r {
-                r = p[r];
-            }
-            let mut k = i;
-            while p[k] != r {
-                let nx = p[k];
-                p[k] = r;
-                k = nx;
-            }
-            r
-        }
-        let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        // walked into a union-find whose roots are each class's least (rank, index): its order
+        // reaches nothing
+        let mut by_ends: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
         for (i, p) in self.pieces.iter().enumerate() {
-            if self.bases[p.base].curve.is_none() {
+            if self.bases.get(p.base).is_none_or(|b| b.curve.is_none()) {
                 continue;
             }
             by_ends
@@ -459,25 +529,31 @@ use super::split::{known_touches, seeds_for};
         }
         for group in by_ends.values() {
             for (k, &i) in group.iter().enumerate() {
-                for &j in &group[k + 1..] {
-                    if self.pieces[i].base == self.pieces[j].base {
+                for &j in group.iter().skip(k + 1) {
+                    let (Some(pi), Some(pj)) = (self.pieces.get(i), self.pieces.get(j)) else {
+                        continue;
+                    };
+                    if pi.base == pj.base {
                         continue;
                     }
-                    let pj = &self.pieces[j];
-                    let cj = self.bases[pj.base].curve.as_ref().unwrap_or_else(|| panic!("has a curve"));
-                    let within =
-                        tol::coincidence(self.bases[pj.base].tol, self.bases[self.pieces[i].base].tol);
+                    let (Some(bi), Some(bj)) = (self.bases.get(pi.base), self.bases.get(pj.base)) else {
+                        continue;
+                    };
+                    // pieces of curveless bases were left out above
+                    let Some(cj) = bj.curve.as_ref() else {
+                        continue;
+                    };
+                    let within = tol::coincidence(bj.tol, bi.tol);
                     let same = [0.25, 0.5, 0.75].iter().all(|&f| {
                         csi::curve_distance(cj, pj.range, self.piece_point(i, f)).0 <= within
                     });
                     if same {
                         let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
                         if ri != rj {
-                            let key = |x: usize| (self.pieces[x].rank, x);
-                            if key(ri) < key(rj) {
-                                parent[rj] = ri;
-                            } else {
-                                parent[ri] = rj;
+                            let key = |x: usize| (self.pieces.get(x).map_or(u8::MAX, |p| p.rank), x);
+                            let (low, high) = if key(ri) < key(rj) { (ri, rj) } else { (rj, ri) };
+                            if let Some(up) = parent.get_mut(high) {
+                                *up = low;
                             }
                         }
                     }
@@ -491,13 +567,14 @@ use super::split::{known_touches, seeds_for};
         self.pieces
             .iter()
             .map(|p| {
-                let b = &self.bases[p.base];
+                // one geometry for every piece, in order: a piece's place is its id
+                let b = self.bases.get(p.base);
                 PieceGeom {
-                    curve: b.curve.clone(),
+                    curve: b.and_then(|b| b.curve.clone()),
                     range: p.range,
                     v0: p.v0,
                     v1: p.v1,
-                    tol: b.tol,
+                    tol: b.map_or(tol::LINEAR, |b| b.tol),
                 }
             })
             .collect()

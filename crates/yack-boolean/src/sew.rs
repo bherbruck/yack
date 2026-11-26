@@ -1,12 +1,14 @@
 // yack: Joining the kept pieces of faces into solids: faces on one surface that share an edge merge
 // Adapted from springrep@a03e8a1 src/boolean/sew.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/boolean/sew.rs to yack-boolean (M3 W8); paths and visibility only.
+// Changes: moved from springrep's src/boolean/sew.rs to yack-boolean (M3 W8); paths and visibility only;
+// hardened (M3 B5): BTreeMap for every HashMap (each looked up, or walked only into a union-find,
+// a set or a sorted list), its four contract panics an early return, its small literals named.
 //! Joining the kept pieces of faces into solids: faces on one surface that share an edge merge
 //! (carrying every name either had), each edge must be used twice in opposite directions, shells
 //! are the connected sets of faces, and a shell enclosing negative volume is a void of the shell
 //! around it. The result passes the checker or is an error.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -80,8 +82,8 @@ fn find(p: &mut [usize], i: usize) -> usize {
 }
 
 /// Each piece's uses: `(face, loop, trim)`.
-#[allow(clippy::disallowed_types)] fn uses(faces: &[OutFace]) -> HashMap<usize, Vec<(usize, usize, usize)>> { // D26: BTree* in hardening, proven by digests
-    let mut out: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+fn uses(faces: &[OutFace]) -> BTreeMap<usize, Vec<(usize, usize, usize)>> {
+    let mut out: BTreeMap<usize, Vec<(usize, usize, usize)>> = BTreeMap::new();
     for (fi, f) in faces.iter().enumerate() {
         for (li, l) in f.loops.iter().enumerate() {
             for (ti, t) in l.iter().enumerate() {
@@ -137,17 +139,17 @@ fn drop_lone_slits(faces: &mut [OutFace]) {
 /// partner. Each use's place round the edge is read a short step into its face, where faces that
 /// leave the edge tangent to each other, as a cylinder lying on a plane does, have parted. Only
 /// pieces with more than two uses are paired here; a piece's two uses are each other's partners.
-#[allow(clippy::disallowed_types)] pub(super) fn pair_uses(faces: &[OutFace], pieces: &[PieceGeom]) -> Result<HashMap<Use, Use>> { // D26: BTree* in hardening, proven by digests
+pub(super) fn pair_uses(faces: &[OutFace], pieces: &[PieceGeom]) -> Result<BTreeMap<Use, Use>> {
     Ok(around_uses(faces, pieces)?.0)
 }
 
 /// [`pair_uses`], and each use's neighbour across the empty wedge beside it.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn around_uses( // D26: BTree* in hardening, proven by digests
+fn around_uses(
     faces: &[OutFace],
     pieces: &[PieceGeom],
-) -> Result<(HashMap<Use, Use>, HashMap<Use, Use>)> {
-    let mut out = HashMap::new();
-    let mut beside = HashMap::new();
+) -> Result<(BTreeMap<Use, Use>, BTreeMap<Use, Use>)> {
+    let mut out = BTreeMap::new();
+    let mut beside = BTreeMap::new();
     let mut shared: Vec<(usize, Vec<Use>)> = uses(faces)
         .into_iter()
         .filter(|(p, us)| us.len() > 2 && pieces[*p].curve.is_some())
@@ -155,7 +157,9 @@ fn drop_lone_slits(faces: &mut [OutFace]) {
     shared.sort_by_key(|x| x.0);
     for (piece, us) in shared {
         let pg = &pieces[piece];
-        let c = pg.curve.as_ref().unwrap_or_else(|| panic!("filtered"));
+        let Some(c) = pg.curve.as_ref() else {
+            continue;
+        };
         let (m, d) = c.d1(0.5 * (pg.range.0 + pg.range.1));
         let refused = || {
             Error::InvalidResult(vec![format!(
@@ -281,12 +285,16 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
         .then_some(map)
 }
 
+/// How far apart, in mm along the surface, two members' images of one place may be and still be one:
+/// an edge two members share there is inside the merged face, and a loop closes on its start.
+const MERGE_GAP: f64 = 1e-5; // tol: a gap between parameter-plane images, in mm along the surface
+
 /// The faces of `group` as one face on the first's surface, or `None` when they do not make one
 /// face with closed parameter-plane loops and a single outer loop. Each member is mapped onto the
 /// first's parameters and moved by whole periods to meet its neighbours; an edge two members share
 /// at one place in the parameter plane is inside the merged face, and one they share a period
 /// apart is its seam.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn merge_group( // D26: BTree* in hardening, proven by digests
+fn merge_group(
     faces: &[OutFace],
     group: &[usize],
     vtol: &[f64],
@@ -294,7 +302,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
 ) -> Option<OutFace> {
     // An imported vertex's edges end anywhere in its sphere, so their images part by up to twice
     // its tolerance.
-    let gap = |v: usize| vtol.get(v).map_or(1e-5, |&t| (2.0 * t).max(1e-5));
+    let gap = |v: usize| vtol.get(v).map_or(MERGE_GAP, |&t| (2.0 * t).max(MERGE_GAP));
     let base = &faces[group[0]];
     let s = &base.surface;
     let mut members: Vec<Vec<Trim>> = Vec::new();
@@ -309,7 +317,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
                 .collect(),
         );
     }
-    let mut uses: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut uses: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
     for (k, ts) in members.iter().enumerate() {
         for (i, t) in ts.iter().enumerate() {
             uses.entry(t.piece).or_default().push((k, i));
@@ -319,7 +327,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
     shift[0] = Some(Vec2::ZERO);
     let mut queue = vec![0];
     while let Some(k) = queue.pop() {
-        let sk = shift[k].unwrap_or_else(|| panic!("queued members are placed"));
+        let sk = shift[k]?;
         for (i, t) in members[k].iter().enumerate() {
             for &(j, ti) in &uses[&t.piece] {
                 if shift[j].is_some() || (j, ti) == (k, i) {
@@ -355,7 +363,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
             // A contact stays: the merged face runs along it both ways, as along a seam.
             if trims[i].piece == trims[j].piece
                 && !contact.contains(&trims[i].piece)
-                && uv_gap(s, mids[i], mids[j]) <= 1e-5
+                && uv_gap(s, mids[i], mids[j]) <= MERGE_GAP
             {
                 inside[i] = true;
                 inside[j] = true;
@@ -373,7 +381,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
         used[first] = true;
         let mut lp = vec![trims[first].clone()];
         loop {
-            let last = lp.last().unwrap_or_else(|| panic!("loop has a trim"));
+            let last = lp.last()?;
             let (v, at) = (last.v1, last.uv1);
             if v == lp[0].v0 && uv_gap(s, at, lp[0].uv0) <= gap(v) {
                 break;
@@ -430,11 +438,11 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
 }
 
 /// Faces on one surface, facing one way, that share an edge become one face.
-#[allow(clippy::disallowed_types)] pub(super) fn merge_same_domain( // D26: BTree* in hardening, proven by digests
+pub(super) fn merge_same_domain(
     faces: Vec<OutFace>,
     pieces: &[PieceGeom],
     vtol: &[f64],
-    partners: &HashMap<Use, Use>,
+    partners: &BTreeMap<Use, Use>,
 ) -> Vec<OutFace> {
     let n = faces.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -493,7 +501,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
         let moved = std::mem::take(&mut members[other]);
         members[root].extend(moved);
     }
-    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for i in 0..n {
         let r = find(&mut parent, i);
         groups.entry(r).or_default().push(i);
@@ -517,7 +525,7 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
 
 /// Every edge must be used by two coedges running opposite ways, or by pairs of them where pieces
 /// touch along it, and a pole by one.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &HashMap<Use, Use>) -> Result<()> { // D26: BTree* in hardening, proven by digests
+fn check_uses(faces: &[OutFace], pieces: &[PieceGeom], partners: &BTreeMap<Use, Use>) -> Result<()> {
     let mut issues = Vec::new();
     for (piece, us) in uses(faces) {
         let pg = &pieces[piece];
@@ -538,12 +546,10 @@ pub(super) fn uv_affine(base: &Surface, m: &Surface) -> Option<UvAffine> {
                     faces[u.0].loops[u.1][u.2].forward != faces[p.0].loops[p.1][p.2].forward
                 })
             });
-        if !paired && (dirs.len() != 2 || dirs[0] == dirs[1]) {
-            let p = pg
-                .curve
-                .as_ref()
-                .unwrap_or_else(|| panic!("checked"))
-                .eval(0.5 * (pg.range.0 + pg.range.1));
+        if !paired && (dirs.len() != 2 || dirs[0] == dirs[1])
+            && let Some(c) = pg.curve.as_ref()
+        {
+            let p = c.eval(0.5 * (pg.range.0 + pg.range.1));
             issues.push(format!(
                 "the edge through ({:.6}, {:.6}, {:.6}) would be used by {} faces{}",
                 p.x,
@@ -573,21 +579,21 @@ type SolidPlan = (Vec<Vec<usize>>, usize);
 /// An arena holding `faces`, grouped into solids of sheets, with each face use's coedge. With
 /// `share`, a solid's sheets share the vertices and edges where they touch; without, each sheet
 /// has its own, as a trial of each sheet alone needs.
-#[allow(clippy::disallowed_types)] fn build( // D26: BTree* in hardening, proven by digests
+fn build(
     faces: &[OutFace],
     solids: &[SolidPlan],
     pool: &[Point3],
     vtol: &[f64],
     pieces: &[PieceGeom],
     share: bool,
-) -> (Brep, Vec<Option<usize>>, HashMap<Use, CoedgeId>) {
+) -> (Brep, Vec<Option<usize>>, BTreeMap<Use, CoedgeId>) {
     let mut b = Brep::new();
     let mut sides = Vec::new();
-    let mut coedge_of: HashMap<Use, CoedgeId> = HashMap::new();
+    let mut coedge_of: BTreeMap<Use, CoedgeId> = BTreeMap::new();
     // One vertex per solid at each point: pieces of a solid that touch at a point share it, while
     // separate solids that touch there close round their own.
-    let mut verts: HashMap<(usize, usize), VertexId> = HashMap::new();
-    let mut edges: HashMap<(usize, usize), EdgeId> = HashMap::new();
+    let mut verts: BTreeMap<(usize, usize), VertexId> = BTreeMap::new();
+    let mut edges: BTreeMap<(usize, usize), EdgeId> = BTreeMap::new();
     let mut sheet = 0usize;
     for (si, (sheets, outer)) in solids.iter().enumerate() {
         let mut shell_ids = Vec::new();
@@ -660,7 +666,7 @@ type SolidPlan = (Vec<Vec<usize>>, usize);
 const THIN: f64 = 10.0 * tol::LINEAR;
 
 /// The result solid from its faces. `vtol` is each pool vertex's local tolerance.
-#[allow(clippy::disallowed_types)] pub(crate) fn assemble( // D26: BTree* in hardening, proven by digests
+pub(crate) fn assemble(
     faces: Vec<OutFace>,
     pool: &[Point3],
     vtol: &[f64],
@@ -700,7 +706,7 @@ const THIN: f64 = 10.0 * tol::LINEAR;
     }
     let mut sheets: Vec<Vec<usize>> = Vec::new();
     let mut sheet_of = vec![0usize; n];
-    let mut index: HashMap<usize, usize> = HashMap::new();
+    let mut index: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, sheet) in sheet_of.iter_mut().enumerate() {
         let r = find(&mut parent, i);
         let k = *index.entry(r).or_insert_with(|| {
@@ -758,7 +764,7 @@ const THIN: f64 = 10.0 * tol::LINEAR;
             join(&mut group, sheet_of[w[0].0], sheet_of[w[1].0]);
         }
     }
-    let mut at_vertex: HashMap<usize, usize> = HashMap::new();
+    let mut at_vertex: BTreeMap<usize, usize> = BTreeMap::new();
     for (fi, f) in faces.iter().enumerate() {
         for t in f.loops.iter().flatten() {
             let pg = &pieces[t.piece];
@@ -772,7 +778,7 @@ const THIN: f64 = 10.0 * tol::LINEAR;
             }
         }
     }
-    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for k in 0..m {
         members.entry(find(&mut group, k)).or_default().push(k);
     }

@@ -72,6 +72,13 @@ pub fn built_by(s: &Solid) -> &'static str {
     s.built_by()
 }
 
+/// The dense p-curve scan of `s`'s cadrs-held body (cadrs's `pcurve_scan`, measure-only), as one
+/// line: `coedges=N over_tol=N pcurve_off=E at=(f,e,t) tol=E edge_off=E outside=E`, or
+/// `error: ...`; `None` when `s` is not held in cadrs form.
+pub fn pcurve_scan(s: &Solid) -> Option<String> {
+    s.held_pcurve_scan()
+}
+
 /// How `s` survives springrep → cadrs → springrep through the bridge: empty when it comes back
 /// alike, else one line per problem, each starting with a stable cause prefix (`to-cadrs:`,
 /// `back:`, `order:`, `volume:`, `area:`, `face-area:`, `classify:`).

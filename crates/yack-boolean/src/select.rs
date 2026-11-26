@@ -1,13 +1,21 @@
 // yack: step 4: each piece of face classified and kept or dropped.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; hardened (M3 B7): checked access in place of indexing, the
+// lookup-only group-class map a BTreeMap.
 //! Step 4: each piece of face classified and kept or dropped.
+
+use std::collections::BTreeMap;
 
 use super::*;
 use super::bounds::overlap;
 
-#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
+/// A piece of the working set that is not there: a bug in the steps before.
+fn missing(what: &str) -> Error {
+    Error::Numerical(format!("boolean: no {what} at that index"))
+}
+
+impl<'a> Work<'a> {
     /// Step 4: each piece of face classified and kept or dropped.
     pub(super) fn select(
         &self,
@@ -15,10 +23,10 @@ use super::bounds::overlap;
         intact: &[bool],
         op: Op,
     ) -> Result<Vec<OutFace>> {
-        let solids: [Vec<(&Domain, Aabb)>; 2] = [0, 1].map(|side| {
-            self.face_of[side]
-                .iter()
-                .map(|&f| (&self.faces[f].dom, self.faces[f].bbox))
+        let solids: [Vec<(&Domain, Aabb)>; 2] = self.face_of.each_ref().map(|ids| {
+            ids.iter()
+                .filter_map(|&f| self.faces.get(f))
+                .map(|face| (&face.dom, face.bbox))
                 .collect()
         });
         let reach = solids.each_ref().map(|faces| {
@@ -31,15 +39,19 @@ use super::bounds::overlap;
         let mut kept: Vec<OutFace> = Vec::new();
         let mut kept_doms: Vec<(usize, Domain)> = Vec::new();
         let groups = self.clear_groups();
-        let mut group_class: HashMap<usize, Class> = HashMap::new();
+        // looked up only: its order reaches nothing
+        let mut group_class: BTreeMap<usize, Class> = BTreeMap::new();
         for (fi, pieces) in frags.into_iter().enumerate() {
-            let face = &self.faces[fi];
-            let b = self.breps[face.side];
+            let face = self.faces.get(fi).ok_or_else(|| missing("face"))?;
+            let b = *self.breps.get(face.side).ok_or_else(|| missing("solid"))?;
             let names = &b.face(face.id).names;
-            let apart = !overlap(&face.bbox, &reach[1 - face.side]);
+            let other_side = 1 - face.side;
+            let other_reach = reach.get(other_side).ok_or_else(|| missing("solid"))?;
+            let apart = !overlap(&face.bbox, other_reach);
+            let memo = intact.get(fi) == Some(&true);
             // A whole face clear of the other solid takes its group's class once a face of the
             // group has been classified.
-            let group = groups[fi].filter(|_| pieces.len() == 1);
+            let group = groups.get(fi).copied().flatten().filter(|_| pieces.len() == 1);
             let known = if apart {
                 Some(Class::Out)
             } else {
@@ -58,7 +70,7 @@ use super::bounds::overlap;
                         reversed: face.dom.reversed,
                         names: names.clone(),
                         loops,
-                        memo: intact[fi].then(|| b.shared_memo(face.id)),
+                        memo: memo.then(|| b.shared_memo(face.id)),
                         side: Some(face.side),
                     };
                     if flip {
@@ -71,7 +83,7 @@ use super::bounds::overlap;
                 let class = if apart {
                     Class::Out
                 } else {
-                    let other = &solids[1 - face.side];
+                    let other = solids.get(other_side).ok_or_else(|| missing("solid"))?;
                     let uv = dom.interior_point().ok_or_else(|| {
                         Error::Numerical("a piece of a face has no interior point".into())
                     })?;
@@ -106,15 +118,16 @@ use super::bounds::overlap;
                 };
                 let mut all_names: BTreeSet<FaceName> = names.clone();
                 if let Some(g) = extra {
-                    let gf = &self.faces[g];
-                    all_names.extend(self.breps[gf.side].face(gf.id).names.iter().cloned());
+                    let gf = self.faces.get(g).ok_or_else(|| missing("face"))?;
+                    let gb = self.breps.get(gf.side).ok_or_else(|| missing("solid"))?;
+                    all_names.extend(gb.face(gf.id).names.iter().cloned());
                 }
                 let mut out = OutFace {
                     surface: dom.surface.clone(),
                     reversed: dom.reversed,
                     names: all_names,
                     loops: dom.loops.clone(),
-                    memo: intact[fi].then(|| b.shared_memo(face.id)),
+                    memo: memo.then(|| b.shared_memo(face.id)),
                     side: Some(face.side),
                 };
                 if flip {
@@ -139,7 +152,9 @@ use super::bounds::overlap;
             .chain(self.met.iter().map(|m| m.0))
             .collect();
         for v in touch {
-            let p = self.pool[v];
+            let Some(&p) = self.pool.get(v) else {
+                continue;
+            };
             let bounds = |f: &OutFace| f.loops.iter().flatten().any(|t| t.v0 == v || t.v1 == v);
             let on_boundary = kept.iter().any(bounds);
             let inside: Vec<(usize, Vec2)> = kept
@@ -160,8 +175,11 @@ use super::bounds::overlap;
                 continue;
             }
             for (i, uv) in inside {
+                let Some(face) = kept.get_mut(i) else {
+                    continue;
+                };
                 // An uncut copy's memo describes the input face's loops, which this one outgrows.
-                kept[i].memo = None;
+                face.memo = None;
                 geoms.push(PieceGeom {
                     curve: None,
                     range: (0.0, 1.0),
@@ -169,7 +187,7 @@ use super::bounds::overlap;
                     v1: v,
                     tol: tol::LINEAR,
                 });
-                kept[i].loops.push(vec![Trim {
+                face.loops.push(vec![Trim {
                     piece: geoms.len() - 1,
                     forward: true,
                     curve: None,
@@ -199,11 +217,11 @@ use super::bounds::overlap;
                 let Some(piece) = self.pieces.get(tr.piece) else {
                     continue;
                 };
-                let BaseKind::Cut {
+                let Some(&BaseKind::Cut {
                     fa,
                     fb,
                     tangent: false,
-                } = self.bases[piece.base].kind
+                }) = self.bases.get(piece.base).map(|b| &b.kind)
                 else {
                     continue;
                 };
@@ -216,15 +234,20 @@ use super::bounds::overlap;
                 };
                 let Some(c) = &tr.curve else { continue };
                 let (q, dq) = c.d1(0.5 * (tr.t0 + tr.t1));
-                let Where::Inside(uvg) = self.faces[g].dom.locate(q) else {
+                let Some(gd) = self.faces.get(g).map(|f| &f.dom) else {
                     continue;
                 };
-                let pl = &dom.samples()[li][k];
-                let uv = pl[pl.len() / 2];
+                let Where::Inside(uvg) = gd.locate(q) else {
+                    continue;
+                };
+                // the middle sample of the trim's polyline
+                let Some(&uv) = dom.samples().get(li).and_then(|l| l.get(k)).and_then(|pl| pl.get(pl.len() / 2)) else {
+                    continue;
+                };
                 let travel = if tr.t1 >= tr.t0 { dq } else { -dq };
                 // The loops keep the material on their left, seen from outside.
                 let into = dom.outward(uv).cross(travel).unit_or_zero();
-                let s = into.dot(self.faces[g].dom.outward(uvg));
+                let s = into.dot(gd.outward(uvg));
                 if s.abs() >= LOCAL_SINE {
                     return Some(s < 0.0);
                 }
@@ -249,7 +272,7 @@ use super::bounds::overlap;
             } else {
                 continue;
             };
-            let gd = &self.faces[g].dom;
+            let gd = &self.faces.get(g).ok_or_else(|| missing("face"))?.dom;
             let at = match gd.locate(p) {
                 // The piece is thinner than twice the tolerance here. It was cut along every
                 // stretch of g's boundary that crosses it, so its interior lies wholly on one side.

@@ -1,13 +1,22 @@
 // yack: step 1a-b: edges pierce faces, edges cross and graze each other, imprints.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; hardened (M3 B10): checked access in place of indexing, the
+// lookup-only maps and sets BTree ones, its two contract panics a fallback, its small literals named.
 //! Step 1a-b: edges pierce faces, edges cross and graze each other, imprints.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use super::bounds::{cell, overlap, padded, locate_piece};
 
-#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
+/// A clip box's slack around a face's box, in mm.
+const CLIP_SLACK: f64 = 1e-6; // tol: slack on a box that only trims a line's range to search
+
+/// The least sine a meeting's reach is read at: below it the reach is the graze's.
+const LEAST_SINE: f64 = 1e-12; // tol: guards a division, not an angle that decides anything
+
+impl<'a> Work<'a> {
     pub(super) fn pierce(&mut self) {
         let mut found: Vec<Hit> = Vec::new();
         let mut on = Vec::new();
@@ -15,19 +24,19 @@ use super::bounds::{cell, overlap, padded, locate_piece};
         // material: the face's surface goes on across it. Lying on the other solid's face it marks
         // no change of side there, and where the two surfaces cross at a shallow angle a seam runs
         // within the tolerance of the other face along its length without being a cut.
-        let one_face: HashSet<usize> = self
+        let one_face: BTreeSet<usize> = self
             .edge_faces()
             .into_iter()
             .filter(|(_, fs)| fs.len() == 1)
             .map(|(bi, _)| bi)
             .collect();
-        for side in 0..2 {
-            for &bi in &self.edge_base[side] {
-                let base = &self.bases[bi];
+        for (side, own) in self.edge_base.iter().enumerate() {
+            for &bi in own {
+                let Some(base) = self.bases.get(bi) else { continue };
                 let Some(curve) = &base.curve else { continue };
                 let bounds_nothing = one_face.contains(&bi);
                 for &fi in self.other(side) {
-                    let face = &self.faces[fi];
+                    let Some(face) = self.faces.get(fi) else { continue };
                     if !overlap(&base.bbox, &face.bbox)
                         || self.on_face.contains(&(bi, fi))
                         || !self.edge_face_near(side, bi, fi)
@@ -36,7 +45,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                     }
                     let range = match &**curve {
                         Curve::Line(l) => {
-                            match ssi::clip_line(l.origin, l.dir, &padded(&face.bbox, 1e-6)) {
+                            match ssi::clip_line(l.origin, l.dir, &padded(&face.bbox, CLIP_SLACK)) {
                                 Some((a, b)) => (a.max(base.range.0), b.min(base.range.1)),
                                 None => continue,
                             }
@@ -123,15 +132,17 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                 }
             };
             let (Some(&bi), Some(&fi)) = (
-                self.edge_base[side].get(f.edge.index()),
-                self.face_of[other].get(f.face.index()),
+                self.edge_base.get(side).and_then(|e| e.get(f.edge.index())),
+                self.face_of.get(other).and_then(|f_| f_.get(f.face.index())),
             ) else {
                 return Err(Error::InvalidInput(
                     "a fact names an edge or face not in its input".into(),
                 ));
             };
-            let base = &self.bases[bi];
-            let surface = &self.faces[fi].dom.surface;
+            let (Some(base), Some(face)) = (self.bases.get(bi), self.faces.get(fi)) else {
+                return Err(Error::Numerical("boolean: a fact's edge or face was not taken in".into()));
+            };
+            let surface = &face.dom.surface;
             let holds = (0..=4).all(|k| {
                 let p = match &base.curve {
                     Some(c) => {
@@ -155,13 +166,15 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     }
 
     /// Each edge base's faces, by face index.
-    pub(super) fn edge_faces(&self) -> HashMap<usize, Vec<usize>> {
-        let mut out: HashMap<usize, Vec<usize>> = HashMap::new();
+    pub(super) fn edge_faces(&self) -> BTreeMap<usize, Vec<usize>> {
+        let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (f, face) in self.faces.iter().enumerate() {
-            let b = self.breps[face.side];
+            let (Some(&b), Some(own)) = (self.breps.get(face.side), self.edge_base.get(face.side)) else {
+                continue;
+            };
             for &lp in &b.face(face.id).loops {
                 for &c in &b.lp(lp).coedges {
-                    let eb = self.edge_base[face.side][b.coedge(c).edge.index()];
+                    let Some(&eb) = own.get(b.coedge(c).edge.index()) else { continue };
                     let list = out.entry(eb).or_default();
                     if !list.contains(&f) {
                         list.push(f);
@@ -177,16 +190,22 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     /// only touch it, a contact the result may keep both sides of.
     pub(super) fn imprint_on_faces(&mut self) {
         for &(bi, fi) in &self.on_face {
-            for &pi in &self.base_pieces[bi] {
-                if self.bases[bi].curve.is_none() {
-                    continue;
-                }
+            let (Some(pieces), Some(base), Some(face)) = (self.base_pieces.get(bi), self.bases.get(bi), self.faces.get(fi))
+            else {
+                continue;
+            };
+            if base.curve.is_none() {
+                continue;
+            }
+            for &pi in pieces {
                 let ends = [0.0, 0.5, 1.0].map(|f| self.piece_point(pi, f));
-                if !matches!(locate_piece(&self.faces[fi].dom, ends), Where::Inside(_)) {
+                if !matches!(locate_piece(&face.dom, ends), Where::Inside(_)) {
                     continue;
                 }
-                if !self.cut_faces[pi].contains(&fi) {
-                    self.cut_faces[pi].push(fi);
+                if let Some(cut) = self.cut_faces.get_mut(pi)
+                    && !cut.contains(&fi)
+                {
+                    cut.push(fi);
                 }
             }
         }
@@ -215,7 +234,8 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                 .then_with(|| (a.base, a.face).cmp(&(b.base, b.face)))
         });
         let edge_faces = self.edge_faces();
-        let mut cuts: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        // looked up only: its order reaches nothing
+        let mut cuts: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
         for (bi, base) in self.bases.iter().enumerate() {
             if let BaseKind::Cut {
                 fa,
@@ -245,7 +265,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
             let v = self.touch_vertex(p, t, h.base, h.face, on);
             // Two surfaces each known to the tolerance fix where they cross to the tolerance over
             // the sine between them: a grazing meeting lies that far along the graze.
-            let reach = (tol::LINEAR / h.sine.max(1e-12)).min(GRAZE_REACH);
+            let reach = (tol::LINEAR / h.sine.max(LEAST_SINE)).min(GRAZE_REACH);
             if reach > tol::LINEAR {
                 let pairs = own.iter().map(|&f| (f.min(h.face), f.max(h.face), reach));
                 self.meetings.entry(v).or_default().extend(pairs);
@@ -262,8 +282,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     /// the crossing lies on the curve the faces are cut along, and is no worse placed, since inside
     /// the edge's own face the edge crosses the curve at least as steeply as it crosses the face.
     pub(super) fn crossing(&self, ci: usize, h: Hit, own: &[usize]) -> Option<(Point3, f64, f64)> {
-        let cut = &self.bases[ci];
-        let edge = &self.bases[h.base];
+        let (cut, edge) = (self.bases.get(ci)?, self.bases.get(h.base)?);
         let (c, e) = (cut.curve.as_ref()?, edge.curve.as_ref()?);
         let BaseKind::Cut { fa, fb, .. } = cut.kind else {
             return None;
@@ -271,16 +290,16 @@ use super::bounds::{cell, overlap, padded, locate_piece};
         let mine = if own.contains(&fa) { fa } else { fb };
         // The edge's other face: the curve crosses it where it crosses the edge.
         let across = match own {
-            [f, g] => Some(&self.faces[if *f == mine { *g } else { *f }].dom.surface),
+            [f, g] => Some(&self.faces.get(if *f == mine { *g } else { *f })?.dom.surface),
             _ => None,
         };
         let (mut q, mut tq, sine) =
             csi::curve_curve_near(c, cut.range, e, edge.range, h.p, h.t, across)?;
-        let face = &self.faces[h.face];
+        let face = self.faces.get(h.face)?;
         // A fitted cut curve puts the crossing off the exact surfaces by its fit error; where the
         // three surfaces fix a point within the tolerance of it, that point is the meeting.
         if let Some(b) = across {
-            let exact = csi::on_three([&self.faces[mine].dom.surface, b, &face.dom.surface], q)
+            let exact = csi::on_three([&self.faces.get(mine)?.dom.surface, b, &face.dom.surface], q)
                 .filter(|x| x.dist(q) <= tol::LINEAR)
                 .map(|x| (x, csi::curve_distance(e, edge.range, x)))
                 .filter(|(_, (d, _))| *d <= tol::LINEAR);
@@ -307,7 +326,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     /// hit left it where it was found, on no curve. That one is this meeting, found from the other
     /// solid's edge, and anywhere in the band: it moves onto the curve, so the two solids' edges
     /// and the curve all pass one vertex where they cross.
-    #[allow(clippy::panic)] pub(super) fn touch_vertex(
+    pub(super) fn touch_vertex(
         &mut self,
         p: Point3,
         t: f64,
@@ -315,7 +334,9 @@ use super::bounds::{cell, overlap, padded, locate_piece};
         fi: usize,
         on: Option<usize>,
     ) -> usize {
-        let bt = self.bases[bi].tol;
+        let Some(bt) = self.bases.get(bi).map(|b| b.tol) else {
+            return self.vertex(p);
+        };
         if bt > tol::LINEAR || self.widest > tol::LINEAR {
             // A meeting on a tolerant edge takes the edge's tolerance (Jackson 1995).
             if let Some(i) = self.coincident_vertex(p, bt) {
@@ -325,16 +346,21 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                 return self.vertex_with(p, bt);
             }
         }
-        let base = &self.bases[bi];
-        let curve = base.curve.clone().unwrap_or_else(|| panic!("pierced edges have curves"));
-        let range = base.range;
-        let surface = &self.faces[fi].dom.surface;
+        // a pierced edge has a curve, and the face it pierces is taken in: without either the
+        // meeting is a vertex of its own
+        let found = self.bases.get(bi).and_then(|b| Some((b.curve.clone()?, b.range))).zip(self.faces.get(fi));
+        let Some(((curve, range), face)) = found else {
+            return self.vertex(p);
+        };
+        let surface = &face.dom.surface;
         let near = |d: f64| d.abs() <= tol::LINEAR;
+        // on the cut `on` names (a cut always has a curve)
         let on_cut = |q: Point3| {
             on.is_none_or(|ci| {
-                let cut = &self.bases[ci];
-                let c = cut.curve.as_ref().unwrap_or_else(|| panic!("cuts have curves"));
-                csi::within(c, cut.range, q, tol::LINEAR)
+                self.bases
+                    .get(ci)
+                    .and_then(|cut| Some((cut.curve.as_ref()?, cut.range)))
+                    .is_some_and(|(c, r)| csi::within(c, r, q, tol::LINEAR))
             })
         };
         let c = cell(p);
@@ -346,8 +372,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                     let Some(ids) = self.grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) else {
                         continue;
                     };
-                    for &i in ids {
-                        let q = self.pool[i];
+                    for (i, q) in ids.iter().filter_map(|&i| Some((i, *self.pool.get(i)?))) {
                         let d = q.dist(p);
                         if d <= tol::LINEAR {
                             return i;
@@ -376,8 +401,8 @@ use super::bounds::{cell, overlap, padded, locate_piece};
         }
         match best {
             Some((_, i)) => {
-                if placed_here {
-                    self.pool[i] = p;
+                if placed_here && let Some(at) = self.pool.get_mut(i) {
+                    *at = p;
                     self.grid.entry(cell(p)).or_default().push(i);
                     self.unplaced.remove(&i);
                 }
@@ -398,10 +423,10 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     pub(super) fn cross_edges(&mut self) {
         let mut found = Vec::new();
         for &ba in &self.edge_base[0] {
-            let a = &self.bases[ba];
+            let Some(a) = self.bases.get(ba) else { continue };
             let Some(ca) = &a.curve else { continue };
             for &bb in &self.edge_base[1] {
-                let b = &self.bases[bb];
+                let Some(b) = self.bases.get(bb) else { continue };
                 let Some(cb) = &b.curve else { continue };
                 if !overlap(&padded(&a.bbox, tol::coincidence(a.tol, b.tol)), &b.bbox)
                     || !self.edges_near(ba, bb)
@@ -426,7 +451,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
             let v = self.vertex_with(p, t);
             if t <= tol::LINEAR && v >= self.inputs {
                 let tangent = |b: usize| -> Option<Vec3> {
-                    let base = &self.bases[b];
+                    let base = self.bases.get(b)?;
                     let c = base.curve.as_ref()?;
                     let (_, at) = csi::curve_distance(c, base.range, p);
                     c.d1(at).1.unit()
@@ -435,7 +460,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                     (Some(x), Some(y)) => x.cross(y).norm(),
                     _ => 0.0,
                 };
-                let reach = (tol::LINEAR / sine.max(1e-12)).min(GRAZE_REACH);
+                let reach = (tol::LINEAR / sine.max(LEAST_SINE)).min(GRAZE_REACH);
                 let r = self.unplaced.entry(v).or_insert(0.0);
                 *r = r.max(reach);
             }
@@ -452,13 +477,13 @@ use super::bounds::{cell, overlap, padded, locate_piece};
         // Meetings the closed forms and steps missed: two splines a hair apart cross at angles of
         // 1e-7 rad, where only the gap's least finds them.
         for &ba in &self.edge_base[0] {
-            let a = &self.bases[ba];
+            let Some(a) = self.bases.get(ba) else { continue };
             let Some(ca) = &a.curve else { continue };
             if a.tol > tol::LINEAR || seam(ba) {
                 continue;
             }
             for &bb in &self.edge_base[1] {
-                let b = &self.bases[bb];
+                let Some(b) = self.bases.get(bb) else { continue };
                 let Some(cb) = &b.curve else { continue };
                 if b.tol > tol::LINEAR
                     || seam(bb)
@@ -483,7 +508,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
     /// already on both in that band is the same meeting.
     pub(super) fn touching_vertex(&self, p: Point3, ba: usize, bb: usize) -> Option<usize> {
         let near = |d: f64| d <= tol::LINEAR;
-        let (a, b) = (&self.bases[ba], &self.bases[bb]);
+        let (a, b) = (self.bases.get(ba)?, self.bases.get(bb)?);
         let (ca, cb) = (a.curve.as_ref()?, b.curve.as_ref()?);
         let (_, tp) = csi::curve_distance(ca, a.range, p);
         let c = cell(p);
@@ -494,8 +519,7 @@ use super::bounds::{cell, overlap, padded, locate_piece};
                     let Some(ids) = self.grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) else {
                         continue;
                     };
-                    for &i in ids {
-                        let q = self.pool[i];
+                    for (i, q) in ids.iter().filter_map(|&i| Some((i, *self.pool.get(i)?))) {
                         let d = q.dist(p);
                         if d > CELL || best.is_some_and(|x| x.0 <= d) {
                             continue;

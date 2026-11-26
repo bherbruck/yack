@@ -1,18 +1,29 @@
 // yack: step 3: each face split by the cuts inside it.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; hardened (M3 B9): checked access in place of indexing (the
+// trim builders return a Result), the lookup-only member map a BTreeMap, its small literal named.
 //! Step 3: each face split by the cuts inside it.
+
+use std::collections::BTreeMap;
 
 use super::*;
 use super::bounds::padded;
 
-#[allow(clippy::disallowed_types)] impl<'a> Work<'a> { // D26: BTree* in hardening, proven by digests
+/// A piece of the working set that is not there: a bug in the steps before.
+fn missing(what: &str) -> Error {
+    Error::Numerical(format!("boolean: no {what} at that index"))
+}
+
+/// A pole piece's ends closer than this share of its parameter span to a cut's are the cut's.
+const POLE_MARGIN: f64 = 1e-9; // tol: a share of a parameter span, not a length
+
+impl<'a> Work<'a> {
     /// A trim along canonical piece `ci` from vertex `start`; `along` breaks the tie for a closed
     /// piece, by the direction the trim must run at the piece's middle.
-    pub(super) fn canon_trim(&self, ci: usize, start: usize, along: Option<Vec3>) -> Trim {
-        let p = &self.pieces[ci];
-        let b = &self.bases[p.base];
+    pub(super) fn canon_trim(&self, ci: usize, start: usize, along: Option<Vec3>) -> Result<Trim> {
+        let p = self.pieces.get(ci).ok_or_else(|| missing("piece"))?;
+        let b = self.bases.get(p.base).ok_or_else(|| missing("edge base"))?;
         let forward = if p.v0 != p.v1 {
             p.v0 == start
         } else {
@@ -26,11 +37,11 @@ use super::bounds::padded;
         } else {
             (p.range.1, p.range.0, p.v1, p.v0)
         };
-        Trim {
+        Ok(Trim {
             piece: ci,
             forward,
             curve: b.curve.clone(),
-            pole: self.pool[p.v0],
+            pole: *self.pool.get(p.v0).ok_or_else(|| missing("vertex"))?,
             t0,
             t1,
             map: UvMap::Projected,
@@ -38,27 +49,37 @@ use super::bounds::padded;
             uv1: Vec2::ZERO,
             v0,
             v1,
-        }
+        })
+    }
+
+    /// The edge base of edge `e` of solid `side`.
+    fn base_of(&self, side: usize, e: EdgeId) -> Result<usize> {
+        self.edge_base.get(side).and_then(|bs| bs.get(e.index())).copied().ok_or_else(|| missing("edge base"))
+    }
+
+    /// The pieces edge base `bi` is cut into.
+    fn pieces_of(&self, bi: usize) -> Result<&[usize]> {
+        self.base_pieces.get(bi).map(Vec::as_slice).ok_or_else(|| missing("edge base"))
     }
 
     /// The face's boundary, its input coedges cut into pieces.
-    pub(super) fn boundary_trims(&self, fi: usize) -> Vec<Vec<Trim>> {
-        let face = &self.faces[fi];
-        let b = self.breps[face.side];
+    pub(super) fn boundary_trims(&self, fi: usize) -> Result<Vec<Vec<Trim>>> {
+        let face = self.faces.get(fi).ok_or_else(|| missing("face"))?;
+        let b = *self.breps.get(face.side).ok_or_else(|| missing("solid"))?;
         let img = b.memo(face.id).slot::<FaceImages>();
         let mut loops = Vec::new();
         for (li, &lp) in b.face(face.id).loops.iter().enumerate() {
             let mut trims = Vec::new();
             for (k, &c) in b.lp(lp).coedges.iter().enumerate() {
                 let co = b.coedge(c);
-                let bi = self.edge_base[face.side][co.edge.index()];
-                let mut ps = self.base_pieces[bi].clone();
+                let bi = self.base_of(face.side, co.edge)?;
+                let mut ps = self.pieces_of(bi)?.to_vec();
                 if co.reversed {
                     ps.reverse();
                 }
                 let mut ts: Vec<f64> = Vec::new();
                 for &pi in &ps {
-                    let r = self.pieces[pi].range;
+                    let r = self.pieces.get(pi).ok_or_else(|| missing("piece"))?.range;
                     let (a, z) = if co.reversed { (r.1, r.0) } else { (r.0, r.1) };
                     if ts.is_empty() {
                         ts.push(a);
@@ -67,27 +88,28 @@ use super::bounds::padded;
                 }
                 let uvs = match &img {
                     Some(img) if ps.len() == 1 => {
-                        let w = img.trims[li][k].whole;
+                        let w = img.trims.get(li).and_then(|l| l.get(k)).ok_or_else(|| missing("trim image"))?.whole;
                         vec![w.0, w.1]
                     }
                     _ => coedge_uv_at(b, c, &ts),
                 };
-                let whole = &face.dom.loops[li][k];
+                let whole = face.dom.loops.get(li).and_then(|l| l.get(k)).ok_or_else(|| missing("trim"))?;
                 for (k, &pi) in ps.iter().enumerate() {
-                    let piece = &self.pieces[pi];
-                    let ci = self.canon[pi];
+                    let piece = self.pieces.get(pi).ok_or_else(|| missing("piece"))?;
+                    let ci = *self.canon.get(pi).ok_or_else(|| missing("piece"))?;
+                    let base = self.bases.get(piece.base).ok_or_else(|| missing("edge base"))?;
                     let start = if co.reversed { piece.v1 } else { piece.v0 };
-                    let mut tr = if self.bases[piece.base].curve.is_none() {
+                    let mut tr = if base.curve.is_none() {
                         Trim {
                             piece: pi,
                             ..whole.clone()
                         }
                     } else {
-                        let along = self.bases[piece.base].curve.as_ref().map(|c| {
+                        let along = base.curve.as_ref().map(|c| {
                             let d = c.d1(0.5 * (piece.range.0 + piece.range.1)).1;
                             if co.reversed { -d } else { d }
                         });
-                        let mut tr = self.canon_trim(ci, start, along);
+                        let mut tr = self.canon_trim(ci, start, along)?;
                         if ci == pi
                             && let UvMap::Affine { .. } = whole.map
                         {
@@ -95,23 +117,25 @@ use super::bounds::padded;
                         }
                         tr
                     };
-                    tr.uv0 = uvs[k];
-                    tr.uv1 = uvs[k + 1];
+                    let (Some(&uv0), Some(&uv1)) = (uvs.get(k), uvs.get(k + 1)) else {
+                        return Err(missing("trim end"));
+                    };
+                    (tr.uv0, tr.uv1) = (uv0, uv1);
                     trims.push(tr);
                 }
             }
             loops.push(trims);
         }
-        loops
+        Ok(loops)
     }
 
     /// A cut across face `fi` along canonical piece `ci`, its parameter-plane image continued
     /// from its middle, placed in the face's window.
-    pub(super) fn cut_trim(&self, fi: usize, ci: usize) -> Trim {
-        let dom = &self.faces[fi].dom;
+    pub(super) fn cut_trim(&self, fi: usize, ci: usize) -> Result<Trim> {
+        let dom = &self.faces.get(fi).ok_or_else(|| missing("face"))?.dom;
         let s = &dom.surface;
-        let p = &self.pieces[ci];
-        let mut tr = self.canon_trim(ci, p.v0, None);
+        let p = self.pieces.get(ci).ok_or_else(|| missing("piece"))?;
+        let mut tr = self.canon_trim(ci, p.v0, None)?;
         let tm = 0.5 * (tr.t0 + tr.t1);
         // A face that runs on past its seam's line (the seam cut away there) spans more than a
         // period, so only the image its loops enclose meets the boundary's nodes.
@@ -131,7 +155,7 @@ use super::bounds::padded;
         let (uv0, uv1) = (march(tr.t0), march(tr.t1));
         tr.uv0 = uv0;
         tr.uv1 = uv1;
-        tr
+        Ok(tr)
     }
 
     /// Step 3: every face split into pieces.
@@ -141,15 +165,16 @@ use super::bounds::padded;
     #[allow(clippy::type_complexity)]
     pub(super) fn split_faces(&self) -> Result<(Vec<Vec<Vec<Vec<Trim>>>>, Vec<PieceGeom>, Vec<bool>)> {
         let mut cuts: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); self.faces.len()];
-        for (pi, fs) in self.cut_faces.iter().enumerate() {
+        for (fs, &ci) in self.cut_faces.iter().zip(&self.canon) {
             for &f in fs {
-                cuts[f].insert(self.canon[pi]);
+                cuts.get_mut(f).ok_or_else(|| missing("face"))?.insert(ci);
             }
         }
         for &(fa, fb) in &self.coincident {
             for (into, from) in [(fa, fb), (fb, fa)] {
-                let from_face = &self.faces[from];
-                let b = self.breps[from_face.side];
+                let from_face = self.faces.get(from).ok_or_else(|| missing("face"))?;
+                let into_dom = &self.faces.get(into).ok_or_else(|| missing("face"))?.dom;
+                let b = *self.breps.get(from_face.side).ok_or_else(|| missing("solid"))?;
                 let edges: BTreeSet<EdgeId> = b
                     .face(from_face.id)
                     .loops
@@ -157,20 +182,23 @@ use super::bounds::padded;
                     .flat_map(|&lp| b.lp(lp).coedges.iter().map(|&c| b.coedge(c).edge))
                     .collect();
                 for e in edges {
-                    let bi = self.edge_base[from_face.side][e.index()];
-                    for &pi in &self.base_pieces[bi] {
-                        if self.bases[bi].curve.is_none() {
+                    let bi = self.base_of(from_face.side, e)?;
+                    let curved = self.bases.get(bi).ok_or_else(|| missing("edge base"))?.curve.is_some();
+                    for &pi in self.pieces_of(bi)? {
+                        if !curved {
                             continue;
                         }
                         let mid = self.piece_point(pi, 0.5);
-                        if let Where::Inside(_) = self.faces[into].dom.locate(mid) {
-                            cuts[into].insert(self.canon[pi]);
+                        if let Where::Inside(_) = into_dom.locate(mid) {
+                            let ci = *self.canon.get(pi).ok_or_else(|| missing("piece"))?;
+                            cuts.get_mut(into).ok_or_else(|| missing("face"))?.insert(ci);
                         }
                     }
                 }
             }
         }
-        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        // looked up only: its order reaches nothing
+        let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (pi, &c) in self.canon.iter().enumerate() {
             members.entry(c).or_default().push(pi);
         }
@@ -178,13 +206,14 @@ use super::bounds::padded;
         let mut poles: Vec<PieceGeom> = Vec::new();
         let mut intact = Vec::with_capacity(self.faces.len());
         for (fi, face_cuts) in cuts.iter().enumerate() {
-            let mut boundary = self.boundary_trims(fi);
+            let face = self.faces.get(fi).ok_or_else(|| missing("face"))?;
+            let mut boundary = self.boundary_trims(fi)?;
             let on_boundary: BTreeSet<usize> = boundary.iter().flatten().map(|t| t.piece).collect();
             let trims: Vec<Trim> = face_cuts
                 .iter()
                 .filter(|ci| !on_boundary.contains(ci))
                 .map(|&ci| self.cut_trim(fi, ci))
-                .collect();
+                .collect::<Result<_>>()?;
             let next_id = self.pieces.len() + poles.len();
             let made = split_poles(&mut boundary, &trims, next_id);
             // Each of its edges whole and its own: where an edge lies along one of the other
@@ -192,13 +221,12 @@ use super::bounds::padded;
             // along another curve over another range, which its memo knows nothing of. A trim
             // names the piece taken, so the edge's own is looked up.
             let own = {
-                let face = &self.faces[fi];
-                let b = self.breps[face.side];
+                let b = *self.breps.get(face.side).ok_or_else(|| missing("solid"))?;
                 b.face(face.id).loops.iter().all(|&lp| {
                     b.lp(lp).coedges.iter().all(|&c| {
-                        let bi = self.edge_base[face.side][b.coedge(c).edge.index()];
-                        let ps = &self.base_pieces[bi];
-                        ps.len() == 1 && self.canon[ps[0]] == ps[0]
+                        // one piece, its own canonical piece
+                        let ps = self.base_of(face.side, b.coedge(c).edge).and_then(|bi| self.pieces_of(bi));
+                        matches!(ps, Ok(&[pi]) if self.canon.get(pi) == Some(&pi))
                     })
                 })
             };
@@ -211,15 +239,14 @@ use super::bounds::padded;
             };
             let before = whole.then(|| sequence(&boundary));
             poles.extend(made);
-            let face = &self.faces[fi];
             let vertex_tol = |v: usize| self.vtol.get(v).copied().unwrap_or(tol::LINEAR);
             // A contact may end inside the face: a tangent curve, or an edge of the other solid
             // lying on it.
             let slit = |ci: usize| {
                 members.get(&ci).is_some_and(|ps| {
-                    ps.iter().any(|&pi| {
-                        let bi = self.pieces[pi].base;
-                        matches!(self.bases[bi].kind, BaseKind::Cut { tangent: true, .. })
+                    ps.iter().filter_map(|&pi| self.pieces.get(pi)).any(|piece| {
+                        let bi = piece.base;
+                        matches!(self.bases.get(bi).map(|b| &b.kind), Some(BaseKind::Cut { tangent: true, .. }))
                             || self.on_face.contains(&(bi, fi))
                     })
                 })
@@ -234,7 +261,7 @@ use super::bounds::padded;
             )
             .map_err(|e| self.at_faces(e, &[fi]))?;
             intact.push(match before {
-                Some(b) => regions.len() == 1 && sequence(&regions[0]) == b,
+                Some(b) => matches!(regions.as_slice(), [only] if sequence(only) == b),
                 None => false,
             });
             out.push(regions);
@@ -249,8 +276,7 @@ pub(super) fn split_poles(boundary: &mut [Vec<Trim>], cuts: &[Trim], next_id: us
     let mut made = Vec::new();
     for lp in boundary.iter_mut() {
         let mut k = 0;
-        while k < lp.len() {
-            let tr = &lp[k];
+        while let Some(tr) = lp.get(k) {
             let UvMap::Affine { origin, dir } = tr.map else {
                 k += 1;
                 continue;
@@ -261,7 +287,7 @@ pub(super) fn split_poles(boundary: &mut [Vec<Trim>], cuts: &[Trim], next_id: us
             }
             let v = tr.v0;
             let (lo, hi) = (tr.t0.min(tr.t1), tr.t0.max(tr.t1));
-            let margin = 1e-9 * (hi - lo);
+            let margin = POLE_MARGIN * (hi - lo);
             let mut at: Vec<f64> = cuts
                 .iter()
                 .flat_map(|c| [(c.v0, c.uv0), (c.v1, c.uv1)])
@@ -283,24 +309,27 @@ pub(super) fn split_poles(boundary: &mut [Vec<Trim>], cuts: &[Trim], next_id: us
             ts.push(tr.t1);
             let parts: Vec<Trim> = ts
                 .windows(2)
-                .map(|w| {
+                .filter_map(|w| {
+                    let &[t0, t1] = w else {
+                        return None;
+                    };
                     let id = next_id + made.len();
                     made.push(PieceGeom {
                         curve: None,
-                        range: (w[0].min(w[1]), w[0].max(w[1])),
+                        range: (t0.min(t1), t0.max(t1)),
                         v0: v,
                         v1: v,
                         tol: tol::LINEAR,
                     });
-                    Trim {
+                    Some(Trim {
                         piece: id,
-                        forward: w[1] > w[0],
-                        t0: w[0],
-                        t1: w[1],
-                        uv0: origin + dir * w[0],
-                        uv1: origin + dir * w[1],
+                        forward: t1 > t0,
+                        t0,
+                        t1,
+                        uv0: origin + dir * t0,
+                        uv1: origin + dir * t1,
                         ..tr.clone()
-                    }
+                    })
                 })
                 .collect();
             let n = parts.len();

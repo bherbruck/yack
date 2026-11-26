@@ -120,6 +120,13 @@ impl Solid {
         }
     }
 
+    /// The dense p-curve scan of the cadrs-held body, if this solid is one (the bake-off's
+    /// [`pcurve_scan`](crate::bakeoff::pcurve_scan)).
+    #[cfg(feature = "bakeoff")]
+    pub(crate) fn held_pcurve_scan(&self) -> Option<String> {
+        self.held().map(crate::engine_cadrs::held_pcurve_scan)
+    }
+
     /// The cadrs-held body, if this solid is one.
     pub(crate) fn held(&self) -> Option<&Held> {
         match &self.0.body {
