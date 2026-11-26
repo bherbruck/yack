@@ -3053,8 +3053,8 @@ fn draft_rounded(
         }
     }
     // (Back from a face of the drafted body to the body's.)
-    let back_sharp: HashMap<usize, usize> = to_sharp.iter().map(|(a, b)| (*b, *a)).collect();
-    let back_drafted: HashMap<usize, usize> = to_drafted.iter().map(|(a, b)| (*b, *a)).collect();
+    let back = |to: &HashMap<usize, usize>| to.iter().fold(std::collections::BTreeMap::new(), |mut m, (a, b)| { m.entry(*b).and_modify(|x: &mut usize| *x = (*x).min(*a)).or_insert(*a); m }); // (two faces gone to one: the lowest, on every run)
+    let (back_sharp, back_drafted) = (back(&to_sharp), back(&to_drafted));
     let origin = |f: usize| {
         back_drafted
             .get(&f)
