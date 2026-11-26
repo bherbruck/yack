@@ -1,12 +1,13 @@
 // yack: Dissolving redundant vertices: a vertex only two edges meet, both between the same two faces and
 // Adapted from springrep@a03e8a1 src/boolean/simplify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/boolean/simplify.rs to yack-boolean (M3 W8); paths and visibility only.
+// Changes: moved from springrep's src/boolean/simplify.rs to yack-boolean (M3 W8); paths and visibility only;
+// hardened (M3 B2): checked access in place of indexing, BTreeMap for the HashMaps (looked up only).
 //! Dissolving redundant vertices: a vertex only two edges meet, both between the same two faces and
 //! on one curve (one line, one circle, or the same curve running on), divides nothing. A boolean
 //! leaves such vertices where an imprint split an edge that the result then keeps whole on both
 //! sides; here each such pair of edges becomes one edge.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     geom::Curve,
@@ -59,11 +60,12 @@ fn continues(a: &Curve, b: &Curve) -> bool {
     }
 }
 
-#[allow(clippy::disallowed_types)] fn merge_once(b: &Brep) -> Option<Brep> { // D26: BTree* in hardening, proven by digests
+fn merge_once(b: &Brep) -> Option<Brep> {
     let (tol_vs, tol_es) = b.tolerant();
     let tolerant_v: BTreeSet<VertexId> = tol_vs.iter().map(|x| x.0).collect();
     let tolerant_e: BTreeSet<EdgeId> = tol_es.iter().map(|x| x.0).collect();
-    let mut at: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+    // `at`, `uses` and `cmap` are looked up only (`at`'s keys are sorted before they are walked)
+    let mut at: BTreeMap<VertexId, Vec<EdgeId>> = BTreeMap::new();
     for e in b.edge_ids() {
         let x = b.edge(e);
         at.entry(x.start).or_default().push(e);
@@ -71,7 +73,7 @@ fn continues(a: &Curve, b: &Curve) -> bool {
             at.entry(x.end).or_default().push(e);
         }
     }
-    let mut uses: HashMap<EdgeId, Vec<CoedgeId>> = HashMap::new();
+    let mut uses: BTreeMap<EdgeId, Vec<CoedgeId>> = BTreeMap::new();
     for c in b.coedge_ids() {
         uses.entry(b.coedge(c).edge).or_default().push(c);
     }
@@ -84,8 +86,7 @@ fn continues(a: &Curve, b: &Curve) -> bool {
     let mut vertices: Vec<&VertexId> = at.keys().collect();
     vertices.sort();
     let (v, first, second) = vertices.into_iter().find_map(|&v| {
-        let es = &at[&v];
-        let [e1, e2] = es[..] else {
+        let &[e1, e2] = at.get(&v)?.as_slice() else {
             return None;
         };
         if e1 == e2
@@ -98,8 +99,8 @@ fn continues(a: &Curve, b: &Curve) -> bool {
         let (x1, x2) = (b.edge(e1), b.edge(e2));
         let (c1, c2) = (x1.curve.as_ref()?, x2.curve.as_ref()?);
         let shared = faces(e1);
-        if shared.len() != 2 || shared != faces(e2) || uses[&e1].len() != 2 || uses[&e2].len() != 2
-        {
+        let used_twice = |e: EdgeId| uses.get(&e).is_some_and(|cs| cs.len() == 2);
+        if shared.len() != 2 || shared != faces(e2) || !used_twice(e1) || !used_twice(e2) {
             return None;
         }
         // The merged edge would close on itself, or the two run back over each other.
@@ -139,9 +140,11 @@ fn continues(a: &Curve, b: &Curve) -> bool {
     let mut vmap: Vec<Option<VertexId>> = vec![None; b.vertex_ids().count()];
     for w in b.vertex_ids() {
         if w != v {
-            vmap[w.index()] = Some(out.add_vertex(b.vertex(w).point));
+            let nw = out.add_vertex(b.vertex(w).point);
+            *vmap.get_mut(w.index())? = Some(nw);
         }
     }
+    let new_vertex = |w: VertexId| vmap.get(w.index()).copied().flatten();
     let mut emap: Vec<Option<EdgeId>> = vec![None; b.edge_ids().count()];
     for e in b.edge_ids() {
         if e == second {
@@ -154,12 +157,13 @@ fn continues(a: &Curve, b: &Curve) -> bool {
             (x.curve.clone(), x.range, x.start, x.end)
         };
         let ne = match curve {
-            Some(c) => out.add_edge(c, rng, vmap[s.index()]?, vmap[t.index()]?),
-            None => out.add_degenerate_edge(vmap[s.index()]?, rng),
+            Some(c) => out.add_edge(c, rng, new_vertex(s)?, new_vertex(t)?),
+            None => out.add_degenerate_edge(new_vertex(s)?, rng),
         };
-        emap[e.index()] = Some(ne);
+        *emap.get_mut(e.index())? = Some(ne);
     }
-    let mut cmap: HashMap<CoedgeId, CoedgeId> = HashMap::new();
+    let new_edge = |e: EdgeId| emap.get(e.index()).copied().flatten();
+    let mut cmap: BTreeMap<CoedgeId, CoedgeId> = BTreeMap::new();
     for f in b.face_ids() {
         let face = b.face(f);
         let nf = out.add_face(
@@ -176,17 +180,16 @@ fn continues(a: &Curve, b: &Curve) -> bool {
                     continue;
                 }
                 kept.push(c);
-                let edge = emap[co.edge.index()]?;
+                let edge = new_edge(co.edge)?;
                 let mut pcurve = co.pcurve.clone();
                 // Running against the merged edge, the coedge now starts at the second edge's far
                 // end, so a projected pcurve's seed moves there.
                 if co.edge == first
                     && co.reversed
-                    && let crate::topo::PCurve::Projected { seed } = &co.pcurve
+                    && matches!(co.pcurve, crate::topo::PCurve::Projected { .. })
                 {
-                    let other = uses[&second].iter().find(|&&o| b.coedge_face(o) == f)?;
-                    let uv = b.coedge_uvs(*other, &[x2.range.1])[0];
-                    let _ = seed;
+                    let other = uses.get(&second)?.iter().find(|&&o| b.coedge_face(o) == f)?;
+                    let uv = *b.coedge_uvs(*other, &[x2.range.1]).first()?;
                     pcurve = crate::topo::PCurve::Projected { seed: uv };
                 }
                 specs.push(CoedgeSpec {
@@ -218,10 +221,10 @@ fn continues(a: &Curve, b: &Curve) -> bool {
         out.add_solid_of(b.solid(so).shells.clone(), b.solid(so).outer);
     }
     for (w, t) in tol_vs {
-        out.set_vertex_tolerance(vmap[w.index()]?, t);
+        out.set_vertex_tolerance(new_vertex(w)?, t);
     }
     for (e, t) in tol_es {
-        out.set_edge_tolerance(emap[e.index()]?, t);
+        out.set_edge_tolerance(new_edge(e)?, t);
     }
     Some(out)
 }

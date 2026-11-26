@@ -4,15 +4,14 @@
 //! out of `step/` and `mesh/` in M2 (T5) so the blends and edit::affine reach them below step, and the
 //! mesher no longer calls the checker.
 
-// `Raw`'s arrays are indexed by the ids a file or a rebuild gives; checked accessors on `Raw`, and
-// one id check where a `Raw` is built, replace these three allows in M3 hardening chunk E (w-h3).
+// adjust and heal still index `Raw`'s arrays by the ids a file or a rebuild gives; `Raw`'s checked
+// accessors replace these two allows in M3 hardening chunk E (w-h3), as they have raw's.
 #[allow(clippy::indexing_slicing)]
 mod adjust;
 mod assemble;
 #[allow(clippy::indexing_slicing)]
 pub mod heal;
 mod mesh_solid;
-#[allow(clippy::indexing_slicing)]
 mod raw;
 
 pub use assemble::assemble;

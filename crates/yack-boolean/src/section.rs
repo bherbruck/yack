@@ -1,6 +1,7 @@
 // yack: Where a plane cuts a solid: the cut's outline and its area.
 // Adapted from springrep@a03e8a1 src/measure/section.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from measure/section.rs to boolean/section.rs (M2.1, T10); paths only; then to yack-boolean (M3 W8), paths and visibility only.
+// Changes: moved from measure/section.rs to boolean/section.rs (M2.1, T10); paths only; then to yack-boolean (M3 W8), paths and visibility only;
+// its one small literal named (M3 B1).
 //! Where a plane cuts a solid: the cut's outline and its area.
 
 use crate::{
@@ -11,6 +12,10 @@ use crate::{
     measure, tol,
     topo::{Brep, FaceId},
 };
+
+/// The sine of the angle between a face's plane and the cutting plane below which the face lies on
+/// the cut.
+const SAME_PLANE_SINE: f64 = 1e-9; // tol: an angle's sine, not a length
 
 /// The part of `s` on the normal's side of the plane, and its faces lying on the plane: the cut.
 fn caps(s: &Brep, origin: Point3, normal: Vec3) -> Result<(Brep, Vec<FaceId>)> {
@@ -25,7 +30,7 @@ fn caps(s: &Brep, origin: Point3, normal: Vec3) -> Result<(Brep, Vec<FaceId>)> {
         .face_ids()
         .filter(|&f| match &cut.face(f).surface {
             Surface::Plane(pl) => {
-                pl.frame.z.cross(n).norm() <= 1e-9
+                pl.frame.z.cross(n).norm() <= SAME_PLANE_SINE
                     && (pl.frame.origin - origin).dot(n).abs() <= 10.0 * tol::LINEAR
             }
             _ => false,

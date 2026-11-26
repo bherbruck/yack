@@ -1342,6 +1342,7 @@ fn faces_to_edges(ix: &[u64]) -> Vec<EdgeId> {
 mod held;
 mod history;
 mod redraw;
+mod scan;
 /// The history of `out`, `body` swept by `steps` all at once (see [`history`]).
 pub(crate) fn swept_history_of(
     k: &DefaultKernel,
@@ -1352,6 +1353,7 @@ pub(crate) fn swept_history_of(
     history::swept_history(k, body, out, &|s| history::steps_pose(steps, s))
 }
 pub use held::{Carried, Drawn3, carry_in, carry_out, display, mesh};
+pub use scan::{PcurveScan, pcurve_scan};
 use redraw::{ball_screwed_as_pipe, from_its_point, reseated_prism};
 #[cfg(test)]
 use redraw::helix_reach;

@@ -1,10 +1,14 @@
 // yack: bounding boxes of faces and curves, and the grid cell of a point.
 // Adapted from springrep@a03e8a1 src/boolean/mod.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/boolean/mod.rs to yack-boolean (M3 W8); split out of lib.rs (M3
-// hardening B0), paths and visibility only.
+// hardening B0), paths and visibility only; its one small literal named (M3 B1).
 //! Bounding boxes of faces and curves, and the grid cell of a point.
 
 use super::*;
+
+/// What a face's box is grown by, as a share of its size plus a millimetre: room for the boundary's
+/// sampled images to fall a hair short of the face's extremes.
+const FACE_BOX_SLACK: f64 = 1e-6; // tol: a share of the box's size, not a feature size
 
 pub(super) fn cell(p: Point3) -> [i64; 3] {
     [
@@ -136,7 +140,7 @@ pub(crate) fn face_bbox(dom: &Domain) -> Aabb {
         }
         _ => {}
     }
-    padded(&bb, 1e-6 * (1.0 + bb.diagonal()))
+    padded(&bb, FACE_BOX_SLACK * (1.0 + bb.diagonal()))
 }
 
 /// Where a piece of curve through `[start, middle, end]` lies in a face: as its middle does,

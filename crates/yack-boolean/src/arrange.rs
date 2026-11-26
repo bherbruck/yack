@@ -1,6 +1,8 @@
 // yack: Splitting a face by cuts in its parameter plane: the boundary trims and both directions of every
 // Adapted from springrep@a03e8a1 src/boolean/arrange.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/boolean/arrange.rs to yack-boolean (M3 W8); paths and visibility only.
+// Changes: moved from springrep's src/boolean/arrange.rs to yack-boolean (M3 W8); paths and visibility only;
+// hardened (M3 B3): the graph's half-edges one struct with checked access in place of parallel
+// indexed vectors, its small literals named; the order of every walk is as before.
 //! Splitting a face by cuts in its parameter plane: the boundary trims and both directions of every
 //! cut form a planar graph, whose regions, traced with the face's material on the left, are the
 //! pieces of the face.
@@ -14,7 +16,7 @@ use crate::{Error, Result, geom::Surface, math::Vec2};
 /// still be one node of the graph, or twice the vertex's local tolerance where that is wider: the
 /// edges of an imported vertex end anywhere in its sphere. Images of a vertex at different nodes
 /// (across a seam) are a period apart.
-const NODE_GAP: f64 = 1e-5;
+const NODE_GAP: f64 = 1e-5; // tol: a gap between images of one vertex, in mm along the surface
 
 /// The direction a trim leaves its start in, as an exact tangent angle and, to order trims that
 /// leave tangentially, the angle of a chord a little way along; and the oriented vector to its far
@@ -33,7 +35,7 @@ struct Graph<'a> {
     scale: Vec2,
 }
 
-#[allow(clippy::match_like_matches_macro)] impl Graph<'_> { // M3 W8: moved verbatim; hardening rewrites it as matches!
+impl Graph<'_> {
     fn oriented(&self, d: Vec2) -> Vec2 {
         Vec2::new(self.sigma * d.x * self.scale.x, d.y * self.scale.y)
     }
@@ -65,10 +67,7 @@ struct Graph<'a> {
             let (p, q) = (self.oriented(a), self.oriented(b));
             0.5 * (p.x * q.y - p.y * q.x)
         };
-        let curved = match (&tr.map, &tr.curve) {
-            (UvMap::Projected, Some(_)) | (UvMap::Fitted(_), _) => true,
-            _ => false,
-        };
+        let curved = matches!((&tr.map, &tr.curve), (UvMap::Projected, Some(_)) | (UvMap::Fitted(_), _));
         if !curved {
             return chord(tr.uv0, tr.uv1);
         }
@@ -110,7 +109,7 @@ fn trim_length(tr: &Trim) -> f64 {
 fn fraction_at(tr: &Trim, reach: f64) -> f64 {
     let start = tr.point(tr.t0);
     let away = |f: f64| tr.point(tr.param(f)).dist(start);
-    let guess = (reach / trim_length(tr).max(1e-300)).min(1.0);
+    let guess = (reach / trim_length(tr).max(1e-300)).min(1.0); // tol: keeps a zero length from dividing
     let mut hi = guess;
     while away(hi) < reach {
         if hi >= 1.0 {
@@ -137,7 +136,23 @@ fn signed_angle(a: f64) -> f64 {
 
 /// Second-order weight of a departure's bend: it orders departures whose tangents agree, and is
 /// too small to reorder any whose tangents differ by more than a few 1e-7 rad.
-const BEND: f64 = 1e-7;
+const BEND: f64 = 1e-7; // tol: a weight on an angle, not a length
+
+/// Tangents closer than this (radians), or than the two trims bend over their chords, are a tie.
+const TANGENT_TIE: f64 = 1e-9; // tol: an angle, not a length
+
+/// Angles this close (radians) agree to the last bits of a turn's reading.
+const LAST_BITS: f64 = 1e-13; // tol: an angle at rounding's scale, not a length
+
+/// The turn given a departure a hair either side of the arrival's own line: just short of a whole
+/// turn, or just past none.
+const HAIR_TURN: f64 = BEND * 1e-9; // tol: an angle below any turn read, not a length
+
+/// Turns further apart than this (radians) are ordered by themselves alone.
+const DISTINCT_TURN: f64 = 1e-6; // tol: an angle, not a length
+
+/// A turn this far (radians) from none and from a whole turn is well away from the arrival.
+const CLEAR_TURN: f64 = 1e-3; // tol: an angle, not a length
 
 /// The clockwise turn from `back` to `c`, in (0, 2π]. Of departures along one tangent, the one
 /// bending further counter-clockwise is met first.
@@ -145,19 +160,15 @@ fn clockwise_turn(back: Departure, c: Departure) -> f64 {
     let d = wrap_angle(back.tangent - c.tangent);
     // A fitted curve's tangent is good only to its fit, so tangents closer than the trims bend
     // over their chords are a tie that the chords decide.
-    let eps = 1e-9_f64.max(bend(back) + bend(c));
+    let eps = TANGENT_TIE.max(bend(back) + bend(c));
     if signed_angle(d).abs() > eps {
         return d - BEND * signed_angle(c.chord - c.tangent);
     }
     let d2 = signed_angle(back.chord - c.chord);
-    if d2.abs() <= 1e-13 && signed_angle(d).abs() <= 1e-13 {
+    if d2.abs() <= LAST_BITS && signed_angle(d).abs() <= LAST_BITS {
         // `c` a hair counter-clockwise of `back` is the last turn, a hair clockwise the first.
         let cross = back.far.x * c.far.y - back.far.y * c.far.x;
-        return if cross > 0.0 {
-            TAU - BEND * 1e-9
-        } else {
-            BEND * 1e-9
-        };
+        return if cross > 0.0 { TAU - HAIR_TURN } else { HAIR_TURN };
     }
     if d2 > 0.0 { d2 * BEND } else { TAU + d2 * BEND }
 }
@@ -171,11 +182,11 @@ fn bend(x: Departure) -> f64 {
 /// `ka` and `kb`. Two whose turns are closer than they bend over their chords are ordered by the
 /// chords of `ab`, both taken at one reach.
 fn turn_order(ka: f64, kb: f64, ab: impl Fn() -> (Departure, Departure)) -> std::cmp::Ordering {
-    if (ka - kb).abs() > 1e-6 {
+    if (ka - kb).abs() > DISTINCT_TURN {
         return ka.total_cmp(&kb);
     }
     let (a, b) = ab();
-    let same = |x: f64, y: f64| signed_angle(x - y).abs() <= 1e-13;
+    let same = |x: f64, y: f64| signed_angle(x - y).abs() <= LAST_BITS;
     if same(ka, kb) && same(a.tangent, b.tangent) && same(a.chord, b.chord) {
         // Of two leaving along one line to the last bit, the further counter-clockwise is met
         // first turning clockwise.
@@ -214,11 +225,28 @@ fn without_spikes(lp: Vec<Trim>, g: &Graph) -> Vec<Trim> {
             out.push(t);
         }
     }
-    while out.len() >= 2 && retraces(&out[out.len() - 1], &out[0], g) {
+    while matches!(out.as_slice(), [first, .., last] if retraces(last, first, g)) {
         out.pop();
         out.remove(0);
     }
     out
+}
+
+/// One direction of a trim in the face's graph: the trim, its other direction where it is a cut,
+/// whether it still bounds a region, its nodes, and the length its chords compare at.
+struct Half {
+    trim: Trim,
+    twin: Option<usize>,
+    alive: bool,
+    start: usize,
+    end: usize,
+    /// Chords compared reach equally far, so departures along one tangent are ordered by how they
+    /// bend, not by how long they are; a straight trim's chord is the whole of it.
+    length: f64,
+}
+
+fn broken(what: &str) -> Error {
+    Error::Numerical(format!("face split: {what}"))
 }
 
 /// The pieces of a face with `boundary` loops cut by `cuts` (each given in one direction), each as
@@ -247,24 +275,17 @@ pub(crate) fn split(
         .map(|lp| without_spikes(lp, &g))
         .filter(|lp| !lp.is_empty())
         .collect();
-    let mut hs: Vec<Trim> = Vec::new();
-    let mut twin: Vec<Option<usize>> = Vec::new();
-    for tr in boundary.into_iter().flatten() {
-        hs.push(tr);
-        twin.push(None);
-    }
+    // The boundary's trims, then each cut's two directions, reversed first.
+    let mut trims: Vec<(Trim, Option<usize>)> = boundary.into_iter().flatten().map(|tr| (tr, None)).collect();
     for c in cuts {
-        let i = hs.len();
-        hs.push(c.reversed());
-        hs.push(c);
-        twin.push(Some(i + 1));
-        twin.push(Some(i));
+        let i = trims.len();
+        trims.push((c.reversed(), Some(i + 1)));
+        trims.push((c, Some(i)));
     }
-    let mut alive = vec![true; hs.len()];
 
     // Nodes: a vertex at one place in the parameter plane.
     let mut nodes: Vec<(usize, Vec2)> = Vec::new();
-    let node_of = |v: usize, uv: Vec2, nodes: &mut Vec<(usize, Vec2)>| -> usize {
+    let mut node_of = |v: usize, uv: Vec2| -> usize {
         if let Some(i) = nodes
             .iter()
             .position(|&(w, p)| w == v && g.metric(p, uv) <= NODE_GAP.max(2.0 * vertex_tol(v)))
@@ -274,66 +295,64 @@ pub(crate) fn split(
         nodes.push((v, uv));
         nodes.len() - 1
     };
-    let mut start = Vec::with_capacity(hs.len());
-    let mut end = Vec::with_capacity(hs.len());
-    for h in &hs {
-        start.push(node_of(h.v0, h.uv0, &mut nodes));
-        end.push(node_of(h.v1, h.uv1, &mut nodes));
+    let mut halves: Vec<Half> = Vec::with_capacity(trims.len());
+    for (trim, twin) in trims {
+        let start = node_of(trim.v0, trim.uv0);
+        let end = node_of(trim.v1, trim.uv1);
+        let length = match trim.map {
+            UvMap::Projected | UvMap::Fitted(_) => trim_length(&trim),
+            UvMap::Affine { .. } => f64::INFINITY,
+        };
+        halves.push(Half { trim, twin, alive: true, start, end, length });
     }
 
-    // A cut that ends where nothing else does bounds no region, unless it is a slit.
+    // A cut that ends where nothing else does bounds no region, unless it is a slit. Each pass
+    // reads the degrees as they stood at its start; a half it drops takes its twin with it.
     loop {
         let mut degree = vec![0usize; nodes.len()];
-        for h in 0..hs.len() {
-            if alive[h] {
-                degree[start[h]] += 1;
-                degree[end[h]] += 1;
+        for h in halves.iter().filter(|h| h.alive) {
+            for n in [h.start, h.end] {
+                *degree.get_mut(n).ok_or_else(|| broken("a trim's node is missing"))? += 1;
             }
         }
-        let mut changed = false;
-        for h in 0..hs.len() {
-            if let Some(t) = twin[h]
-                && alive[h]
-                && !slit(hs[h].piece)
-                && start[h] != end[h]
-                && (degree[start[h]] == 2 || degree[end[h]] == 2)
-            {
-                alive[h] = false;
-                alive[t] = false;
-                changed = true;
-            }
-        }
-        if !changed {
+        let two = |n: usize| degree.get(n) == Some(&2);
+        let dead: Vec<(usize, usize)> = halves
+            .iter()
+            .enumerate()
+            .filter_map(|(i, h)| {
+                let t = h.twin?;
+                (h.alive && !slit(h.trim.piece) && h.start != h.end && (two(h.start) || two(h.end)))
+                    .then_some((i, t))
+            })
+            .collect();
+        if dead.is_empty() {
             break;
+        }
+        for (i, t) in dead {
+            for k in [i, t] {
+                halves.get_mut(k).ok_or_else(|| broken("a cut's twin is missing"))?.alive = false;
+            }
         }
     }
 
     let mut out_of: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for h in 0..hs.len() {
-        if alive[h] {
-            out_of[start[h]].push(h);
-        }
+    for (i, h) in halves.iter().enumerate().filter(|(_, h)| h.alive) {
+        out_of.get_mut(h.start).ok_or_else(|| broken("a trim's node is missing"))?.push(i);
     }
-    // Chords compared reach equally far, so departures along one tangent are ordered by how they
-    // bend, not by how long they are; a straight trim's chord is the whole of it.
-    let lengths: Vec<f64> = hs
-        .iter()
-        .map(|h| match h.map {
-            UvMap::Projected | UvMap::Fitted(_) => trim_length(h),
-            UvMap::Affine { .. } => f64::INFINITY,
-        })
-        .collect();
     let next = |h: usize| -> Option<usize> {
-        let outs = &out_of[end[h]];
+        let arrival = halves.get(h)?;
+        let outs = out_of.get(arrival.end)?;
         // A boundary only turns straight back along the edge it came by at a dead end: a cut's
         // other side, or the face's own loop running back down a contact it already holds,
         // which leaves at exactly the arrival's tangent and so would read as the sharpest turn.
         let back = |o: usize| {
-            Some(o) == twin[h]
-                || (hs[o].piece == hs[h].piece
-                    && hs[o].forward != hs[h].forward
-                    && start[o] == end[h]
-                    && end[o] == start[h])
+            Some(o) == arrival.twin
+                || halves.get(o).is_some_and(|out| {
+                    out.trim.piece == arrival.trim.piece
+                        && out.trim.forward != arrival.trim.forward
+                        && out.start == arrival.end
+                        && out.end == arrival.start
+                })
         };
         let others: Vec<usize> = outs.iter().copied().filter(|&o| !back(o)).collect();
         let pool = if others.is_empty() {
@@ -345,77 +364,80 @@ pub(crate) fn split(
         // trims, so a sliver trim elsewhere at the node cannot shorten them until rounding
         // outweighs how two trims leaving along nearly one tangent part. Turns that come out
         // close are read again with one reach, a twentieth of the shortest of the three.
-        let at = nodes[end[h]].1;
+        let at = nodes.get(arrival.end)?.1;
         let dep = |t: &Trim, r: f64| g.departure(t, r.min(1e300), at);
-        let turn = |c: usize, r: f64| clockwise_turn(dep(&hs[h].reversed(), r), dep(&hs[c], r));
-        let own: Vec<(usize, f64)> = pool
-            .into_iter()
-            .map(|c| (c, turn(c, 0.05 * lengths[h].min(lengths[c]))))
-            .collect();
-        own.into_iter()
-            .min_by(|&(a, ka), &(b, kb)| {
-                if (ka - kb).abs() > 1e-6 {
-                    return ka.total_cmp(&kb);
-                }
-                // Two turning well away from the arrival are ordered between themselves; the
-                // arrival's length has no say in their reach.
-                let clear = |k: f64| k > 1e-3 && k < TAU - 1e-3;
-                let pair = 0.05 * lengths[a].min(lengths[b]);
-                let r = if clear(ka) && clear(kb) {
-                    pair
-                } else {
-                    pair.min(0.05 * lengths[h])
-                };
-                let back_h = dep(&hs[h].reversed(), r);
-                let (la, lb) = (dep(&hs[a], r), dep(&hs[b], r));
-                turn_order(
-                    clockwise_turn(back_h, la),
-                    clockwise_turn(back_h, lb),
-                    || (la, lb),
-                )
+        let back_trim = arrival.trim.reversed();
+        let own: Vec<(&Half, f64)> = pool
+            .iter()
+            .map(|&c| {
+                let out = halves.get(c)?;
+                let r = 0.05 * arrival.length.min(out.length);
+                Some((out, clockwise_turn(dep(&back_trim, r), dep(&out.trim, r))))
             })
-            .map(|x| x.0)
+            .collect::<Option<_>>()?;
+        let best = own.into_iter().zip(&pool).min_by(|&((a, ka), _), &((b, kb), _)| {
+            if (ka - kb).abs() > DISTINCT_TURN {
+                return ka.total_cmp(&kb);
+            }
+            // Two turning well away from the arrival are ordered between themselves; the
+            // arrival's length has no say in their reach.
+            let clear = |k: f64| k > CLEAR_TURN && k < TAU - CLEAR_TURN;
+            let pair = 0.05 * a.length.min(b.length);
+            let r = if clear(ka) && clear(kb) {
+                pair
+            } else {
+                pair.min(0.05 * arrival.length)
+            };
+            let back_h = dep(&back_trim, r);
+            let (la, lb) = (dep(&a.trim, r), dep(&b.trim, r));
+            turn_order(
+                clockwise_turn(back_h, la),
+                clockwise_turn(back_h, lb),
+                || (la, lb),
+            )
+        });
+        best.map(|(_, &c)| c)
     };
 
-    let mut seen = vec![false; hs.len()];
+    let mut seen = vec![false; halves.len()];
     let mut cycles: Vec<Vec<usize>> = Vec::new();
-    for h0 in 0..hs.len() {
-        if !alive[h0] || seen[h0] {
+    for (h0, half) in halves.iter().enumerate() {
+        if !half.alive || seen.get(h0).copied().unwrap_or(true) {
             continue;
         }
         let mut cyc = Vec::new();
         let mut h = h0;
         loop {
-            if seen[h] {
+            let seen_h = seen.get_mut(h).ok_or_else(|| broken("a boundary runs to a missing trim"))?;
+            if *seen_h {
                 if h == h0 {
                     break;
                 }
-                return Err(Error::Numerical(
-                    "face split: a region's boundary does not close".into(),
-                ));
+                return Err(broken("a region's boundary does not close"));
             }
-            seen[h] = true;
+            *seen_h = true;
             cyc.push(h);
-            h = next(h).ok_or_else(|| {
-                Error::Numerical("face split: a boundary ends at a node with no way on".into())
-            })?;
+            h = next(h).ok_or_else(|| broken("a boundary ends at a node with no way on"))?;
         }
         cycles.push(cyc);
     }
 
+    let trim_of = |h: usize| halves.get(h).map(|x| &x.trim).ok_or_else(|| broken("a region names a missing trim"));
     // A loop's area from 16 chords a trim, with its error judged against 8: where that error is
     // a fair share of the area (a sliver between two curved trims, which chords sag across), the
     // exact integral decides the sign instead. Chords follow a curve a hair from a pole, where a
     // fixed rule's points would not.
-    let area = |cyc: &[usize]| -> f64 {
+    let area = |cyc: &[usize]| -> Result<f64> {
         let (mut fine, mut coarse) = (Vec::new(), Vec::new());
         for &h in cyc {
-            let n = match hs[h].map {
+            let tr = trim_of(h)?;
+            let n = match tr.map {
                 UvMap::Affine { .. } => 1,
                 UvMap::Projected | UvMap::Fitted(_) => 16,
             };
-            let pl = hs[h].polyline(surface, n);
-            for (k, &p) in pl[..pl.len() - 1].iter().enumerate() {
+            let pl = tr.polyline(surface, n);
+            let (_, all_but_last) = pl.split_last().ok_or_else(|| broken("a trim has no points"))?;
+            for (k, &p) in all_but_last.iter().enumerate() {
                 fine.push(g.oriented(p));
                 if k % 2 == 0 {
                     coarse.push(g.oriented(p));
@@ -424,53 +446,49 @@ pub(crate) fn split(
         }
         let a = polygon_area(&fine);
         if a.abs() > 4.0 * (a - polygon_area(&coarse)).abs() / 3.0 {
-            return a;
+            return Ok(a);
         }
-        cyc.iter().map(|&h| g.swept_area(&hs[h])).sum()
+        cyc.iter().map(|&h| trim_of(h).map(|tr| g.swept_area(tr))).sum()
     };
     // A cycle running only along slits and back, each trim's twin in it too, encloses nothing: a
     // slit inside the face, a loop of its own.
     let only_slits = |cyc: &[usize]| {
         cyc.iter()
-            .all(|&h| twin[h].is_some_and(|t| cyc.contains(&t)))
+            .all(|&h| halves.get(h).and_then(|x| x.twin).is_some_and(|t| cyc.contains(&t)))
     };
     let areas: Vec<f64> = cycles
         .iter()
-        .map(|c| if only_slits(c) { 0.0 } else { area(c) })
-        .collect();
-    let loops_of = |cyc: &[usize]| -> Vec<Trim> { cyc.iter().map(|&h| hs[h].clone()).collect() };
-    let outers: Vec<usize> = (0..cycles.len()).filter(|&i| areas[i] > 0.0).collect();
+        .map(|c| if only_slits(c) { Ok(0.0) } else { area(c) })
+        .collect::<Result<_>>()?;
+    let loop_of = |cyc: &[usize]| -> Result<Vec<Trim>> { cyc.iter().map(|&h| trim_of(h).cloned()).collect() };
+    // The outer regions, each its cycle and area.
+    let outers: Vec<(&Vec<usize>, f64)> = cycles.iter().zip(areas.iter().copied()).filter(|&(_, a)| a > 0.0).collect();
     let outer_domains: Vec<Domain> = outers
         .iter()
-        .map(|&i| Domain::new(surface.clone(), reversed, vec![loops_of(&cycles[i])]))
-        .collect();
-    let mut pieces: Vec<Vec<Vec<Trim>>> =
-        outers.iter().map(|&i| vec![loops_of(&cycles[i])]).collect();
-    for (i, cyc) in cycles.iter().enumerate() {
-        if areas[i] > 0.0 {
+        .map(|&(c, _)| Ok(Domain::new(surface.clone(), reversed, vec![loop_of(c)?])))
+        .collect::<Result<_>>()?;
+    let mut pieces: Vec<Vec<Vec<Trim>>> = outers.iter().map(|&(c, _)| Ok(vec![loop_of(c)?])).collect::<Result<_>>()?;
+    let pieces_of = |c: &[usize]| -> Vec<usize> { c.iter().filter_map(|&h| halves.get(h)).map(|x| x.trim.piece).collect() };
+    for (cyc, &area) in cycles.iter().zip(&areas) {
+        if area > 0.0 {
             continue;
         }
-        let first = &hs[cyc[0]];
+        let first = cyc.first().map_or_else(|| Err(broken("a hole has no trims")), |&h| trim_of(h))?;
         let probe = first.mid_uv(surface);
         // A region on the other side of any of the hole's pieces cannot hold it.
-        let pieces_of = |c: &[usize]| -> Vec<usize> { c.iter().map(|&h| hs[h].piece).collect() };
         let mine = pieces_of(cyc);
-        let host = (0..outers.len())
-            .filter(|&k| {
-                !pieces_of(&cycles[outers[k]])
-                    .iter()
-                    .any(|p| mine.contains(p))
-            })
+        let host = outers
+            .iter()
+            .zip(&outer_domains)
+            .enumerate()
+            .filter(|(_, ((c, _), _))| !pieces_of(c).iter().any(|p| mine.contains(p)))
             // A region winding past a period holds the probe at one of its images.
-            .filter(|&k| outer_domains[k].inside_image(probe).is_some())
-            .min_by(|&a, &b| areas[outers[a]].total_cmp(&areas[outers[b]]));
-        match host {
-            Some(k) => pieces[k].push(loops_of(cyc)),
-            None => {
-                return Err(Error::Numerical(
-                    "face split: a hole lies in no region".into(),
-                ));
-            }
+            .filter(|(_, (_, d))| d.inside_image(probe).is_some())
+            .min_by(|(_, ((_, a), _)), (_, ((_, b), _))| a.total_cmp(b))
+            .map(|(k, _)| k);
+        match host.and_then(|k| pieces.get_mut(k)) {
+            Some(piece) => piece.push(loop_of(cyc)?),
+            None => return Err(broken("a hole lies in no region")),
         }
     }
     Ok(pieces)

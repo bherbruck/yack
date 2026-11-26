@@ -1,6 +1,7 @@
 // yack: Same-domain face merging on a finished solid: faces on
 // Adapted from springrep@a03e8a1 src/boolean/unify.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/boolean/unify.rs to yack-boolean (M3 W8); paths and visibility only.
+// Changes: moved from springrep's src/boolean/unify.rs to yack-boolean (M3 W8); paths and visibility only;
+// hardened (M3 B2): checked access in place of indexing.
 //! Same-domain face merging on a finished solid: faces on
 //! one surface, facing one way, that share an edge become one face carrying every name the merged
 //! faces carried. Booleans already merge the faces they keep; this is for solids no boolean made,
@@ -17,7 +18,7 @@ use crate::topo::{
     domain::{Trim, UvMap},
 };
 use crate::{
-    Result,
+    Error, Result,
     math::{Point3, Vec2},
     topo::{Brep, CoedgeId, PCurve, SolidId, coedge_params},
 };
@@ -59,10 +60,11 @@ fn unify_solid(b: &Brep) -> Result<Option<Brep>> {
         .collect();
     let pieces: Vec<PieceGeom> = b
         .edge_ids()
-        .map(|e| {
+        .zip(&curves)
+        .map(|(e, curve)| {
             let edge = b.edge(e);
             PieceGeom {
-                curve: curves[e.index()].clone(),
+                curve: curve.clone(),
                 range: edge.range,
                 v0: edge.start.index(),
                 v1: edge.end.index(),
@@ -82,9 +84,10 @@ fn unify_solid(b: &Brep) -> Result<Option<Brep>> {
                         .coedges
                         .iter()
                         .map(|&c| trim(b, c, &curves, &pool))
-                        .collect()
+                        .collect::<Option<Vec<Trim>>>()
                 })
-                .collect();
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| Error::Numerical("a coedge of a face to unify has no samples".into()))?;
             faces.push(OutFace {
                 surface: face.surface.clone(),
                 reversed: face.reversed,
@@ -104,37 +107,39 @@ fn unify_solid(b: &Brep) -> Result<Option<Brep>> {
     sew::assemble(merged, &pool, &vtol, &pieces).map(Some)
 }
 
-/// A coedge as a whole trim of its own edge, the edge's index its piece.
-fn trim(b: &Brep, c: CoedgeId, curves: &[Option<Rc<crate::geom::Curve>>], pool: &[Point3]) -> Trim {
+/// A coedge as a whole trim of its own edge, the edge's index its piece; `None` where the edge has
+/// no curve slot or end vertex in `curves` and `pool`, or the coedge no samples.
+fn trim(b: &Brep, c: CoedgeId, curves: &[Option<Rc<crate::geom::Curve>>], pool: &[Point3]) -> Option<Trim> {
     let co = b.coedge(c);
     let edge = b.edge(co.edge);
     let ts = coedge_params(b, c, 16);
     let uvs = coedge_uv_at(b, c, &ts);
+    let (&t0, &t1, &uv0, &uv1) = (ts.first()?, ts.last()?, uvs.first()?, uvs.last()?);
     let map = match (&co.pcurve, &edge.curve) {
         (PCurve::Affine { origin, dir }, _) => UvMap::Affine {
             origin: *origin,
             dir: *dir,
         },
         (PCurve::Projected { .. }, None) => UvMap::Affine {
-            origin: uvs[0],
+            origin: uv0,
             dir: Vec2::ZERO,
         },
         (PCurve::Projected { .. }, Some(_)) => UvMap::Projected,
         (PCurve::Fitted { curve }, _) => UvMap::Fitted(std::rc::Rc::new((**curve).clone())),
     };
-    Trim {
+    Some(Trim {
         piece: co.edge.index(),
         forward: !co.reversed,
-        curve: curves[co.edge.index()].clone(),
-        pole: pool[edge.start.index()],
-        t0: ts[0],
-        t1: ts[ts.len() - 1],
+        curve: curves.get(co.edge.index())?.clone(),
+        pole: *pool.get(edge.start.index())?,
+        t0,
+        t1,
         map,
-        uv0: uvs[0],
-        uv1: uvs[uvs.len() - 1],
+        uv0,
+        uv1,
         v0: b.coedge_start(c).index(),
         v1: b.coedge_end(c).index(),
-    }
+    })
 }
 
 #[cfg(test)]

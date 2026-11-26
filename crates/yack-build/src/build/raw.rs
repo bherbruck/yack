@@ -2,7 +2,9 @@
 // Adapted from springrep@a03e8a1 src/step/topology.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from step/topology.rs to build/raw.rs (M2 T5): the builder the STEP reader, the
 // blends and edit::affine share; paths and visibility only; then to yack-build (M3 W7), paths and visibility only;
-// M3 hardening (w-h3): a use of an edge with no curve gives no samples (an error) instead of a panic.
+// M3 hardening (w-h3): a use of an edge with no curve gives no samples (an error) instead of a panic;
+// chunk E: `Raw::check_ids` at every entry, then every look-up by id through `entity`/`entity_mut`,
+// the one indexing contract; a loop's uses walked with the next by iterators.
 //! A solid's raw topology, as a file or a rebuild gives it, built into an arena: its points, its
 //! edges and their uses, its faces and their loops, then each edge's range and pcurves.
 
@@ -55,6 +57,71 @@ pub struct Raw {
     pub edges: Vec<RawEdge>,
     pub faces: Vec<RawFace>,
     pub shells: Vec<Vec<usize>>,
+}
+
+/// The entity at `index` in one of a [`Raw`]'s lists or a list kept beside them. Every id a
+/// `Raw` holds is checked when it reaches an entry ([`Raw::check_ids`]), and the lists beside it
+/// are built one to one with its own, so an index past the end is a bug: the module's one look-up
+/// that panics.
+#[allow(clippy::indexing_slicing)]
+pub(crate) fn entity<T>(items: &[T], index: usize) -> &T {
+    &items[index]
+}
+
+/// [`entity`], mutably.
+#[allow(clippy::indexing_slicing)]
+pub(crate) fn entity_mut<T>(items: &mut [T], index: usize) -> &mut T {
+    &mut items[index]
+}
+
+impl Raw {
+    /// Edge `e`, mutably.
+    pub(crate) fn edge_mut(&mut self, e: usize) -> &mut RawEdge {
+        entity_mut(&mut self.edges, e)
+    }
+
+    /// Every id the topology holds names one of its entities: each edge's ends and faces, each
+    /// face's uses and points, each shell's faces, and a `VERTEX_POINT` instance per point. An
+    /// error naming the first that does not.
+    pub fn check_ids(&self) -> Result<()> {
+        let bad = |what: &str, id: usize| {
+            let message = format!("a solid's topology names {what} {id}, which it does not have");
+            Err(Error::InvalidInput(message))
+        };
+        if self.vertex_ids.len() != self.points.len() {
+            return Err(Error::InvalidInput(
+                "a solid's topology has a point without its vertex, or a vertex without its point"
+                    .into(),
+            ));
+        }
+        let (points, edges, faces) = (self.points.len(), self.edges.len(), self.faces.len());
+        for e in &self.edges {
+            if let Some(v) = [e.start, e.end].into_iter().find(|&v| v >= points) {
+                return bad("point", v);
+            }
+            if let Some(&f) = e.faces.iter().find(|&&f| f >= faces) {
+                return bad("face", f);
+            }
+        }
+        for f in &self.faces {
+            let mut uses = f.bounds.iter().flat_map(|(_, uses)| uses);
+            if let Some(u) = uses.find(|u| u.edge >= edges) {
+                return bad("edge", u.edge);
+            }
+            if let Some(&v) = f.points.iter().find(|&&v| v >= points) {
+                return bad("point", v);
+            }
+        }
+        if let Some(&f) = self.shells.iter().flatten().find(|&&f| f >= faces) {
+            return bad("face", f);
+        }
+        Ok(())
+    }
+}
+
+/// Each item with the one after it round the loop, the last with the first.
+fn round<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    items.iter().zip(items.iter().cycle().skip(1))
 }
 
 /// The parameter of the point of `c` nearest `p`; a periodic curve's within its first period.
@@ -110,11 +177,23 @@ pub fn edge_range(c: &Curve, ps: Point3, pe: Point3, closed: bool) -> Option<(f6
     (t1 > t0).then_some((t0, t1))
 }
 
-/// One coedge's samples in the parameter plane, in its own direction.
+/// One coedge's samples in the parameter plane, in its own direction: never empty.
 #[derive(Clone, Debug)]
 struct Track {
     ts: Vec<f64>,
     uvs: Vec<Vec2>,
+}
+
+impl Track {
+    /// Where it starts.
+    fn first_uv(&self) -> Vec2 {
+        self.uvs.first().copied().unwrap_or_default()
+    }
+
+    /// Where it ends.
+    fn last_uv(&self) -> Vec2 {
+        self.uvs.last().copied().unwrap_or_default()
+    }
 }
 
 /// Builds the arena of a read (and, where needed, healed) solid.
@@ -132,7 +211,10 @@ impl Builder {
             .edges
             .iter()
             .zip(ranges)
-            .map(|(e, &r)| b.add_edge(e.curve.clone(), r, vertices[e.start], vertices[e.end]))
+            .map(|(e, &r)| {
+                let (start, end) = (*entity(&vertices, e.start), *entity(&vertices, e.end));
+                b.add_edge(e.curve.clone(), r, start, end)
+            })
             .collect();
         Builder { b, vertices, edges }
     }
@@ -156,18 +238,21 @@ impl Builder {
             };
             tracks.push((*outer, uses, t));
         }
-        let areas: Vec<f64> = tracks.iter().map(|(_, _, t)| area2(t)).collect();
-        let outer = (0..tracks.len())
-            .filter(|&i| areas[i] * want > 0.0)
-            .max_by(|&i, &j| {
-                let key = |k: usize| (tracks[k].0, areas[k].abs());
-                key(i)
-                    .partial_cmp(&key(j))
+        // The outer loop: the one enclosing area the face's way, the file's outer first, then the
+        // largest.
+        let outer = tracks
+            .iter()
+            .enumerate()
+            .map(|(i, (file_outer, _, t))| (i, *file_outer, area2(t)))
+            .filter(|&(_, _, area)| area * want > 0.0)
+            .max_by(|&(_, a_outer, a_area), &(_, b_outer, b_area)| {
+                (a_outer, a_area.abs())
+                    .partial_cmp(&(b_outer, b_area.abs()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .unwrap_or(0);
+            .map_or(0, |(i, _, _)| i);
         tracks.swap(0, outer);
-        let (lo, hi) = uv_box(&tracks[0].2);
+        let (lo, hi) = tracks.first().map_or_else(|| uv_box(&[]), |(_, _, t)| uv_box(t));
         for (_, _, t) in tracks.iter_mut().skip(1) {
             shift_into(surface, t, lo, hi);
         }
@@ -177,20 +262,15 @@ impl Builder {
             self.b.add_loop(face, specs);
         }
         for &p in &f.points {
-            let v = self.vertices[p];
-            let mut at = [Track {
-                ts: vec![0.0],
-                uvs: vec![surface.project(self.b.vertex(v).point)],
-            }];
-            shift_into(surface, &mut at, lo, hi);
+            let v = *entity(&self.vertices, p);
+            let uv = surface.project(self.b.vertex(v).point);
+            let at = [Track { ts: vec![0.0], uvs: vec![uv] }];
+            let origin = period_shift(surface, &at, lo, hi).map_or(uv, |d| uv + d);
             let edge = self.b.add_degenerate_edge(v, (0.0, 1.0));
             let spec = CoedgeSpec {
                 edge,
                 reversed: false,
-                pcurve: PCurve::Affine {
-                    origin: at[0].uvs[0],
-                    dir: Vec2::ZERO,
-                },
+                pcurve: PCurve::Affine { origin, dir: Vec2::ZERO },
             };
             self.b.add_loop(face, vec![spec]);
         }
@@ -199,29 +279,20 @@ impl Builder {
 
     fn specs(&mut self, s: &Surface, uses: &[Use], tracks: &[Track]) -> Vec<CoedgeSpec> {
         let mut out = Vec::new();
-        let n = uses.len();
-        for k in 0..n {
-            let (edge, reversed) = (self.edges[uses[k].edge], uses[k].reversed);
-            let tr = &tracks[k];
-            let pcurve = match (s, &self.b.edge(edge).curve) {
-                (Surface::Plane(_), Some(Curve::Line(_))) => {
-                    let (t0, t1) = (tr.ts[0], tr.ts[tr.ts.len() - 1]);
-                    let (a, z) = (tr.uvs[0], tr.uvs[tr.uvs.len() - 1]);
+        // Each use with its track, and the track of the use after it round the loop.
+        for (u, (tr, next_track)) in uses.iter().zip(round(tracks)) {
+            let (edge, reversed) = (*entity(&self.edges, u.edge), u.reversed);
+            let pcurve = match (s, &self.b.edge(edge).curve, tr.ts.as_slice()) {
+                (Surface::Plane(_), Some(Curve::Line(_)), &[t0, .., t1]) => {
+                    let (a, z) = (tr.first_uv(), tr.last_uv());
                     let dir = (z - a) / (t1 - t0);
-                    PCurve::Affine {
-                        origin: a - dir * t0,
-                        dir,
-                    }
+                    PCurve::Affine { origin: a - dir * t0, dir }
                 }
-                _ => PCurve::Projected { seed: tr.uvs[0] },
+                _ => PCurve::Projected { seed: tr.first_uv() },
             };
-            out.push(CoedgeSpec {
-                edge,
-                reversed,
-                pcurve,
-            });
-            let end = tr.uvs[tr.uvs.len() - 1];
-            let next = tracks[(k + 1) % n].uvs[0];
+            out.push(CoedgeSpec { edge, reversed, pcurve });
+            let end = tr.last_uv();
+            let next = next_track.first_uv();
             if gap_is_pole(s, end, next) {
                 let e = self.b.edge(edge);
                 let v = if reversed { e.start } else { e.end };
@@ -242,7 +313,7 @@ impl Builder {
     /// The 3-D samples of a use of an edge, in its direction.
     /// `None` for a pole, which a STEP edge never is.
     fn samples(&self, u: Use) -> Option<(Vec<f64>, Vec<Point3>)> {
-        let e = self.b.edge(self.edges[u.edge]);
+        let e = self.b.edge(*entity(&self.edges, u.edge));
         let c = e.curve.as_ref()?;
         let (t0, t1) = e.range;
         let mut cuts = vec![t0];
@@ -253,9 +324,9 @@ impl Builder {
             _ => (16 / (cuts.len() - 1)).max(4),
         };
         let mut ts = Vec::new();
-        for w in cuts.windows(2) {
+        for (&from, &to) in cuts.iter().zip(cuts.iter().skip(1)) {
             for k in 0..per {
-                ts.push(w[0] + (w[1] - w[0]) * k as f64 / per as f64);
+                ts.push(from + (to - from) * k as f64 / per as f64);
             }
         }
         ts.push(t1);
@@ -272,7 +343,7 @@ impl Builder {
     fn track_loop(&self, s: &Surface, uses: &[Use], sign: Option<f64>) -> Option<Vec<Track>> {
         let samples: Vec<(Vec<f64>, Vec<Point3>)> =
             uses.iter().map(|&u| self.samples(u)).collect::<Option<_>>()?;
-        let start = s.project(samples[0].1[0]);
+        let start = s.project(*samples.first()?.1.first()?);
         let mut acc = Vec::with_capacity(uses.len());
         self.track_from(s, uses, &samples, 0, start, sign, &mut acc)
             .then_some(acc)
@@ -290,18 +361,23 @@ impl Builder {
         acc: &mut Vec<Track>,
     ) -> bool {
         if k == uses.len() {
-            let (end, first) = (acc[k - 1].uvs[acc[k - 1].uvs.len() - 1], acc[0].uvs[0]);
+            let (Some(last), Some(first)) = (acc.last(), acc.first()) else { return false };
+            let (end, first) = (last.last_uv(), first.first_uv());
             let closed = closes(s, end, first) || gap_is_pole(s, end, first);
             return closed && sign.is_none_or(|w| area2(acc) * w > 0.0);
         }
-        let (ts, pts) = &samples[k];
-        let first = s.project_near(pts[0], hint);
+        let (Some((ts, pts)), Some(&this_use), Some(&p0)) =
+            (samples.get(k), uses.get(k), samples.get(k).and_then(|(_, pts)| pts.first()))
+        else {
+            return false;
+        };
+        let first = s.project_near(p0, hint);
         let free = pole_free(s, first);
         let mut starts = vec![first];
-        if free != (false, false) && pts.len() > 1 {
+        if let (true, Some(&p1)) = (free != (false, false), pts.get(1)) {
             // A use leaving a pole may leave at any angle: take the one its next point implies,
             // in each period near the hint.
-            let inner = s.project_near(pts[1], hint);
+            let inner = s.project_near(p1, hint);
             starts.clear();
             let shifts = |on: bool, p: Option<f64>| match p {
                 Some(p) if on => vec![0.0, -p, p],
@@ -330,26 +406,33 @@ impl Builder {
         {
             let mut uvs = Vec::with_capacity(pts.len());
             uvs.push(st);
-            for p in &pts[1..] {
-                let prev = uvs[uvs.len() - 1];
-                uvs.push(s.project_near(*p, prev));
+            let mut prev = st;
+            for p in pts.iter().skip(1) {
+                prev = s.project_near(*p, prev);
+                uvs.push(prev);
             }
             let n = uvs.len();
             // At a pole the free parameter is the one the edge leaves it by, found as the
             // checker and every later reader of the pcurve finds it.
-            let curve = self.b.edge(self.edges[uses[k].edge]).curve.as_ref();
-            if let Some(c) = curve.filter(|_| n > 1) {
-                if pole_free(s, uvs[0]) != (false, false) {
-                    uvs[0] = project_on(s, c, ts[0], ts[1], st);
+            let curve = self.b.edge(*entity(&self.edges, this_use.edge)).curve.as_ref();
+            if let (Some(c), &[t_first, t_second, ..], &[.., t_before, t_last]) =
+                (curve.filter(|_| n > 1), ts.as_slice(), ts.as_slice())
+            {
+                let at_pole = |uv: &Vec2| pole_free(s, *uv) != (false, false);
+                if let Some(start) = uvs.first_mut().filter(|uv| at_pole(uv)) {
+                    *start = project_on(s, c, t_first, t_second, st);
                 }
-                if pole_free(s, uvs[n - 1]) != (false, false) {
-                    uvs[n - 1] = project_on(s, c, ts[n - 1], ts[n - 2], uvs[n - 2]);
+                let before_end = uvs.get(n - 2).copied();
+                if let (Some(before_end), Some(end)) = (before_end, uvs.last_mut())
+                    && pole_free(s, *end) != (false, false)
+                {
+                    *end = project_on(s, c, t_last, t_before, before_end);
                 }
             }
-            if coincides_with_twin(uses, acc, k, &uvs) != slit {
+            if coincides_with_twin(uses, acc, this_use, &uvs) != slit {
                 continue;
             }
-            let end = uvs[n - 1];
+            let end = uvs.last().copied().unwrap_or(st);
             acc.push(Track {
                 ts: ts.clone(),
                 uvs,
@@ -363,14 +446,16 @@ impl Builder {
     }
 }
 
-/// Whether an earlier use of the same edge in this loop runs back over the same parameters: a slit,
-/// where a seam's would run a period away.
-fn coincides_with_twin(uses: &[Use], acc: &[Track], k: usize, uvs: &[Vec2]) -> bool {
+/// Whether an earlier use of the same edge as `this` in this loop, with its track in `acc`, runs
+/// back over the same parameters: a slit, where a seam's would run a period away.
+fn coincides_with_twin(uses: &[Use], acc: &[Track], this: Use, uvs: &[Vec2]) -> bool {
     let n = uvs.len();
-    (0..k).any(|j| {
-        uses[j].edge == uses[k].edge && {
-            let other = &acc[j].uvs;
-            other.len() == n && other[n / 2].dist(uvs[n - 1 - n / 2]) < 1e-6
+    let mid = uvs.len().checked_sub(1 + n / 2).and_then(|i| uvs.get(i));
+    uses.iter().zip(acc).any(|(earlier, track)| {
+        earlier.edge == this.edge && {
+            let other = &track.uvs;
+            other.len() == n
+                && matches!((other.get(n / 2), mid), (Some(a), Some(&b)) if a.dist(b) < 1e-6)
         }
     })
 }
@@ -400,13 +485,12 @@ fn gap_is_pole(s: &Surface, a: Vec2, b: Vec2) -> bool {
 }
 
 fn area2(tracks: &[Track]) -> f64 {
+    // Each track's points but its last, the next track's first.
     let pts: Vec<Vec2> = tracks
         .iter()
-        .flat_map(|t| t.uvs[..t.uvs.len() - 1].iter().copied())
+        .flat_map(|t| t.uvs.split_last().map_or(&[][..], |(_, rest)| rest).iter().copied())
         .collect();
-    (0..pts.len())
-        .map(|i| pts[i].cross(pts[(i + 1) % pts.len()]))
-        .sum()
+    round(&pts).map(|(a, &b)| a.cross(b)).sum()
 }
 
 fn uv_box(tracks: &[Track]) -> (Vec2, Vec2) {
@@ -421,6 +505,18 @@ fn uv_box(tracks: &[Track]) -> (Vec2, Vec2) {
 
 /// Moves a hole's samples by whole periods so its centre lies inside the outer loop's box.
 fn shift_into(s: &Surface, tracks: &mut [Track], lo: Vec2, hi: Vec2) {
+    if let Some(d) = period_shift(s, tracks, lo, hi) {
+        for t in tracks {
+            for uv in &mut t.uvs {
+                *uv = *uv + d;
+            }
+        }
+    }
+}
+
+/// The whole periods that move the samples' centre inside the box `lo`–`hi`; `None` where none
+/// are needed.
+fn period_shift(s: &Surface, tracks: &[Track], lo: Vec2, hi: Vec2) -> Option<Vec2> {
     let (a, b) = uv_box(tracks);
     let c = (a + b) * 0.5;
     let shift = |x: f64, lo: f64, hi: f64, p: Option<f64>| -> f64 {
@@ -433,24 +529,31 @@ fn shift_into(s: &Surface, tracks: &mut [Track], lo: Vec2, hi: Vec2) {
         shift(c.x, lo.x, hi.x, s.u_period()),
         shift(c.y, lo.y, hi.y, s.v_period()),
     );
-    if d.x != 0.0 || d.y != 0.0 {
-        for t in tracks {
-            for uv in &mut t.uvs {
-                *uv = *uv + d;
-            }
-        }
-    }
+    (d.x != 0.0 || d.y != 0.0).then_some(d)
 }
 
 /// The arena of a solid read as `raw`, as the file orients it, unchecked.
 pub fn build(raw: &Raw, ranges: &[(f64, f64)], tolerated: Option<&heal::Tolerated>) -> Result<Brep> {
+    raw.check_ids()?;
+    let too_many = |what: &str| Err(Error::InvalidInput(format!("more {what} than the solid has")));
+    if ranges.len() < raw.edges.len() {
+        return Err(Error::InvalidInput("fewer edge ranges than the solid has edges".into()));
+    }
+    if let Some(t) = tolerated {
+        if t.vertices.len() > raw.points.len() {
+            return too_many("vertex tolerances");
+        }
+        if t.edges.len() > raw.edges.len() {
+            return too_many("edge tolerances");
+        }
+    }
     let mut bld = Builder::new(raw, ranges);
     if let Some(t) = tolerated {
-        for (v, &x) in t.vertices.iter().enumerate() {
-            bld.b.set_vertex_tolerance(bld.vertices[v], x);
+        for (&v, &x) in bld.vertices.iter().zip(&t.vertices) {
+            bld.b.set_vertex_tolerance(v, x);
         }
-        for (e, &x) in t.edges.iter().enumerate() {
-            bld.b.set_edge_tolerance(bld.edges[e], x);
+        for (&e, &x) in bld.edges.iter().zip(&t.edges) {
+            bld.b.set_edge_tolerance(e, x);
         }
     }
     for f in &raw.faces {
@@ -486,11 +589,12 @@ pub fn rebuilt(
         points,
         ..Raw::default()
     };
-    let mut edge_at = vec![usize::MAX; curves.len()];
-    for ((e, id), c) in b.edge_ids().enumerate().zip(curves) {
+    // Each arena edge's raw edge, `None` for one without a curve.
+    let mut edge_at: Vec<Option<usize>> = vec![None; curves.len()];
+    for (((e, id), c), slot) in b.edge_ids().enumerate().zip(curves).zip(edge_at.iter_mut()) {
         if let Some(curve) = c {
             let x = b.edge(id);
-            edge_at[e] = raw.edges.len();
+            *slot = Some(raw.edges.len());
             raw.edges.push(RawEdge {
                 id: e as u64,
                 curve,
@@ -513,17 +617,17 @@ pub fn rebuilt(
                 .coedges
                 .iter()
                 .map(|&c| b.coedge(c))
-                .filter(|c| edge_at[c.edge.index()] != usize::MAX)
-                .map(|c| Use {
-                    edge: edge_at[c.edge.index()],
-                    reversed: c.reversed ^ turned,
+                .filter_map(|c| {
+                    let edge = edge_at.get(c.edge.index()).copied().flatten()?;
+                    Some(Use { edge, reversed: c.reversed ^ turned })
                 })
                 .collect();
             if turned {
                 uses.reverse();
             }
+            let face_index = raw.faces.len();
             for u in &uses {
-                raw.edges[u.edge].faces.push(raw.faces.len());
+                raw.edge_mut(u.edge).faces.push(face_index);
             }
             bounds.push((k == 0, uses));
         }
@@ -591,14 +695,13 @@ pub fn parts_of(b: &Brep) -> Result<Parts> {
         points: b.vertex_ids().map(|v| b.vertex(v).point).collect(),
         ..Parts::default()
     };
-    let mut edge_at = vec![usize::MAX; b.edge_ids().count()];
-    for e in b.edge_ids() {
+    // Each arena edge's part, `None` for a degenerate one.
+    let mut edge_at: Vec<Option<usize>> = vec![None; b.edge_ids().count()];
+    for (e, slot) in b.edge_ids().zip(edge_at.iter_mut()) {
         let x = b.edge(e);
         if let Some(curve) = &x.curve {
-            edge_at[e.index()] = parts.edges.len();
-            parts
-                .edges
-                .push((curve.clone(), x.start.index(), x.end.index()));
+            *slot = Some(parts.edges.len());
+            parts.edges.push((curve.clone(), x.start.index(), x.end.index()));
         }
     }
     for (shell, &sh) in solid.shells.iter().enumerate() {
@@ -612,8 +715,9 @@ pub fn parts_of(b: &Brep) -> Result<Parts> {
                         .coedges
                         .iter()
                         .map(|&c| b.coedge(c))
-                        .filter(|c| edge_at[c.edge.index()] != usize::MAX)
-                        .map(|c| (edge_at[c.edge.index()], c.reversed))
+                        .filter_map(|c| {
+                            Some((edge_at.get(c.edge.index()).copied().flatten()?, c.reversed))
+                        })
                         .collect()
                 })
                 .collect();
@@ -632,42 +736,48 @@ pub fn parts_of(b: &Brep) -> Result<Parts> {
 /// The solid `parts` describe, its pcurves and parameter ranges found as a file's are. Points and
 /// edges no face uses are left out.
 pub fn solid_of(parts: &Parts) -> Result<Brep> {
+    parts.check_ids()?;
     let mut raw = Raw::default();
-    let mut edge_at = vec![usize::MAX; parts.edges.len()];
-    let mut point_at = vec![usize::MAX; parts.points.len()];
-    let mut order: Vec<usize> = (0..parts.faces.len()).collect();
-    order.sort_by_key(|&f| parts.faces[f].shell);
-    for (fi, &at) in order.iter().enumerate() {
-        let f = &parts.faces[at];
+    // Each part edge's and point's raw one, once a face uses it.
+    let mut edge_at: Vec<Option<usize>> = vec![None; parts.edges.len()];
+    let mut point_at: Vec<Option<usize>> = vec![None; parts.points.len()];
+    // The faces, shell by shell, each first as the parts list it.
+    let mut order: Vec<(usize, &PartFace)> = parts.faces.iter().enumerate().collect();
+    order.sort_by_key(|(_, f)| f.shell);
+    for (fi, &(_, f)) in order.iter().enumerate() {
         let mut bounds = Vec::new();
         for (k, l) in f.loops.iter().enumerate() {
             let mut uses = Vec::new();
             for &(e, reversed) in l {
-                if edge_at[e] == usize::MAX {
-                    let (curve, start, end) = &parts.edges[e];
-                    let mut ends = [*start, *end];
-                    for v in &mut ends {
-                        if point_at[*v] == usize::MAX {
-                            point_at[*v] = raw.points.len();
-                            raw.vertex_ids.push(raw.points.len() as u64);
-                            raw.points.push(parts.points[*v]);
-                        }
-                        *v = point_at[*v];
+                let edge = match *entity(&edge_at, e) {
+                    Some(edge) => edge,
+                    None => {
+                        let (curve, start, end) = entity(&parts.edges, e);
+                        let mut point = |v: usize| match *entity(&point_at, v) {
+                            Some(p) => p,
+                            None => {
+                                let p = raw.points.len();
+                                *entity_mut(&mut point_at, v) = Some(p);
+                                raw.vertex_ids.push(p as u64);
+                                raw.points.push(*entity(&parts.points, v));
+                                p
+                            }
+                        };
+                        let (start, end) = (point(*start), point(*end));
+                        let edge = raw.edges.len();
+                        *entity_mut(&mut edge_at, e) = Some(edge);
+                        raw.edges.push(RawEdge {
+                            id: e as u64,
+                            curve: curve.clone(),
+                            start,
+                            end,
+                            faces: Vec::new(),
+                        });
+                        edge
                     }
-                    edge_at[e] = raw.edges.len();
-                    raw.edges.push(RawEdge {
-                        id: e as u64,
-                        curve: curve.clone(),
-                        start: ends[0],
-                        end: ends[1],
-                        faces: Vec::new(),
-                    });
-                }
-                raw.edges[edge_at[e]].faces.push(fi);
-                uses.push(Use {
-                    edge: edge_at[e],
-                    reversed,
-                });
+                };
+                raw.edge_mut(edge).faces.push(fi);
+                uses.push(Use { edge, reversed });
             }
             bounds.push((k == 0, uses));
         }
@@ -682,12 +792,34 @@ pub fn solid_of(parts: &Parts) -> Result<Brep> {
         if raw.shells.len() <= f.shell {
             raw.shells.resize(f.shell + 1, Vec::new());
         }
-        raw.shells[f.shell].push(fi);
+        entity_mut(&mut raw.shells, f.shell).push(fi);
     }
     let (ranges, _) = heal::heal(&mut raw)?;
     let mut out = assemble(&raw, &ranges, None)?;
-    for (g, &at) in out.face_ids().collect::<Vec<_>>().into_iter().zip(&order) {
-        out.set_face_names(g, parts.faces[at].names.clone());
+    for (g, &(_, f)) in out.face_ids().collect::<Vec<_>>().into_iter().zip(&order) {
+        out.set_face_names(g, f.names.clone());
     }
     Ok(out)
+}
+
+impl Parts {
+    /// Every edge's ends name points, and every loop's uses name edges: an error naming the
+    /// first id that does not.
+    pub fn check_ids(&self) -> Result<()> {
+        let bad = |what: &str, id: usize| {
+            let message = format!("a solid's parts name {what} {id}, which they do not have");
+            Err(Error::InvalidInput(message))
+        };
+        let points = self.points.len();
+        for &(_, start, end) in &self.edges {
+            if let Some(v) = [start, end].into_iter().find(|&v| v >= points) {
+                return bad("point", v);
+            }
+        }
+        let mut uses = self.faces.iter().flat_map(|f| f.loops.iter().flatten());
+        if let Some(&(e, _)) = uses.find(|&&(e, _)| e >= self.edges.len()) {
+            return bad("edge", e);
+        }
+        Ok(())
+    }
 }
