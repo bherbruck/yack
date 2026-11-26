@@ -22,5 +22,6 @@ pub mod build;
 pub mod loft;
 pub mod primitive;
 pub mod ruled;
+pub mod spindle;
 pub mod drafted;
 pub mod sweep;

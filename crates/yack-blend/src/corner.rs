@@ -1,6 +1,7 @@
 // yack: A fillet running round a corner round smaller than itself and bent the same way: the corner of a
 // Adapted from springrep@a03e8a1 src/blend/corner.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/blend/corner.rs to yack-blend (M3 W9a); paths and visibility only.
+// Changes: moved from springrep's src/blend/corner.rs to yack-blend (M3 W9a); paths and visibility only;
+// hardened (M3 L2): checked access in place of indexing, its contract panics gone, its small literals named.
 //! A fillet running round a corner round smaller than itself and bent the same way: the corner of a
 //! plate whose walls meet in a round of radius ρ, its rim filleted with r > ρ, or a pocket's floor
 //! filleted past its corner rounds. The ball cannot follow the round: it rolls along each wall, both
@@ -68,6 +69,13 @@ fn near(s: &Surface, uv: Vec2, to: Option<Vec2>) -> Vec2 {
     )
 }
 
+/// The least weight of a quadratic arc's middle control point: below it the arc turns by nearly a
+/// half turn, whose middle point runs off towards infinity.
+const LEAST_WEIGHT: f64 = 1e-6; // tol: a weight, not a length
+
+/// How near zero a determinant or distance is that leaves two walls with no single crossing.
+const DEGENERATE: f64 = 1e-12; // tol: guards a division, not a length that decides anything
+
 /// The rational quadratic arc of a circle about `centre` from `a` to `b` the short way: its middle
 /// control point and weight.
 fn arc_middle(centre: Point3, a: Point3, b: Point3) -> Option<(Point3, f64)> {
@@ -75,7 +83,7 @@ fn arc_middle(centre: Point3, a: Point3, b: Point3) -> Option<(Point3, f64)> {
     let half = 0.5 * u.cross(v).norm().atan2(u.dot(v));
     let w = half.cos();
     let mid = (u + v).unit()?;
-    (w > 1e-6).then(|| (centre + mid * (u.norm() / w), w))
+    (w > LEAST_WEIGHT).then(|| (centre + mid * (u.norm() / w), w))
 }
 
 /// A wall beside the round, in the plate's plane: a line through `p` with outward normal `n`, or a
@@ -119,7 +127,7 @@ fn crossing(a: Wall, b: Wall, near: Vec2) -> Option<Vec2> {
     let found: Vec<Vec2> = match (a, b) {
         (Wall::Line { p: p1, n: n1 }, Wall::Line { p: p2, n: n2 }) => {
             let det = n1.x * n2.y - n1.y * n2.x;
-            if det.abs() <= 1e-12 {
+            if det.abs() <= DEGENERATE {
                 return None;
             }
             let (c1, c2) = (n1.dot(p1), n2.dot(p2));
@@ -145,7 +153,7 @@ fn crossing(a: Wall, b: Wall, near: Vec2) -> Option<Vec2> {
             },
         ) => {
             let d = (c2 - c1).norm();
-            if d <= 1e-12 {
+            if d <= DEGENERATE {
                 return None;
             }
             let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
@@ -199,21 +207,16 @@ pub(super) fn sharp(body: &Brep, picked: &[Picked], radius: f64) -> Result<Vec<S
         if at.len() != 3 {
             continue;
         }
-        let here: Vec<usize> = (0..picked.len())
-            .filter(|&i| at.contains(&picked[i].edge))
-            .collect();
-        let [i, j] = here[..] else { continue };
-        let Some(&c) = at
-            .iter()
-            .find(|&&e| e != picked[i].edge && e != picked[j].edge)
-        else {
+        let here: Vec<&Picked> = picked.iter().filter(|p| at.contains(&p.edge)).collect();
+        let &[pi, pj] = here.as_slice() else { continue };
+        let Some(&c) = at.iter().find(|&&e| e != pi.edge && e != pj.edge) else {
             continue;
         };
-        let Some(&plate) = picked[i].faces.iter().find(|f| picked[j].faces.contains(f)) else {
+        let Some(&plate) = pi.faces.iter().find(|f| pj.faces.contains(f)) else {
             continue;
         };
-        let wall = |k: usize| picked[k].faces.iter().copied().find(|&f| f != plate);
-        let (Some(w1), Some(w2)) = (wall(i), wall(j)) else {
+        let wall = |pk: &Picked| pk.faces.iter().copied().find(|&f| f != plate);
+        let (Some(w1), Some(w2)) = (wall(pi), wall(pj)) else {
             continue;
         };
         let p = body.vertex(v).point;
@@ -234,20 +237,21 @@ pub(super) fn sharp(body: &Brep, picked: &[Picked], radius: f64) -> Result<Vec<S
             continue;
         };
         if run::convex(body, cc) != Some(false)
-            || run::convex(body, picked[i].coedges[0]) != Some(true)
-            || run::convex(body, picked[j].coedges[0]) != Some(true)
+            || run::convex(body, pi.coedges[0]) != Some(true)
+            || run::convex(body, pj.coedges[0]) != Some(true)
         {
             continue;
         }
         let (m1, m2) = (-o1, -o2);
         // Each piece ends on the plane through the concave edge square to its own edge, keeping
         // the side its edge runs to.
-        let clip = |k: usize| {
-            let x = body.edge(picked[k].edge);
+        // `m` the wall's inward normal on the piece's own side
+        let clip = |pk: &Picked, m: Vec3| {
+            let x = body.edge(pk.edge);
             let far = body
                 .vertex(if x.start == v { x.end } else { x.start })
                 .point;
-            let along = n.cross(if k == i { m1 } else { m2 });
+            let along = n.cross(m);
             let keep = if (far - p).dot(along) >= 0.0 {
                 along
             } else {
@@ -257,7 +261,7 @@ pub(super) fn sharp(body: &Brep, picked: &[Picked], radius: f64) -> Result<Vec<S
         };
         out.push(Swallowed {
             arc: None,
-            ends: [(picked[i].edge, v, clip(i)), (picked[j].edge, v, clip(j))],
+            ends: [(pi.edge, v, clip(pi, m1)), (pj.edge, v, clip(pj, m2))],
             plate,
             tool: swing_tool(p, n, m1, m2, r)?,
         });
@@ -429,12 +433,16 @@ pub(super) fn swallowed(body: &Brep, picked: &[Picked], radius: f64) -> Result<V
             ends.push((next.edge, v, wall));
             walls.push(shape);
         }
+        // one end and one wall at each end of the round
+        let (&[end_a, end_b], [wall_a, wall_b]) = (ends.as_slice(), walls.as_slice()) else {
+            return unsupported("a fillet's corner without a wall at each end");
+        };
         // From the corner centre to the plate.
         let lift = n_plate * (side * radius);
         let round_centre = flat(circle.frame.origin);
         let Some(c2) = crossing(
-            walls[0].offset(side * radius),
-            walls[1].offset(side * radius),
+            wall_a.offset(side * radius),
+            wall_b.offset(side * radius),
             round_centre,
         ) else {
             return unsupported("a fillet's corner whose walls never come within its radius");
@@ -455,8 +463,7 @@ pub(super) fn swallowed(body: &Brep, picked: &[Picked], radius: f64) -> Result<V
         };
         let mut arcs = Vec::new();
         let mut base_ends = [a1, a2];
-        for k in 0..2 {
-            let (_, _, wall) = ends[k];
+        for (k, ((_, _, wall), a)) in [end_a, end_b].into_iter().zip([a1, a2]).enumerate() {
             let Surface::Cylinder(cyl) = &body.face(wall).surface else {
                 continue;
             };
@@ -465,8 +472,9 @@ pub(super) fn swallowed(body: &Brep, picked: &[Picked], radius: f64) -> Result<V
                 return unsupported("a fillet's corner centred on its wall's axis");
             };
             let foot = o + dir * cyl.radius;
-            let a = [a1, a2][k];
-            base_ends[k] = foot;
+            if let Some(end) = base_ends.get_mut(k) {
+                *end = foot;
+            }
             let arc = if k == 0 {
                 BaseArc {
                     centre: o,
@@ -498,8 +506,8 @@ pub(super) fn swallowed(body: &Brep, picked: &[Picked], radius: f64) -> Result<V
             base.push(arcs.remove(pos).1);
         }
         let mut clips = Vec::with_capacity(2);
-        for (k, (edge, v, _)) in ends.iter().enumerate() {
-            let Some(m) = n_plate.cross(base_ends[k] - c).unit() else {
+        for ((edge, v, _), &base_end) in [end_a, end_b].iter().zip(&base_ends) {
+            let Some(m) = n_plate.cross(base_end - c).unit() else {
                 return unsupported("a fillet's corner whose base touches its axis");
             };
             let x = body.edge(*edge);
@@ -516,12 +524,12 @@ pub(super) fn swallowed(body: &Brep, picked: &[Picked], radius: f64) -> Result<V
             clips.push(Clip::Plane { origin: c, keep });
         }
         let tool = corner_tool(body, plate, &base, c, t, lift, side)?;
+        let &[clip_a, clip_b] = clips.as_slice() else {
+            return unsupported("a fillet's corner without a clip at each end");
+        };
         out.push(Swallowed {
             arc: Some(ai),
-            ends: [
-                (ends[0].0, ends[0].1, clips[0]),
-                (ends[1].0, ends[1].1, clips[1]),
-            ],
+            ends: [(end_a.0, end_a.1, clip_a), (end_b.0, end_b.1, clip_b)],
             plate,
             tool,
         });
@@ -545,7 +553,7 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
     BTreeSet::from([FaceName::new(MARK, name)])
 }
 
-#[allow(clippy::panic)] fn corner_tool(
+fn corner_tool(
     body: &Brep,
     plate: FaceId,
     base: &[BaseArc],
@@ -556,14 +564,20 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
 ) -> Result<Brep> {
     let n_plate = outward(body, plate, t);
     let n = base.len();
+    let Some(first) = base.first() else {
+        return unsupported("a fillet's corner with no base");
+    };
     // The base as one rational quadratic, one span to each arc.
-    let mut row: Vec<(Point3, f64)> = vec![(base[0].from, 1.0)];
+    let mut row: Vec<(Point3, f64)> = vec![(first.from, 1.0)];
+    // each arc's middle and weight, which the row's arcs were checked to have
+    let mut middles = Vec::with_capacity(n);
     for arc in base {
         let Some((mid, w)) = arc_middle(arc.centre, arc.from, arc.to) else {
             return unsupported("a fillet's corner base that turns by a half turn");
         };
         row.push((mid, w));
         row.push((arc.to, 1.0));
+        middles.push((mid, w));
     }
     let mut knots_u = vec![0.0; 3];
     for k in 1..n {
@@ -593,7 +607,7 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
     };
 
     let mut tool = Brep::new();
-    let base_pts: Vec<Point3> = std::iter::once(base[0].from)
+    let base_pts: Vec<Point3> = std::iter::once(first.from)
         .chain(base.iter().map(|a| a.to))
         .collect();
     let vb: Vec<VertexId> = base_pts.iter().map(|&p| tool.add_vertex(p)).collect();
@@ -604,24 +618,30 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
     let vt = tool.add_vertex(t);
     let mut lows = Vec::with_capacity(n);
     let mut tops = Vec::with_capacity(n);
-    for (k, arc) in base.iter().enumerate() {
-        let (mid, w) = arc_middle(arc.centre, arc.from, arc.to).unwrap_or_else(|| panic!("checked above"));
-        lows.push(tool.add_edge(
-            quad([arc.from, mid, arc.to], w)?,
-            (0.0, 1.0),
-            vb[k],
-            vb[k + 1],
-        ));
+    // each arc between its two base vertices and its two top ones
+    for (((arc, &(mid, w)), lo), hi) in base.iter().zip(&middles).zip(vb.windows(2)).zip(vtop.windows(2)) {
+        let (&[l0, l1], &[h0, h1]) = (lo, hi) else {
+            continue;
+        };
+        lows.push(tool.add_edge(quad([arc.from, mid, arc.to], w)?, (0.0, 1.0), l0, l1));
         tops.push(tool.add_edge(
             quad([arc.from + lift, mid + lift, arc.to + lift], w)?,
             (0.0, 1.0),
-            vtop[k],
-            vtop[k + 1],
+            h0,
+            h1,
         ));
     }
-    let (b0, bn) = (base_pts[0], base_pts[n]);
-    let side1 = tool.add_edge(quad([b0, b0 + lift, t], s)?, (0.0, 1.0), vb[0], vt);
-    let side2 = tool.add_edge(quad([bn, bn + lift, t], s)?, (0.0, 1.0), vb[n], vt);
+    let ends_of = |vs: &[VertexId]| (vs.first().copied(), vs.last().copied());
+    let (
+        (Some(&b0), Some(&bn)),
+        (Some(vb0), Some(vbn)),
+        (Some(vtop0), Some(vtopn)),
+    ) = ((base_pts.first(), base_pts.last()), ends_of(&vb), ends_of(&vtop))
+    else {
+        return unsupported("a fillet's corner with no base");
+    };
+    let side1 = tool.add_edge(quad([b0, b0 + lift, t], s)?, (0.0, 1.0), vb0, vt);
+    let side2 = tool.add_edge(quad([bn, bn + lift, t], s)?, (0.0, 1.0), vbn, vt);
     let pole = tool.add_degenerate_edge(vt, (0.0, 1.0));
     let line =
         |tool: &mut Brep, p: Point3, q: Point3, vp: VertexId, vq: VertexId| -> Result<EdgeId> {
@@ -631,17 +651,14 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
             Ok(tool.add_edge(Curve::Line(l), (0.0, len), vp, vq))
         };
     let mut ups = Vec::with_capacity(n + 1);
-    for k in 0..=n {
-        ups.push(line(
-            &mut tool,
-            base_pts[k],
-            base_pts[k] + lift,
-            vb[k],
-            vtop[k],
-        )?);
+    for ((&p, &vp), &vq) in base_pts.iter().zip(&vb).zip(&vtop) {
+        ups.push(line(&mut tool, p, p + lift, vp, vq)?);
     }
-    let flat1 = line(&mut tool, t, b0 + lift, vt, vtop[0])?;
-    let flat2 = line(&mut tool, t, bn + lift, vt, vtop[n])?;
+    let flat1 = line(&mut tool, t, b0 + lift, vt, vtop0)?;
+    let flat2 = line(&mut tool, t, bn + lift, vt, vtopn)?;
+    let (Some(&up0), Some(&upn)) = (ups.first(), ups.last()) else {
+        return unsupported("a fillet's corner with no base");
+    };
 
     let affine = |o: (f64, f64), d: (f64, f64)| {
         Some(PCurve::Affine {
@@ -653,11 +670,11 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
         let frame = crate::math::Frame::from_axis(p, nrm)?;
         Ok(Surface::Plane(crate::geom::Plane { frame }))
     };
-    let ends = [b0, bn];
-    let trim_out = |k: usize| -> Result<Vec3> {
-        let m = n_plate.cross(ends[k] - c).unit_or_zero();
+    // the trim plane at base end `end`, `other` the base's other end
+    let trim_out = |end: Point3, other: Point3| -> Result<Vec3> {
+        let m = n_plate.cross(end - c).unit_or_zero();
         // Out of the tool is towards the piece beside it, away from the other end.
-        Ok(if (ends[1 - k] - c).dot(m) <= 0.0 {
+        Ok(if (other - c).dot(m) <= 0.0 {
             m
         } else {
             -m
@@ -665,10 +682,10 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
     };
     let toward_c = |p: Point3| (c - p).unit_or_zero();
     let mid_patch = patch.eval(0.5 * n as f64, 0.5);
-    let index = |f: FaceId| {
+    let index = |f: FaceId| -> Result<usize> {
         body.face_ids()
             .position(|g| g == f)
-            .unwrap_or_else(|| panic!("a face of the body"))
+            .ok_or_else(|| Error::Numerical("a fillet's corner on a face not of the body".into()))
     };
     let mut walk = Vec::with_capacity(n + 3);
     for (k, &e) in lows.iter().enumerate() {
@@ -684,20 +701,23 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
         names: mark("patch"),
         walk,
     }];
-    for (k, arc) in base.iter().enumerate() {
-        let (mid, _) = arc_middle(arc.centre, arc.from, arc.to).unwrap_or_else(|| panic!("checked above"));
+    // each arc's face, between its low and top edges and the ups at its ends
+    for ((((arc, &(mid, _)), &low), &top), up) in base.iter().zip(&middles).zip(&lows).zip(&tops).zip(ups.windows(2)) {
+        let &[up_from, up_to] = up else {
+            continue;
+        };
         let mid_arc =
             arc.centre + (mid - arc.centre).unit_or_zero() * (arc.from - arc.centre).norm();
         faces.push(ToolFace {
             surface: body.face(arc.face).surface.clone(),
             out: outward(body, arc.face, mid_arc) * side,
             at: mid_arc + lift * 0.5,
-            names: mark(&format!("face_{}", index(arc.face))),
+            names: mark(&format!("face_{}", index(arc.face)?)),
             walk: vec![
-                (lows[k], true, None),
-                (ups[k + 1], true, None),
-                (tops[k], false, None),
-                (ups[k], false, None),
+                (low, true, None),
+                (up_to, true, None),
+                (top, false, None),
+                (up_from, false, None),
             ],
         });
     }
@@ -716,25 +736,25 @@ fn mark(name: &str) -> BTreeSet<FaceName> {
         walk: top_walk,
     });
     faces.push(ToolFace {
-        surface: plane_through(c, trim_out(0)?)?,
-        out: trim_out(0)?,
+        surface: plane_through(c, trim_out(b0, bn)?)?,
+        out: trim_out(b0, bn)?,
         at: (b0 + (b0 + lift) + t) / 3.0,
         names: BTreeSet::new(),
         walk: vec![
             (side1, false, None),
-            (ups[0], true, None),
+            (up0, true, None),
             (flat1, false, None),
         ],
     });
     faces.push(ToolFace {
-        surface: plane_through(c, trim_out(1)?)?,
-        out: trim_out(1)?,
+        surface: plane_through(c, trim_out(bn, b0)?)?,
+        out: trim_out(bn, b0)?,
         at: (bn + (bn + lift) + t) / 3.0,
         names: BTreeSet::new(),
         walk: vec![
             (side2, true, None),
             (flat2, true, None),
-            (ups[n], false, None),
+            (upn, false, None),
         ],
     });
     assemble(tool, faces, "a fillet's corner tool")
@@ -820,9 +840,9 @@ fn newell(tool: &Brep, walk: &[(EdgeId, bool, Option<PCurve>)]) -> Vec3 {
         }
     }
     let mut n = Vec3::ZERO;
-    for i in 0..pts.len() {
-        let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
-        n += p.cross(q);
+    // each point with the next, the last with the first
+    for (p, q) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        n += p.cross(*q);
     }
     n
 }

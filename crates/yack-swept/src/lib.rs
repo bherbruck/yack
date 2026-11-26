@@ -157,6 +157,34 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_slid_along_its_axis_covers_its_annulus() {
+        // R 5, r 1, slid 3 up its axis: 2π²Rr² and 3 times the annulus 4πRr.
+        let ring = yack_build::primitive::torus(&Frame::WORLD, 5.0, 1.0, "ring").unwrap();
+        let s = swept(&ring, &Motion::Slide { by: Vec3::new(0.0, 0.0, 3.0) }, "f").unwrap();
+        let pi = std::f64::consts::PI;
+        near(yack_measure::volume(&s), 10.0 * pi * pi + 3.0 * 20.0 * pi);
+    }
+
+    #[test]
+    fn a_ring_slid_flat_past_its_hole() {
+        // R 5, r 1, slid 12 along x, past the widest gap (2R) in its hole: each line along x
+        // through its shadow is covered from the ring's first point to 12 past its last, so the
+        // volume is 12 × the shadow (4Rr + πr²) and the spans' integral, ∫ π(R + √(r² − z²))² dz
+        // = π(2rR² + πRr² + 4r³/3).
+        let ring = yack_build::primitive::torus(&Frame::WORLD, 5.0, 1.0, "ring").unwrap();
+        let s = swept(&ring, &Motion::Slide { by: Vec3::new(12.0, 0.0, 0.0) }, "f").unwrap();
+        let pi = std::f64::consts::PI;
+        near(yack_measure::volume(&s), 12.0 * (20.0 + pi) + pi * (50.0 + 5.0 * pi + 4.0 / 3.0));
+    }
+
+    #[test]
+    fn a_ring_slid_aslant_declines() {
+        let ring = yack_build::primitive::torus(&Frame::WORLD, 5.0, 1.0, "ring").unwrap();
+        let s = swept(&ring, &Motion::Slide { by: Vec3::new(3.0, 0.0, 4.0) }, "f");
+        assert!(matches!(s, Err(Error::Unsupported(_))), "{s:?}");
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
@@ -171,11 +199,6 @@ mod tests {
     fn what_is_not_built_yet_declines() {
         let turn = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 1.0 };
         assert!(matches!(swept(&cube(), &turn, "f"), Err(Error::Unsupported(_))));
-        let torus = yack_build::primitive::torus(&Frame::WORLD, 5.0, 1.0, "ring").unwrap();
-        assert!(matches!(
-            swept(&torus, &Motion::Slide { by: Vec3::X }, "f"),
-            Err(Error::Unsupported(_))
-        ));
         let nothing = Motion::Slide { by: Vec3::ZERO };
         assert!(matches!(swept(&cube(), &nothing, "f"), Err(Error::InvalidInput(_))));
     }

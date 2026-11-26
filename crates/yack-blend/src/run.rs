@@ -42,6 +42,13 @@ pub(super) struct Beyond {
     pub overhung: bool,
 }
 
+/// The entry of `pair` for a picked edge's face `k`, 0 or 1: an edge's two faces, their traces
+/// and their reaches are pairs, and `k` names one; any `k` past 0 is the second.
+pub(crate) fn of_face<T>(pair: &[T; 2], k: usize) -> &T {
+    let [first, second] = pair;
+    if k == 0 { first } else { second }
+}
+
 /// Whether the edge from `near` to `far` of `curve` leaves `v` onto the outer side of the end face
 /// `end_face` there: the piece, which stops on the end face, never reaches it.
 fn rises_off(
@@ -76,10 +83,10 @@ fn end_face(body: &Brep, pk: &Picked, v: VertexId) -> Option<FaceId> {
 /// takes off that face: negative between the edge and the contact.
 fn past_contact(s: &Section, o: &Outline, k: usize, q: Point3) -> f64 {
     let (q2, _) = in_section(s, q);
-    let (dir, width) = o.reach[k];
+    let (dir, width) = *of_face(&o.reach, k);
     let t = s.p + dir * width;
-    match s.trace[k] {
-        Trace::Line => (q2 - t).dot(s.m[k]),
+    match *of_face(&s.trace, k) {
+        Trace::Line => (q2 - t).dot(*of_face(&s.m, k)),
         Trace::Circle { centre, radius } => {
             let (a, b) = (t - centre, q2 - centre);
             let turn = a.cross(b).atan2(a.dot(b));
@@ -131,7 +138,7 @@ pub(super) fn chain(
     v: VertexId,
 ) -> Vec<EdgeId> {
     const SAMPLES: usize = 32;
-    let c0 = pk.coedges[k];
+    let c0 = *of_face(&pk.coedges, k);
     let lp = body.lp(body.coedge(c0).lp);
     let n = lp.coedges.len();
     let Some(at) = lp.coedges.iter().position(|&c| c == c0) else {
@@ -141,11 +148,9 @@ pub(super) fn chain(
     let end = end_face(body, pk, v);
     let mut out = Vec::new();
     for step in 1..n {
-        let c = lp.coedges[if forward {
-            (at + step) % n
-        } else {
-            (at + n - step) % n
-        }];
+        let Some(&c) = lp.coedges.get(if forward { (at + step) % n } else { (at + n - step) % n }) else {
+            continue;
+        };
         let e = body.coedge(c).edge;
         let edge = body.edge(e);
         let Some(curve) = edge.curve.as_ref() else {
@@ -212,7 +217,7 @@ pub(super) fn beyond(
     let mut walls: BTreeSet<FaceId> = BTreeSet::new();
     let mut joints: Vec<CoedgeId> = Vec::new();
     for k in 0..2 {
-        let c0 = pk.coedges[k];
+        let c0 = *of_face(&pk.coedges, k);
         let lp = body.lp(body.coedge(c0).lp);
         let n = lp.coedges.len();
         let at = lp
@@ -223,11 +228,9 @@ pub(super) fn beyond(
         let forward = body.coedge_end(c0) == v;
         let mut walked: Vec<CoedgeId> = Vec::new();
         for step in 1..n {
-            let c = lp.coedges[if forward {
-                (at + step) % n
-            } else {
-                (at + n - step) % n
-            }];
+            let Some(&c) = lp.coedges.get(if forward { (at + step) % n } else { (at + n - step) % n }) else {
+                continue;
+            };
             let e = body.coedge(c).edge;
             if is_picked(e) {
                 return Err("a blend that runs on past a short edge onto another blend".into());
@@ -288,11 +291,10 @@ pub(super) fn beyond(
         // Where two walked edges meet, the faces across them meet too, at the edges into the
         // vertex they share.
         for pair in walked.windows(2) {
-            let w = if forward {
-                body.coedge_end(pair[0])
-            } else {
-                body.coedge_start(pair[0])
+            let &[first, _] = pair else {
+                continue;
             };
+            let w = if forward { body.coedge_end(first) } else { body.coedge_start(first) };
             for c in body.coedge_ids() {
                 let x = body.edge(body.coedge(c).edge);
                 if (x.start == w || x.end == w) && !walked.contains(&c) {

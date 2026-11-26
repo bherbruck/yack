@@ -1,6 +1,8 @@
 // yack: Blends built as faces and sewn into the body (D. J. Jackson, "Boundary representation
 // Adapted from springrep@a03e8a1 src/blend/sew.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/blend/sew.rs to yack-blend (M3 W9a); paths and visibility only.
+// Changes: moved from springrep's src/blend/sew.rs to yack-blend (M3 W9a); paths and visibility only;
+// hardened (M3 L3): checked access in place of indexing, BTreeMap for every HashMap (each looked up,
+// or walked only into a set or an `any`), its contract panics gone, its small literal named.
 //! Blends built as faces and sewn into the body (D. J. Jackson, "Boundary representation
 //! modelling with local tolerances", Solid Modeling '95, section 5): each piece's blend faces
 //! are taken whole from its swept tool, whose sides lie on the two faces its edge joins, so the
@@ -11,7 +13,7 @@
 //! point is one the sweep made or one already on the body. Where the pieces do not close up that
 //! way, the caller cuts the tools instead.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Ball, Picked, SIDES, run::Beyond};
 use crate::{
@@ -99,8 +101,8 @@ struct Parts {
 }
 
 /// Piece `i`'s blend faces in its tool, which other pieces' blends may share.
-#[allow(clippy::disallowed_types)] fn parts(tool: &Brep, i: usize) -> Option<Parts> { // D26: BTree* in hardening, proven by digests
-    let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+fn parts(tool: &Brep, i: usize) -> Option<Parts> {
+    let mut faces_of: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
     for c in tool.coedge_ids() {
         faces_of
             .entry(tool.coedge(c).edge)
@@ -124,7 +126,7 @@ struct Parts {
                     uses.push((e, Use::Pole));
                     continue;
                 }
-                let roles: Vec<Role> = faces_of[&e].iter().map(|&g| role(g)).collect();
+                let roles: Vec<Role> = faces_of.get(&e)?.iter().map(|&g| role(g)).collect();
                 let u = match roles.as_slice() {
                     [Role::Blend, Role::Blend | Role::Other] | [Role::Other, Role::Blend] => {
                         Use::Inner
@@ -152,7 +154,7 @@ struct Mapped {
 /// The blend sewn into `body`: every piece's blend faces, named `names[i]`, facing out of the body
 /// when the piece is `convex[i]`, cut away from it, and into it otherwise; or why it could not be.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::disallowed_types)] pub(super) fn sewn( // D26: BTree* in hardening, proven by digests
+pub(super) fn sewn(
     body: &Brep,
     picked: &[Picked],
     tools: &[Brep],
@@ -171,14 +173,14 @@ struct Mapped {
         .map(|(i, t)| parts(t, i))
         .collect::<Option<_>>()
         .ok_or("a tool whose blend faces meet it other than at its sides and ends")?;
-    let picked_of: HashMap<EdgeId, usize> = picked
+    let picked_of: BTreeMap<EdgeId, usize> = picked
         .iter()
         .enumerate()
         .map(|(i, pk)| (pk.edge, i))
         .collect();
     // The body's vertices the blend takes away, each with the pieces that take it.
     let mut gone: BTreeSet<VertexId> = BTreeSet::new();
-    let mut near: HashMap<VertexId, BTreeSet<usize>> = HashMap::new();
+    let mut near: BTreeMap<VertexId, BTreeSet<usize>> = BTreeMap::new();
     for (i, pk) in picked.iter().enumerate() {
         let e = body.edge(pk.edge);
         for v in [e.start, e.end] {
@@ -201,18 +203,21 @@ struct Mapped {
     let mut vmap: Vec<Option<VertexId>> = vec![None; body.vertex_ids().count()];
     for v in body.vertex_ids() {
         if !gone.contains(&v) {
-            vmap[v.index()] = Some(out.add_vertex(body.vertex(v).point));
+            let kept = out.add_vertex(body.vertex(v).point);
+            if let Some(slot) = vmap.get_mut(v.index()) {
+                *slot = Some(kept);
+            }
         }
     }
 
     // The tools' vertices, one wherever two pieces' ends meet.
     let mut pool: Vec<VertexId> = Vec::new();
-    let mut tvmap: Vec<HashMap<VertexId, VertexId>> = vec![HashMap::new(); tools.len()];
-    for (i, tool) in tools.iter().enumerate() {
-        for &(e, _) in &parts[i].uses {
+    let mut tvmap: Vec<BTreeMap<VertexId, VertexId>> = vec![BTreeMap::new(); tools.len()];
+    for ((tool, part), tv) in tools.iter().zip(&parts).zip(tvmap.iter_mut()) {
+        for &(e, _) in &part.uses {
             let edge = tool.edge(e);
             for v in [edge.start, edge.end] {
-                if tvmap[i].contains_key(&v) {
+                if tv.contains_key(&v) {
                     continue;
                 }
                 let p = tool.vertex(v).point;
@@ -227,7 +232,7 @@ struct Mapped {
                         w
                     }
                 };
-                tvmap[i].insert(v, id);
+                tv.insert(v, id);
             }
         }
     }
@@ -249,11 +254,12 @@ struct Mapped {
     // Every other edge at a blend's end is cut back to where a contact curve meets it, or runs on
     // to it past the end where the blend opens the face beyond.
     let mut ranges: Vec<(f64, f64)> = body.edge_ids().map(|e| body.edge(e).range).collect();
+    let kept = |v: VertexId| vmap.get(v.index()).copied().flatten();
     let mut ends: Vec<[Option<VertexId>; 2]> = body
         .edge_ids()
         .map(|e| {
             let x = body.edge(e);
-            [vmap[x.start.index()], vmap[x.end.index()]]
+            [kept(x.start), kept(x.end)]
         })
         .collect();
     for e in body.edge_ids() {
@@ -277,9 +283,12 @@ struct Mapped {
             }
             let v = if k == 0 { edge.start } else { edge.end };
             let corner = body.vertex(v).point;
-            let candidates: BTreeSet<VertexId> = near[&v]
-                .iter()
-                .flat_map(|&i| points[i].iter().copied())
+            let candidates: BTreeSet<VertexId> = near
+                .get(&v)
+                .into_iter()
+                .flatten()
+                .filter_map(|&i| points.get(i))
+                .flat_map(|ps| ps.iter().copied())
                 .collect();
             let on = |range: (f64, f64)| -> Vec<(VertexId, f64)> {
                 candidates
@@ -322,15 +331,19 @@ struct Mapped {
             if hits.iter().any(|h| h.0 != w) {
                 return Err("an edge at a blend's end that two contact curves meet".into());
             }
-            ends[e.index()][k] = Some(w);
+            let (Some([start, end]), Some(range)) = (ends.get_mut(e.index()), ranges.get_mut(e.index())) else {
+                return Err("an edge of the body not in its own list".into());
+            };
             if k == 0 {
-                ranges[e.index()].0 = t;
+                (*start, range.0) = (Some(w), t);
             } else {
-                ranges[e.index()].1 = t;
+                (*end, range.1) = (Some(w), t);
             }
         }
-        let (t0, t1) = ranges[e.index()];
-        let speed = curve.d1(0.5 * (t0 + t1)).1.norm().max(1e-300);
+        let Some(&(t0, t1)) = ranges.get(e.index()) else {
+            return Err("an edge of the body not in its own list".into());
+        };
+        let speed = curve.d1(0.5 * (t0 + t1)).1.norm().max(1e-300); // tol: keeps a stationary curve from dividing
         if (t1 - t0) * speed <= tol::LINEAR {
             return Err("an edge a blend cuts back past its other end".into());
         }
@@ -341,27 +354,33 @@ struct Mapped {
             continue;
         }
         let edge = body.edge(e);
-        let [Some(s), Some(t)] = ends[e.index()] else {
-            unreachable!("every end of a kept edge is kept or cut back");
+        // every end of a kept edge is kept or cut back
+        let (Some(&[Some(s), Some(t)]), Some(&range)) = (ends.get(e.index()), ranges.get(e.index())) else {
+            return Err("a kept edge with an end neither kept nor cut back".into());
         };
-        emap[e.index()] = Some(match &edge.curve {
-            Some(c) => out.add_edge(c.clone(), ranges[e.index()], s, t),
+        let made = match &edge.curve {
+            Some(c) => out.add_edge(c.clone(), range, s, t),
             None => out.add_degenerate_edge(s, edge.range),
-        });
+        };
+        if let Some(slot) = emap.get_mut(e.index()) {
+            *slot = Some(made);
+        }
     }
 
     // The tools' edges; an end section two pieces share is one edge.
-    let mut tmap: Vec<HashMap<EdgeId, Mapped>> = vec![HashMap::new(); tools.len()];
+    let mut tmap: Vec<BTreeMap<EdgeId, Mapped>> = vec![BTreeMap::new(); tools.len()];
     let mut crosses: Vec<(EdgeId, Point3)> = Vec::new();
     // A crease between two pieces whose tools were joined is one edge of both.
     let mut creases: Vec<(EdgeId, Point3)> = Vec::new();
-    for (i, tool) in tools.iter().enumerate() {
-        for &(e, u) in &parts[i].uses {
+    for (((tool, part), tv), tm) in tools.iter().zip(&parts).zip(&tvmap).zip(tmap.iter_mut()) {
+        for &(e, u) in &part.uses {
             let edge = tool.edge(e);
-            let (s, t) = (tvmap[i][&edge.start], tvmap[i][&edge.end]);
+            let (Some(&s), Some(&t)) = (tv.get(&edge.start), tv.get(&edge.end)) else {
+                return Err("a tool's edge whose ends were not taken in".into());
+            };
             let Some(curve) = edge.curve.as_ref() else {
                 let x = out.add_degenerate_edge(s, edge.range);
-                tmap[i].insert(
+                tm.insert(
                     e,
                     Mapped {
                         edge: x,
@@ -385,7 +404,7 @@ struct Mapped {
                     (ends_match && m.dist(mid) <= tol::LINEAR).then_some((x, xe.start != s))
                 });
                 if let Some((x, flipped)) = same {
-                    tmap[i].insert(
+                    tm.insert(
                         e,
                         Mapped {
                             edge: x,
@@ -402,7 +421,7 @@ struct Mapped {
                 Use::Inner => creases.push((x, mid)),
                 _ => {}
             }
-            tmap[i].insert(
+            tm.insert(
                 e,
                 Mapped {
                     edge: x,
@@ -451,30 +470,28 @@ struct Mapped {
     }
 
     let mut blend_faces: Vec<(usize, FaceId)> = Vec::new();
-    for (i, tool) in tools.iter().enumerate() {
-        for &f in &parts[i].blends {
+    // each piece's tool, blend faces, side and names together
+    let pieces = tools.iter().zip(&parts).zip(convex).zip(names).zip(&tmap).enumerate();
+    for (i, ((((tool, part), &convex), names), tm)) in pieces {
+        for &f in &part.blends {
             let face = tool.face(f);
-            let nf = out.add_face(
-                face.surface.clone(),
-                face.reversed != convex[i],
-                names[i].iter().cloned(),
-            );
+            let nf = out.add_face(face.surface.clone(), face.reversed != convex, names.iter().cloned());
             for &lp in &face.loops {
                 let mut specs = Vec::new();
                 for &c in &tool.lp(lp).coedges {
                     let co = tool.coedge(c);
-                    let m = tmap[i][&co.edge];
+                    let m = *tm.get(&co.edge).ok_or("a blend face's edge not taken in")?;
                     let params = crate::topo::coedge_params(tool, c, 1);
                     let pcurve = |at_end: bool| -> PCurve {
                         if m.own && matches!(co.pcurve, PCurve::Affine { .. }) {
                             return co.pcurve.clone();
                         }
+                        // one point at each of the two parameters
                         let uvs = tool.coedge_uvs(c, &params);
-                        PCurve::Projected {
-                            seed: if at_end { uvs[1] } else { uvs[0] },
-                        }
+                        let seed = if at_end { uvs.last() } else { uvs.first() };
+                        PCurve::Projected { seed: seed.copied().unwrap_or(crate::math::Vec2::ZERO) }
                     };
-                    specs.push(if convex[i] {
+                    specs.push(if convex {
                         CoedgeSpec {
                             edge: m.edge,
                             reversed: !(co.reversed != m.flipped),
@@ -488,7 +505,7 @@ struct Mapped {
                         }
                     });
                 }
-                if convex[i] {
+                if convex {
                     specs.reverse();
                 }
                 out.add_loop(nf, specs);
@@ -500,8 +517,9 @@ struct Mapped {
 
     for (at, ball) in balls {
         let f = corner_face(&mut out, ball, at, &tmap, tools, &parts, feature)?;
+        let &first = at.first().ok_or("a corner ball with no pieces")?;
         sides.push(None);
-        blend_faces.push((at[0], f));
+        blend_faces.push((first, f));
     }
 
     for s in body.solid_ids() {
@@ -511,13 +529,13 @@ struct Mapped {
                 .shell(sh)
                 .faces
                 .iter()
-                .map(|f| fmap[f.index()])
+                .filter_map(|f| fmap.get(f.index()).copied())
                 .collect();
             let members: BTreeSet<FaceId> = body.shell(sh).faces.iter().copied().collect();
             faces.extend(
                 blend_faces
                     .iter()
-                    .filter(|(i, _)| members.contains(&picked[*i].faces[0]))
+                    .filter(|(i, _)| picked.get(*i).is_some_and(|pk| members.contains(&pk.faces[0])))
                     .map(|&(_, f)| f),
             );
             shells.push(out.add_shell(faces));
@@ -539,11 +557,11 @@ struct Mapped {
 
 /// The sphere octant closing a corner where the pieces `at` stop short: bounded by each one's end
 /// section, a quarter circle of the sphere, and facing out of the body.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn corner_face( // D26: BTree* in hardening, proven by digests
+fn corner_face(
     out: &mut Brep,
     ball: &Ball,
     at: &[usize],
-    tmap: &[HashMap<EdgeId, Mapped>],
+    tmap: &[BTreeMap<EdgeId, Mapped>],
     tools: &[Brep],
     parts: &[Parts],
     feature: &str,
@@ -552,8 +570,10 @@ struct Mapped {
     let on_ball = |p: Point3| (p.dist(ball.centre) - ball.radius).abs() <= tol::LINEAR;
     let mut arcs: Vec<EdgeId> = Vec::new();
     for &i in at {
-        let tool = &tools[i];
-        let mut ends = parts[i].uses.iter().filter(|u| {
+        let (Some(tool), Some(part), Some(tm)) = (tools.get(i), parts.get(i), tmap.get(i)) else {
+            return Err("a corner names a piece that does not exist".into());
+        };
+        let mut ends = part.uses.iter().filter(|u| {
             let e = tool.edge(u.0);
             u.1 == Use::Cross
                 && on_ball(tool.vertex(e.start).point)
@@ -562,13 +582,17 @@ struct Mapped {
         let (Some(&(e, _)), None) = (ends.next(), ends.next()) else {
             return Err("a corner piece without one end section on its sphere".into());
         };
-        arcs.push(tmap[i][&e].edge);
+        arcs.push(tm.get(&e).ok_or("a corner piece's end section not taken in")?.edge);
     }
     // Chained end to end, then turned to run counter-clockwise seen from outside.
-    let mut lp: Vec<(EdgeId, bool)> = vec![(arcs[0], false)];
-    let mut left: Vec<EdgeId> = arcs[1..].to_vec();
-    while !left.is_empty() {
-        let (e, rev) = *lp.last().unwrap_or_else(|| panic!("started with one"));
+    let Some((&first, rest)) = arcs.split_first() else {
+        return Err("a corner with no pieces".into());
+    };
+    let mut lp: Vec<(EdgeId, bool)> = vec![(first, false)];
+    let mut left: Vec<EdgeId> = rest.to_vec();
+    while let Some(&(e, rev)) = lp.last()
+        && !left.is_empty()
+    {
         let x = out.edge(e);
         let tip = if rev { x.start } else { x.end };
         let k = left
@@ -584,9 +608,10 @@ struct Mapped {
     };
     let corners: Vec<Point3> = lp.iter().map(start).collect();
     let n: Vec3 = ball.normals[0] + ball.normals[1] + ball.normals[2];
-    let turn = (corners[1] - corners[0])
-        .cross(corners[2] - corners[1])
-        .dot(n);
+    let &[c0, c1, c2, ..] = corners.as_slice() else {
+        return Err("a corner with fewer than three end sections".into());
+    };
+    let turn = (c1 - c0).cross(c2 - c1).dot(n);
     if turn < 0.0 {
         lp.reverse();
         for c in &mut lp {
@@ -611,12 +636,12 @@ struct Mapped {
 }
 
 /// What rebuilding a body face's loop reads.
-#[allow(clippy::disallowed_types)] struct Rebuild<'a> { // D26: BTree* in hardening, proven by digests
+struct Rebuild<'a> {
     picked: &'a [Picked],
-    picked_of: &'a HashMap<EdgeId, usize>,
+    picked_of: &'a BTreeMap<EdgeId, usize>,
     parts: &'a [Parts],
     tools: &'a [Brep],
-    tmap: &'a [HashMap<EdgeId, Mapped>],
+    tmap: &'a [BTreeMap<EdgeId, Mapped>],
     emap: &'a [Option<EdgeId>],
     ranges: &'a [(f64, f64)],
     cross_edges: &'a [EdgeId],
@@ -636,7 +661,7 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
 /// Body loop `lp` with each picked edge replaced by its piece's contact curve on this face, each
 /// edge cut back to its new ends, and an end section across each corner the blend took off; and
 /// whether anything changed.
-#[allow(clippy::panic)] fn rebuild_loop(
+fn rebuild_loop(
     body: &Brep,
     lp: crate::topo::LoopId,
     r: &Rebuild,
@@ -657,12 +682,16 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
         };
         if let Some(&i) = r.picked_of.get(&co.edge) {
             changed = true;
-            let k = r.picked[i]
+            let (Some(pk), Some(part), Some(tool), Some(tmap)) = (r.picked.get(i), r.parts.get(i), r.tools.get(i), r.tmap.get(i))
+            else {
+                return Err("a picked edge whose piece does not exist".into());
+            };
+            let k = pk
                 .faces
                 .iter()
                 .position(|&g| g == body.lp(lp).face)
                 .ok_or("a picked edge on a face it does not join")?;
-            let contacts: Vec<EdgeId> = r.parts[i]
+            let contacts: Vec<EdgeId> = part
                 .uses
                 .iter()
                 .filter(|u| u.1 == Use::Contact(k))
@@ -671,28 +700,29 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
             let ce = match contacts.as_slice() {
                 [ce] => ce,
                 // The blend meets this face only at a pole, where its neighbours' contacts meet.
-                [] if r.parts[i].uses.iter().any(|u| u.1 == Use::Pole) => continue,
+                [] if part.uses.iter().any(|u| u.1 == Use::Pole) => continue,
                 _ => {
                     return Err("a piece with its contact on a face in other than one edge".into());
                 }
             };
-            let tool = &r.tools[i];
             let tc = tool.edge(*ce);
-            let tcurve = tc.curve.as_ref().unwrap_or_else(|| panic!("checked in parts"));
-            let curve = edge.curve.as_ref().unwrap_or_else(|| panic!("a picked edge has a curve"));
+            // a contact has a curve (`parts` checked it), and so has a picked edge
+            let (Some(tcurve), Some(curve)) = (tc.curve.as_ref(), edge.curve.as_ref()) else {
+                return Err("a picked edge or its contact without a curve".into());
+            };
             let tm = 0.5 * (edge.range.0 + edge.range.1);
             let (p, d) = curve.d1(tm);
             let d = if co.reversed { -d } else { d };
             let (_, s) = curve_distance(tcurve, tc.range, p);
             let reversed = tcurve.d1(s).1.dot(d) < 0.0;
-            let m = r.tmap[i][ce];
+            let m = *tmap.get(ce).ok_or("a contact not taken in")?;
             let spec_edge = out.edge(m.edge);
             let start = if reversed {
                 spec_edge.end
             } else {
                 spec_edge.start
             };
-            let hint = body.coedge_uvs(c, &[t_start])[0];
+            let hint = *body.coedge_uvs(c, &[t_start]).first().ok_or("a coedge with no point")?;
             let seed = surface.project_near(out.vertex(start).point, hint);
             specs.push((
                 CoedgeSpec {
@@ -708,15 +738,18 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
             changed = true;
             continue;
         }
-        let ne = r.emap[co.edge.index()].unwrap_or_else(|| panic!("every unpicked edge is kept"));
-        let range = r.ranges[co.edge.index()];
+        // every unpicked edge is kept
+        let (Some(&Some(ne)), Some(&range)) = (r.emap.get(co.edge.index()), r.ranges.get(co.edge.index())) else {
+            return Err("an unpicked edge that was not kept".into());
+        };
         let new_start = if co.reversed { range.1 } else { range.0 };
         let pcurve = match &co.pcurve {
             PCurve::Projected { .. } if new_start != t_start => {
                 changed = true;
-                PCurve::Projected {
-                    seed: body.coedge_uvs(c, &[t_start, new_start])[1],
-                }
+                let &[_, seed] = body.coedge_uvs(c, &[t_start, new_start]).as_slice() else {
+                    return Err("a coedge with no point".into());
+                };
+                PCurve::Projected { seed }
             }
             other => {
                 changed |= range != edge.range;
@@ -737,10 +770,9 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
     }
     let n = specs.len();
     let mut joined: Vec<CoedgeSpec> = Vec::with_capacity(n + 2);
-    for i in 0..n {
-        let (a, ca) = &specs[i];
+    // each spec with the next, the last with the first
+    for ((a, ca), (b, _)) in specs.iter().zip(specs.iter().cycle().skip(1)) {
         joined.push(a.clone());
-        let (b, _) = &specs[(i + 1) % n];
         let (_, end) = spec_ends(out, a);
         let (start, _) = spec_ends(out, b);
         if end == start {
@@ -751,7 +783,7 @@ fn spec_ends(out: &Brep, s: &CoedgeSpec) -> (VertexId, VertexId) {
         let old = body.coedge(*ca);
         let range = body.edge(old.edge).range;
         let t_end = if old.reversed { range.0 } else { range.1 };
-        let hint = body.coedge_uvs(*ca, &[t_end])[0];
+        let hint = *body.coedge_uvs(*ca, &[t_end]).first().ok_or("a coedge with no point")?;
         for (x, reversed) in chain {
             let from = if reversed {
                 out.edge(x).end
@@ -834,19 +866,19 @@ fn across(
 
 /// Whether a face the blend made or changed shares an edge with another face on its surface, so
 /// [`unify`] would merge them.
-#[allow(clippy::disallowed_types)] fn mergeable(b: &Brep, sides: &[Option<usize>]) -> bool { // D26: BTree* in hardening, proven by digests
-    let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+fn mergeable(b: &Brep, sides: &[Option<usize>]) -> bool {
+    let mut faces_of: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
     for c in b.coedge_ids() {
         faces_of
             .entry(b.coedge(c).edge)
             .or_default()
             .push(b.coedge_face(c));
     }
-    faces_of.values().any(|fs| {
-        fs.len() == 2
-            && fs[0] != fs[1]
-            && (sides[fs[0].index()].is_none() || sides[fs[1].index()].is_none())
-            && same_domain(&b.face(fs[0]).surface, &b.face(fs[1]).surface)
+    // a face the blend changed marks its side `None`; a face missing from `sides` is one of those
+    let changed = |f: FaceId| sides.get(f.index()).is_none_or(Option::is_none);
+    faces_of.values().any(|fs| match fs.as_slice() {
+        &[f, g] => f != g && (changed(f) || changed(g)) && same_domain(&b.face(f).surface, &b.face(g).surface),
+        _ => false,
     })
 }
 

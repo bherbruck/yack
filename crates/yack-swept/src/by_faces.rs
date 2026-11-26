@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use yack_base::kernel::{Error, Result};
 use yack_build::build::{PartFace, Parts, param_of, parts_of, solid_of};
 
-use yack_geom::{Circle, Curve, Cylinder, Extrusion, Line, Plane, Surface};
+use yack_geom::{Circle, Curve, Cylinder, Ellipse, Extrusion, Line, Plane, Surface};
 use yack_math::kernel::{Frame, Point3, Transform, Vec3};
 use yack_topo::{Brep, FaceName};
 
@@ -36,24 +36,61 @@ enum Stand {
     Leads,
     Trails,
     Along,
-    /// It leads on one side of a plane through `origin` square to the unit `normal` and trails on
-    /// the other: the plane its contact lies in. Which side leads, the face's own normals say once
-    /// a split has left it on one side.
-    Contact {
-        origin: Point3,
-        normal: Vec3,
-    },
+    /// Its contact lies on one cut, or on two: on each side of them it leads all over or trails
+    /// all over. Which, the face's own normals say once splits have left it on one side of each.
+    Contact(Cut, Option<Cut>),
 }
 
-/// A plane a piece lies wholly on one side of, as a split left it: through `origin`, square to the
-/// unit `normal`.
-#[derive(Clone, Copy, Debug)]
-struct Side {
-    origin: Point3,
-    normal: Vec3,
+/// A surface a solid is split along before its faces are swept, and that a piece then lies wholly
+/// on one side of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Cut {
+    /// The plane through `origin` square to the unit `normal`.
+    Plane { origin: Point3, normal: Vec3 },
+    /// The cylinder of `radius` about the line through `origin` along the unit `axis`.
+    Tube { origin: Point3, axis: Vec3, radius: f64 },
 }
 
-/// How many contact planes a slide may split a solid by before it declines.
+impl Cut {
+    /// Whether `self` and `other` are one surface.
+    fn same(&self, other: &Cut) -> bool {
+        let parallel = |a: Vec3, b: Vec3| a.cross(b).norm() <= yack_tol::ANGULAR;
+        match (self, other) {
+            (Cut::Plane { origin: o, normal: n }, Cut::Plane { origin: p, normal: m }) => {
+                parallel(*n, *m) && (*p - *o).dot(*n).abs() <= yack_tol::LINEAR
+            }
+            (
+                Cut::Tube { origin: o, axis: a, radius: r },
+                Cut::Tube { origin: p, axis: b, radius: s },
+            ) => {
+                parallel(*a, *b)
+                    && (*p - *o).cross(*a).norm() <= yack_tol::LINEAR
+                    && (r - s).abs() <= yack_tol::LINEAR
+            }
+            _ => false,
+        }
+    }
+
+    /// `piece` cut along `self`: the two sides, either of which may be empty.
+    fn split(&self, piece: &Brep) -> Result<(Brep, Brep)> {
+        match *self {
+            Cut::Plane { origin, normal } => yack_boolean::split(piece, origin, normal),
+            Cut::Tube { origin, axis, radius } => {
+                // A cylinder reaching past the piece both ways along the axis: inside it, outside.
+                let b = yack_topo::bbox::bbox(piece);
+                let reach = 2.0 * (b.diagonal() + b.center().dist(origin)) + 1.0;
+                let frame = Frame::new(origin - axis * reach, axis, axis.any_perpendicular())?;
+                let tool = yack_build::primitive::cylinder(&frame, radius, 2.0 * reach, "cut")?;
+                Ok((
+                    yack_boolean::intersection(piece, &tool)?,
+                    yack_boolean::difference(piece, &tool)?,
+                ))
+            }
+        }
+    }
+}
+
+/// How many cuts a slide may split a solid along before it declines.
 const MAX_SPLITS: usize = 24;
 
 /// How far a face's outward normal must lean towards or away from the slide (its cosine) for a
@@ -99,9 +136,10 @@ fn slid(body: &Brep, by: Vec3, feature: &str) -> Result<Brep> {
     })
 }
 
-/// Adds to `prisms` what each leading face of each solid of `body` sweeps on `slide`, splitting a solid along a curved face's contact first; `sides` are
-/// the planes earlier splits left `body` on one side of.
-fn prisms_of(body: &Brep, slide: &Slide, sides: &[Side], prisms: &mut Vec<Brep>) -> Result<()> {
+/// Adds to `prisms` what each leading face of each solid of `body` sweeps on `slide`, splitting a
+/// solid along a curved face's contact first; `sides` are the cuts earlier splits left `body` on
+/// one side of.
+fn prisms_of(body: &Brep, slide: &Slide, sides: &[Cut], prisms: &mut Vec<Brep>) -> Result<()> {
     let solids: Vec<_> = body.solid_ids().collect();
     for &solid in &solids {
         let piece =
@@ -113,22 +151,22 @@ fn prisms_of(body: &Brep, slide: &Slide, sides: &[Side], prisms: &mut Vec<Brep>)
             match settled(face, &parts, stand(face, &parts, slide.dir)?, sides, slide.dir)? {
                 Stand::Leads => leading.push(k),
                 Stand::Trails | Stand::Along => {}
-                Stand::Contact { origin, normal, .. } => {
-                    cut = Some((origin, normal));
+                Stand::Contact(next, _) => {
+                    cut = Some(next);
                     break;
                 }
             }
         }
-        if let Some((origin, normal)) = cut {
+        if let Some(cut) = cut {
             if sides.len() >= MAX_SPLITS {
                 return Err(Error::Unsupported(format!(
                     "by faces: a solid with more than {MAX_SPLITS} contacts on a slide"
                 )));
             }
-            let (above, below) = yack_boolean::split(&piece, origin, normal)?;
+            let (above, below) = cut.split(&piece)?;
             for half in [above, below] {
                 let mut more = sides.to_vec();
-                more.push(Side { origin, normal });
+                more.push(cut);
                 prisms_of(&half, slide, &more, prisms)?;
             }
             continue;
@@ -140,31 +178,40 @@ fn prisms_of(body: &Brep, slide: &Slide, sides: &[Side], prisms: &mut Vec<Brep>)
     Ok(())
 }
 
-/// `stand` for `face` of `parts`, a contact settled where an earlier split left the piece on one
-/// side of its plane: there the face leads all over or trails all over, and samples of its normal
-/// along its boundary say which (a decline where they disagree).
+/// `stand` for `face` of `parts`, a contact settled where earlier splits left the piece on one
+/// side of each of its cuts: there the face leads all over or trails all over, and samples of its
+/// normal along its boundary say which (a decline where they disagree). Where a cut is still to
+/// come, the contact names it first.
 fn settled(
     face: &PartFace,
     parts: &Parts,
     stand: Stand,
-    sides: &[Side],
+    sides: &[Cut],
     dir: Vec3,
 ) -> Result<Stand> {
-    let Stand::Contact { origin, normal } = stand else {
+    let Stand::Contact(first, second) = stand else {
         return Ok(stand);
     };
-    let split = sides.iter().any(|side| {
-        side.normal.cross(normal).norm() <= yack_tol::ANGULAR
-            && (origin - side.origin).dot(side.normal).abs() <= yack_tol::LINEAR
-    });
-    if split { leans(face, parts, dir) } else { Ok(stand) }
+    let done = |c: &Cut| sides.iter().any(|side| side.same(c));
+    match [Some(first), second].into_iter().flatten().find(|c| !done(c)) {
+        Some(next) => Ok(Stand::Contact(next, None)),
+        None => leans(face, parts, dir),
+    }
 }
 
 /// Whether `face`, known to lead all over or trail all over, leads or trails: from its outward
-/// normal at a quarter, a half and three quarters along each piece of its boundary.
+/// normal a little inside it from a quarter, a half and three quarters along each piece of its
+/// boundary. Inside, not on it: a face's whole boundary can lie on its contacts (a quarter of a
+/// torus cut along both of its contacts), where every normal is square to the slide.
 fn leans(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
-    let (mut most, mut least) = (f64::NEG_INFINITY, f64::INFINITY);
-    for &(e, _) in face.loops.iter().flatten() {
+    let outward = |p: Point3| {
+        let uv = face.surface.project(p);
+        let n = face.surface.normal(uv.x, uv.y);
+        if face.reversed { -n } else { n }
+    };
+    // Each sample on the boundary, and the way the face's loop runs there.
+    let mut samples = Vec::new();
+    for &(e, reversed) in face.loops.iter().flatten() {
         let (curve, a, b) = parts.edges.get(e).ok_or_else(|| missing("edge"))?;
         let pa = *parts.points.get(*a).ok_or_else(|| missing("point"))?;
         let pb = *parts.points.get(*b).ok_or_else(|| missing("point"))?;
@@ -175,13 +222,25 @@ fn leans(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
             middle_param(curve, (pa, pb)) * 2.0 - t0
         };
         for f in [0.25, 0.5, 0.75] {
-            let p = curve.eval(t0 + f * (t1 - t0));
-            let uv = face.surface.project(p);
-            let n = face.surface.normal(uv.x, uv.y);
-            let s = if face.reversed { -n } else { n }.dot(dir);
-            most = most.max(s);
-            least = least.min(s);
+            let (p, d) = curve.d1(t0 + f * (t1 - t0));
+            samples.push((p, if reversed { -d } else { d }));
         }
+    }
+    let mut span = yack_math::kernel::Aabb::EMPTY;
+    for &(p, _) in &samples {
+        span.add(p);
+    }
+    // A step in from the boundary: a fiftieth of the face's reach, along the face (its material
+    // lies on the left of the loop seen from outside, `n × travel`).
+    let step = span.diagonal() / 50.0;
+    let (mut most, mut least) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (p, travel) in samples {
+        let Some(inward) = outward(p).cross(travel).unit() else {
+            continue;
+        };
+        let s = outward(p + inward * step).dot(dir);
+        most = most.max(s);
+        least = least.min(s);
     }
     if most > CLEAR && least > -CLEAR {
         Ok(Stand::Leads)
@@ -220,9 +279,12 @@ fn stand(face: &PartFace, parts: &Parts, dir: Vec3) -> Result<Stand> {
             let normal = across
                 .unit()
                 .ok_or_else(|| Error::Unsupported("by faces: a degenerate cylinder".into()))?;
-            Ok(Stand::Contact { origin: c.frame.origin, normal })
+            Ok(Stand::Contact(Cut::Plane { origin: c.frame.origin, normal }, None))
         }
-        Surface::Sphere(sp) => Ok(Stand::Contact { origin: sp.frame.origin, normal: dir }),
+        Surface::Sphere(sp) => {
+            Ok(Stand::Contact(Cut::Plane { origin: sp.frame.origin, normal: dir }, None))
+        }
+        Surface::Torus(t) => torus_stand(t, dir),
         Surface::Cone(c) => cone_stand(face, parts, c, dir),
         other => Err(Error::Unsupported(format!(
             "by faces: a {} face the slide crosses is not split along its contact yet",
@@ -260,7 +322,39 @@ fn cone_stand(face: &PartFace, parts: &Parts, c: &yack_geom::Cone, dir: Vec3) ->
         .unit()
         .ok_or_else(|| Error::Unsupported("by faces: a cone touched along one generator".into()))?;
     let apex = c.frame.origin - z * (c.radius * cos / sin);
-    Ok(Stand::Contact { origin: apex, normal })
+    Ok(Stand::Contact(Cut::Plane { origin: apex, normal }, None))
+}
+
+/// How a torus's face stands to a slide along the unit `dir`. Its outward normal is
+/// `cos v·radial(u) + sin v·z`, so it is square to the slide where
+/// `cos v·(radial(u)·d⊥) + sin v·(dir·z) = 0`. Slid along its axis that is `sin v = 0`, the outer
+/// and inner equators: the plane through the centre square to the axis. Slid square to its axis
+/// it is `cos v = 0` (the top and bottom circles, on the cylinder of the major radius) or
+/// `radial(u)·d⊥ = 0` (the plane through the axis square to the slide). Slid aslant the contact
+/// lies on no plane or cylinder: a decline.
+fn torus_stand(t: &yack_geom::Torus, dir: Vec3) -> Result<Stand> {
+    let z = t.frame.z;
+    let along = dir.dot(z);
+    let across = dir - z * along;
+    if t.minor >= t.major {
+        return Err(Error::Unsupported("by faces: a torus that meets its own axis".into()));
+    }
+    let origin = t.frame.origin;
+    if across.norm() <= yack_tol::ANGULAR {
+        return Ok(Stand::Contact(Cut::Plane { origin, normal: z }, None));
+    }
+    if along.abs() <= yack_tol::ANGULAR {
+        let normal = across
+            .unit()
+            .ok_or_else(|| Error::Unsupported("by faces: a degenerate slide".into()))?;
+        return Ok(Stand::Contact(
+            Cut::Plane { origin, normal },
+            Some(Cut::Tube { origin, axis: z, radius: t.major }),
+        ));
+    }
+    Err(Error::Unsupported(
+        "by faces: a torus slid aslant to its axis (its contact is not planar)".into(),
+    ))
 }
 
 /// One piece of a face's boundary, along its curve from point `start` to point `end` (indices of
@@ -321,15 +415,27 @@ impl Prism<'_> {
         let pb = *self.parts.points.get(*b).ok_or_else(|| missing("point"))?;
         let (ka, kb) = (self.pair(Some(*a), pa, dir), self.pair(Some(*b), pb, dir));
         let mut list = vec![Piece { curve: curve.clone(), start: ka, end: kb }];
-        if a == b {
+        let long = match curve.period() {
+            Some(period) => {
+                let t0 = param_of(curve, pa);
+                middle_param(curve, (pa, pb)) - t0 > 0.25 * period
+            }
+            None => false,
+        };
+        if a == b || long {
             let period = curve.period().ok_or_else(|| {
                 Error::Unsupported("by faces: a closed edge on a curve with no period".into())
             })?;
-            let half = curve.eval(param_of(curve, pa) + period / 2.0);
-            let km = self.pair(None, half, dir);
+            // Closed: halves; open but more than half way round: cut at its middle.
+            let middle = if a == b {
+                param_of(curve, pa) + period / 2.0
+            } else {
+                middle_param(curve, (pa, pb))
+            };
+            let km = self.pair(None, curve.eval(middle), dir);
             list = vec![
                 Piece { curve: curve.clone(), start: ka, end: km },
-                Piece { curve: curve.clone(), start: km, end: ka },
+                Piece { curve: curve.clone(), start: km, end: kb },
             ];
         }
         let mut made = Vec::new();
@@ -447,9 +553,23 @@ fn side_surface(
             let frame = Frame::new(c.frame.origin, c.frame.z, c.frame.origin - middle)?;
             Curve::Circle(Circle { frame, radius: c.radius })
         }
+        // An ellipse's parameter starts on its major axis; turned half round (its frame's x and y
+        // reversed) it is the same ellipse, its parameter starting on the other end. A piece goes
+        // at most half way round, so one of the two keeps the seam off it.
+        Curve::Ellipse(el) => {
+            let t0 = param_of(curve, ends.0);
+            let t1 = 2.0 * middle_param(curve, ends) - t0;
+            let seam_inside = t1 > std::f64::consts::TAU;
+            if seam_inside {
+                let frame = Frame::new(el.frame.origin, el.frame.z, -el.frame.x)?;
+                Curve::Ellipse(Ellipse { frame, ..el.clone() })
+            } else {
+                curve.clone()
+            }
+        }
         other if other.period().is_some() => {
             return Err(Error::Unsupported(
-                "by faces: the side of a closed curve other than a circle".into(),
+                "by faces: the side of a closed curve other than a circle or an ellipse".into(),
             ));
         }
         other => other.clone(),

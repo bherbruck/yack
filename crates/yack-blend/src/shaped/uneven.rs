@@ -1,6 +1,8 @@
 // yack: The corner where three fillets of unequal radii meet, closed without a crease.
 // Adapted from springrep@a03e8a1 src/blend/shaped/uneven.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/blend/shaped/uneven.rs to yack-blend (M3 W9a); paths and visibility only.
+// Changes: moved from springrep's src/blend/shaped/uneven.rs to yack-blend (M3 W9a); paths and visibility only;
+// hardened (M3 L5): checked access in place of indexing (a corner's threes through `of3`), its small
+// literals named.
 //! The corner where three fillets of unequal radii meet, closed without a crease.
 //!
 //! A ball of radius `ρ` touching two of the corner's planes has its centre `ρ` in from both, and
@@ -31,6 +33,31 @@ use crate::{
     topo::{Brep, EdgeId, FaceName, VertexId},
 };
 
+/// Entry `j` of a corner's three (its faces, edges, radii), counted round the corner: `j` past 2
+/// wraps.
+fn of3<T>(xs: &[T; 3], j: usize) -> &T {
+    let [a, b, c] = xs;
+    match j % 3 {
+        0 => a,
+        1 => b,
+        _ => c,
+    }
+}
+
+/// [`of3`], to change.
+fn of3_mut<T>(xs: &mut [T; 3], j: usize) -> &mut T {
+    let [a, b, c] = xs;
+    match j % 3 {
+        0 => a,
+        1 => b,
+        _ => c,
+    }
+}
+
+/// Unit normals whose dot product is within this of 1 are one; an edge whose direction's dot with
+/// a face normal is within this of 0 lies in that face.
+const SAME_COS: f64 = 1e-9; // tol: a cosine, not a length
+
 /// A corner of three planes whose three edges are rounded at radii not all equal. Edge `j` lies
 /// between faces `j + 1` and `j + 2`.
 struct Corner {
@@ -53,14 +80,14 @@ impl Corner {
     /// Where a ball touching edge `j`'s two faces has its centre, for each unit of its radius:
     /// square to the edge, one in from both.
     fn in_from(&self, j: usize) -> Vec3 {
-        let (p, q) = (self.a[(j + 1) % 3], self.a[(j + 2) % 3]);
+        let (p, q) = (*of3(&self.a, j + 1), *of3(&self.a, j + 2));
         (p + q) / (1.0 + p.dot(q))
     }
 
     /// How far along edge `j` the ball touching all three faces sits, for each unit of its
     /// radius.
     fn along(&self, j: usize) -> f64 {
-        (1.0 - self.in_from(j).dot(self.a[j])) / self.e[j].dot(self.a[j])
+        (1.0 - self.in_from(j).dot(*of3(&self.a, j))) / of3(&self.e, j).dot(*of3(&self.a, j))
     }
 
     /// The centre of the ball of the largest radius touching all three faces.
@@ -69,7 +96,7 @@ impl Corner {
     }
 
     fn shrinks(&self, j: usize) -> bool {
-        self.largest() - self.r[j] > tol::LINEAR
+        self.largest() - *of3(&self.r, j) > tol::LINEAR
     }
 
     /// How far along edge `j` its own fillet starts: where the corner's ball sits, and its
@@ -80,7 +107,7 @@ impl Corner {
 
     /// The centre of edge `j`'s fillet's first ball.
     fn first(&self, j: usize) -> Point3 {
-        self.at + self.e[j] * self.start(j) + self.in_from(j) * self.r[j]
+        self.at + *of3(&self.e, j) * self.start(j) + self.in_from(j) * *of3(&self.r, j)
     }
 
     /// What the ball sweeps from the corner along edge `j`: its unit axis toward the corner's
@@ -89,7 +116,7 @@ impl Corner {
         let run = self.centre() - self.first(j);
         (
             run.unit_or_zero(),
-            ((self.largest() - self.r[j]) / run.norm()).asin(),
+            ((self.largest() - *of3(&self.r, j)) / run.norm()).asin(),
         )
     }
 }
@@ -128,16 +155,16 @@ fn corners(s: &Brep, edges: &[(EdgeId, f64)]) -> Vec<Corner> {
                 break;
             };
             let n = if face.reversed { -p.frame.z } else { p.frame.z };
-            if !normals.iter().any(|m| m.dot(n) > 1.0 - 1e-9) {
+            if !normals.iter().any(|m| m.dot(n) > 1.0 - SAME_COS) {
                 normals.push(n);
             }
         }
         let straight = here
             .iter()
             .all(|x| matches!(s.edge(x.0).curve, Some(Curve::Line(_))));
-        if !flat || !straight || normals.len() != 3 {
+        let (true, true, &[n0, n1, n2], Some(&(first_edge, _))) = (flat, straight, normals.as_slice(), here.first()) else {
             continue;
-        }
+        };
         let far = |e: EdgeId| {
             let [p, q] = ends(e);
             s.vertex(if p == v { q } else { p }).point
@@ -146,25 +173,28 @@ fn corners(s: &Brep, edges: &[(EdgeId, f64)]) -> Vec<Corner> {
         let mut c = Corner {
             vertex: v,
             at,
-            a: [-normals[0], -normals[1], -normals[2]],
+            a: [-n0, -n1, -n2],
             e: [Vec3::ZERO; 3],
             len: [0.0; 3],
             r: [0.0; 3],
-            edges: [here[0].0; 3],
+            edges: [first_edge; 3],
         };
         let mut placed = 0;
         for &(e, r) in &here {
             let run = far(e) - at;
             let Some(d) = run.unit() else { continue };
-            let leaves: Vec<usize> = (0..3).filter(|&j| d.dot(c.a[j]).abs() > 1e-9).collect();
+            let leaves: Vec<usize> = (0..3).filter(|&j| d.dot(*of3(&c.a, j)).abs() > SAME_COS).collect();
             if let [j] = leaves[..]
-                && d.dot(c.a[j]) > 0.0
+                && d.dot(*of3(&c.a, j)) > 0.0
             {
-                (c.e[j], c.len[j], c.r[j], c.edges[j]) = (d, run.norm(), r, e);
+                *of3_mut(&mut c.e, j) = d;
+                *of3_mut(&mut c.len, j) = run.norm();
+                *of3_mut(&mut c.r, j) = r;
+                *of3_mut(&mut c.edges, j) = e;
                 placed |= 1 << j;
             }
         }
-        if placed == 7 && (0..3).all(|j| c.len[j] > c.start(j) + c.r[j]) {
+        if placed == 7 && (0..3).all(|j| *of3(&c.len, j) > c.start(j) + *of3(&c.r, j)) {
             out.push(c);
         }
     }
@@ -234,8 +264,12 @@ impl Build {
         }
     }
 
+    fn point(&self, i: usize) -> Result<Point3> {
+        self.parts.points.get(i).copied().ok_or_else(|| Error::Numerical("a corner's point that is not there".into()))
+    }
+
     fn line(&mut self, from: usize, to: usize) -> Result<Side> {
-        let (p, q) = (self.parts.points[from], self.parts.points[to]);
+        let (p, q) = (self.point(from)?, self.point(to)?);
         let dir = (q - p)
             .unit()
             .ok_or_else(|| Error::InvalidInput("a corner's line of no length".into()))?;
@@ -248,33 +282,37 @@ impl Build {
     }
 
     fn arc(&mut self, centre: Point3, from: usize, to: usize) -> Result<Side> {
-        let (curve, mid) = arc(centre, self.parts.points[from], self.parts.points[to])?;
+        let (curve, mid) = arc(centre, self.point(from)?, self.point(to)?)?;
         Ok(self.side(curve, from, to, mid))
     }
 
     /// A face on `surface` bounded by `sides`, each running on from the last, either way round.
-    fn face(&mut self, surface: Surface, name: String, mut sides: Vec<Side>) {
+    fn face(&mut self, surface: Surface, name: String, mut sides: Vec<Side>) -> Result<()> {
         let mut ring = Vec::new();
         for s in &sides {
-            ring.push(self.parts.points[s.from]);
+            ring.push(self.point(s.from)?);
             ring.push(s.mid);
         }
         let middle = ring.iter().fold(Vec3::ZERO, |sum, &p| sum + p) / ring.len() as f64;
-        let turn = (0..ring.len()).fold(Vec3::ZERO, |sum, k| {
-            sum + (ring[k] - middle).cross(ring[(k + 1) % ring.len()] - middle)
-        });
+        // each point with the next, the last with the first
+        let turn = ring
+            .iter()
+            .zip(ring.iter().cycle().skip(1))
+            .fold(Vec3::ZERO, |sum, (&p, &q)| sum + (p - middle).cross(q - middle));
         if turn.dot(self.out) < 0.0 {
             sides.reverse();
             for s in &mut sides {
                 (s.from, s.to) = (s.to, s.from);
             }
         }
-        let uv = surface.project(sides[0].mid);
+        let first = sides.first().ok_or_else(|| Error::Numerical("a corner face with no sides".into()))?;
+        let uv = surface.project(first.mid);
         let reversed = surface.normal(uv.x, uv.y).dot(self.out) < 0.0;
         let uses = sides
             .iter()
-            .map(|s| (s.edge, self.parts.edges[s.edge].1 != s.from))
-            .collect();
+            .map(|s| Some((s.edge, self.parts.edges.get(s.edge)?.1 != s.from)))
+            .collect::<Option<_>>()
+            .ok_or_else(|| Error::Numerical("a corner side that is not there".into()))?;
         self.parts.faces.push(PartFace {
             surface,
             reversed,
@@ -282,6 +320,7 @@ impl Build {
             names: BTreeSet::from([FaceName::new("\u{1}fil", name)]),
             shell: self.shell,
         });
+        Ok(())
     }
 }
 
@@ -290,7 +329,7 @@ impl Build {
 fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
     let big = c.largest();
     let centre = c.centre();
-    let foot = |ball: Point3, rho: f64, face: usize| ball - c.a[face] * rho;
+    let foot = |ball: Point3, rho: f64, face: usize| ball - *of3(&c.a, face) * rho;
     let mut b = Build {
         parts,
         shell: 0,
@@ -303,26 +342,24 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
     let mut round = [0; 3];
     for j in 0..3 {
         let first = c.first(j);
-        let (Some(p), Some(q)) = (
-            b.found(foot(first, c.r[j], next(j))),
-            b.found(foot(first, c.r[j], prev(j))),
-        ) else {
+        let rj = *of3(&c.r, j);
+        let (Some(p), Some(q)) = (b.found(foot(first, rj, next(j))), b.found(foot(first, rj, prev(j)))) else {
             return Ok(None);
         };
-        ends[j] = [p, q];
+        *of3_mut(&mut ends, j) = [p, q];
         let Some(e) = b.between(p, q) else {
             return Ok(None);
         };
-        round[j] = e;
+        *of3_mut(&mut round, j) = e;
         // On face j, its edges' cuts cross where each is as far along as its fillet starts.
-        let (u, v) = (c.e[next(j)], c.e[prev(j)]);
+        let (u, v) = (*of3(&c.e, next(j)), *of3(&c.e, prev(j)));
         let (s, t) = (c.start(next(j)), c.start(prev(j)));
         let k = u.dot(v);
         let p = c.at + u * ((s - k * t) / (1.0 - k * k)) + v * ((t - k * s) / (1.0 - k * k));
         let Some(x) = b.found(p) else {
             return Ok(None);
         };
-        cross[j] = x;
+        *of3_mut(&mut cross, j) = x;
     }
     // The cut's faces go: each the flat one on a fillet's end.
     let mut cut = Vec::new();
@@ -334,7 +371,7 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
         };
         cut.push(f);
     }
-    b.shell = b.parts.faces[cut[0]].shell;
+    b.shell = cut.first().and_then(|&f| b.parts.faces.get(f)).map_or(0, |f| f.shell);
     cut.sort_unstable();
     cut.dedup();
     for &f in cut.iter().rev() {
@@ -348,28 +385,23 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
     // foot.
     let mut touch = Vec::new();
     for j in 0..3 {
-        let (p, q) = (b.parts.points[ends[j][0]], b.parts.points[ends[j][1]]);
+        let ([end_from, end_to], rj) = (*of3(&ends, j), *of3(&c.r, j));
+        let (p, q) = (b.point(end_from)?, b.point(end_to)?);
         let own = Side {
-            edge: round[j],
-            from: ends[j][0],
-            to: ends[j][1],
-            mid: c.first(j) + ((p + q) * 0.5 - c.first(j)).unit_or_zero() * c.r[j],
+            edge: *of3(&round, j),
+            from: end_from,
+            to: end_to,
+            mid: c.first(j) + ((p + q) * 0.5 - c.first(j)).unit_or_zero() * rj,
         };
         let (axis, half) = c.cone(j);
         let first = c.first(j);
         let small = match c.shrinks(j) {
-            true => b.arc(first - axis * (c.r[j] * half.sin()), ends[j][0], ends[j][1])?,
+            true => b.arc(first - axis * (rj * half.sin()), end_from, end_to)?,
             false => own,
         };
-        let large = b.arc(
-            centre - axis * (big * half.sin()),
-            feet[next(j)],
-            feet[prev(j)],
-        )?;
-        let lines = [
-            b.line(ends[j][0], feet[next(j)])?,
-            b.line(ends[j][1], feet[prev(j)])?,
-        ];
+        let (foot_next, foot_prev) = (*of3(&feet, next(j)), *of3(&feet, prev(j)));
+        let large = b.arc(centre - axis * (big * half.sin()), foot_next, foot_prev)?;
+        let lines = [b.line(end_from, foot_next)?, b.line(end_to, foot_prev)?];
         let back = |s: Side| Side {
             from: s.to,
             to: s.from,
@@ -379,15 +411,15 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
         let sweep = if c.shrinks(j) {
             b.face(
                 Surface::Sphere(Sphere {
-                    frame: Frame::new(first, c.e[j], away)?,
-                    radius: c.r[j],
+                    frame: Frame::new(first, *of3(&c.e, j), away)?,
+                    radius: rj,
                 }),
                 format!("corner{at}_cap{j}"),
                 vec![own, back(small)],
-            );
+            )?;
             Surface::Cone(Cone {
-                frame: Frame::new(first - axis * (c.r[j] * half.sin()), axis, away)?,
-                radius: c.r[j] * half.cos(),
+                frame: Frame::new(first - axis * (rj * half.sin()), axis, away)?,
+                radius: rj * half.cos(),
                 half_angle: half,
             })
         } else {
@@ -400,26 +432,27 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
             sweep,
             format!("corner{at}_sweep{j}"),
             vec![small, lines[1], back(large), back(lines[0])],
-        );
+        )?;
         sides.push(large);
         touch.push(lines);
     }
     let inward = centre - c.at;
+    let &[side0, side1, side2] = sides.as_slice() else {
+        return Ok(None);
+    };
     b.face(
         Surface::Sphere(Sphere {
             frame: Frame::new(centre, inward.cross(c.e[0]), inward)?,
             radius: big,
         }),
         format!("corner{at}_ball"),
-        vec![sides[2], sides[0], sides[1]],
-    );
+        vec![side2, side0, side1],
+    )?;
     // Each face's corner the cut took comes back as far as the lines its two cones touch it
     // along: on face i those of the edge before it, then the edge after it.
     for i in 0..3 {
-        let (Some(l1), Some(l2)) = (
-            b.between(ends[prev(i)][0], cross[i]),
-            b.between(ends[next(i)][1], cross[i]),
-        ) else {
+        let x = *of3(&cross, i);
+        let (Some(l1), Some(l2)) = (b.between(of3(&ends, prev(i))[0], x), b.between(of3(&ends, next(i))[1], x)) else {
             return Ok(None);
         };
         let Some(f) = b.parts.faces.iter().position(|f| {
@@ -428,9 +461,14 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
         }) else {
             return Ok(None);
         };
-        let (a, z) = (touch[prev(i)][0], touch[next(i)][1]);
+        let (Some(&[a, _]), Some(&[_, z])) = (touch.get(prev(i)), touch.get(next(i))) else {
+            return Ok(None);
+        };
         let edges = &b.parts.edges;
-        for lp in &mut b.parts.faces[f].loops {
+        let Some(face) = b.parts.faces.get_mut(f) else {
+            return Ok(None);
+        };
+        for lp in &mut face.loops {
             let (Some(p1), Some(p2)) = (
                 lp.iter().position(|u| u.0 == l1),
                 lp.iter().position(|u| u.0 == l2),
@@ -445,10 +483,10 @@ fn closed(parts: Parts, c: &Corner, at: usize) -> Result<Option<Parts>> {
                 ..s
             };
             let run = if forward { [a, back(z)] } else { [z, back(a)] };
-            let uses: Vec<(usize, bool)> = run
-                .iter()
-                .map(|s| (s.edge, edges[s.edge].1 != s.from))
-                .collect();
+            let Some(uses) = run.iter().map(|s| Some((s.edge, edges.get(s.edge)?.1 != s.from))).collect::<Option<Vec<(usize, bool)>>>()
+            else {
+                return Ok(None);
+            };
             let (lo, hi) = (p1.min(p2), p1.max(p2));
             if (lo, hi) == (0, lp.len() - 1) {
                 lp.pop();
@@ -479,7 +517,7 @@ pub(super) fn rounded(s: &Brep, edges: &[(EdgeId, f64)]) -> Result<Option<Brep>>
             corners
                 .iter()
                 .filter(|c| c.vertex == v)
-                .filter_map(|c| (0..3).find(|&j| c.edges[j] == e).map(|j| c.start(j)))
+                .filter_map(|c| (0..3).find(|&j| *of3(&c.edges, j) == e).map(|j| c.start(j)))
                 .sum::<f64>()
         };
         let (from, to) = (taken(x.start), p.dist(q) - taken(x.end));
@@ -500,7 +538,7 @@ pub(super) fn rounded(s: &Brep, edges: &[(EdgeId, f64)]) -> Result<Option<Brep>>
             "\u{1}corner",
         )?;
         for j in 0..3 {
-            let side = half_space(s, c.at + c.e[j] * c.start(j), -c.e[j])?;
+            let side = half_space(s, c.at + *of3(&c.e, j) * c.start(j), -*of3(&c.e, j))?;
             cell = boolean::intersection(&cell, &side)?;
         }
         cut = boolean::difference(&cut, &cell)?;
