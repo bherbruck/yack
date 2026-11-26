@@ -1,6 +1,7 @@
 // yack: A move of faces followed from where they are to where they go, its topology changing where a
 // Adapted from springrep@a03e8a1 src/edit/tweak/through.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from edit/tweak/through.rs to tweak/through.rs (M2.4, T6); paths only; then to yack-tweak (M3 W7), paths and visibility only.
+// Changes: moved from edit/tweak/through.rs to tweak/through.rs (M2.4, T6); paths only; then to yack-tweak (M3 W7), paths and visibility only;
+// checked access, and a collapse that cannot read its own tables declines (hardening T2).
 //! A move of faces followed from where they are to where they go, its topology changing where a
 //! face closes on the way: walls drafted until they meet close over the top between them, a step
 //! raised level with the top closes the riser, and a round offset past its radius closes into the
@@ -63,7 +64,7 @@ const CLOSED: f64 = 10.0 * tol::LINEAR;
         let at = |s: f64| -> Result<Brep> {
             let mut moved = HashMap::new();
             for f in cur.face_ids() {
-                if let Some(p) = paths.get(&from[&f]) {
+                if let Some(p) = from.get(&f).and_then(|g| paths.get(g)) {
                     moved.insert(f, p(s)?);
                 } else if changed {
                     // After a collapse every vertex settles again where its faces meet, those the
@@ -99,7 +100,7 @@ const CLOSED: f64 = 10.0 * tol::LINEAR;
         let next_from = cur
             .face_ids()
             .zip(&kept)
-            .filter_map(|(f, nf)| nf.map(|nf| (nf, from[&f])))
+            .filter_map(|(f, nf)| Some((nf.as_ref().copied()?, *from.get(&f)?)))
             .collect();
         cur = next;
         from = next_from;
@@ -108,10 +109,17 @@ const CLOSED: f64 = 10.0 * tol::LINEAR;
     }
 }
 
-fn root(p: &mut [usize], mut i: usize) -> usize {
-    while p[i] != i {
-        p[i] = p[p[i]];
-        i = p[i];
+/// The representative of `i` in the union-find `parent`, halving the path on the way.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&up) = parent.get(i) {
+        if up == i {
+            break;
+        }
+        let grand = parent.get(up).copied().unwrap_or(up);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = grand;
+        }
+        i = grand;
     }
     i
 }
@@ -121,7 +129,7 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
 /// or lying on each other face to face, taken out; and a face left running along an edge and back
 /// that nothing else uses rid of it. With, for each face of `b`, its face in the result. `None`
 /// where nothing has closed.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> { // D26: BTree* in hardening, proven by digests
+#[allow(clippy::disallowed_types)] fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> { // D26: BTree* in hardening, proven by digests
     let eids: Vec<EdgeId> = b.edge_ids().collect();
     let vids: Vec<VertexId> = b.vertex_ids().collect();
     let nv = vids.len();
@@ -131,7 +139,7 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
     order.sort_by(|x, y| b.vertex(*x).point.x.total_cmp(&b.vertex(*y).point.x));
     for (k, &v) in order.iter().enumerate() {
         let p = b.vertex(v).point;
-        for &w in &order[k + 1..] {
+        for &w in order.iter().skip(k + 1) {
             let q = b.vertex(w).point;
             if q.x - p.x > eps {
                 break;
@@ -139,7 +147,9 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
             if p.dist(q) <= eps {
                 let (a, c) = (root(&mut parent, v.index()), root(&mut parent, w.index()));
                 if a != c {
-                    parent[a.max(c)] = a.min(c);
+                    if let Some(slot) = parent.get_mut(a.max(c)) {
+                        *slot = a.min(c);
+                    }
                     changed = true;
                 }
             }
@@ -159,15 +169,16 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
         );
         if let Some(c) = &x.curve
             && radial::length(c, x.range) <= eps
+            && let Some(slot) = into.get_mut(e.index())
         {
-            into[e.index()] = None;
+            *slot = None;
             changed = true;
         }
     }
     let mut by_ends: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for e in b.edge_ids() {
         let x = b.edge(e);
-        if into[e.index()].is_none() || x.curve.is_none() {
+        if into.get(e.index()).copied().flatten().is_none() || x.curve.is_none() {
             continue;
         }
         let (s, t) = (at(&mut parent, x.start), at(&mut parent, x.end));
@@ -178,20 +189,21 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
     }
     for group in by_ends.values().filter(|g| g.len() > 1) {
         for (k, &i) in group.iter().enumerate() {
-            if into[i] != Some((i, false)) {
+            if into.get(i) != Some(&Some((i, false))) {
                 continue;
             }
-            let (m, d) = mids[i].unwrap_or_else(|| panic!("curved"));
-            for &j in &group[k + 1..] {
-                if into[j] != Some((j, false)) {
+            // Every edge of a group is curved: `by_ends` takes no other.
+            let &Some((m, d)) = mids.get(i)? else { return None };
+            for &j in group.iter().skip(k + 1) {
+                if into.get(j) != Some(&Some((j, false))) {
                     continue;
                 }
-                let y = b.edge(eids[j]);
-                let c = y.curve.as_ref().unwrap_or_else(|| panic!("curved"));
+                let y = b.edge(*eids.get(j)?);
+                let c = y.curve.as_ref()?;
                 let t = c.project(m, y.range.0, y.range.1);
                 let (q, dq) = c.d1(t);
                 if q.dist(m) <= eps {
-                    into[j] = Some((i, d.dot(dq) < 0.0));
+                    *into.get_mut(j)? = Some((i, d.dot(dq) < 0.0));
                     changed = true;
                 }
             }
@@ -213,7 +225,7 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
                         .iter()
                         .filter_map(|&c| {
                             let co = b.coedge(c);
-                            into[co.edge.index()].map(|(e, flip)| (e, co.reversed != flip, c))
+                            into.get(co.edge.index()).copied().flatten().map(|(e, flip)| (e, co.reversed != flip, c))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -222,53 +234,58 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
         })
         .collect();
     let nf = loops.len();
-    let mut gone = vec![false; nf];
     let edge_set = |l: &Vec<Vec<(usize, bool, crate::topo::CoedgeId)>>| {
         let mut s: Vec<usize> = l.iter().flatten().map(|x| x.0).collect();
         s.sort_unstable();
         s
     };
-    for f in 0..nf {
-        let es = edge_set(&loops[f]);
-        // No boundary, or a strip along one edge.
-        if es.is_empty() || (es.len() == 2 && es[0] == es[1] && loops[f].len() == 1) {
-            gone[f] = true;
-        }
-    }
+    // No boundary, or a strip along one edge.
+    let mut gone: Vec<bool> = loops
+        .iter()
+        .map(|l| {
+            let es = edge_set(l);
+            es.is_empty() || (matches!(es.as_slice(), [a, c] if a == c) && l.len() == 1)
+        })
+        .collect();
     // Faces face to face: the same edges, one lying on the other.
     let faces: Vec<FaceId> = b.face_ids().collect();
     for f in 0..nf {
         for g in f + 1..nf {
-            if gone[f] || gone[g] || edge_set(&loops[f]) != edge_set(&loops[g]) {
+            let (Some(lf), Some(lg), Some(&ff), Some(&fg)) = (loops.get(f), loops.get(g), faces.get(f), faces.get(g)) else {
+                return None;
+            };
+            if gone.get(f) != Some(&false) || gone.get(g) != Some(&false) || edge_set(lf) != edge_set(lg) {
                 continue;
             }
-            let dom = crate::topo::face_domain(b, faces[f]);
+            let dom = crate::topo::face_domain(b, ff);
             let Some(uv) = dom.interior_point() else {
                 continue;
             };
             let p = dom.surface.eval(uv.x, uv.y);
-            let on = &b.face(faces[g]).surface;
+            let on = &b.face(fg).surface;
             if crate::intersect::csi::signed_distance(on, p).abs() <= eps {
-                gone[f] = true;
-                gone[g] = true;
+                for k in [f, g] {
+                    if let Some(slot) = gone.get_mut(k) {
+                        *slot = true;
+                    }
+                }
             }
         }
     }
     // A face running along an edge and back that no other face uses: a slit, which is no edge.
     let mut uses: HashMap<usize, usize> = HashMap::new();
-    for f in (0..nf).filter(|&f| !gone[f]) {
-        for &(e, _, _) in loops[f].iter().flatten() {
+    for (l, _) in loops.iter().zip(&gone).filter(|(_, g)| !**g) {
+        for &(e, _, _) in l.iter().flatten() {
             *uses.entry(e).or_default() += 1;
         }
     }
-    let alive: Vec<usize> = (0..nf).filter(|&f| !gone[f]).collect();
-    for f in alive {
-        for l in &mut loops[f] {
+    for (face_loops, gone) in loops.iter_mut().zip(gone.iter_mut()).filter(|(_, g)| !**g) {
+        for l in face_loops.iter_mut() {
             loop {
                 let n = l.len();
-                let found = (0..n).find(|&k| {
-                    let (a, c) = (l[k], l[(k + 1) % n]);
-                    n >= 2 && a.0 == c.0 && a.1 != c.1 && uses[&a.0] == 2
+                let found = (0..n).find(|&k| match (l.get(k), l.get((k + 1) % n)) {
+                    (Some(a), Some(c)) => n >= 2 && a.0 == c.0 && a.1 != c.1 && uses.get(&a.0) == Some(&2),
+                    _ => false,
                 });
                 let Some(k) = found else { break };
                 let j = (k + 1) % n;
@@ -277,28 +294,29 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
                 l.remove(lo);
             }
         }
-        loops[f].retain(|l| !l.is_empty());
-        if loops[f].is_empty() {
-            gone[f] = true;
+        face_loops.retain(|l| !l.is_empty());
+        if face_loops.is_empty() {
+            *gone = true;
         }
     }
-    let used: std::collections::BTreeSet<usize> = (0..nf)
-        .filter(|&f| !gone[f])
-        .flat_map(|f| loops[f].iter().flatten().map(|x| x.0).collect::<Vec<_>>())
+    let used: std::collections::BTreeSet<usize> = loops
+        .iter()
+        .zip(&gone)
+        .filter(|(_, g)| !**g)
+        .flat_map(|(l, _)| l.iter().flatten().map(|x| x.0).collect::<Vec<_>>())
         .collect();
     let mut out = Brep::new();
     let mut verts: HashMap<usize, VertexId> = HashMap::new();
-    let mut vertex = |out: &mut Brep, p: &mut Vec<usize>, v: VertexId| -> VertexId {
+    let mut vertex = |out: &mut Brep, p: &mut Vec<usize>, v: VertexId| -> Option<VertexId> {
         let r = root(p, v.index());
-        *verts
-            .entry(r)
-            .or_insert_with(|| out.add_vertex(b.vertex(vids[r]).point))
+        let point = b.vertex(*vids.get(r)?).point;
+        Some(*verts.entry(r).or_insert_with(|| out.add_vertex(point)))
     };
     let mut edges: HashMap<usize, EdgeId> = HashMap::new();
     for &i in &used {
-        let x = b.edge(eids[i]);
-        let s = vertex(&mut out, &mut parent, x.start);
-        let t = vertex(&mut out, &mut parent, x.end);
+        let x = b.edge(*eids.get(i)?);
+        let s = vertex(&mut out, &mut parent, x.start)?;
+        let t = vertex(&mut out, &mut parent, x.end)?;
         edges.insert(
             i,
             match &x.curve {
@@ -307,18 +325,19 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
             },
         );
     }
-    let mut kept = vec![None; nf];
-    for f in 0..nf {
-        if gone[f] {
+    let mut kept = Vec::with_capacity(nf);
+    for ((&f, face_loops), &gone) in faces.iter().zip(&loops).zip(&gone) {
+        if gone {
+            kept.push(None);
             continue;
         }
-        let face = b.face(faces[f]);
+        let face = b.face(f);
         let id = out.add_face(face.surface.clone(), face.reversed, face.names.clone());
-        for l in &loops[f] {
+        for l in face_loops {
             let mut last: Option<Vec2> = None;
             let mut specs = Vec::new();
             for &(e, reversed, c) in l {
-                let edge = edges[&e];
+                let edge = *edges.get(&e)?;
                 let x = out.edge(edge);
                 let pcurve = match &x.curve {
                     None => b.coedge(c).pcurve.clone(),
@@ -347,14 +366,14 @@ fn root(p: &mut [usize], mut i: usize) -> usize {
             }
             out.add_loop(id, specs);
         }
-        kept[f] = Some(id);
+        kept.push(Some(id));
     }
     for sh in b.shell_ids() {
         let ids: Vec<FaceId> = b
             .shell(sh)
             .faces
             .iter()
-            .filter_map(|f| kept[f.index()])
+            .filter_map(|f| kept.get(f.index()).copied().flatten())
             .collect();
         let _ = out.add_shell(ids);
     }

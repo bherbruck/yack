@@ -1,14 +1,11 @@
 // yack: Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 // Adapted from springrep@a03e8a1 src/edit.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: convex_edges moved in from pick.rs (M2.5, T8); then to yack-edit (M3 W9b), paths and visibility only.
+// Changes: convex_edges moved in from pick.rs (M2.5, T8); then to yack-edit (M3 W9b), paths and visibility only;
+// on checked access, its indexing allow gone (hardening E1).
 //! Changes to a solid's faces: faces moved, tilted or taken out, a solid hollowed, grown by a
 //! distance or stretched, and the slab a face sweeps. Each builds exact tools and combines them
 //! with the booleans, blends and face moves.
 
-
-// springrep's edit code indexes by position; D26's hardening pass moves it onto checked access,
-// as for yack-linalg until M5.
-#![allow(clippy::indexing_slicing)]
 
 // springrep's foundation modules (D26), under the names the moved code uses.
 use yack_blend as blend;
@@ -83,7 +80,7 @@ pub fn convex_edges(b: &Brep) -> Result<Vec<EdgeId>> {
         let edge = b.edge(e);
         let Some(c) = &edge.curve else { continue };
         let uses: Vec<_> = b.coedge_ids().filter(|&o| b.coedge(o).edge == e).collect();
-        let [cf, cg] = uses[..] else { continue };
+        let &[cf, cg] = uses.as_slice() else { continue };
         let (f, g) = (b.coedge_face(cf), b.coedge_face(cg));
         if f == g {
             continue;

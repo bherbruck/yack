@@ -2,6 +2,9 @@
 // Adapted from springrep@a03e8a1 src/edit/tweak/tests.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from edit/tweak/tests.rs to tweak/tests.rs (M2.4, T6); paths only; then to yack-tweak (M3 W7), paths and visibility only.
 use super::*;
+use crate::offset::{OFFSET_FIT, offset_fitted};
+use crate::planes::move_planes;
+use crate::math::Vec3;
 use crate::topo::FaceName;
 use yack_measure as measure;
 
@@ -153,4 +156,24 @@ fn a_spline_sphere_octant_offset_is_the_octant_of_the_grown_sphere() {
         }
     }
     assert!(worst <= 2.0 * OFFSET_FIT, "{worst:e}");
+}
+
+#[test]
+#[allow(clippy::disallowed_types)] fn two_faces_refused_two_ways_refuse_by_the_lower_face_id_every_run() { // D26: BTree* in hardening, proven by digests
+    // rod10: its side is a cylinder, which no plane move takes (Unsupported); its end turned over
+    // faces the wrong way (InvalidInput). Each new HashMap iterates in its own order.
+    let b = fixture("rod10");
+    let end = face(&b, "end");
+    let side = b.face_ids().find(|&f| plane_of(&b.face(f).surface).is_none()).unwrap();
+    let fr = frame(&b, end);
+    let over = Frame::new(fr.origin, -fr.z, fr.x).unwrap();
+    for _ in 0..16 {
+        let moved: HashMap<FaceId, Frame> = [(side, fr), (end, over)].into_iter().collect();
+        let got = move_planes(&b, &moved);
+        if side < end {
+            assert!(matches!(got, Err(Error::Unsupported(_))), "{:?}", got.err());
+        } else {
+            assert!(matches!(got, Err(Error::InvalidInput(_))), "{:?}", got.err());
+        }
+    }
 }
