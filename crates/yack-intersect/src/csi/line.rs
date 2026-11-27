@@ -2,7 +2,8 @@
 // Adapted from springrep@a03e8a1 src/boolean/csi.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: split out of csi.rs (M3 hardening): the plane, sphere and cone cases out of the
 // dispatcher, named rounding limits, iterators instead of indexing; the same arithmetic in the same
-// order.
+// order. The touching-pair test in `line_quadric` later follows springrep@f2ad60e's csi.rs (MIT OR
+// Apache-2.0): a pair is one touch only when the roots lie within a model's size of each other.
 //! A line `o + t·d` (`d` unit) against each kind of surface: in closed form against the quadrics
 //! and the torus, and against extrusions, surfaces of revolution and ruled surfaces as a function of
 //! the profile's parameter over its polynomial pieces. Splines are [`super::spline`]'s.
@@ -87,7 +88,11 @@ pub(super) fn line_cone(o: Point3, d: Vec3, s: &Surface, cone: &Cone) -> Hits {
 }
 
 /// The crossings of a line with a quadric `s` whose implicit form along the line is
-/// `qa·t² + qb·t + qc`; a pair closer than the tolerance band is one touching point.
+/// `qa·t² + qb·t + qc`. A pair the line runs between within the tolerance band (read midway between
+/// the roots, where it strays furthest) is one touching point, however far rounding splits the
+/// pair, as a double root at a cone's apex is. Roots a model's size apart are two: a line nearly
+/// parallel to a cone's generator has one root far out, and the surface's distance read there says
+/// nothing about the near one.
 fn line_quadric(o: Point3, d: Vec3, s: &Surface, [qa, qb, qc]: [f64; 3]) -> Hits {
     let at = |t: f64| signed_distance(s, o + d * t).abs();
     if qa.abs() < NO_COEFFICIENT {
@@ -106,7 +111,11 @@ fn line_quadric(o: Point3, d: Vec3, s: &Surface, [qa, qb, qc]: [f64; 3]) -> Hits
         if t1 > t2 {
             std::mem::swap(&mut t1, &mut t2);
         }
-        if at(t_near) <= tol::LINEAR { vec![t_near] } else { vec![t1, t2] }
+        if (t2 - t1) * d.norm() <= tol::MODEL_SIZE && at(t_near) <= tol::LINEAR {
+            vec![t_near]
+        } else {
+            vec![t1, t2]
+        }
     };
     Hits { ts, on_surface: false }
 }

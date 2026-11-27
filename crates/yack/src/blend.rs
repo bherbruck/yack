@@ -111,11 +111,12 @@ impl Solid {
             let op = "fillet_variable";
             let e = self.sr_edge(op, "edge", edge)?;
             let ei = u64::from(edge);
-            ladder::two(
-                op,
-                &|| engine::made(&feature, op, sr::fillet_variable(self.need(op)?, e, engine::p3(from), r_from, r_to, &feature)),
-                &|| engine_cadrs::blend(op, self, &[ei], "round", |k, id| glue::fillet_variable(k, id, ei, from.to_array(), r_from, r_to)),
-            )
+            // yack-edit's exact round (circles square to a straight convex edge between planes) first,
+            // then cadrs (bake-off doc/donors.md); springrep's rolling-ball variable fillet is no rung
+            // here: it misses the exact volume by 1.6e-5 (bench fillet/variable-radius-edge)
+            let native = || engine::made(&feature, op, yack_edit::fillet_variable(self.need(op)?, e, engine::p3(from), r_from, r_to, &feature));
+            let cadrs = || engine_cadrs::blend(op, self, &[ei], "round", |k, id| glue::fillet_variable(k, id, ei, from.to_array(), r_from, r_to));
+            ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }])
         })
     }
 
@@ -351,10 +352,18 @@ impl Solid {
             let e = self.sr_edge(op, "edge", edge)?;
             let f = self.sr_face(op, "face", face)?;
             let (ei, fi) = (u64::from(edge), u64::from(face));
-            ladder::two(
+            // springrep, then yack-edit's turned-rim chamfer where springrep declines (a springrep
+            // Invalid still ends the ladder), then cadrs (bake-off doc/donors.md)
+            let springrep = || engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, along_face, along_other, &feature));
+            let native = || engine::made(&feature, op, yack_edit::chamfer_two(self.need(op)?, e, f, along_face, along_other, &feature));
+            let cadrs = || engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, along_face, along_other));
+            ladder::ladder(
                 op,
-                &|| engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, along_face, along_other, &feature)),
-                &|| engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, along_face, along_other)),
+                &[
+                    ladder::Rung { name: "springrep", run: &springrep },
+                    ladder::Rung { name: "native", run: &native },
+                    ladder::Rung { name: "cadrs", run: &cadrs },
+                ],
             )
         })
     }

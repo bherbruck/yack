@@ -1,6 +1,7 @@
 // yack: Rounds and chamfers beyond one size on edges picked together: a round between faces that
 // Adapted from springrep@a03e8a1 src/blend/shaped.rs (MIT, (c) 2026 Springcraft, Inc.).
-// Changes: moved from springrep's src/blend/shaped.rs to yack-blend (M3 W9a); paths and visibility only.
+// Changes: moved from springrep's src/blend/shaped.rs to yack-blend (M3 W9a); paths and visibility only;
+// hardened (M3 L4): checked access in place of indexing, a contract panic gone, its small literals named.
 //! Rounds and chamfers beyond one size on edges picked together: a round between faces that
 //! share no edge, a full round, sections that are conics or curvature continuous, a radius that
 //! grows along its edge, a size for each edge, and corners set back. Each builds an exact tool
@@ -67,6 +68,30 @@ pub fn plane_of(b: &Brep, f: FaceId) -> Result<(Point3, Vec3)> {
     }
 }
 
+/// Cosines below this (as dot products of unit vectors) are square.
+const SQUARE_COS: f64 = 1e-9; // tol: a cosine, not a length
+
+/// Unit normals whose dot product is within this of 1 are one normal.
+const SAME_NORMAL_COS: f64 = 1e-9; // tol: a cosine, not a length
+
+/// Unit normals closer than this are one normal.
+const SAME_NORMAL: f64 = 1e-6; // tol: a distance between unit vectors, not a length
+
+/// A determinant this near zero leaves the faces with no one circle touching all three.
+const DEGENERATE: f64 = 1e-12; // tol: guards a division, not a length that decides anything
+
+/// The step in a section's parameter of its curvature's numerical second derivative.
+const DIFF_STEP: f64 = 1e-3; // tol: a step in a curve parameter, not a length
+
+/// How far below 1 a thumbweight's bracket starts, where the section degenerates.
+const BELOW_ONE: f64 = 1e-9; // tol: a weight, not a length
+
+/// A thumbweight bracket this narrow, as a share of its distance from 1, is found.
+const BISECT_SHARE: f64 = 1e-15; // tol: a share at rounding's scale, not a length
+
+/// How far in from a ball's ends (a share of the edge's length) its feet are probed.
+const FOOT_NUDGE: f64 = 1e-6; // tol: a share of a length, not a length
+
 /// The section square to the direction planes all run along: a frame drawing in it, placed so an
 /// extrusion `len` long from it runs through all of `s`.
 struct Section {
@@ -76,18 +101,18 @@ struct Section {
 
 impl Section {
     fn new(s: &Brep, normals: &[Vec3]) -> Result<Section> {
-        let d = normals[0]
-            .cross(normals[1])
-            .unit()
-            .ok_or_else(|| Error::InvalidInput("the faces are parallel".into()))?;
-        if normals.iter().any(|n| n.dot(d).abs() > 1e-9) {
+        let &[n0, n1, ..] = normals else {
+            return Err(Error::InvalidInput("a section needs two faces".into()));
+        };
+        let d = n0.cross(n1).unit().ok_or_else(|| Error::InvalidInput("the faces are parallel".into()))?;
+        if normals.iter().any(|n| n.dot(d).abs() > SQUARE_COS) {
             return Err(Error::Unsupported(
                 "faces that do not all run along one direction".into(),
             ));
         }
         let b = measure::bbox(s);
         let reach = b.diagonal() + 1.0;
-        let frame = Frame::new(b.center() - d * reach, d, normals[0])?;
+        let frame = Frame::new(b.center() - d * reach, d, n0)?;
         Ok(Section {
             frame,
             len: 2.0 * reach,
@@ -120,7 +145,10 @@ impl Section {
 /// `centre` of `radius` through `via`, counter-clockwise.
 fn loop_with_arc(pts: &[Vec2], centre: Vec2, radius: f64, via: Vec2) -> ProfileLoop {
     let ang = |p: Vec2| (p.y - centre.y).atan2(p.x - centre.x);
-    let (from, to) = (pts[pts.len() - 1], pts[0]);
+    // no points, no loop: the extrusion it is cut with then refuses
+    let (Some(&from), Some(&to)) = (pts.last(), pts.first()) else {
+        return ProfileLoop { segments: Vec::new() };
+    };
     let ccw = (ang(to) - ang(from)).rem_euclid(TAU);
     let sweep = if (ang(via) - ang(from)).rem_euclid(TAU) < ccw {
         ccw
@@ -129,7 +157,10 @@ fn loop_with_arc(pts: &[Vec2], centre: Vec2, radius: f64, via: Vec2) -> ProfileL
     };
     let mut segments: Vec<Segment> = pts
         .windows(2)
-        .map(|w| Segment::Line { a: w[0], b: w[1] })
+        .filter_map(|w| match *w {
+            [a, b] => Some(Segment::Line { a, b }),
+            _ => None,
+        })
         .collect();
     segments.push(Segment::Arc {
         center: centre,
@@ -141,9 +172,8 @@ fn loop_with_arc(pts: &[Vec2], centre: Vec2, radius: f64, via: Vec2) -> ProfileL
     let mid = ang(from) + sweep / 2.0;
     let mut ring: Vec<Vec2> = pts.to_vec();
     ring.push(centre + Vec2::new(mid.cos(), mid.sin()) * radius);
-    let twice: f64 = (0..ring.len())
-        .map(|i| ring[i].cross(ring[(i + 1) % ring.len()]))
-        .sum();
+    // each corner with the next, the last with the first
+    let twice: f64 = ring.iter().zip(ring.iter().cycle().skip(1)).map(|(p, q)| p.cross(*q)).sum();
     if twice < 0.0 {
         for s in &mut segments {
             s.reverse();
@@ -220,14 +250,17 @@ fn full_round_raw(s: &Brep, side_a: FaceId, middle: FaceId, side_b: FaceId) -> R
         .iter()
         .map(|(p, n)| [n.x, n.y, 1.0, n.dot(*p)])
         .collect();
+    let [r0, r1, r2, ..] = m.as_slice() else {
+        return Err(Error::InvalidInput("a full round needs three faces".into()));
+    };
+    // the determinant of the rows' columns `c`
     let det3 = |c: [usize; 3]| {
-        let e = |i: usize, j: usize| m[i][c[j]];
-        e(0, 0) * (e(1, 1) * e(2, 2) - e(1, 2) * e(2, 1))
-            - e(0, 1) * (e(1, 0) * e(2, 2) - e(1, 2) * e(2, 0))
-            + e(0, 2) * (e(1, 0) * e(2, 1) - e(1, 1) * e(2, 0))
+        let pick = |row: &[f64; 4]| c.map(|j| row.get(j).copied().unwrap_or(0.0));
+        let ([a0, a1, a2], [b0, b1, b2], [c0, c1, c2]) = (pick(r0), pick(r1), pick(r2));
+        a0 * (b1 * c2 - b2 * c1) - a1 * (b0 * c2 - b2 * c0) + a2 * (b0 * c1 - b1 * c0)
     };
     let den = det3([0, 1, 2]);
-    if den.abs() <= 1e-12 {
+    if den.abs() <= DEGENERATE {
         return Err(Error::InvalidInput(
             "no circle touches all three faces".into(),
         ));
@@ -243,9 +276,10 @@ fn full_round_raw(s: &Brep, side_a: FaceId, middle: FaceId, side_b: FaceId) -> R
         ));
     }
     let centre = Vec2::new(cx, cy);
-    let touch = |k: usize| centre + planes[k].1 * rho;
-    let (ta, tm, tb) = (touch(0), touch(1), touch(2));
-    let (na, nm, nb) = (planes[0].1, planes[1].1, planes[2].1);
+    let &[(_, na), (_, nm), (_, nb), ..] = planes.as_slice() else {
+        return Err(Error::InvalidInput("a full round needs three faces".into()));
+    };
+    let (ta, tm, tb) = (centre + na * rho, centre + nm * rho, centre + nb * rho);
     let far = 2.0 * rho + 1.0;
     let pts = [
         ta,
@@ -358,14 +392,17 @@ fn section_blend(
     ];
     let mut segments: Vec<Segment> = pts
         .windows(2)
-        .map(|w| Segment::Line { a: w[0], b: w[1] })
+        .filter_map(|w| match *w {
+            [a, b] => Some(Segment::Line { a, b }),
+            _ => None,
+        })
         .collect();
-    segments.push(blend(tb, corner, ta));
+    let closing = blend(tb, corner, ta);
     let mut ring: Vec<Vec2> = pts.to_vec();
-    ring.push(segments.last().unwrap_or_else(|| panic!("a closing section")).at(0.5));
-    let twice: f64 = (0..ring.len())
-        .map(|i| ring[i].cross(ring[(i + 1) % ring.len()]))
-        .sum();
+    ring.push(closing.at(0.5));
+    segments.push(closing);
+    // each corner with the next, the last with the first
+    let twice: f64 = ring.iter().zip(ring.iter().cycle().skip(1)).map(|(p, q)| p.cross(*q)).sum();
     if twice < 0.0 {
         for seg in &mut segments {
             seg.reverse();
@@ -440,9 +477,12 @@ fn gn_weights(order: u32, w: f64, t: f64) -> ([f64; 2], [f64; 2]) {
 fn gn_center_radius(order: u32, w: f64, alpha: f64, d: f64) -> f64 {
     let t = 0.5;
     let (_, d1) = gn_weights(order, w, t);
-    let h = 1e-3;
+    let h = DIFF_STEP;
     let second = |k: usize| {
-        let at = |s: f64| gn_weights(order, w, t + s * h).1[k];
+        let at = |s: f64| {
+            let [d0, d1] = gn_weights(order, w, t + s * h).1;
+            if k == 0 { d0 } else { d1 }
+        };
         (at(-2.0) - 8.0 * at(-1.0) + 8.0 * at(1.0) - at(2.0)) / (12.0 * h)
     };
     let (a1, b1, a2, b2) = (d1[0], d1[1], second(0), second(1));
@@ -486,7 +526,7 @@ fn gn_area_share(order: u32, w: f64) -> f64 {
 fn gn_equal_area_w(order: u32, alpha: f64) -> f64 {
     let c = 1.0 / (alpha / 2.0).tan();
     let target = (c - (PI - alpha) / 2.0) / (c * (alpha / 2.0).cos().powi(2));
-    let (mut lo, mut hi) = (-1.0f64, 1.0 - 1e-9);
+    let (mut lo, mut hi) = (-1.0f64, 1.0 - BELOW_ONE);
     while gn_area_share(order, lo) < target && lo > -1e12 {
         hi = lo;
         lo = 2.0 * lo - 1.0;
@@ -498,7 +538,7 @@ fn gn_equal_area_w(order: u32, alpha: f64) -> f64 {
         } else {
             hi = mid;
         }
-        if hi - lo <= 1e-15 * (1.0 - lo) {
+        if hi - lo <= BISECT_SHARE * (1.0 - lo) {
             break;
         }
     }
@@ -508,7 +548,7 @@ fn gn_equal_area_w(order: u32, alpha: f64) -> f64 {
 /// The thumbweight at which a G^n section with legs `d` long meeting at `alpha` bends with radius
 /// `center` at its middle: that radius falls from unbounded to zero as `w` rises to 1.
 fn gn_center_w(order: u32, alpha: f64, d: f64, center: f64) -> f64 {
-    let (mut lo, mut hi) = (-1.0f64, 1.0 - 1e-9);
+    let (mut lo, mut hi) = (-1.0f64, 1.0 - BELOW_ONE);
     while gn_center_radius(order, lo, alpha, d) < center && lo > -1e12 {
         hi = lo;
         lo = 2.0 * lo - 1.0;
@@ -520,7 +560,7 @@ fn gn_center_w(order: u32, alpha: f64, d: f64, center: f64) -> f64 {
         } else {
             hi = mid;
         }
-        if hi - lo <= 1e-15 * (1.0 - lo) {
+        if hi - lo <= BISECT_SHARE * (1.0 - lo) {
             break;
         }
     }
@@ -649,13 +689,13 @@ fn fillet_variable_raw(s: &Brep, e: EdgeId, from: Point3, r_from: f64, r_to: f64
         .ok_or_else(|| Error::InvalidInput("a flat edge".into()))?;
     // The faces must hold each ball's feet, `r / tan(α/2)` out along them, all along the edge.
     for (p, r) in [(p0, r_from), (p1, r_to)] {
-        for (u, k) in [(ua, 0usize), (ub, 1usize)] {
-            let at = p + dir * (if p == p0 { 1e-6 } else { -1e-6 } * len) + u * (r / half.tan());
+        for (u, normal) in [(ua, normals[0]), (ub, normals[1])] {
+            let at = p + dir * (if p == p0 { FOOT_NUDGE } else { -FOOT_NUDGE } * len) + u * (r / half.tan());
             let holds = crate::measure::face_at(s, at).is_some_and(|(f, d)| {
                 d <= 10.0 * tol::LINEAR && {
                     let n = s.face(f).surface.normal(0.0, 0.0);
                     let n = if s.face(f).reversed { -n } else { n };
-                    (sec.dir(n) - normals[k]).norm() <= 1e-6
+                    (sec.dir(n) - normal).norm() <= SAME_NORMAL
                 }
             });
             if !holds {
@@ -926,9 +966,12 @@ fn square_corner(
         ));
     }
     let ends = |e: EdgeId| [s.edge(e).start, s.edge(e).end];
-    let corner = ends(edges[0])
+    let Some((&first, rest)) = edges.split_first() else {
+        return Err(Error::InvalidInput("a set-back corner of no edges".into()));
+    };
+    let corner = ends(first)
         .into_iter()
-        .find(|v| edges[1..].iter().all(|&e| ends(e).contains(v)))
+        .find(|v| rest.iter().all(|&e| ends(e).contains(v)))
         .ok_or_else(|| Error::InvalidInput("the edges do not meet at one corner".into()))?;
     let mut normals: Vec<Vec3> = Vec::new();
     for co in s.coedge_ids() {
@@ -943,12 +986,14 @@ fn square_corner(
             ));
         };
         let n = if face.reversed { -p.frame.z } else { p.frame.z };
-        if !normals.iter().any(|m| m.dot(n) > 1.0 - 1e-9) {
+        if !normals.iter().any(|m| m.dot(n) > 1.0 - SAME_NORMAL_COS) {
             normals.push(n);
         }
     }
-    let square =
-        normals.len() == 3 && (0..3).all(|i| normals[i].dot(normals[(i + 1) % 3]).abs() < 1e-9);
+    let &[n0, n1, n2] = normals.as_slice() else {
+        return Err(Error::Unsupported("a set-back corner of other than three faces".into()));
+    };
+    let square = [(n0, n1), (n1, n2), (n2, n0)].iter().all(|(a, b)| a.dot(*b).abs() < SQUARE_COS);
     if !square {
         return Err(Error::Unsupported(
             "a set-back corner whose faces are not square".into(),
@@ -964,7 +1009,7 @@ fn square_corner(
     }
     Ok((
         s.vertex(corner).point,
-        [-normals[0], -normals[1], -normals[2]],
+        [-n0, -n1, -n2],
     ))
 }
 

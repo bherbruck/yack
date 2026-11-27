@@ -1,13 +1,26 @@
 // yack: the rolling-ball fillet built: the ball rolled along the chain, its strip sewn into the body.
 // Adapted from springrep@a03e8a1 src/blend/rolling.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/blend/rolling.rs to yack-blend (M3 W9a); paths and visibility only;
-// split out of rolling.rs (M3 hardening R0), paths and visibility only.
+// split out of rolling.rs (M3 hardening R0), paths and visibility only; then on checked access, its
+// maps BTreeMaps (looked up only), its contract panics gone, its small literals named (R1).
 //! The rolling-ball fillet built: the ball rolled along the chain, its strip sewn into the body.
 
 use super::*;
 
+/// An end on a face: the edges its sides were walked to, and its trim's edges by their start.
+type EndHere<'a> = (&'a [(EdgeId, bool); 2], &'a BTreeMap<OrderedF64, EdgeId>);
+
+/// What a segment's kept range must exceed, in chain parameter, to be kept.
+const KEPT: f64 = 1e-9; // tol: a chain parameter at rounding's scale, not a length
+
+/// How near a trim's split must be to a crossing's `v` to take its place.
+const SNAP_V: f64 = 1e-6; // tol: a section parameter, not a length
+
+/// Segment bounds closer than this share of the chain's length (or a millimetre) are one.
+const SAME_BOUND: f64 = 1e-9; // tol: a share of a length, not a length
+
 /// The fillet of `radius` along the tangent chain `picked`, edge `i`'s faces named `names[i]`.
-#[allow(clippy::disallowed_types)] #[allow(clippy::panic)] pub(crate) fn fillet( // D26: BTree* in hardening, proven by digests
+pub(crate) fn fillet(
     body: &Brep,
     picked: &[Picked],
     radius: f64,
@@ -34,12 +47,16 @@ use super::*;
     let n = links.len();
     let total: f64 = links.iter().map(|l| l.len).sum();
     let chain_edges: BTreeSet<EdgeId> = links.iter().map(|l| l.edge).collect();
-    let mut uses: HashMap<EdgeId, Vec<CoedgeId>> = HashMap::new();
+    // looked up only: its order reaches nothing
+    let mut uses: BTreeMap<EdgeId, Vec<CoedgeId>> = BTreeMap::new();
     for c in body.coedge_ids() {
         uses.entry(body.coedge(c).edge).or_default().push(c);
     }
-    let faces_of =
-        |e: EdgeId| -> BTreeSet<FaceId> { uses[&e].iter().map(|&c| body.coedge_face(c)).collect() };
+    let faces_of = |e: EdgeId| -> BTreeSet<FaceId> {
+        uses.get(&e).into_iter().flatten().map(|&c| body.coedge_face(c)).collect()
+    };
+    let used_twice = |e: EdgeId| uses.get(&e).is_some_and(|u| u.len() == 2);
+    let first_coedge = |pk: usize| picked.get(pk).map(|p| p.coedges[0]);
     let at_vertex = |v: VertexId| -> Vec<EdgeId> {
         body.edge_ids()
             .filter(|&e| {
@@ -48,13 +65,14 @@ use super::*;
             })
             .collect()
     };
-    let tangent = |link: &Link, leaving: bool| -> Vec3 {
+    // a chain edge has a curve (checked above)
+    let tangent = |link: &Link, leaving: bool| -> Option<Vec3> {
         let e = body.edge(link.edge);
-        let c = e.curve.as_ref().unwrap_or_else(|| panic!("checked above"));
+        let c = e.curve.as_ref()?;
         let at_end = leaving != link.forward;
         let t = if at_end { e.range.1 } else { e.range.0 };
         let d = c.d1(t).1.unit_or_zero();
-        if link.forward == leaving { d } else { -d }
+        Some(if link.forward == leaving { d } else { -d })
     };
 
     // The junctions at each inner chain vertex, and every other edge there refused.
@@ -62,19 +80,23 @@ use super::*;
     let mut joints: Vec<[Option<Junction>; 2]> = Vec::with_capacity(inner);
     let mut vertices: Vec<VertexId> = Vec::with_capacity(inner);
     for i in 0..inner {
-        let (l, m) = (&links[i], &links[(i + 1) % n]);
-        let v = body.coedge_end(picked[l.pk].coedges[0]);
+        let (Some(l), Some(m)) = (links.get(i), links.get((i + 1) % n)) else {
+            return unsupported("whose chain has a gap");
+        };
+        let Some(c0) = first_coedge(l.pk) else {
+            return unsupported("whose chain names an edge not picked");
+        };
+        let v = body.coedge_end(c0);
         vertices.push(v);
         let at = body.vertex(v).point;
         let mut pair: [Option<Junction>; 2] = [None, None];
         let mut taken: BTreeSet<EdgeId> = BTreeSet::new();
-        #[allow(clippy::needless_range_loop)]
-        for k in 0..2 {
-            let (fa, fb) = (l.faces[k], m.faces[k]);
+        for (k, slot) in pair.iter_mut().enumerate() {
+            let (fa, fb) = (*run::of_face(&l.faces, k), *run::of_face(&m.faces, k));
             let found = at_vertex(v).into_iter().find(|&e| {
                 !chain_edges.contains(&e)
                     && faces_of(e) == BTreeSet::from([fa, fb])
-                    && (fa != fb || uses[&e].len() == 2)
+                    && (fa != fb || used_twice(e))
             });
             let Some(e) = found else {
                 if fa != fb {
@@ -88,7 +110,7 @@ use super::*;
                 return unsupported("at a pole");
             };
             let _ = c;
-            pair[k] = Some(Junction {
+            *slot = Some(Junction {
                 edge: e,
                 at,
                 before: fa,
@@ -131,13 +153,11 @@ use super::*;
     // An open chain's ends, each on the plane of the one other face there.
     let mut ends: Vec<End> = Vec::new();
     if !closed {
-        for (at_start, li) in [(true, 0), (false, n - 1)] {
-            let l = &roll.links[li];
-            let v = if at_start {
-                body.coedge_start(picked[l.pk].coedges[0])
-            } else {
-                body.coedge_end(picked[l.pk].coedges[0])
+        for (at_start, l) in [(true, roll.links.first()), (false, roll.links.last())] {
+            let (Some(l), Some(c0)) = (l, l.and_then(|l| first_coedge(l.pk))) else {
+                return unsupported("along no edges");
             };
+            let v = if at_start { body.coedge_start(c0) } else { body.coedge_end(c0) };
             let others: BTreeSet<FaceId> = at_vertex(v)
                 .iter()
                 .flat_map(|&e| faces_of(e))
@@ -146,23 +166,19 @@ use super::*;
             let [f] = others.iter().copied().collect::<Vec<_>>()[..] else {
                 return unsupported("ending where more than one other face meets it");
             };
-            let mut found = Vec::with_capacity(2);
-            for k in 0..2 {
-                let Some(e) = at_vertex(v)
-                    .into_iter()
-                    .find(|&e| faces_of(e) == BTreeSet::from([f, l.faces[k]]))
-                else {
-                    return unsupported("ending where its end face meets a side at no edge");
-                };
-                found.push(e);
-            }
-            let edges = [found[0], found[1]];
+            let meeting = |side: FaceId| at_vertex(v).into_iter().find(|&e| faces_of(e) == BTreeSet::from([f, side]));
+            let (Some(e0), Some(e1)) = (meeting(l.faces[0]), meeting(l.faces[1])) else {
+                return unsupported("ending where its end face meets a side at no edge");
+            };
+            let edges = [e0, e1];
             if at_vertex(v).len() != 3 {
                 return unsupported("ending at a vertex where other edges meet");
             }
             // The side the chain comes from: a point a little way back along it.
             let surface = body.face(f).surface.clone();
-            let back = tangent(l, at_start);
+            let Some(back) = tangent(l, at_start) else {
+                return unsupported("on an edge with no curve");
+            };
             let at = body.vertex(v).point;
             let uv = surface.project(at);
             let nrm = surface.normal(uv.x, uv.y);
@@ -197,15 +213,17 @@ use super::*;
     let mut last: Vec<[(EdgeId, bool); 2]> = Vec::with_capacity(ends.len());
     let mut dropped_edges: BTreeSet<EdgeId> = BTreeSet::new();
     let mut dropped_vertices: BTreeSet<VertexId> = BTreeSet::new();
-    for (ti, e) in ends.iter().enumerate() {
+    for (e, trim) in ends.iter().zip(&trims) {
         let mut found = Vec::with_capacity(2);
         for k in 0..2 {
-            let p = trims[ti].curve.eval(k as f64);
-            let (mut edge, mut from) = (e.edges[k], e.vertex);
+            let p = trim.curve.eval(k as f64);
+            let (mut edge, mut from) = (*run::of_face(&e.edges, k), e.vertex);
             let mut steps = 0;
             loop {
                 let x = body.edge(edge);
-                let c = x.curve.as_ref().unwrap_or_else(|| panic!("an end face's edge has a curve"));
+                let Some(c) = x.curve.as_ref() else {
+                    return unsupported("whose end face has an edge with no curve");
+                };
                 let starts = x.start == from;
                 // A line, circle or ellipse runs on past its ends, so the first edge's contact may
                 // lie past the vertex, where the blend opens the end face.
@@ -240,7 +258,10 @@ use super::*;
                 (edge, from) = (next, w);
             }
         }
-        last.push([found[0], found[1]]);
+        let &[f0, f1] = found.as_slice() else {
+            return unsupported("whose contacts do not both end on its end face");
+        };
+        last.push([f0, f1]);
     }
 
     // Segment boundaries: every chain vertex, every crossing, and an open chain's two ends past
@@ -263,10 +284,10 @@ use super::*;
         crossing.push(c);
     }
     let margin = 0.25 * radius;
-    let (lo, hi) = if closed {
-        (0.0, total)
-    } else {
-        (ends[0].lo - margin, ends[1].hi + margin)
+    let (lo, hi) = match (closed, ends.first(), ends.get(1)) {
+        (true, _, _) => (0.0, total),
+        (false, Some(first), Some(second)) => (first.lo - margin, second.hi + margin),
+        _ => return unsupported("open, without its two ends"),
     };
     if !closed {
         cuts.retain(|&t| t > lo && t < hi);
@@ -281,7 +302,7 @@ use super::*;
         } else {
             (a - b).abs()
         };
-        d <= 1e-9 * total.max(1.0)
+        d <= SAME_BOUND * total.max(1.0)
     };
     let mut bounds: Vec<f64> = Vec::new();
     for t in cuts {
@@ -295,31 +316,27 @@ use super::*;
         bounds.len() - 1
     };
     let mut segments = Vec::with_capacity(m);
-    for j in 0..m {
-        let a = bounds[j];
-        let b = if j + 1 < bounds.len() {
-            bounds[j + 1]
-        } else {
-            bounds[0] + total
-        };
+    // each bound with the next, the last (of a closed chain) with the first a turn on
+    let nexts = bounds.iter().skip(1).copied().chain(bounds.first().map(|&f| f + total));
+    for (&a, b) in bounds.iter().zip(nexts).take(m) {
         segments.push(fit(&roll, a, b)?);
     }
-    let bound_index =
-        |t: f64| -> Option<usize> { (0..bounds.len()).find(|&x| close(t, bounds[x])) };
+    let bound_index = |t: f64| -> Option<usize> { bounds.iter().position(|&b| close(t, b)) };
 
     // Where each segment is kept: `s` from `lower(v)` to `upper(v)`.
-    let start_trim = (!closed).then(|| &trims[0]);
-    let end_trim = (!closed).then(|| &trims[1]);
-    let lower = |j: usize, v: f64| match start_trim {
-        Some(t) => segments[j].a.max(t.s_at(v)),
-        None => segments[j].a,
+    let start_trim = trims.first().filter(|_| !closed);
+    let end_trim = trims.get(1).filter(|_| !closed);
+    let lower = |sg: &Segment, v: f64| match start_trim {
+        Some(t) => sg.a.max(t.s_at(v)),
+        None => sg.a,
     };
-    let upper = |j: usize, v: f64| match end_trim {
-        Some(t) => segments[j].b.min(t.s_at(v)),
-        None => segments[j].b,
+    let upper = |sg: &Segment, v: f64| match end_trim {
+        Some(t) => sg.b.min(t.s_at(v)),
+        None => sg.b,
     };
-    let alive: Vec<bool> = (0..m)
-        .map(|j| (0..=64).any(|i| upper(j, i as f64 / 64.0) > lower(j, i as f64 / 64.0) + 1e-9))
+    let alive: Vec<bool> = segments
+        .iter()
+        .map(|sg| (0..=64).any(|i| upper(sg, i as f64 / 64.0) > lower(sg, i as f64 / 64.0) + KEPT))
         .collect();
 
     // The rebuilt solid.
@@ -330,9 +347,13 @@ use super::*;
     let mut vmap: Vec<Option<VertexId>> = vec![None; body.vertex_ids().count()];
     for w in body.vertex_ids() {
         if !gone.contains(&w) {
-            vmap[w.index()] = Some(out.add_vertex(body.vertex(w).point));
+            let kept = out.add_vertex(body.vertex(w).point);
+            if let Some(slot) = vmap.get_mut(w.index()) {
+                *slot = Some(kept);
+            }
         }
     }
+    let kept = |w: VertexId| vmap.get(w.index()).copied().flatten();
 
     // Vertices on each segment's corners and on the trims, shared by position.
     let mut pool: Vec<VertexId> = Vec::new();
@@ -351,14 +372,16 @@ use super::*;
     let mut trim_splits: Vec<BTreeSet<OrderedF64>> = vec![BTreeSet::new(); trims.len()];
     // Where each trim meets each bound's arc: (bound index, v).
     let mut meets: Vec<(usize, f64)> = Vec::new();
-    for (ti, t) in trims.iter().enumerate() {
+    for ((t, end), splits) in trims.iter().zip(&ends).zip(trim_splits.iter_mut()) {
         let mut vs = vec![0.0, 1.0];
         for (bi, &b) in bounds.iter().enumerate() {
             for w in t.samples.windows(2) {
-                let ((v0, s0), (v1, s1)) = (w[0], w[1]);
+                let &[(v0, s0), (v1, s1)] = w else {
+                    continue;
+                };
                 if (s0 - b) * (s1 - b) < 0.0 {
                     // Exactly where the true trim meets the bound's arc, so the two share a vertex.
-                    let g = |v: f64| Ok(roll.trim_at(&ends[ti], v, s0)? - b);
+                    let g = |v: f64| Ok(roll.trim_at(end, v, s0)? - b);
                     let v = bisect(v0, v1, s0 - b, g)?;
                     vs.push(v);
                     meets.push((bi, v));
@@ -366,28 +389,33 @@ use super::*;
             }
         }
         // The trim's own ends first, so a crossing a hair from either merges into it.
-        vs[2..].sort_by(f64::total_cmp);
+        if let Some(crossings) = vs.get_mut(2..) {
+            crossings.sort_by(f64::total_cmp);
+        }
         for v in vs {
             let p = t.curve.eval(v);
             let near = |x: &OrderedF64| t.curve.eval(x.0).dist(p) <= 10.0 * tol::LINEAR;
-            if !trim_splits[ti].iter().any(near) {
-                trim_splits[ti].insert(OrderedF64(v));
+            if !splits.iter().any(near) {
+                splits.insert(OrderedF64(v));
             }
         }
     }
     let mut trim_edges: Vec<BTreeMap<OrderedF64, EdgeId>> = vec![BTreeMap::new(); trims.len()];
-    for (ti, t) in trims.iter().enumerate() {
-        let vs: Vec<f64> = trim_splits[ti].iter().map(|x| x.0).collect();
+    for ((t, splits), edges) in trims.iter().zip(&trim_splits).zip(trim_edges.iter_mut()) {
+        let vs: Vec<f64> = splits.iter().map(|x| x.0).collect();
         for w in vs.windows(2) {
-            let a = vertex_at(&mut out, t.curve.eval(w[0]));
-            let b = vertex_at(&mut out, t.curve.eval(w[1]));
-            let e = out.add_edge(Curve::BSpline(t.curve.clone()), (w[0], w[1]), a, b);
-            trim_edges[ti].insert(OrderedF64(w[0]), e);
+            let &[v0, v1] = w else {
+                continue;
+            };
+            let a = vertex_at(&mut out, t.curve.eval(v0));
+            let b = vertex_at(&mut out, t.curve.eval(v1));
+            let e = out.add_edge(Curve::BSpline(t.curve.clone()), (v0, v1), a, b);
+            edges.insert(OrderedF64(v0), e);
         }
     }
     // Each inner bound's arc, split where a trim crosses it, kept where some segment keeps it.
     let mut arcs: Vec<Vec<(f64, f64, EdgeId)>> = vec![Vec::new(); bounds.len()];
-    for (bi, &b) in bounds.iter().enumerate() {
+    for ((bi, &b), bound_arcs) in bounds.iter().enumerate().zip(arcs.iter_mut()) {
         let sec = roll.section(b, None)?;
         let curve = sec.arc_curve(radius)?;
         let mut vs = vec![0.0, 1.0];
@@ -397,7 +425,7 @@ use super::*;
                 .iter()
                 .flatten()
                 .map(|x| x.0)
-                .find(|&x| (x - v).abs() <= 1e-6)
+                .find(|&x| (x - v).abs() <= SNAP_V)
                 .unwrap_or(v);
             if at == bi && snapped > 0.0 && snapped < 1.0 {
                 vs.push(snapped);
@@ -405,65 +433,71 @@ use super::*;
         }
         vs.sort_by(f64::total_cmp);
         for w in vs.windows(2) {
-            let mid = 0.5 * (w[0] + w[1]);
-            let kept_by = |j: usize| -> bool {
-                alive[j] && lower(j, mid) < upper(j, mid) - 1e-9 && {
-                    let (a, c) = (lower(j, mid), upper(j, mid));
+            let &[w0, w1] = w else {
+                continue;
+            };
+            let mid = 0.5 * (w0 + w1);
+            let kept_by = |(sg, &alive): (&Segment, &bool)| -> bool {
+                alive && lower(sg, mid) < upper(sg, mid) - KEPT && {
+                    let (a, c) = (lower(sg, mid), upper(sg, mid));
                     close(a, b) || close(c, b)
                 }
             };
-            if !(0..m).any(kept_by) {
+            if !segments.iter().zip(&alive).any(kept_by) {
                 continue;
             }
-            let a = vertex_at(&mut out, curve.eval(w[0]));
-            let c = vertex_at(&mut out, curve.eval(w[1]));
-            let e = out.add_edge(Curve::Nurbs(Box::new(curve.clone())), (w[0], w[1]), a, c);
-            arcs[bi].push((w[0], w[1], e));
+            let a = vertex_at(&mut out, curve.eval(w0));
+            let c = vertex_at(&mut out, curve.eval(w1));
+            let e = out.add_edge(Curve::Nurbs(Box::new(curve.clone())), (w0, w1), a, c);
+            bound_arcs.push((w0, w1, e));
         }
     }
     // Each kept segment's two contact pieces.
     let mut pieces: Vec<[Option<EdgeId>; 2]> = vec![[None, None]; m];
-    for j in 0..m {
-        if !alive[j] {
+    for ((sg, &alive), piece) in segments.iter().zip(&alive).zip(pieces.iter_mut()) {
+        if !alive {
             continue;
         }
-        for (k, v) in [(0, 0.0), (1, 1.0)] {
-            let (a, b) = (lower(j, v), upper(j, v));
-            if b <= a + 1e-9 {
+        let [slot0, slot1] = piece;
+        for (slot, contact, v) in [(slot0, &sg.contact[0], 0.0), (slot1, &sg.contact[1], 1.0)] {
+            let (a, b) = (lower(sg, v), upper(sg, v));
+            if b <= a + KEPT {
                 continue;
             }
-            let c = Curve::BSpline(segments[j].contact[k].clone());
+            let c = Curve::BSpline(contact.clone());
             let va = vertex_at(&mut out, c.eval(a));
             let vb = vertex_at(&mut out, c.eval(b));
-            pieces[j][k] = Some(out.add_edge(c, (a, b), va, vb));
+            *slot = Some(out.add_edge(c, (a, b), va, vb));
         }
     }
 
     // The body's edges: each junction cut back to where its side's contact crosses it, each end
     // face's edges with the sides cut back to the contacts' ends.
     // Per edge, the point its start is cut back to and the point its end is.
-    let mut cut_at: HashMap<EdgeId, [Option<Point3>; 2]> = HashMap::new();
+    // looked up only: its order reaches nothing
+    let mut cut_at: BTreeMap<EdgeId, [Option<Point3>; 2]> = BTreeMap::new();
     let mut cut = |e: EdgeId, starts: bool, p: Point3| -> Result<()> {
-        let slot = &mut cut_at.entry(e).or_default()[if starts { 0 } else { 1 }];
+        let [at_start, at_end] = cut_at.entry(e).or_default();
+        let slot = if starts { at_start } else { at_end };
         if slot.replace(p).is_some() {
             return unsupported("that cuts one end of an edge back twice");
         }
         Ok(())
     };
-    for i in 0..inner {
-        for (k, &crossed) in crossing[i].iter().enumerate() {
-            if let (Some(j), Some(t)) = (&roll.joints[i][k], crossed) {
+    for (i, (crossings, &at)) in crossing.iter().zip(&vertices).enumerate() {
+        for (k, &crossed) in crossings.iter().enumerate() {
+            if let (Some(j), Some(t)) = (roll.joint(i, k), crossed) {
                 if bound_index(t).is_none() {
                     return unsupported("whose crossing is not a segment's end");
                 }
-                let p = roll.section(t, None)?.contact[k];
-                cut(j.edge, body.edge(j.edge).start == vertices[i], p)?;
+                let p = *run::of_face(&roll.section(t, None)?.contact, k);
+                cut(j.edge, body.edge(j.edge).start == at, p)?;
             }
         }
     }
-    for (ti, l) in last.iter().enumerate() {
+    for (l, trim) in last.iter().zip(&trims) {
         for (k, &(edge, starts)) in l.iter().enumerate() {
-            cut(edge, starts, trims[ti].curve.eval(k as f64))?;
+            cut(edge, starts, trim.curve.eval(k as f64))?;
         }
     }
     let mut emap: Vec<Option<EdgeId>> = vec![None; body.edge_ids().count()];
@@ -473,14 +507,17 @@ use super::*;
         }
         let x = body.edge(e);
         let Some(c) = x.curve.clone() else {
-            let Some(w) = vmap[x.start.index()] else {
+            let Some(w) = kept(x.start) else {
                 return unsupported("through a pole at a chain vertex");
             };
-            emap[e.index()] = Some(out.add_degenerate_edge(w, x.range));
+            let pole = out.add_degenerate_edge(w, x.range);
+            if let Some(slot) = emap.get_mut(e.index()) {
+                *slot = Some(pole);
+            }
             continue;
         };
         let mut range = x.range;
-        let (mut na, mut nb) = (vmap[x.start.index()], vmap[x.end.index()]);
+        let (mut na, mut nb) = (kept(x.start), kept(x.end));
         if let Some(&[at_start, at_end]) = cut_at.get(&e) {
             // An edge may run on past its end to a contact, where the blend opens its face.
             let span = x.range.1 - x.range.0;
@@ -510,7 +547,10 @@ use super::*;
         let (Some(na), Some(nb)) = (na, nb) else {
             return unsupported("along an edge whose vertex another edge ends on");
         };
-        emap[e.index()] = Some(out.add_edge(c, range, na, nb));
+        let made = out.add_edge(c, range, na, nb);
+        if let Some(slot) = emap.get_mut(e.index()) {
+            *slot = Some(made);
+        }
     }
 
     // The body's faces: each run of chain edges swapped for the contact pieces on that face, and
@@ -523,24 +563,35 @@ use super::*;
             face.reversed,
             face.names.iter().cloned(),
         );
-        fmap[f.index()] = Some(nf);
-        let end_here: Vec<usize> = (0..ends.len()).filter(|&t| ends[t].face == f).collect();
+        if let Some(slot) = fmap.get_mut(f.index()) {
+            *slot = Some(nf);
+        }
+        // the ends on this face, each with the edges its sides were walked to and its trim's edges
+        let end_here: Vec<EndHere> = ends
+            .iter()
+            .zip(&last)
+            .zip(&trim_edges)
+            .filter(|((end, _), _)| end.face == f)
+            .map(|((_, l), te)| (l, te))
+            .collect();
         for &lp in &face.loops {
             let coedges = &body.lp(lp).coedges;
             let is_chain = |c: CoedgeId| chain_edges.contains(&body.coedge(c).edge);
             let first = coedges.iter().position(|&c| !is_chain(c)).unwrap_or(0);
-            let order: Vec<CoedgeId> = (0..coedges.len())
-                .map(|i| coedges[(first + i) % coedges.len()])
-                .collect();
+            let order: Vec<CoedgeId> = coedges.iter().cycle().skip(first).take(coedges.len()).copied().collect();
             let mut specs: Vec<CoedgeSpec> = Vec::new();
             let mut hint: Option<Vec2> = None;
             let push_new = |specs: &mut Vec<CoedgeSpec>,
                             hint: &mut Option<Vec2>,
                             out: &Brep,
                             e: EdgeId,
-                            reversed: bool| {
+                            reversed: bool|
+             -> Result<()> {
                 let x = out.edge(e);
-                let curve = x.curve.as_ref().unwrap_or_else(|| panic!("a new edge has a curve"));
+                // the contact pieces and trims made above all have curves
+                let Some(curve) = x.curve.as_ref() else {
+                    return unsupported("whose new edge has no curve");
+                };
                 let (ta, tb) = if reversed {
                     (x.range.1, x.range.0)
                 } else {
@@ -562,17 +613,20 @@ use super::*;
                     reversed,
                     pcurve: PCurve::Projected { seed },
                 });
+                Ok(())
             };
             let mut i = 0;
-            while i < order.len() {
-                let c = order[i];
+            while let Some(&c) = order.get(i) {
                 if dropped_edges.contains(&body.coedge(c).edge) {
                     i += 1;
                     continue;
                 }
                 if !is_chain(c) {
                     let co = body.coedge(c);
-                    let ne = emap[co.edge.index()].unwrap_or_else(|| panic!("every other edge is copied"));
+                    // every edge off the chain is copied
+                    let Some(&Some(ne)) = emap.get(co.edge.index()) else {
+                        return unsupported("whose face has an edge that was not copied");
+                    };
                     let x = out.edge(ne);
                     let (from, to) = if co.reversed {
                         (x.end, x.start)
@@ -585,7 +639,9 @@ use super::*;
                     } else {
                         orig.range.1
                     };
-                    let end_uv = body.coedge_uvs(c, &[orig_end])[0];
+                    let Some(&end_uv) = body.coedge_uvs(c, &[orig_end]).first() else {
+                        return unsupported("whose face has a coedge with no point");
+                    };
                     let pcurve = match &co.pcurve {
                         PCurve::Projected { seed } => PCurve::Projected {
                             seed: face.surface.project_near(out.vertex(from).point, *seed),
@@ -599,17 +655,14 @@ use super::*;
                     });
                     hint = Some(face.surface.project_near(out.vertex(to).point, end_uv));
                     // At an end face's corner, its trim curve runs from this edge to the next.
-                    for &t in &end_here {
+                    for &(walked, edges) in &end_here {
                         // The walked-to edge on side k, cut where this coedge now ends.
-                        let k = last[t]
-                            .iter()
-                            .position(|&(x, starts)| x == co.edge && starts == co.reversed);
+                        let k = walked.iter().position(|&(x, starts)| x == co.edge && starts == co.reversed);
                         let Some(k) = k else {
                             continue;
                         };
                         // From side k's contact end (v = k) to the other's.
-                        let mut run: Vec<(EdgeId, bool)> =
-                            trim_edges[t].values().map(|&te| (te, false)).collect();
+                        let mut run: Vec<(EdgeId, bool)> = edges.values().map(|&te| (te, false)).collect();
                         if k == 1 {
                             run.reverse();
                             for r in &mut run {
@@ -617,47 +670,47 @@ use super::*;
                             }
                         }
                         for (te, rev) in run {
-                            push_new(&mut specs, &mut hint, &out, te, rev);
+                            push_new(&mut specs, &mut hint, &out, te, rev)?;
                         }
                     }
                     i += 1;
                     continue;
                 }
                 let co = body.coedge(c);
-                let li = roll
-                    .links
-                    .iter()
-                    .position(|l| l.edge == co.edge)
-                    .unwrap_or_else(|| panic!("a chain edge"));
-                let k = (0..2)
-                    .find(|&k| roll.links[li].faces[k] == f)
-                    .unwrap_or_else(|| panic!("a chain edge's face is one of its sides"));
+                // a chain coedge's edge is a link's, and its face one of the link's sides
+                let Some(link) = roll.links.iter().find(|l| l.edge == co.edge) else {
+                    return unsupported("whose chain edge is not a link");
+                };
+                let Some(k) = (0..2).find(|&k| *run::of_face(&link.faces, k) == f) else {
+                    return unsupported("whose chain edge's face is not one of its sides");
+                };
                 let along = k == 0;
                 let mut run = 0;
-                while i + run < order.len() && is_chain(order[i + run]) {
+                while order.get(i + run).is_some_and(|&c| is_chain(c)) {
                     run += 1;
                 }
-                let mut mine: Vec<usize> = (0..m)
-                    .filter(|&j| pieces[j][k].is_some() && segments[j].face[k] == f)
-                    .collect();
+                // the segments with a contact piece on this face, by index
+                let mine_here = |(_, (piece, sg)): &(usize, (&[Option<EdgeId>; 2], &Segment))| {
+                    run::of_face(piece, k).is_some() && *run::of_face(&sg.face, k) == f
+                };
+                let mut mine: Vec<usize> =
+                    pieces.iter().zip(&segments).enumerate().filter(mine_here).map(|(j, _)| j).collect();
                 if closed
-                    && let Some(gap) = (0..mine.len()).find(|&x| {
-                        let (p, q) = (mine[x], mine[(x + 1) % mine.len()]);
-                        (p + 1) % m != q
-                    })
+                    && let Some(gap) = mine.iter().zip(mine.iter().cycle().skip(1)).position(|(&p, &q)| (p + 1) % m != q)
                 {
                     let len = mine.len();
                     mine.rotate_left((gap + 1) % len);
                 }
-                if mine.windows(2).any(|w| (w[0] + 1) % m != w[1]) {
+                if mine.windows(2).any(|w| matches!(*w, [p, q] if (p + 1) % m != q)) {
                     return unsupported("whose contact leaves a face and comes back to it");
                 }
                 if !along {
                     mine.reverse();
                 }
                 for j in mine {
-                    let e = pieces[j][k].unwrap_or_else(|| panic!("filtered above"));
-                    push_new(&mut specs, &mut hint, &out, e, !along);
+                    if let Some(&e) = pieces.get(j).and_then(|p| run::of_face(p, k).as_ref()) {
+                        push_new(&mut specs, &mut hint, &out, e, !along)?;
+                    }
                 }
                 i += run;
             }
@@ -676,27 +729,31 @@ use super::*;
         dir: Vec2::new(0.0, 1.0),
     };
     let mut blends = Vec::with_capacity(m);
-    for (j, sg) in segments.iter().enumerate() {
-        if !alive[j] {
+    for ((sg, &alive), piece) in segments.iter().zip(&alive).zip(&pieces) {
+        if !alive {
             continue;
         }
-        let pk = roll.links[sg.link].pk;
+        let pk = roll.link(sg.link)?.pk;
+        let Some(names) = names.get(pk) else {
+            return unsupported("whose chain names an edge not picked");
+        };
         let surface = Surface::Nurbs(Box::new(sg.surface.clone()));
-        let bf = out.add_face(surface.clone(), true, names[pk].iter().cloned());
+        let bf = out.add_face(surface.clone(), true, names.iter().cloned());
         let mut specs = Vec::new();
-        let on_face = |e: EdgeId, reversed: bool, hint: Vec2, out: &Brep| -> CoedgeSpec {
+        // a trim's edge has a curve
+        let on_face = |e: EdgeId, reversed: bool, hint: Vec2, out: &Brep| -> Option<CoedgeSpec> {
             let x = out.edge(e);
             let t = if reversed { x.range.1 } else { x.range.0 };
-            let p = x.curve.as_ref().unwrap_or_else(|| panic!("a curve")).eval(t);
-            CoedgeSpec {
+            let p = x.curve.as_ref()?.eval(t);
+            Some(CoedgeSpec {
                 edge: e,
                 reversed,
                 pcurve: PCurve::Projected {
                     seed: surface.project_near(p, hint),
                 },
-            }
+            })
         };
-        if let Some(e) = pieces[j][0] {
+        if let Some(e) = piece[0] {
             specs.push(CoedgeSpec {
                 edge: e,
                 reversed: true,
@@ -704,16 +761,19 @@ use super::*;
             });
         }
         // The start side, v rising: the arc at `a` where kept, the start trim where it cuts.
-        let side_run = |at_start: bool, specs: &mut Vec<CoedgeSpec>, out: &Brep| {
+        let side_run = |at_start: bool, specs: &mut Vec<CoedgeSpec>, out: &Brep| -> Result<()> {
             let b_here = if at_start { sg.a } else { sg.b };
-            let bi = bound_index(b_here).unwrap_or_else(|| panic!("a segment ends on a bound"));
+            // a segment ends on a bound, which has its arcs
+            let Some(bound_arcs) = bound_index(b_here).and_then(|bi| arcs.get(bi)) else {
+                return unsupported("whose segment ends off its bounds");
+            };
             let mut parts: Vec<(f64, CoedgeSpec)> = Vec::new();
-            for &(v0, v1, e) in &arcs[bi] {
+            for &(v0, v1, e) in bound_arcs {
                 let mid = 0.5 * (v0 + v1);
                 let edge_here = if at_start {
-                    close(lower(j, mid), b_here)
+                    close(lower(sg, mid), b_here)
                 } else {
-                    close(upper(j, mid), b_here)
+                    close(upper(sg, mid), b_here)
                 };
                 if edge_here {
                     parts.push((
@@ -727,13 +787,18 @@ use super::*;
                 }
             }
             let ti = if at_start { 0 } else { 1 };
-            if !closed {
-                for (&OrderedF64(v0), &e) in &trim_edges[ti] {
+            if !closed
+                && let (Some(edges), Some(trim)) = (trim_edges.get(ti), trims.get(ti))
+            {
+                for (&OrderedF64(v0), &e) in edges {
                     let x = out.edge(e);
                     let mid = 0.5 * (x.range.0 + x.range.1);
-                    let s = trims[ti].s_at(mid);
-                    if s > sg.a + 1e-9 && s < sg.b - 1e-9 {
-                        parts.push((v0, on_face(e, !at_start, Vec2::new(s, mid), out)));
+                    let s = trim.s_at(mid);
+                    if s > sg.a + KEPT && s < sg.b - KEPT {
+                        let Some(spec) = on_face(e, !at_start, Vec2::new(s, mid), out) else {
+                            return unsupported("whose trim's edge has no curve");
+                        };
+                        parts.push((v0, spec));
                     }
                 }
             }
@@ -742,20 +807,21 @@ use super::*;
                 parts.reverse();
             }
             specs.extend(parts.into_iter().map(|x| x.1));
+            Ok(())
         };
-        side_run(true, &mut specs, &out);
-        if let Some(e) = pieces[j][1] {
+        side_run(true, &mut specs, &out)?;
+        if let Some(e) = piece[1] {
             specs.push(CoedgeSpec {
                 edge: e,
                 reversed: false,
                 pcurve: row(1.0),
             });
         }
-        side_run(false, &mut specs, &out);
+        side_run(false, &mut specs, &out)?;
         out.add_loop(bf, specs);
         // Its outward side faces away from a ball inside the body, towards one outside it.
         let s = &out.face(bf).surface;
-        let u = 0.5 * (lower(j, 0.5) + upper(j, 0.5));
+        let u = 0.5 * (lower(sg, 0.5) + upper(sg, 0.5));
         let p = s.eval(u, 0.5);
         let sec = roll.section(u, None)?;
         let away = (p - sec.centre) * if convex { 1.0 } else { -1.0 };
@@ -768,13 +834,13 @@ use super::*;
     }
 
     for sh in body.shell_ids() {
-        let mut faces: Vec<FaceId> = body
-            .shell(sh)
-            .faces
-            .iter()
-            .map(|f| fmap[f.index()].unwrap_or_else(|| panic!("every face is copied")))
-            .collect();
-        if body.shell(sh).faces.contains(&picked[0].faces[0]) {
+        // every face is copied
+        let Some(mut faces) =
+            body.shell(sh).faces.iter().map(|f| fmap.get(f.index()).copied().flatten()).collect::<Option<Vec<FaceId>>>()
+        else {
+            return unsupported("whose face was not copied");
+        };
+        if picked.first().is_some_and(|pk| body.shell(sh).faces.contains(&pk.faces[0])) {
             faces.extend(&blends);
         }
         out.add_shell(faces);
@@ -785,7 +851,8 @@ use super::*;
     out.pair_radial();
     let problems = check::check(&out);
     if !problems.is_empty() {
-        return unsupported(&format!("whose result does not check: {}", problems[0]));
+        let first = problems.first().map(|p| p.to_string()).unwrap_or_default();
+        return unsupported(&format!("whose result does not check: {first}"));
     }
     Ok(out)
 }

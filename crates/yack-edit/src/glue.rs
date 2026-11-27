@@ -66,9 +66,61 @@ fn thicken(b: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
     crate::thicken(b, faces, thickness)
 }
 
+/// Whether the inward shell of `b` to `thickness`, open through `open`, deals with every round thinner
+/// than its wall: by taking it out of the cavity (tori, spheres and cones about an axis, see
+/// [`crate::tweak::drop_vanishing_rounds`]), or because the only ones are straight cylindrical rounds
+/// between plane faces, which the cavity's offset follows closed. False where a round of another
+/// kind would still close the move, and where none does.
+pub fn shell_goes_past_rounds(b: &Brep, open: &[FaceId], thickness: f64) -> bool {
+    let by: BTreeMap<FaceId, f64> = b.face_ids().map(|f| (f, if open.contains(&f) { thickness } else { -thickness })).collect();
+    matches!(crate::tweak::drop_vanishing_rounds(b, &by), Ok(Some(_))) || only_straight_rounds_close(b, thickness)
+}
+
+/// Whether the rounds of `b` that a wall of `thickness` closes are all straight cylinders, each
+/// between plane faces only, and there is one.
+fn only_straight_rounds_close(b: &Brep, thickness: f64) -> bool {
+    use crate::geom::Surface;
+    let closing: Vec<FaceId> = b
+        .face_ids()
+        .filter(|&f| {
+            let face = b.face(f);
+            !face.reversed
+                && match &face.surface {
+                    Surface::Cylinder(c) => c.radius <= thickness,
+                    Surface::Sphere(s) => s.radius <= thickness,
+                    Surface::Torus(t) => t.minor <= thickness,
+                    _ => false,
+                }
+        })
+        .collect();
+    !closing.is_empty()
+        && closing.iter().all(|&f| {
+            matches!(b.face(f).surface, Surface::Cylinder(_))
+                && b.face(f).loops.iter().all(|&lp| {
+                    b.lp(lp).coedges.iter().all(|&c| {
+                        let e = b.coedge(c).edge;
+                        b.edge_uses(e).iter().map(|&u| b.coedge_face(u)).all(|g| g == f || matches!(b.face(g).surface, Surface::Plane(_)))
+                    })
+                })
+        })
+}
+
+/// Whether `out`, the inward shell of `b` to `thickness`, is a wall that can be one: some solid in it
+/// and some cavity taken, and no more solid than a skin of the whole surface's area by the
+/// thickness holds.
+fn is_a_wall(b: &Brep, out: &Brep, thickness: f64) -> bool {
+    let (whole, wall) = (crate::measure::volume(b), crate::measure::volume(out));
+    wall > 0.0 && whole - wall > 0.0 && wall <= crate::measure::area(b) * thickness * (1.0 + 1e-6) // tol: slack on an exact bound
+}
+
 /// Hollows to a wall of `thickness` inside, removing `open`.
 pub fn shell(b: &Brep, open: &[FaceId], thickness: f64) -> Result<Brep> {
-    crate::shell(b, open, thickness, crate::Wall::Inward, "shell")
+    let out = crate::shell(b, open, thickness, crate::Wall::Inward, "shell")?;
+    // A round closed by following the offset is checked, not taken on trust.
+    if only_straight_rounds_close(b, thickness) && !is_a_wall(b, &out, thickness) {
+        return Err(Error::Unsupported("a shell whose straight rounds closed on the way left no sound wall".into()));
+    }
+    Ok(out)
 }
 
 /// Wraps the solid in a wall of `thickness` outside it, removing `open`: the faces become the wall's inside.
@@ -205,5 +257,30 @@ mod tests {
         // Grown inward the two faces close over the crease; one face alone has none.
         assert!(!opens_a_crease(&cube, &[top, side], -1.0));
         assert!(!opens_a_crease(&cube, &[top], 1.0));
+    }
+
+    #[test]
+    fn a_shell_follows_a_straight_round_thinner_than_its_wall_closed() {
+        // A 10 cube with one vertical edge rounded by 1 (it holds 1000 less (1 - pi/4) 1^2 10), shelled 2
+        // thick, so the round closes in the cavity, whose corner stays sharp: open at the top the cavity
+        // is 6 x 6 x 8, closed 6 x 6 x 6.
+        let cube = crate::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "c").unwrap();
+        let edge = cube
+            .edge_ids()
+            .find(|&e| {
+                let (a, b) = (cube.vertex(cube.edge(e).start).point, cube.vertex(cube.edge(e).end).point);
+                (a.x - 10.0).abs() < 1e-9 && (a.y - 10.0).abs() < 1e-9 && (b.x - 10.0).abs() < 1e-9 && (b.y - 10.0).abs() < 1e-9 // tol: the edge x = y = 10
+            })
+            .unwrap();
+        let rounded = crate::blend::fillet_edges(&cube, &[edge], 1.0, "r").unwrap();
+        let top = face_toward(&rounded, Vec3::Z);
+        let held = 1000.0 - (1.0 - std::f64::consts::FRAC_PI_4) * 10.0;
+        assert!(super::shell_goes_past_rounds(&rounded, &[top], 2.0));
+        // A wall thinner than the round leaves it standing: nothing closes.
+        assert!(!super::shell_goes_past_rounds(&rounded, &[top], 0.5));
+        let cup = super::shell(&rounded, &[top], 2.0).unwrap();
+        assert!((crate::measure::volume(&cup) - (held - 6.0 * 6.0 * 8.0)).abs() < 1e-6, "{}", crate::measure::volume(&cup));
+        let sealed = super::shell(&rounded, &[], 2.0).unwrap();
+        assert!((crate::measure::volume(&sealed) - (held - 6.0 * 6.0 * 6.0)).abs() < 1e-6, "{}", crate::measure::volume(&sealed));
     }
 }

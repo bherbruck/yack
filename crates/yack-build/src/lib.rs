@@ -23,5 +23,7 @@ pub mod loft;
 pub mod primitive;
 pub mod ruled;
 pub mod spindle;
+pub mod nurbs;
+pub mod sewn;
 pub mod drafted;
 pub mod sweep;

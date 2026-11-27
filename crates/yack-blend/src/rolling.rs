@@ -1,7 +1,8 @@
 // yack: A fillet along a tangent chain of edges no constant section sweeps: the surface a ball of the
 // Adapted from springrep@a03e8a1 src/blend/rolling.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/blend/rolling.rs to yack-blend (M3 W9a); paths and visibility only;
-// the fillet's build split out into rolling/build.rs (M3 hardening R0), paths and visibility only.
+// the fillet's build split out into rolling/build.rs (M3 hardening R0), paths and visibility only; the
+// roll on checked access, its face-domain map a BTreeMap (looked up only), its small literals named (R1).
 //! A fillet along a tangent chain of edges no constant section sweeps: the surface a ball of the
 //! fillet's radius sweeps rolling along the chain in contact with the faces on both sides.
 //!
@@ -29,7 +30,7 @@
 //! them, an end's plane gives up the corner the blend takes and gains its trim curve, and the
 //! segments' faces fill the strip.
 
-#[allow(clippy::disallowed_types)] use std::collections::{BTreeMap, BTreeSet, HashMap}; // D26: BTree* in hardening, proven by digests
+use std::collections::{BTreeMap, BTreeSet};
 
 mod build;
 
@@ -53,6 +54,33 @@ const FIT: f64 = 0.1;
 /// Section counts tried in turn for a segment; the last that still misses [`FIT`] refuses.
 const SAMPLES: [usize; 10] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
+/// Chain parameters this close are one place on the chain.
+const SAME_S: f64 = 1e-12; // tol: a chain parameter at rounding's scale, not a length
+
+/// A sine, distance or determinant this near zero is degenerate.
+const DEGENERATE: f64 = 1e-12; // tol: guards a division, not a length that decides anything
+
+/// The least weight of a section arc's middle control point: below it the arc turns by a half turn.
+const LEAST_WEIGHT: f64 = 1e-3; // tol: a weight, not a length
+
+/// A section's Newton step this short, as a share of the tolerance, has settled.
+const SETTLED: f64 = 1e-3; // tol: a share of the tolerance
+
+/// The first secant step of an end's trim, as a share of the radius.
+const FIRST_STEP: f64 = 1e-3; // tol: a share of the radius, not a length
+
+/// A Newton step on a curve parameter this short, as a share of its size, has settled.
+const SETTLED_PARAM: f64 = 1e-15; // tol: a share at rounding's scale, not a length
+
+/// The step of a curve's numerical second derivative, as a share of its range.
+const DIFF_STEP: f64 = 1e-6; // tol: a share of a parameter range, not a length
+
+/// The least parameter range a numerical derivative's step is a share of.
+const LEAST_SPAN: f64 = 1e-9; // tol: a parameter range, not a length
+
+/// A secant bracket this narrow, as a share of the parameter's size, has converged.
+const CONVERGED: f64 = 1e-14; // tol: a share at rounding's scale, not a length
+
 fn unsupported<T>(why: &str) -> Result<T> {
     Err(Error::Unsupported(format!("a rolling-ball fillet {why}")))
 }
@@ -71,7 +99,7 @@ impl Section {
         let (a, b) = (self.contact[0] - self.centre, self.contact[1] - self.centre);
         let half = 0.5 * a.cross(b).norm().atan2(a.dot(b));
         let w = half.cos();
-        if w <= 1e-3 {
+        if w <= LEAST_WEIGHT {
             return unsupported("whose faces turn by nearly a half turn");
         }
         let Some(mid) = (a + b).unit() else {
@@ -143,7 +171,7 @@ impl End {
 }
 
 /// The chain and the ball.
-#[allow(clippy::disallowed_types)] struct Roll<'a> { // D26: BTree* in hardening, proven by digests
+struct Roll<'a> {
     body: &'a Brep,
     links: Vec<Link>,
     closed: bool,
@@ -154,7 +182,7 @@ impl End {
     /// `joints[i][k]`: the junction on side `k` where link `i` ends and the next begins.
     joints: Vec<[Option<Junction>; 2]>,
     /// The trimmed domain of every face a side has, to tell whether a foot lies in the face.
-    domains: HashMap<FaceId, Domain>,
+    domains: BTreeMap<FaceId, Domain>,
 }
 
 impl Roll<'_> {
@@ -170,20 +198,33 @@ impl Roll<'_> {
         let s = self.wrap(s);
         self.links
             .iter()
-            .rposition(|l| l.s0 <= s + 1e-12)
+            .rposition(|l| l.s0 <= s + SAME_S)
             .unwrap_or(0)
     }
 
     /// The point and unit tangent of link `i`'s edge `d` along it from its start in `s`.
-    #[allow(clippy::panic)] fn on_link(&self, i: usize, d: f64) -> Result<(Point3, Vec3)> {
-        let l = &self.links[i];
+    /// Link `i` of the chain.
+    fn link(&self, i: usize) -> Result<&Link> {
+        self.links.get(i).ok_or_else(|| Error::Numerical("a rolling chain's link that is not there".into()))
+    }
+
+    /// The junction on side `k` at the end of link `i`, if there is one.
+    fn joint(&self, i: usize, k: usize) -> Option<&Junction> {
+        self.joints.get(i).and_then(|j| run::of_face(j, k).as_ref())
+    }
+
+    fn on_link(&self, i: usize, d: f64) -> Result<(Point3, Vec3)> {
+        let l = self.link(i)?;
         let e = self.body.edge(l.edge);
         let t = if l.forward {
             e.range.0 + d
         } else {
             e.range.1 - d
         };
-        let (p, dt) = e.curve.as_ref().unwrap_or_else(|| panic!("a picked edge has a curve")).d1(t);
+        let Some(curve) = e.curve.as_ref() else {
+            return unsupported("on an edge with no curve");
+        };
+        let (p, dt) = curve.d1(t);
         let Some(along) = (if l.forward { dt } else { -dt }).unit() else {
             return unsupported("on an edge with no tangent");
         };
@@ -194,17 +235,19 @@ impl Roll<'_> {
     /// end it runs on straight along its tangent there.
     fn chain_at(&self, s: f64) -> Result<(Point3, Vec3, usize)> {
         let s = self.wrap(s);
-        let last = self.links.len() - 1;
+        let (Some(last), Some(last_link)) = (self.links.len().checked_sub(1), self.links.last()) else {
+            return unsupported("along no edges");
+        };
         if !self.closed && s < 0.0 {
             let (p, d) = self.on_link(0, 0.0)?;
             return Ok((p + d * s, d, 0));
         }
         if !self.closed && s > self.total {
-            let (p, d) = self.on_link(last, self.links[last].len)?;
+            let (p, d) = self.on_link(last, last_link.len)?;
             return Ok((p + d * (s - self.total), d, last));
         }
         let i = self.link_at(s);
-        let l = &self.links[i];
+        let l = self.link(i)?;
         let (p, d) = self.on_link(i, (s - l.s0).clamp(0.0, l.len))?;
         Ok((p, d, i))
     }
@@ -226,10 +269,10 @@ impl Roll<'_> {
         let n = self.links.len();
         let mut out = Vec::new();
         if self.closed || i > 0 {
-            out.extend(self.joints[(i + n - 1) % n][k].as_ref());
+            out.extend(self.joint((i + n - 1) % n, k));
         }
         if self.closed || i + 1 < n {
-            out.extend(self.joints[i][k].as_ref());
+            out.extend(self.joint(i, k));
         }
         out
     }
@@ -238,8 +281,8 @@ impl Roll<'_> {
     /// about the link that lies in its face, by the face's own trimmed domain. Where none does (past
     /// an open chain's end, or where the strip runs off its face) the ball rolls on the link's own
     /// face's surface.
-    fn foot(&self, i: usize, k: usize, q: Point3) -> (Point3, Vec3, FaceId) {
-        let own = self.links[i].faces[k];
+    fn foot(&self, i: usize, k: usize, q: Point3) -> Result<(Point3, Vec3, FaceId)> {
+        let own = *run::of_face(&self.link(i)?.faces, k);
         let near = self.near(i, k);
         let (p, nrm) = self.foot_on(own, q);
         let in_face = |f: FaceId, p: Point3| {
@@ -261,7 +304,7 @@ impl Roll<'_> {
         // With no other face on this side about the link, or a foot in the link's own face, that
         // is the contact: a foot lies inside at most one face.
         if far || in_face(own, p) {
-            return (p, nrm, own);
+            return Ok((p, nrm, own));
         }
         let mut faces = vec![own];
         for j in near {
@@ -283,23 +326,23 @@ impl Roll<'_> {
                 best = Some((d, p, nrm, f));
             }
         }
-        match best {
+        Ok(match best {
             Some((_, p, nrm, f)) => (p, nrm, f),
             None => (p, nrm, own),
-        }
+        })
     }
 
     /// The section at chain parameter `s`, starting Newton from `guess` or from the chain.
     fn section(&self, s: f64, guess: Option<Point3>) -> Result<Section> {
         let (e, along, i) = self.chain_at(s)?;
+        let faces = self.link(i)?.faces;
         let mut c = guess.unwrap_or_else(|| {
-            let n = outward(self.body, self.links[i].faces[0], e)
-                + outward(self.body, self.links[i].faces[1], e);
+            let n = outward(self.body, faces[0], e) + outward(self.body, faces[1], e);
             e + n * (self.side * self.radius)
         });
         for _ in 0..60 {
-            let (pa, na, _) = self.foot(i, 0, c);
-            let (pb, nb, _) = self.foot(i, 1, c);
+            let (pa, na, _) = self.foot(i, 0, c)?;
+            let (pb, nb, _) = self.foot(i, 1, c)?;
             let f = [
                 (c - pa).dot(na) - self.side * self.radius,
                 (c - pb).dot(nb) - self.side * self.radius,
@@ -309,9 +352,9 @@ impl Roll<'_> {
                 Error::Unsupported("a rolling-ball fillet whose faces are parallel".into())
             })?;
             c -= step;
-            if step.norm() <= 1e-3 * tol::LINEAR {
-                let (a, _, fa) = self.foot(i, 0, c);
-                let (b, _, fb) = self.foot(i, 1, c);
+            if step.norm() <= SETTLED * tol::LINEAR {
+                let (a, _, fa) = self.foot(i, 0, c)?;
+                let (b, _, fb) = self.foot(i, 1, c)?;
                 if a.dist(e) > 10.0 * self.radius || b.dist(e) > 10.0 * self.radius {
                     return unsupported("whose ball leaves the edge");
                 }
@@ -326,16 +369,16 @@ impl Roll<'_> {
     }
 
     /// Where, near the joint at the end of link `i`, side `k`'s contact crosses its junction.
-    #[allow(clippy::panic)] fn crossing(&self, i: usize, k: usize) -> Result<Option<f64>> {
-        let Some(j) = &self.joints[i][k] else {
+    fn crossing(&self, i: usize, k: usize) -> Result<Option<f64>> {
+        let Some(j) = self.joint(i, k) else {
             return Ok(None);
         };
         let n = self.links.len();
         let next = (i + 1) % n;
-        let at = self.links[next].s0 + if next == 0 { self.total } else { 0.0 };
+        let (here, there) = (self.link(i)?, self.link(next)?);
+        let at = there.s0 + if next == 0 { self.total } else { 0.0 };
         // Up to four radii either side of the joint, in each link's own parameter.
-        let speed = |li: usize, d: f64| -> f64 {
-            let l = &self.links[li];
+        let speed = |l: &Link, d: f64| -> f64 {
             let e = self.body.edge(l.edge);
             let t = if l.forward {
                 e.range.0 + d
@@ -345,14 +388,10 @@ impl Roll<'_> {
             e.curve
                 .as_ref()
                 .map_or(1.0, |c| c.d1(t).1.norm())
-                .max(1e-12)
+                .max(DEGENERATE)
         };
-        let back = self.links[i]
-            .len
-            .min(4.0 * self.radius / speed(i, self.links[i].len));
-        let fwd = self.links[next]
-            .len
-            .min(4.0 * self.radius / speed(next, 0.0));
+        let back = here.len.min(4.0 * self.radius / speed(here, here.len));
+        let fwd = there.len.min(4.0 * self.radius / speed(there, 0.0));
         let s = self.surface(j.before);
         let seam_u = s.project(j.at).x;
         // Zero where the contact reaches the junction: across a seam's parameter, or across the
@@ -361,12 +400,15 @@ impl Roll<'_> {
             let sec = self.section(t, guess)?;
             let d = if j.seam {
                 let up = s.u_period().unwrap_or(f64::INFINITY);
-                let u = s.project(sec.contact[k]).x;
+                let u = s.project(*run::of_face(&sec.contact, k)).x;
                 (u - seam_u + 0.5 * up).rem_euclid(up) - 0.5 * up
             } else {
                 // The foot on the face before the junction, across the junction curve from it.
                 let x = self.body.edge(j.edge);
-                let jc = x.curve.as_ref().unwrap_or_else(|| panic!("a junction has a curve"));
+                // a junction between two faces lies on a curve
+                let Some(jc) = x.curve.as_ref() else {
+                    return unsupported("whose junction has no curve");
+                };
                 let (p, _) = self.foot_on(j.before, sec.centre);
                 let tq = nearest_param(jc, p, x.range)?;
                 let (q, tj) = jc.d1(tq);
@@ -382,7 +424,7 @@ impl Roll<'_> {
             let t = at - back + (back + fwd) * m as f64 / steps as f64;
             let (d, c) = g(t, guess)?;
             guess = Some(c);
-            if d.abs() <= 1e-12 {
+            if d.abs() <= DEGENERATE {
                 return Ok(Some(t));
             }
             if let Some((tp, dp)) = prev {
@@ -411,7 +453,7 @@ impl Roll<'_> {
             return Ok(from);
         }
         let (mut a, mut ga) = (from, g0);
-        let (mut b, mut gb) = (from + 1e-3 * self.radius, 0.0);
+        let (mut b, mut gb) = (from + FIRST_STEP * self.radius, 0.0);
         gb = if b != a { g(b)? } else { gb };
         for _ in 0..40 {
             if gb == ga {
@@ -424,7 +466,7 @@ impl Roll<'_> {
             (a, ga) = (b, gb);
             b = c;
             gb = g(b)?;
-            if gb == 0.0 || (b - a).abs() <= 1e-14 * (1.0 + b.abs()) {
+            if gb == 0.0 || (b - a).abs() <= CONVERGED * (1.0 + b.abs()) {
                 return Ok(b);
             }
         }
@@ -471,7 +513,7 @@ fn bisect(mut lo: f64, mut hi: f64, glo: f64, g: impl Fn(f64) -> Result<f64>) ->
 /// `x` with `[r0; r1; r2]·x = f`, or `None` when the rows are dependent.
 fn solve3(r: [Vec3; 3], f: [f64; 3]) -> Option<Vec3> {
     let det = r[0].dot(r[1].cross(r[2]));
-    if det.abs() <= 1e-12 {
+    if det.abs() <= DEGENERATE {
         return None;
     }
     let (c0, c1, c2) = (r[1].cross(r[2]), r[2].cross(r[0]), r[0].cross(r[1]));
@@ -488,7 +530,7 @@ struct Segment {
     contact: [BSpline; 2],
 }
 
-#[allow(clippy::panic)] fn fit(roll: &Roll, a: f64, b: f64) -> Result<Segment> {
+fn fit(roll: &Roll, a: f64, b: f64) -> Result<Segment> {
     let link = roll.link_at(0.5 * (a + b));
     let mut guess = None;
     for &n in &SAMPLES {
@@ -499,33 +541,29 @@ struct Segment {
             guess = Some(s.centre);
             secs.push(s);
         }
-        guess = Some(secs[0].centre);
-        let mut rows: [Vec<Vec3>; 4] = Default::default();
+        guess = secs.first().map(|s| s.centre);
+        // the four rows: contact 0, the weighted middle, contact 1, and the weight
+        let (mut side0, mut middle, mut side1, mut weight) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for s in &secs {
             let (m, w) = s.arc(roll.radius)?;
-            rows[0].push(s.contact[0]);
-            rows[1].push(m * w);
-            rows[2].push(s.contact[1]);
-            rows[3].push(Vec3::new(w, 0.0, 0.0));
+            side0.push(s.contact[0]);
+            middle.push(m * w);
+            side1.push(s.contact[1]);
+            weight.push(Vec3::new(w, 0.0, 0.0));
         }
-        let splines: Vec<BSpline> = rows
-            .iter()
-            .map(|r| BSpline::interpolate_at(r, &params))
-            .collect::<Result<_>>()?;
-        let knots = splines[0].knots().to_vec();
-        let count = splines[0].control_points().len();
+        let [c0, c1, c2, c3] = [side0, middle, side1, weight].map(|r| BSpline::interpolate_at(&r, &params));
+        let (c0, c1, c2, c3) = (c0?, c1?, c2?, c3?);
+        let knots = c0.knots().to_vec();
+        let count = c0.control_points().len();
         let mut ctrl = Vec::with_capacity(3 * count);
         let mut weights = Vec::with_capacity(3 * count);
-        for i in 0..count {
-            let w = splines[3].control_points()[i].x;
+        let rows = c0.control_points().iter().zip(c1.control_points()).zip(c2.control_points()).zip(c3.control_points());
+        for (((&p0, &pm), &p1), wp) in rows {
+            let w = wp.x;
             if w <= 0.0 {
                 return unsupported("whose sections turn too fast to fit");
             }
-            ctrl.extend([
-                splines[0].control_points()[i],
-                splines[1].control_points()[i] / w,
-                splines[2].control_points()[i],
-            ]);
+            ctrl.extend([p0, pm / w, p1]);
             weights.extend([1.0, w, 1.0]);
         }
         let surface = NurbsSurface::new(
@@ -535,9 +573,9 @@ struct Segment {
             ctrl,
             Some(weights),
         )?;
-        let mid = roll.section(0.5 * (a + b), Some(secs[n / 2].centre))?;
+        let mid = roll.section(0.5 * (a + b), secs.get(n / 2).map(|s| s.centre))?;
         let mut worst = 0.0f64;
-        for (i, near) in secs[..n].iter().enumerate() {
+        for (i, near) in secs.iter().take(n).enumerate() {
             let t = a + (b - a) * (i as f64 + 0.5) / n as f64;
             let s = roll.section(t, Some(near.centre))?;
             if s.face != mid.face {
@@ -546,23 +584,19 @@ struct Segment {
             for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 worst = worst.max(surface.eval(t, v).dist(s.at(roll.radius, v)?));
             }
-            for (k, v) in [(0, 0.0), (1, 1.0)] {
+            for (face, v) in [(s.face[0], 0.0), (s.face[1], 1.0)] {
                 let p = surface.eval(t, v);
-                worst = worst.max(roll.foot_on(s.face[k], p).0.dist(p));
+                worst = worst.max(roll.foot_on(face, p).0.dist(p));
             }
         }
         if worst <= FIT * tol::LINEAR {
-            let mut it = splines.into_iter();
-            let c0 = it.next().unwrap_or_else(|| panic!("four splines"));
-            let _ = it.next();
-            let c1 = it.next().unwrap_or_else(|| panic!("four splines"));
             return Ok(Segment {
                 a,
                 b,
                 link,
                 face: mid.face,
                 surface,
-                contact: [c0, c1],
+                contact: [c0, c2],
             });
         }
     }
@@ -579,13 +613,13 @@ struct Trim {
 impl Trim {
     /// `s*` at `v`, read off the samples.
     fn s_at(&self, v: f64) -> f64 {
-        let k = self
-            .samples
-            .windows(2)
-            .position(|w| v <= w[1].0)
-            .unwrap_or(self.samples.len() - 2);
-        let ((v0, s0), (v1, s1)) = (self.samples[k], self.samples[k + 1]);
-        s0 + (s1 - s0) * (v - v0) / (v1 - v0)
+        // the first pair of samples reaching `v`, or the last pair; a trim has at least two
+        let pairs = || self.samples.windows(2);
+        let pair = pairs().find(|w| matches!(w, [_, (v1, _)] if v <= *v1)).or_else(|| pairs().last());
+        match pair {
+            Some(&[(v0, s0), (v1, s1)]) => s0 + (s1 - s0) * (v - v0) / (v1 - v0),
+            _ => self.samples.first().map_or(v, |x| x.1),
+        }
     }
 }
 
@@ -603,7 +637,7 @@ fn fit_trim(roll: &Roll, e: &End, from: f64) -> Result<Trim> {
         }
         let curve = BSpline::interpolate_at(&pts, &vs)?;
         let mut worst = 0.0f64;
-        for (i, &(_, near)) in samples[..n].iter().enumerate() {
+        for (i, &(_, near)) in samples.iter().take(n).enumerate() {
             let v = (i as f64 + 0.5) / n as f64;
             let s = roll.trim_at(e, v, near)?;
             let p = roll.section(s, None)?.at(roll.radius, v)?;
@@ -618,25 +652,25 @@ fn fit_trim(roll: &Roll, e: &End, from: f64) -> Result<Trim> {
 
 /// The picked edges as one chain run the way side 0's faces use them, closed or open, or `None`.
 fn chain(body: &Brep, picked: &[Picked]) -> Option<(Vec<Link>, bool)> {
-    let end_of = |i: usize| body.coedge_end(picked[i].coedges[0]);
-    let start_of = |i: usize| body.coedge_start(picked[i].coedges[0]);
+    let end_of = |i: usize| picked.get(i).map(|p| body.coedge_end(p.coedges[0]));
+    let start_of = |i: usize| picked.get(i).map(|p| body.coedge_start(p.coedges[0]));
     let first = (0..picked.len())
         .find(|&i| !(0..picked.len()).any(|j| end_of(j) == start_of(i)))
         .unwrap_or(0);
     let mut order = vec![first];
     let mut used = vec![false; picked.len()];
-    used[first] = true;
+    *used.get_mut(first)? = true;
     while order.len() < picked.len() {
         let v = end_of(*order.last()?);
-        let next = (0..picked.len()).find(|&j| !used[j] && start_of(j) == v)?;
-        used[next] = true;
+        let next = (0..picked.len()).find(|&j| used.get(j) == Some(&false) && start_of(j) == v)?;
+        *used.get_mut(next)? = true;
         order.push(next);
     }
-    let closed = end_of(*order.last()?) == start_of(order[0]);
+    let closed = end_of(*order.last()?) == start_of(*order.first()?);
     let mut s0 = 0.0;
     let mut links = Vec::with_capacity(order.len());
     for i in order {
-        let pk = &picked[i];
+        let pk = picked.get(i)?;
         let e = body.edge(pk.edge);
         let len = e.range.1 - e.range.0;
         links.push(Link {
@@ -672,7 +706,7 @@ impl Ord for OrderedF64 {
 
 /// The parameter of curve `c` nearest `p`: a line's or circle's in closed form (a circle's within
 /// a turn of `range`), any other's by sampling `range` and refining with Newton steps.
-#[allow(clippy::panic)] fn nearest_param(c: &Curve, p: Point3, range: (f64, f64)) -> Result<f64> {
+fn nearest_param(c: &Curve, p: Point3, range: (f64, f64)) -> Result<f64> {
     match c {
         Curve::Line(l) => Ok((p - l.origin).dot(l.dir)),
         Curve::Circle(ci) => {
@@ -686,19 +720,19 @@ impl Ord for OrderedF64 {
             let mut t = (0..=n)
                 .map(|i| range.0 + (range.1 - range.0) * i as f64 / n as f64)
                 .min_by(|&a, &b| c.eval(a).dist(p).total_cmp(&c.eval(b).dist(p)))
-                .unwrap_or_else(|| panic!("samples"));
+                .unwrap_or(range.0);
             for _ in 0..50 {
                 let (q, d) = c.d1(t);
-                let h = 1e-6 * (range.1 - range.0).max(1e-9);
+                let h = DIFF_STEP * (range.1 - range.0).max(LEAST_SPAN);
                 let d2 = (c.d1(t + h).1 - c.d1(t - h).1) / (2.0 * h);
                 let f = (q - p).dot(d);
                 let df = d.dot(d) + (q - p).dot(d2);
-                if df.abs() <= 1e-300 {
+                if df.abs() <= 1e-300 { // tol: guards a division by zero
                     break;
                 }
                 let step = f / df;
                 t = (t - step).clamp(range.0, range.1);
-                if step.abs() <= 1e-15 * (1.0 + t.abs()) {
+                if step.abs() <= SETTLED_PARAM * (1.0 + t.abs()) {
                     break;
                 }
             }

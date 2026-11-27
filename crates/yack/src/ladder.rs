@@ -23,8 +23,8 @@ pub(crate) struct Rung<'a> {
 
 /// Ops cadrs runs first until the bake-off (doc/donors.md) orders them; springrep first elsewhere.
 /// (chamfer went back to springrep first: cadrs-first lost 77 chamfer-prism conformance cases.)
-const CADRS_FIRST: &[&str] =
-    &["swept", "delete_faces", "move_faces", "offset_faces", "shell", "shell_outward", "draft", "fillet_variable"];
+/// (delete_faces, shell and shell_outward went springrep first: doc/donors.md.)
+const CADRS_FIRST: &[&str] = &["swept", "move_faces", "offset_faces", "draft"];
 
 
 /// Whether cadrs leads `op`'s ladder.

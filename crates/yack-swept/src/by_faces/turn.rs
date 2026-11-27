@@ -18,7 +18,7 @@
 
 use yack_base::kernel::{Error, Result};
 use yack_build::build::PartFace;
-use yack_geom::{Curve, Cylinder, Plane, Revolution, Surface};
+use yack_geom::{Cone, Curve, Cylinder, Plane, Revolution, Sphere, Surface, Torus};
 use yack_math::kernel::{Frame, Point3, Transform, Vec3};
 
 use super::{Cut, Stand, middle_param};
@@ -65,7 +65,9 @@ pub(super) fn stand(face: &PartFace, origin: Point3, axis: Vec3) -> Result<Stand
 /// seam-safe for the piece from `ends.0` to `ends.1`, `reversed` whether the leading face's loop
 /// runs against it. A straight piece along the axis sweeps a cylinder, one square to it a plane;
 /// anything else its surface of revolution. The surface's own seam (where its turn parameter
-/// starts) goes opposite the side, so no side face meets it.
+/// starts) goes opposite the side, so no side face meets it; on a whole turn (`angle` = `TAU`)
+/// the side meets itself all the way round, its seam is the piece, and the surface is the
+/// piece's revolution whatever the piece.
 pub(super) fn side(
     curve: &Curve,
     ends: (Point3, Point3),
@@ -82,9 +84,11 @@ pub(super) fn side(
         return Err(Error::Unsupported("by faces: an edge that runs along its turn".into()));
     };
     let foot = |p: Point3| origin + axis * axis.dot(p - origin);
+    let whole = angle >= std::f64::consts::TAU;
     // Half way round the turn, and then half a turn on: off the side.
     let away = Transform::rotation(origin, axis, 0.5 * angle + std::f64::consts::PI);
     let surface = match curve {
+        _ if whole => whole_side(curve, ends, mid, origin, axis)?,
         Curve::Line(l) if l.dir.cross(axis).norm() <= yack_tol::ANGULAR => {
             let radial = mid - foot(mid);
             let x = away.vector(radial);
@@ -105,4 +109,77 @@ pub(super) fn side(
     let uv = surface.project(mid);
     let natural = surface.normal(uv.x, uv.y);
     Ok((surface, natural.dot(out) < 0.0))
+}
+
+/// The surface a piece sweeps going all the way round, its seam (where its turn parameter starts)
+/// on the piece: the quadric or torus of revolution it is where it is one, else its surface of
+/// revolution. A straight piece along the axis sweeps a cylinder, one in a plane through the axis
+/// a cone, one square to the axis a plane (whose side is an annulus or a disc: see
+/// `super::annulus`); a circle in a plane through the axis a sphere (centred on the axis) or a
+/// torus.
+fn whole_side(
+    curve: &Curve,
+    ends: (Point3, Point3),
+    mid: Point3,
+    origin: Point3,
+    axis: Vec3,
+) -> Result<Surface> {
+    let foot = |p: Point3| origin + axis * axis.dot(p - origin);
+    let radial = |p: Point3| p - foot(p);
+    let revolution =
+        || Surface::Revolution(Box::new(Revolution { curve: curve.clone(), origin, axis }));
+    Ok(match curve {
+        Curve::Line(l) => {
+            let in_meridian = l.dir.cross(axis).dot(mid - origin).abs() <= yack_tol::LINEAR;
+            if l.dir.cross(axis).norm() <= yack_tol::ANGULAR {
+                Surface::Cylinder(Cylinder {
+                    frame: Frame::new(foot(mid), axis, radial(mid))?,
+                    radius: radial(mid).norm(),
+                })
+            } else if l.dir.dot(axis).abs() <= yack_tol::ANGULAR {
+                Surface::Plane(Plane { frame: Frame::new(mid, axis, radial(mid))? })
+            } else if in_meridian {
+                // From the end lower along the axis, so the generator runs up it.
+                let (p1, p2) = if (ends.1 - ends.0).dot(axis) >= 0.0 {
+                    (ends.0, ends.1)
+                } else {
+                    (ends.1, ends.0)
+                };
+                let rise = (p2 - p1).dot(axis);
+                let spread = radial(p2).norm() - radial(p1).norm();
+                let x = if radial(p1).norm() > yack_tol::LINEAR { radial(p1) } else { radial(p2) };
+                Surface::Cone(Cone {
+                    frame: Frame::new(foot(p1), axis, x)?,
+                    radius: radial(p1).norm(),
+                    half_angle: spread.atan2(rise),
+                })
+            } else {
+                revolution()
+            }
+        }
+        Curve::Circle(c) => {
+            let n = c.frame.z;
+            let centre = c.frame.origin;
+            let in_meridian = n.dot(axis).abs() <= yack_tol::ANGULAR
+                && n.dot(centre - origin).abs() <= yack_tol::LINEAR;
+            let off = radial(centre).norm();
+            if !in_meridian {
+                revolution()
+            } else if off <= yack_tol::LINEAR {
+                Surface::Sphere(Sphere {
+                    frame: Frame::new(centre, axis, radial(mid))?,
+                    radius: c.radius,
+                })
+            } else if c.radius < off {
+                Surface::Torus(Torus {
+                    frame: Frame::new(foot(centre), axis, radial(centre))?,
+                    major: off,
+                    minor: c.radius,
+                })
+            } else {
+                revolution()
+            }
+        }
+        _ => revolution(),
+    })
 }

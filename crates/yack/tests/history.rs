@@ -463,3 +463,225 @@ fn the_rounded_shell_rungs_name_their_faces_for_history() -> Result<()> {
     assert!(built > 0, "neither rounded-shell rung built the open box");
     Ok(())
 }
+
+
+/// spindle_torus runs yack-build's rung first; a horn torus (tube radius equal to the ring's), which
+/// that rung declines, is still answered, by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn a_horn_torus_falls_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::built_by;
+    let spindle = spindle_torus(&Frame::WORLD, 3.0, 5.0)?;
+    assert_eq!(built_by(&spindle), "native");
+    let horn = spindle_torus(&Frame::WORLD, 5.0, 5.0)?;
+    assert_eq!(built_by(&horn), "cadrs");
+    assert!(horn.check().is_empty() && horn.volume() > 0.0);
+    Ok(())
+}
+
+
+/// delete_faces runs springrep first: a drilled block's hole deleted on that rung, every face with a
+/// History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_delete_faces_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let drilled = b.difference(&cylinder(&Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0)?)?;
+    let wall = drilled.face_at([3.0, 5.0, 5.0])?;
+    force_op("delete_faces", Engine::Springrep);
+    let made = drilled.delete_faces(&[wall]);
+    force(Engine::Both);
+    let filled = made?;
+    assert_eq!(built_by(&filled), "springrep");
+    let found = audit("delete_faces", &[&drilled], &filled);
+    assert!(found.is_empty(), "delete_faces: {found:?}");
+    Ok(())
+}
+
+
+/// thicken with sharp joins runs springrep's mitre first: the two sharp bench inputs (an open box
+/// grown out, an angle bracket) on the native path, every face with a History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_sharp_thicken_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let c = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let tray = c.faces_at(&[[5.0, 5.0, 0.0], [0.0, 5.0, 5.0], [10.0, 5.0, 5.0], [5.0, 0.0, 5.0], [5.0, 10.0, 5.0]])?;
+    let b = block(&Frame::WORLD, [10.0, 8.0, 10.0])?;
+    let legs = b.faces_at(&[[5.0, 4.0, 0.0], [0.0, 4.0, 5.0]])?;
+    force_op("thicken", Engine::Springrep);
+    let made = [(&c, c.thicken(&tray, 1.0, Join::Sharp)), (&b, b.thicken(&legs, 1.0, Join::Sharp))];
+    force(Engine::Both);
+    for (input, out) in made {
+        let s = out?;
+        assert_eq!(built_by(&s), "springrep");
+        let found = audit("thicken sharp", &[input], &s);
+        assert!(found.is_empty(), "thicken sharp: {found:?}");
+        eprintln!("thicken sharp: {} faces, every one with an origin", s.faces().len());
+    }
+    Ok(())
+}
+
+
+/// shell runs springrep first: an open box and an open cylinder shelled on that rung, every face
+/// with a History origin (invariant 3); a sphere open at a cap, which springrep declines, is
+/// answered by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_shell_rungs_name_their_faces_and_fall_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let b = block(&Frame::WORLD, [10.0, 8.0, 6.0])?;
+    let lid = b.face_at([5.0, 4.0, 6.0])?;
+    let c = cylinder(&Frame::WORLD, 5.0, 10.0)?;
+    let cap = c.face_at([1.0, 1.0, 10.0])?;
+    force_op("shell", Engine::Springrep);
+    let inward = [(&b, b.shell(&[lid], 1.0)), (&c, c.shell(&[cap], 1.0))];
+    force(Engine::Both);
+    for (input, out) in inward {
+        let s = out?;
+        assert_eq!(built_by(&s), "springrep");
+        let found = audit("shell", &[input], &s);
+        assert!(found.is_empty(), "shell: {found:?}");
+        eprintln!("shell: {} faces, every one with an origin", s.faces().len());
+    }
+    let cut = sphere(&Frame::WORLD, 5.0)?.split(&Plane::new([0.0, 0.0, 3.0], [0.0, 0.0, -1.0])?)?.front;
+    let domed = cut.shell(&[cut.face_at([1.0, 1.0, 3.0])?], 1.0)?;
+    assert_eq!(built_by(&domed), "cadrs");
+    assert!(domed.check().is_empty() && domed.volume() > 0.0);
+    Ok(())
+}
+
+
+/// springrep's shell rung names every face of shelled frustums (open at both ends, sealed below the
+/// opening, tall), a shelled rounded box and an open box shelled outward (invariant 3): the inputs
+/// of the bench cases it once left faces unnamed on.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_shell_rung_names_every_face_of_frustums_and_rounded_boxes() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let f = cone(&Frame::WORLD, 6.0, 3.0, 4.0)?;
+    let (bottom, top) = (f.face_at([1.0, 1.0, 0.0])?, f.face_at([1.0, 1.0, 4.0])?);
+    let tall = cone(&Frame::WORLD, 7.0, 1.0, 8.0)?;
+    let tall_top = tall.face_at([0.2, 0.2, 8.0])?;
+    let b = block(&Frame::WORLD, [20.0, 14.0, 10.0])?;
+    let corners = [[0.0, 0.0, 5.0], [20.0, 0.0, 5.0], [20.0, 14.0, 5.0], [0.0, 14.0, 5.0]];
+    let r = b.fillet(&corners.iter().map(|&p| b.edge_at(p)).collect::<Result<Vec<_>>>()?, 2.0)?;
+    let r_top = r.face_at([10.0, 7.0, 10.0])?;
+    force_op("shell", Engine::Springrep);
+    let made = [
+        (&f, f.shell(&[bottom, top], 2.7)),
+        (&f, f.shell(&[top], 2.7)),
+        (&tall, tall.shell(&[tall_top], 2.0)),
+        (&r, r.shell(&[r_top], 2.0)),
+    ];
+    let c = block(&Frame::WORLD, [10.0, 8.0, 6.0])?;
+    force_op("shell_outward", Engine::Springrep);
+    let outward = c.shell_outward(&[c.face_at([5.0, 4.0, 6.0])?], 1.0);
+    force(Engine::Both);
+    let made = made.into_iter().chain([(&c, outward)]);
+    for (input, out) in made {
+        let s = out?;
+        assert_eq!(built_by(&s), "springrep");
+        let found = audit("shell", &[input], &s);
+        assert!(found.is_empty(), "shell: {found:?}");
+    }
+    Ok(())
+}
+
+
+/// thicken with round joins: yack-edit's thicken_sheet rung (after cadrs, as "native") under
+/// `force_op`: an angle bracket's two legs grown out and joined round, every face with a History
+/// origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_round_thicken_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let b = block(&Frame::WORLD, [10.0, 8.0, 10.0])?;
+    let legs = b.faces_at(&[[5.0, 4.0, 0.0], [0.0, 4.0, 5.0]])?;
+    force_op("thicken", Engine::Native);
+    let made = b.thicken(&legs, 1.0, Join::Round);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    let found = audit("thicken round", &[&b], &s);
+    assert!(found.is_empty(), "thicken round: {found:?}");
+    eprintln!("thicken round: {} faces, every one with an origin", s.faces().len());
+    Ok(())
+}
+
+
+/// fillet_variable runs yack-edit's exact round first: a cube edge rounded from 1 to 2 under
+/// `force_op(.., Native)`, every face with a History origin (invariant 3); a cylinder's rim, not
+/// straight, which that rung declines, is answered by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_variable_round_names_its_faces_and_falls_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let cube = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let edge = cube.edge_at([10.0, 10.0, 5.0])?;
+    force_op("fillet_variable", Engine::Native);
+    let made = cube.fillet_variable(edge, [10.0, 10.0, 0.0], 1.0, 2.0);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    let found = audit("fillet_variable", &[&cube], &s);
+    assert!(found.is_empty(), "fillet_variable: {found:?}");
+    assert_eq!(built_by(&cube.fillet_variable(edge, [10.0, 10.0, 0.0], 1.0, 2.0)?), "native");
+    let c = cylinder(&Frame::WORLD, 5.0, 10.0)?;
+    let rim = c.edge_at([5.0, 0.0, 10.0])?;
+    let r = c.fillet_variable(rim, [5.0, 0.0, 10.0], 1.0, 2.0)?;
+    assert_eq!(built_by(&r), "cadrs");
+    assert!(r.check().is_empty() && r.volume() > 0.0);
+    Ok(())
+}
+
+
+/// chamfer_two's native turned-rim rung (after springrep, before cadrs): a hemisphere's rim and a
+/// lens's rim bevelled by two setbacks under `force_op(.., Native)`, every face with a History origin
+/// (invariant 3), and the default ladder reaching that rung where springrep declines.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_turned_rim_chamfer_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let hemi = sphere(&Frame::WORLD, 5.0)?.split(&Plane::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0])?)?.front;
+    let (rim, flat) = (hemi.edge_at([0.0, 5.0, 0.0])?, hemi.face_at([1.0, 1.0, 0.0])?);
+    let lens = sphere(&Frame::at([0.0, 0.0, 3.0]), 5.0)?.intersection(&sphere(&Frame::at([0.0, 0.0, -3.0]), 5.0)?)?;
+    let (seam, cap) = (lens.edge_at([0.0, 4.0, 0.0])?, lens.face_at([0.0, 3.0, 1.0])?);
+    force_op("chamfer_two", Engine::Native);
+    let made = [(&hemi, hemi.chamfer_two(rim, flat, 2.0, 1.0)), (&lens, lens.chamfer_two(seam, cap, 2.0, 1.0))];
+    force(Engine::Both);
+    for (input, out) in made {
+        let s = out?;
+        assert_eq!(built_by(&s), "native");
+        let found = audit("chamfer_two", &[input], &s);
+        assert!(found.is_empty(), "chamfer_two: {found:?}");
+        eprintln!("chamfer_two: {} faces, every one with an origin", s.faces().len());
+    }
+    assert_eq!(built_by(&hemi.chamfer_two(rim, flat, 2.0, 1.0)?), "native");
+    Ok(())
+}
+
+
+/// nurbs_solid's native rung (yack-build's closed net, after cadrs) under `force_op`: the rational
+/// quadratic NURBS sphere of radius 5, its one face `side` with a History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_nurbs_solid_rung_names_its_face_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let ring = [[1., 0.], [1., 1.], [0., 1.], [-1., 1.], [-1., 0.], [-1., -1.], [0., -1.], [1., -1.], [1., 0.]];
+    let arc = [[0., -5.], [5., -5.], [5., 0.], [5., 5.], [0., 5.]];
+    let net: Vec<Vec<Point3>> = ring.iter().map(|&[x, y]| arc.iter().map(|&[r, z]| Point3::new(r * x, r * y, z)).collect()).collect();
+    let wt = [1.0, std::f64::consts::FRAC_1_SQRT_2, 0.5];
+    let w: Vec<Vec<f64>> = (0..9usize).map(|i| (0..5usize).map(|j| wt[i % 2 + j % 2]).collect()).collect();
+    let (ku, kv) = ([0., 0., 0., 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1., 1., 1.], [0., 0., 0., 0.5, 0.5, 1., 1., 1.]);
+    force_op("nurbs_solid", Engine::Native);
+    let made = nurbs_solid(&Frame::WORLD, [2, 2], [&ku, &kv], &net, Some(&w));
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    let found = audit("nurbs_solid", &[], &s);
+    assert!(found.is_empty(), "nurbs_solid: {found:?}");
+    eprintln!("nurbs_solid: {} faces, every one with an origin", s.faces().len());
+    Ok(())
+}

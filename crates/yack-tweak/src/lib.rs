@@ -144,11 +144,13 @@ fn near_uv(s: &Surface, p: Point3, last: Option<Vec2>) -> Vec2 {
 mod draft;
 mod offset;
 mod planes;
+mod rounds;
 mod surfaces;
 mod through;
 
 pub use draft::draft;
 pub use offset::{offset_faces, offset_followed, offset_surface};
+pub use rounds::drop_vanishing_rounds;
 pub use surfaces::{move_faces, move_faces_by, move_faces_pinned};
 
 #[cfg(test)]

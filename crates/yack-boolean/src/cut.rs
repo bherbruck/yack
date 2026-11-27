@@ -19,6 +19,16 @@ const REGION_SLACK: f64 = 1e-3; // tol: a share of the boxes' size, not a featur
 /// See [`REGION_SLACK`].
 const REGION_PAD: f64 = 1e-4; // tol: slack on a search box, not a tolerance
 
+/// Where stretch `t0..t1` of `curve`, whose two ends were made one vertex `at` by another curve,
+/// is held to that vertex: the end nearer it, if the stretch is no longer than `reach` (the
+/// vertices' distance and tolerance) at its ends and its middle. A longer stretch is a piece of its
+/// own.
+fn merged_stretch(curve: &Curve, (t0, t1): (f64, f64), at: Point3, reach: f64) -> Option<f64> {
+    let (from, to) = (curve.eval(t0), curve.eval(t1));
+    (from.dist(to) <= reach && from.dist(curve.eval(0.5 * (t0 + t1))) <= reach)
+        .then(|| if from.dist(at) <= to.dist(at) { t0 } else { t1 })
+}
+
 /// The root of `i` in the union-find `parent`, every step on the way pointed straight at it.
 fn find(parent: &mut [usize], i: usize) -> usize {
     let mut root = i;
@@ -419,7 +429,15 @@ impl<'a> Work<'a> {
                 };
                 let gap = pr.dist(pv) + tv;
                 if gap > tr {
-                    let held = gap.min(self.cap);
+                    // A grazing meeting is known only to its reach, as where a curve passes one;
+                    // and a vertex a curve already grew keeps what it has.
+                    let reach = [r, v]
+                        .into_iter()
+                        .filter_map(|m| self.meetings.get(&m))
+                        .flatten()
+                        .map(|m| m.2)
+                        .fold(0.0, f64::max);
+                    let held = tr.max(gap.min(self.cap.max(reach)));
                     if let Some(t) = self.vtol.get_mut(r) {
                         *t = held;
                     }
@@ -430,13 +448,40 @@ impl<'a> Work<'a> {
                 }
             }
         }
-        for ((bi, ts, vs), short) in plans.into_iter().zip(shorts) {
-            let vs: Vec<usize> = vs.into_iter().map(|v| root(&mut parent, v)).collect();
+        for ((bi, mut ts, met), short) in plans.into_iter().zip(shorts) {
+            let vs: Vec<usize> = met.iter().map(|&v| root(&mut parent, v)).collect();
+            // Two vertices that another curve made one may lie over the tolerance apart along this
+            // one. The piece between them, no longer than they are apart, would join the vertex to
+            // itself: the curve passes the vertex once, where it comes nearest.
+            let curve = self.bases.get(bi).and_then(|b| b.curve.as_ref());
+            for k in 0..ts.len().saturating_sub(1) {
+                let (Some(&a), Some(&b), Some(&va), Some(&vb), Some(&is_short), Some(curve)) =
+                    (met.get(k), met.get(k + 1), vs.get(k), vs.get(k + 1), short.get(k), curve)
+                else {
+                    continue;
+                };
+                if a == b || va != vb || is_short {
+                    continue;
+                }
+                let (Some(&pa), Some(&pb), Some(&ta), Some(&tb), Some(&at), Some(&t0), Some(&t1)) =
+                    (self.pool.get(a), self.pool.get(b), self.vtol.get(a), self.vtol.get(b), self.pool.get(va), ts.get(k), ts.get(k + 1))
+                else {
+                    continue;
+                };
+                let reach = pa.dist(pb) + tol::between(ta, tb);
+                if let Some(t) = merged_stretch(curve, (t0, t1), at, reach) {
+                    for end in [k, k + 1] {
+                        if let Some(slot) = ts.get_mut(end) {
+                            *slot = t;
+                        }
+                    }
+                }
+            }
             for ((tw, vw), &is_short) in ts.windows(2).zip(vs.windows(2)).zip(&short) {
                 let (&[t0, t1], &[v0, v1]) = (tw, vw) else {
                     continue;
                 };
-                if v0 == v1 && is_short {
+                if v0 == v1 && (is_short || t0 == t1) {
                     continue;
                 }
                 self.add_piece(bi, (t0, t1), v0, v1);
@@ -578,5 +623,33 @@ impl<'a> Work<'a> {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Line;
+
+    fn along_x() -> Curve {
+        Curve::Line(Line { origin: Vec3::ZERO, dir: Vec3::X })
+    }
+
+    #[test]
+    fn a_stretch_between_two_merged_vertices_is_held_to_the_end_nearer_the_vertex() {
+        let reach = 3.0 * tol::LINEAR;
+        // Ends 2 tolerances apart, merged at a point a hair from the second end.
+        let (t0, t1) = (0.0, 2.0 * tol::LINEAR);
+        let at = Vec3::new(1.9 * tol::LINEAR, 0.0, 0.0);
+        assert_eq!(merged_stretch(&along_x(), (t0, t1), at, reach), Some(t1));
+        let at = Vec3::new(0.1 * tol::LINEAR, 0.0, 0.0);
+        assert_eq!(merged_stretch(&along_x(), (t0, t1), at, reach), Some(t0));
+    }
+
+    #[test]
+    fn a_stretch_longer_than_the_vertices_reach_stays_a_piece_of_its_own() {
+        let reach = 3.0 * tol::LINEAR;
+        let (t0, t1) = (0.0, 4.0 * tol::LINEAR);
+        assert_eq!(merged_stretch(&along_x(), (t0, t1), Vec3::ZERO, reach), None);
     }
 }

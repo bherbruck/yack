@@ -1,7 +1,8 @@
 // yack: A move of faces followed from where they are to where they go, its topology changing where a
 // Adapted from springrep@a03e8a1 src/edit/tweak/through.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from edit/tweak/through.rs to tweak/through.rs (M2.4, T6); paths only; then to yack-tweak (M3 W7), paths and visibility only;
-// checked access, and a collapse that cannot read its own tables declines (hardening T2).
+// checked access, and a collapse that cannot read its own tables declines (hardening T2); a face folded
+// flat onto its own edges is taken out (draft arms closing, w-h1).
 //! A move of faces followed from where they are to where they go, its topology changing where a
 //! face closes on the way: walls drafted until they meet close over the top between them, a step
 //! raised level with the top closes the riser, and a round offset past its radius closes into the
@@ -239,12 +240,33 @@ fn collapse(b: &Brep, eps: f64) -> Option<(Brep, Vec<Option<FaceId>>)> {
         s.sort_unstable();
         s
     };
-    // No boundary, or a strip along one edge.
+    // Whether a face's boundary changed here: an edge of it closed or run together with another.
+    let touched: Vec<bool> = b
+        .face_ids()
+        .map(|f| {
+            b.face(f).loops.iter().any(|&lp| {
+                b.lp(lp).coedges.iter().any(|&c| {
+                    let e = b.coedge(c).edge.index();
+                    into.get(e).copied().flatten() != Some((e, false))
+                })
+            })
+        })
+        .collect();
+    // No boundary, a strip along one edge, or, where its boundary changed, a face folded flat on
+    // itself: every edge it has left it runs along twice, there and back (the top of an arm whose
+    // two sides drafted until they met, now the ridge between them).
     let mut gone: Vec<bool> = loops
         .iter()
-        .map(|l| {
+        .zip(&touched)
+        .map(|(l, &touched)| {
             let es = edge_set(l);
-            es.is_empty() || (matches!(es.as_slice(), [a, c] if a == c) && l.len() == 1)
+            es.is_empty()
+                || (matches!(es.as_slice(), [a, c] if a == c) && l.len() == 1)
+                || (touched && es.len() % 2 == 0 && es.chunks(2).all(|p| matches!(p, [a, c] if a == c)) && {
+                    let mut once = es.clone();
+                    once.dedup();
+                    once.len() * 2 == es.len()
+                })
         })
         .collect();
     // Faces face to face: the same edges, one lying on the other.

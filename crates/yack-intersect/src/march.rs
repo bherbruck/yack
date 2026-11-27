@@ -581,8 +581,12 @@ fn drop_twin_loops(branches: &mut Vec<Branch>, h_max: f64) {
     }
 }
 
-/// The deepest the surfaces part inside a closed branch: the gap from `a` to `b` midway between
-/// each point and the nearest point of the far half of the loop.
+/// The deepest the surfaces part inside a closed branch: the gap from each to the other midway
+/// between each point and the nearest point of the far half of the loop. Read from one surface
+/// alone it is nothing wherever that surface stands square to the loop's chords (an ellipsoid at
+/// its equator, a lofted skin at a level section): every chord point projects back onto the loop.
+/// Two surfaces that cross cannot both stand square to the chords, so one of the two shows the
+/// depth, and a true lens still reads within the tolerance both ways.
 fn lens_depth(a: &Surface, b: &Surface, br: &Branch) -> f64 {
     let n = br.points.len();
     let mut deepest: f64 = 0.0;
@@ -599,12 +603,15 @@ fn lens_depth(a: &Surface, b: &Surface, br: &Branch) -> f64 {
         let Some((_, &far)) = across else {
             continue;
         };
-        for f in [0.25, 0.5, 0.75] {
-            let x = p.lerp(far, f);
-            let ua = a.project_near(x, uv_a);
-            let q = a.eval(ua.x, ua.y);
-            let ub = b.project_near(q, uv_b);
-            deepest = deepest.max((q - b.eval(ub.x, ub.y)).dot(b.normal(ub.x, ub.y)).abs());
+        for (from, to, hint_from, hint_to) in [(a, b, uv_a, uv_b), (b, a, uv_b, uv_a)] {
+            for f in [0.25, 0.5, 0.75] {
+                let x = p.lerp(far, f);
+                let u_from = from.project_near(x, hint_from);
+                let q = from.eval(u_from.x, u_from.y);
+                let u_to = to.project_near(q, hint_to);
+                let gap = (q - to.eval(u_to.x, u_to.y)).dot(to.normal(u_to.x, u_to.y)).abs();
+                deepest = deepest.max(gap);
+            }
         }
     }
     deepest
@@ -721,6 +728,7 @@ mod tests {
     use super::*;
     use crate::csi::signed_distance;
     use crate::geom::Cylinder;
+    use crate::geom::Plane;
     use crate::geom::Torus;
     use crate::math::Frame;
 
@@ -745,6 +753,30 @@ mod tests {
                 let p = c.curve.eval(t);
                 assert!(signed_distance(&a, p).abs() < 1e-7);
                 assert!(signed_distance(&b, p).abs() < 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn a_loop_on_a_surface_square_to_the_other_is_a_crossing_whichever_is_first() {
+        // A rod of radius 3 cut across by the plane z = 2: every point of the disk is nearest the
+        // rod on its rim, so the gap read from the plane to the rod is nothing, yet the disk's
+        // middle is 3 from the rod. The loop is the circle of radius 3 at z = 2, either way round.
+        let rod = Surface::Cylinder(Cylinder { frame: Frame::WORLD, radius: 3.0 });
+        let across = Surface::Plane(Plane {
+            frame: Frame::new(Vec3::new(0.0, 0.0, 2.0), Vec3::Z, Vec3::X).unwrap(),
+        });
+        let region = Aabb { min: Vec3::new(-4.0, -4.0, 1.0), max: Vec3::new(4.0, 4.0, 3.0) };
+        let seeds = [Vec3::new(3.0, 0.0, 2.0)];
+        for (a, b) in [(&rod, &across), (&across, &rod)] {
+            let curves = trace(a, b, &region, &seeds).unwrap().0;
+            assert_eq!(curves.len(), 1);
+            let c = &curves[0];
+            assert!(c.closed);
+            for i in 0..50 {
+                let t = c.range.0 + (c.range.1 - c.range.0) * i as f64 / 50.0;
+                let p = c.curve.eval(t);
+                assert!((p.z - 2.0).abs() < 1e-7 && (p.x.hypot(p.y) - 3.0).abs() < 1e-7);
             }
         }
     }

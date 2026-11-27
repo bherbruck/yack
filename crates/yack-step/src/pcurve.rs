@@ -6,7 +6,7 @@
 //! surface's parameter range, at equal parameters, so a reader takes it only where it holds and
 //! projects the edge everywhere else.
 // Step 1 (measure-only): only the reader's probe calls these until topology takes the pcurves.
-#![cfg_attr(not(test), allow(dead_code))]
+#![allow(dead_code)]
 
 use yack_p21::{Entity, Param};
 

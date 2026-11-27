@@ -54,9 +54,14 @@ pub(crate) fn creased_edges(b: &Brep, convex: bool) -> Vec<EdgeId> {
 /// moves `d` inward; where two faces meet concavely the moved ones part, and the erosion's boundary
 /// there is a cylinder of radius `d` about the old edge, the moved solid's concave edge rounded
 /// at `d` (a ball's patch at each concave corner). Convex edges and corners stay sharp: their
-/// moved faces meet. Declines where a round face would collapse (a rod, ball or tube no thicker
-/// than `d`), which changes the solid's topology.
+/// moved faces meet. A round of radius at most `d` vanishes: the erosion there is the erosion of
+/// the edge it rounded, so it is taken out first, its neighbours meeting in that edge. Declines
+/// where another round face would collapse (a rod, ball or tube no thicker than `d`), which
+/// changes the solid's topology.
 pub(crate) fn offset_inward(s: &Brep, d: f64, feature: &str) -> Result<Brep> {
+    let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, -d)).collect();
+    let sharp = crate::tweak::drop_vanishing_rounds(s, &by)?.map(|(b, _)| b);
+    let s = sharp.as_ref().unwrap_or(s);
     if topo::local::radius_collapses(s, None, -d, false) {
         return Err(Error::Unsupported(
             "an inward offset that collapses a round face (a rod, ball or tube no thicker than the offset)".into(),
@@ -90,6 +95,19 @@ pub(crate) fn offset_inward(s: &Brep, d: f64, feature: &str) -> Result<Brep> {
         ));
     }
     blend::fillet_edges(&moved, &edges, d, feature).map_err(declined)
+}
+
+/// [`offset_faces`] with the rounds the move goes past taken out first (a convex one moved in, a
+/// concave one out, past its radius; see [`crate::tweak::drop_vanishing_rounds`]): their
+/// neighbours meet in the edge they rounded, which then moves as any edge does.
+pub(crate) fn offset_faces_past_rounds(s: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Brep> {
+    match crate::tweak::drop_vanishing_rounds(s, by)? {
+        None => offset_faces(s, by),
+        Some((sharp, map)) => {
+            let by: BTreeMap<FaceId, f64> = by.iter().filter_map(|(f, &d)| Some((*map.get(f)?, d))).collect();
+            offset_faces(&sharp, &by)
+        }
+    }
 }
 
 /// Whether `s` has a flat wall no thicker than `2d`: two plane faces turned apart with the
@@ -225,6 +243,110 @@ mod tests {
         assert!(!thin_wall(&bell, 0.5));
         let ball = crate::primitive::sphere(&Frame::WORLD, 2.0, "b").unwrap();
         assert!(bends_tighter_than(&ball, 2.5) && !bends_tighter_than(&ball, 1.5));
+    }
+
+    /// `s` with its convex edges rounded `r`.
+    fn rounded(s: Brep, r: f64) -> Brep {
+        let e: Vec<EdgeId> = crate::convex_edges(&s).unwrap();
+        blend::fillet_edges(&s, &e, r, "r").unwrap()
+    }
+
+    #[test]
+    fn an_inward_offset_past_a_puck_s_rounds_is_the_sharp_puck_s() {
+        // A puck of radius 6, 10 tall, both rims rounded 2: offset −3 (past the rounds) is the
+        // puck of radius 3, 4 tall; offset −2 (just to them) the puck of radius 4, 6 tall.
+        let puck = rounded(crate::primitive::cylinder(&Frame::WORLD, 6.0, 10.0, "c").unwrap(), 2.0);
+        let past = crate::offset(&puck, -3.0, "o").unwrap();
+        close(measure::volume(&past), PI * 9.0 * 4.0);
+        close(measure::area(&past), 2.0 * PI * 9.0 + 2.0 * PI * 3.0 * 4.0);
+        let by = crate::offset(&puck, -2.0, "o").unwrap();
+        close(measure::volume(&by), PI * 16.0 * 6.0);
+        close(measure::area(&by), 2.0 * PI * 16.0 + 2.0 * PI * 4.0 * 6.0);
+    }
+
+    #[test]
+    fn an_inward_offset_past_a_hemisphere_s_round_is_a_cap() {
+        // A hemisphere of radius 5, its rim rounded 1, offset −1.5: the ball of radius 3.5 above
+        // the plane 1.5 up, a cap 2 high, V = πh²(3R − h)/3, A = 2πRh + π(R² − (R − h)²).
+        let ball = crate::primitive::sphere(&Frame::WORLD, 5.0, "b").unwrap();
+        let below = crate::primitive::block(&Frame::WORLD.translated(crate::math::Vec3::new(-6.0, -6.0, -6.0)), crate::math::Vec3::new(12.0, 12.0, 6.0), "k").unwrap();
+        let half = rounded(crate::boolean::difference(&ball, &below).unwrap(), 1.0);
+        let o = crate::offset(&half, -1.5, "o").unwrap();
+        let (r, h) = (3.5, 2.0);
+        close(measure::volume(&o), PI * h * h * (3.0 * r - h) / 3.0);
+        close(measure::area(&o), 2.0 * PI * r * h + PI * (r * r - (r - h) * (r - h)));
+    }
+
+    #[test]
+    fn an_inward_offset_past_a_frustum_s_rounds_is_the_sharp_frustum_s() {
+        // A frustum of radii 6 and 3, 6 tall, both rims rounded 1.5, offset −2: the sharp frustum's
+        // erosion, its flat ends 2 in and its side's line ρ = 6 − z/2 moved 2 in along its normal,
+        // √5 across: the frustum from z = 2 to 4 of radii 5 − √5 and 4 − √5, its side √5 long.
+        let k = rounded(crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 6.0, "k").unwrap(), 1.5);
+        let o = crate::offset(&k, -2.0, "o").unwrap();
+        let (a, c) = (5.0 - 5f64.sqrt(), 4.0 - 5f64.sqrt());
+        close(measure::volume(&o), PI * 2.0 / 3.0 * (a * a + a * c + c * c));
+        close(measure::area(&o), PI * (a * a + c * c) + PI * (a + c) * 5f64.sqrt());
+    }
+
+    #[test]
+    fn an_inward_offset_past_a_turned_post_s_round_is_the_sharp_post_s() {
+        // A post of radius 5, 6 tall, under a frustum 5 to 2 over 4, the step between rounded 1,
+        // offset −1.5: the cylinder of radius 3.5 from z = 1.5 meets the cone's side moved in
+        // (ρ = 3.125 − 0.75·(z − 6)) at z = 5.5, which runs to the top moved down to 8.5, ρ = 1.25.
+        let post = crate::boolean::union(
+            &crate::primitive::cylinder(&Frame::WORLD, 5.0, 6.0, "c").unwrap(),
+            &crate::primitive::cone(&Frame::WORLD.translated(crate::math::Vec3::new(0.0, 0.0, 6.0)), 5.0, 2.0, 4.0, "k").unwrap(),
+        )
+        .unwrap();
+        let step: Vec<EdgeId> = crate::convex_edges(&post)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| post.edge(e).curve.as_ref().is_some_and(|c| (c.eval(post.edge(e).range.0).z - 6.0).abs() < 1e-6))
+            .collect();
+        let post = blend::fillet_edges(&post, &step, 1.0, "r").unwrap();
+        let o = crate::offset(&post, -1.5, "o").unwrap();
+        close(measure::volume(&o), PI * (12.25 * 4.0 + (12.25 + 3.5 * 1.25 + 1.5625)));
+        close(measure::area(&o), PI * (12.25 + 28.0 + 4.75 * 3.75 + 1.5625));
+    }
+
+    #[test]
+    fn an_inward_offset_past_a_round_by_a_concave_edge_declines() {
+        // A puck whose top rim is rounded 2, with a boss of radius 3.5 on top (on the flat, inside the round): its foot, a
+        // concave edge 2.5 from the rim the round rounded, could change the erosion there, so
+        // offset −3 declines.
+        let puck = crate::primitive::cylinder(&Frame::WORLD, 6.0, 10.0, "c").unwrap();
+        let rim: Vec<EdgeId> = crate::convex_edges(&puck)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| puck.edge(e).curve.as_ref().is_some_and(|c| (c.eval(puck.edge(e).range.0).z - 10.0).abs() < 1e-6))
+            .collect();
+        let puck = blend::fillet_edges(&puck, &rim, 2.0, "r").unwrap();
+        let boss = crate::primitive::cylinder(&Frame::WORLD.translated(crate::math::Vec3::new(0.0, 0.0, 10.0)), 3.5, 1.0, "b").unwrap();
+        let bossed = crate::boolean::union(&puck, &boss).unwrap();
+        let e = crate::offset(&bossed, -3.0, "o").unwrap_err();
+        assert!(matches!(&e, Error::Unsupported(m) if m.contains("concave edge lies near")), "{e}");
+    }
+
+    #[test]
+    fn a_growth_past_a_root_round_is_the_sharp_root_s() {
+        // A puck of radius 6, 4 tall, under a boss of radius 2, 4 tall, the root between them
+        // rounded 0.5: grown by 1 the root's round is gone, and the solid is the sharp stepped
+        // puck grown by 1, built here without the round.
+        let at = |z: f64| Frame::WORLD.translated(crate::math::Vec3::new(0.0, 0.0, z));
+        let sharp = crate::boolean::union(
+            &crate::primitive::cylinder(&Frame::WORLD, 6.0, 4.0, "p").unwrap(),
+            &crate::primitive::cylinder(&at(4.0), 2.0, 4.0, "b").unwrap(),
+        )
+        .unwrap();
+        let root = concave_edges(&sharp);
+        assert_eq!(root.len(), 1);
+        let rooted = blend::fillet_edges(&sharp, &root, 0.5, "r").unwrap();
+        let (grown, want) = (crate::offset(&rooted, 1.0, "o").unwrap(), crate::offset(&sharp, 1.0, "o").unwrap());
+        close(measure::volume(&grown), measure::volume(&want));
+        close(measure::area(&grown), measure::area(&want));
+        // Short of the round's radius the round stays, a round of 0.25 filling the root's corner.
+        assert!(measure::volume(&crate::offset(&rooted, 0.25, "o").unwrap()) > measure::volume(&crate::offset(&sharp, 0.25, "o").unwrap()));
     }
 
     #[test]

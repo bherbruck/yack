@@ -51,35 +51,49 @@ fn declined(e: Error) -> Error {
 /// through those. The cavity's faces are `<feature>.inner`.
 pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -> Result<Brep> {
     thick_enough(thickness)?;
-    let walls: Vec<FaceId> = s.face_ids().filter(|f| !open.contains(f)).collect();
-    if topo::local::radius_collapses(s, Some(&walls), thickness, true) {
+    // The walls moved in, the open faces moved out so the cavity runs out through them.
+    let move_of = |f: FaceId, open: &[FaceId]| if open.contains(&f) { thickness } else { -thickness };
+    let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, move_of(f, open))).collect();
+    // A round the walls move in past its radius vanishes from the cavity: the points farther than
+    // the thickness from it are those farther from the sharp edge it rounded. So the cavity is cut
+    // from the solid with those rounds taken out (`base`), and the wall is the solid itself less
+    // the cavity. `of` takes each face of `base` back to the face of `s` it is.
+    let (base, of): (Brep, BTreeMap<FaceId, FaceId>) =
+        match crate::tweak::drop_vanishing_rounds(s, &by).map_err(declined)? {
+            Some((sharp, kept)) => (sharp, kept.into_iter().map(|(old, new)| (new, old)).collect()),
+            None => (s.clone(), s.face_ids().map(|f| (f, f)).collect()),
+        };
+    let open: Vec<FaceId> =
+        of.iter().filter(|&(_, old)| open.contains(old)).map(|(&new, _)| new).collect();
+    let walls: Vec<FaceId> = base.face_ids().filter(|f| !open.contains(f)).collect();
+    if topo::local::radius_collapses(&base, Some(&walls), thickness, true) {
         return Err(Error::Unsupported(
-            "a rounded shell past a round face's radius (the round vanishes, which this rung does not build)".into(),
+            "a rounded shell past a round face's radius (a round that does not vanish cleanly)".into(),
         ));
     }
-    if topo::local::open_at_concave_edge(s, open) {
+    if topo::local::open_at_concave_edge(&base, &open) {
         return Err(Error::Unsupported("a rounded shell open at a concave edge".into()));
     }
-    // The walls moved in, the open faces moved out so the cavity runs out through them.
-    let by: BTreeMap<FaceId, f64> =
-        s.face_ids().map(|f| (f, if open.contains(&f) { thickness } else { -thickness })).collect();
-    let moved = crate::offset_faces(s, &by).map_err(declined)?;
+    let by: BTreeMap<FaceId, f64> = base.face_ids().map(|f| (f, move_of(f, &open))).collect();
+    let moved = crate::offset_faces(&base, &by).map_err(declined)?;
     // Where the moved walls cross (a neck thinner than twice the wall), faces of the moved solid
     // vanish, and the cavity is no longer the moved faces with their concave edges rounded: the
     // erosion bulges round the corners whose walls went (bench shell/dumbbell-neck-filled), which
     // this construction cannot make. Only a move that keeps every face is built here.
-    if !crate::same_topology(s, &moved) {
+    if !crate::same_topology(&base, &moved) {
         return Err(Error::Unsupported(
             "a rounded shell whose moved walls cross or vanish (the cavity's rounds are not the moved solid's)".into(),
         ));
     }
     let inner = FaceName::new(feature, FaceName::INNER);
-    // The move kept the topology and with it the ids: each cavity face offsets the face of `s` with
-    // its id.
+    // The move kept the topology and with it the ids: each cavity face offsets the face of `base`
+    // with its id, which is the face `of` names in `s`.
     let mut moved = moved;
     for f in moved.face_ids().collect::<Vec<_>>() {
-        let names: BTreeSet<FaceName> =
-            [inner.clone(), FaceName::new(feature, format!("inner_f{}", f.index()))].into_iter().collect();
+        let mut names: BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
+        if let Some(old) = of.get(&f) {
+            names.insert(FaceName::new(feature, format!("inner_f{}", old.index())));
+        }
         moved.set_face_names(f, names);
     }
     let concave = crate::concave_edges(&moved);
@@ -217,6 +231,20 @@ mod tests {
         ];
         let plate = prism(&outline, 6.0);
         assert!(matches!(shell_rounded(&plate, &[top(&plate, 6.0)], 1.5, "s"), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn a_rounded_puck_hollowed_past_its_rounds_loses_them_inside() {
+        // bench shell/rounded-puck-hollowed-past-its-rounds: a cylinder r 6, h 10, both rims rounded
+        // to 2, hollowed to 3 with no opening. The rounds vanish from the cavity, which is the sharp
+        // cylinder r 3 from z 3 to 7: V = (the rounded puck) − 36π.
+        let puck = crate::primitive::cylinder(&Frame::WORLD, 6.0, 10.0, "c").unwrap();
+        let rims: Vec<_> = crate::convex_edges(&puck).unwrap();
+        let rounded = blend::fillet_edges(&puck, &rims, 2.0, "r").unwrap();
+        let out = shell_rounded(&rounded, &[], 3.0, "s").unwrap();
+        close(measure::volume(&out), measure::volume(&rounded) - 36.0 * PI);
+        close(measure::volume(&out), 957.9725995316304);
+        assert!(crate::check::check(&out).is_empty());
     }
 
     #[test]

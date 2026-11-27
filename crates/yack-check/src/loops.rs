@@ -8,8 +8,12 @@ use crate::{
     geom::Surface,
     math::Vec2,
     tol,
-    topo::{Brep, CoedgeId, FaceId, face_domain},
+    topo::{Brep, CoedgeId, FaceId, LoopId, face_domain},
 };
+
+/// Two images of one edge's middle in the parameter plane are the same image when they are this far
+/// apart or less, as the surface carries a step.
+const SAME_IMAGE: f64 = 10.0 * tol::LINEAR;
 
 /// A parameter moving this much slower than the other stands still beside it: a pole.
 const STANDING_STILL: f64 = 1e-9; // tol: a ratio of speeds
@@ -23,6 +27,31 @@ pub(crate) fn uv_gap(b: &Brep, face: FaceId, p: Vec2, q: Vec2) -> f64 {
     let wu = if a <= STANDING_STILL * c { c } else { a };
     let wv = if c <= STANDING_STILL * a { a } else { c };
     (p.x - q.x).abs() * wu + (p.y - q.y).abs() * wv
+}
+
+/// Whether loop `lp` of face `f` runs only along slits and back: each coedge's edge is run the other
+/// way by another coedge of the loop, over the same image in the parameter plane (not a seam's, a
+/// period away). Such a loop is a contact inside the face and encloses nothing, so its area has no
+/// sign to test: read as zero, an inner slit in a face turned against its surface would run the
+/// wrong way. (Idea from springrep@f2ad60e's checker, MIT OR Apache-2.0; written afresh.)
+pub(crate) fn slit_loop(b: &Brep, f: FaceId, lp: LoopId) -> bool {
+    let coedges = &b.lp(lp).coedges;
+    let middle = |c: CoedgeId| {
+        let (t0, t1) = b.edge(b.coedge(c).edge).range;
+        b.coedge_uvs(c, &[0.5 * (t0 + t1)]).first().copied()
+    };
+    coedges.iter().all(|&c| {
+        let coedge = b.coedge(c);
+        b.edge(coedge.edge).curve.is_some()
+            && middle(c).is_some_and(|here| {
+                coedges.iter().any(|&d| {
+                    let back = b.coedge(d);
+                    back.edge == coedge.edge
+                        && back.reversed != coedge.reversed
+                        && middle(d).is_some_and(|there| uv_gap(b, f, here, there) <= SAME_IMAGE)
+                })
+            })
+    })
 }
 
 /// Whether the two images `p` and `q` of the tolerant vertex that coedge `c` ends at are apart by

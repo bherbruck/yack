@@ -132,8 +132,8 @@ const CLEAR: f64 = 1e-3; // tol: a cosine, not a length; samples sit a quarter o
 enum How {
     /// A slide by `by`, along the unit `dir`.
     Slide { by: Vec3, dir: Vec3 },
-    /// A turn by `angle` (strictly between 0 and a whole turn), counter-clockwise looking down the
-    /// unit `axis`, about the line through `origin`.
+    /// A turn by `angle` (more than 0, at most a whole turn, which is exactly `TAU`),
+    /// counter-clockwise looking down the unit `axis`, about the line through `origin`.
     Turn { origin: Point3, axis: Vec3, angle: f64 },
 }
 
@@ -144,6 +144,11 @@ struct Sweep<'a> {
 }
 
 impl Sweep<'_> {
+    /// Whether this is a whole turn: every point goes all the way round, and back where it began.
+    fn whole(&self) -> bool {
+        matches!(self.how, How::Turn { angle, .. } if angle >= std::f64::consts::TAU)
+    }
+
     /// How fast `p` moves (for a turn, per radian).
     fn velocity(&self, p: Point3) -> Vec3 {
         match self.how {
@@ -156,6 +161,7 @@ impl Sweep<'_> {
     fn moved(&self) -> Transform {
         match self.how {
             How::Slide { by, .. } => Transform::translation(by),
+            How::Turn { .. } if self.whole() => Transform::translation(Vec3::ZERO),
             How::Turn { origin, axis, angle } => Transform::rotation(origin, axis, angle),
         }
     }
@@ -200,7 +206,7 @@ impl Sweep<'_> {
     }
 }
 
-/// [`crate::swept`] by faces: a slide, or a turn short of a whole one.
+/// [`crate::swept`] by faces: a slide, or a turn.
 pub(crate) fn swept(body: &Brep, motion: &Motion, feature: &str) -> Result<Brep> {
     match motion {
         Motion::Slide { by } => {
@@ -219,9 +225,12 @@ pub(crate) fn swept(body: &Brep, motion: &Motion, feature: &str) -> Result<Brep>
             if angle <= yack_tol::ANGULAR {
                 return Err(Error::InvalidInput("a turn through no angle moves nothing".into()));
             }
-            if angle >= std::f64::consts::TAU - yack_tol::ANGULAR {
-                return Err(Error::Unsupported("by faces: a whole turn is not built yet".into()));
-            }
+            // A whole turn or more covers what a whole turn does.
+            let angle = if angle >= std::f64::consts::TAU - yack_tol::ANGULAR {
+                std::f64::consts::TAU
+            } else {
+                angle
+            };
             // The solid as given is at angle 0: the sweep starts where it is at the lesser angle.
             let mut start = body.clone();
             start.transform(&Transform::rotation(*axis_point, axis, a0));
@@ -542,6 +551,11 @@ impl<'a> Prism<'a> {
         let start = self.out.points.len();
         self.out.points.push(p);
         let pair = match self.sweep.rail(p)? {
+            // A whole turn brings the point back: its rail is a whole circle.
+            Some(rail) if self.sweep.whole() => {
+                self.out.edges.push((rail, start, start));
+                Pair { start, end: start, rail: Some(self.out.edges.len() - 1) }
+            }
             Some(rail) => {
                 self.out.points.push(self.moved.point(p));
                 self.out.edges.push((rail, start, start + 1));
@@ -600,8 +614,9 @@ impl<'a> Prism<'a> {
             let (s, t) = (self.at(piece.start)?, self.at(piece.end)?);
             let e0 = self.out.edges.len();
             self.out.edges.push((piece.curve.clone(), s.start, t.start));
-            // A piece that stays where it is (on a turn's axis) is one edge both caps share.
-            if s.rail.is_none() && t.rail.is_none() {
+            // A piece that stays where it is (on a turn's axis), or comes back to it (a whole turn),
+            // is one edge both caps (both sides of its side face) share.
+            if (s.rail.is_none() && t.rail.is_none()) || self.sweep.whole() {
                 made.push((piece, e0, e0));
                 continue;
             }
@@ -637,7 +652,8 @@ fn prism(parts: &Parts, k: usize, sweep: &Sweep) -> Result<Brep> {
                 start_loop.push((e0, !reversed));
                 end_loop.push((e1, reversed));
                 // A seam sweeps no side, nor a piece that stays where it is.
-                if uses(e) == 1 && e0 != e1 {
+                let stays = p.at(piece.start)?.rail.is_none() && p.at(piece.end)?.rail.is_none();
+                if uses(e) == 1 && !stays {
                     sides.push((piece, reversed, e0, e1));
                 }
             }
@@ -648,22 +664,28 @@ fn prism(parts: &Parts, k: usize, sweep: &Sweep) -> Result<Brep> {
         end_loops.push(end_loop);
     }
     let named = |part: &str| BTreeSet::from([FaceName::new(sweep.feature, part)]);
-    let mut faces = vec![
-        PartFace {
-            surface: face.surface.clone(),
-            reversed: !face.reversed,
-            loops: start_loops,
-            names: named(FaceName::START),
-            shell: 0,
-        },
-        PartFace {
-            surface: face.surface.transformed(&p.moved),
-            reversed: face.reversed,
-            loops: end_loops,
-            names: named(FaceName::END),
-            shell: 0,
-        },
-    ];
+    // A whole turn ends where it starts: no caps, its sides close on themselves (each meets
+    // itself along its piece, its seam).
+    let mut faces = if sweep.whole() {
+        Vec::new()
+    } else {
+        vec![
+            PartFace {
+                surface: face.surface.clone(),
+                reversed: !face.reversed,
+                loops: start_loops,
+                names: named(FaceName::START),
+                shell: 0,
+            },
+            PartFace {
+                surface: face.surface.transformed(&p.moved),
+                reversed: face.reversed,
+                loops: end_loops,
+                names: named(FaceName::END),
+                shell: 0,
+            },
+        ]
+    };
     for (piece, reversed, e0, e1) in sides {
         // Along the loop: the piece (as the face uses it), the rail up from its end, the slid
         // piece back, the rail down to its start; the face's material lies on the loop's left.
@@ -681,16 +703,51 @@ fn prism(parts: &Parts, k: usize, sweep: &Sweep) -> Result<Brep> {
         loop_.push((e1, !reversed));
         loop_.extend(ra.map(|r| (r, true)));
         let (surface, flip) = sweep.side(&piece.curve, ends, reversed)?;
+        // A whole turn of a piece square to the axis sweeps an annulus (a disc where the piece
+        // reaches the axis): bounded by its ends' rails, not by the piece, which would be a slit.
+        let loops = match (&surface, sweep.whole()) {
+            (Surface::Plane(_), true) => annulus(&p, sweep, (piece.start, piece.end), flip)?,
+            _ => vec![loop_],
+        };
         faces.push(PartFace {
             surface,
             reversed: flip,
-            loops: vec![loop_],
+            loops,
             names: named(FaceName::SIDE),
             shell: 0,
         });
     }
     p.out.faces = faces;
     solid_of(&p.out)
+}
+
+/// The loops of the annulus (or disc) a piece square to a whole turn's axis sweeps, its outer
+/// loop first: its ends' rails, each a whole circle counter-clockwise about the axis, run so that
+/// the face (its natural normal the axis, against it when `flip`) lies on their left.
+fn annulus(
+    p: &Prism,
+    sweep: &Sweep,
+    ends: (usize, usize),
+    flip: bool,
+) -> Result<Vec<Vec<(usize, bool)>>> {
+    let How::Turn { origin, axis, .. } = sweep.how else {
+        return Err(missing("turn"));
+    };
+    let reach = |k: usize| -> Result<(f64, Option<usize>)> {
+        let pair = p.at(k)?;
+        let q = *p.out.points.get(pair.start).ok_or_else(|| missing("point"))?;
+        Ok(((q - origin).cross(axis).norm(), pair.rail))
+    };
+    let (mut outer, mut inner) = (reach(ends.0)?, reach(ends.1)?);
+    if inner.0 > outer.0 {
+        std::mem::swap(&mut outer, &mut inner);
+    }
+    // Seen down the axis the outer rail runs as it is and the inner against it; seen from the
+    // other side, the other way round.
+    let outer = outer.1.ok_or_else(|| missing("rail"))?;
+    let mut loops = vec![vec![(outer, flip)]];
+    loops.extend(inner.1.map(|r| vec![(r, !flip)]));
+    Ok(loops)
 }
 
 /// The surface a piece of boundary sweeps as it slides along the unit `dir`, and whether the

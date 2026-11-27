@@ -224,21 +224,44 @@ impl Solid {
         let sharp = join == Join::Sharp;
         let cadrs = || engine_cadrs::op(op, self, |k, id| glue::thicken_joined(k, id, &ix, thickness, sharp));
         if sharp {
-            // springrep cannot be told how to join a crease: only cadrs mitres on request
-            return firewall::op(op, &[self], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }]));
+            // springrep mitres (thicken_named without a round join: the moved faces run on until they
+            // meet), first (bake-off doc/donors.md: both sharp bench cases equal to 3.9e-16); cadrs
+            // answers what it declines
+            let springrep = || {
+                let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, false, engine::PROVISIONAL))?;
+                if !yack_topo::local::rims_square(self.need(op)?, &f) {
+                    return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal");
+                }
+                Ok(out)
+            };
+            return firewall::op(op, &[self], || {
+                ladder::ladder(op, &[ladder::Rung { name: "springrep", run: &springrep }, ladder::Rung { name: "cadrs", run: &cadrs }])
+            });
         }
+        let springrep = || {
+            let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, join == Join::Round, engine::PROVISIONAL))?;
+            if !yack_topo::local::rims_square(self.need(op)?, &f) {
+                return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal");
+            }
+            Ok(out)
+        };
+        // yack-edit's thicken_sheet (round joins, bends the move closes) after springrep and before
+        // cadrs (bake-off doc/donors.md); its free rims are swept square too, so the same slant refuses
+        let native = || {
+            let out = engine::made(engine::PROVISIONAL, op, yack_edit::thicken_sheet(self.need(op)?, &f, thickness, true, engine::PROVISIONAL))?;
+            if !yack_topo::local::rims_square(self.need(op)?, &f) {
+                return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; the native rung would sweep it along the neighbour, not the sheet's normal");
+            }
+            Ok(out)
+        };
         firewall::op(op, &[self], || {
-            ladder::two(
+            ladder::ladder(
                 op,
-                &|| {
-                    let out = engine::made(engine::PROVISIONAL, op, sr::thicken_named(self.need(op)?, &f, thickness, join == Join::Round, engine::PROVISIONAL))?;
-                    if !yack_topo::local::rims_square(self.need(op)?, &f) {
-                        return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; springrep would sweep it along the neighbour, not the sheet's normal",
-                        );
-                    }
-                    Ok(out)
-                },
-                &cadrs,
+                &[
+                    ladder::Rung { name: "springrep", run: &springrep },
+                    ladder::Rung { name: "native", run: &native },
+                    ladder::Rung { name: "cadrs", run: &cadrs },
+                ],
             )
         })
     }
@@ -272,7 +295,9 @@ impl Solid {
                         return Err(Error::invalid(op, "thickness", "the walls would meet: thicker than half the part"));
                     }
                     let out = engine::made_from("shell", op, sr::shell(b, &f, thickness))?;
-                    if yack_topo::local::radius_collapses(b, None, thickness, true) {
+                    // yack-edit's shell goes past rounds thinner than the wall itself (it drops them before
+                    // offsetting the cavity); the guard stays for the rounds it does not handle
+                    if yack_topo::local::radius_collapses(b, None, thickness, true) && !sr::shell_goes_past_rounds(b, &f, thickness) {
                         return refuse(out, op, "a round face of radius under the thickness would close");
                     }
                     Ok(out)
@@ -334,7 +359,8 @@ impl Solid {
         }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        // yack-edit's rung (w-h5), after cadrs's until its bake-off (shell_rounded is in CADRS_FIRST)
+        // yack-edit's rung (w-h2) first (bake-off doc/donors.md: 3 equal to 3.7e-16, 0 wrong); cadrs
+        // answers what it declines
         firewall::op(op, &[self], || {
             ladder::two(
                 op,
@@ -362,7 +388,8 @@ impl Solid {
         }
         let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
-        // yack-edit's rung (w-h5), after cadrs's until its bake-off (shell_outward_rounded is in CADRS_FIRST)
+        // yack-edit's rung (w-h2) first (bake-off doc/donors.md: equal on box-open-top-outward, 0 wrong);
+        // cadrs answers what it declines
         firewall::op(op, &[self], || {
             ladder::two(
                 op,

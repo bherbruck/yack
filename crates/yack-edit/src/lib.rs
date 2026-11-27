@@ -42,14 +42,22 @@ use crate::{
 
 mod affine;
 mod apex;
+mod cone_cavity;
+mod enclosed;
 mod offset_in;
 mod rounded_shell;
+mod thicken_sheet;
+mod turned_chamfer;
+mod variable_round;
 pub mod glue;
 pub mod requirement;
 
 pub use affine::{Affine, affine};
 pub use offset_in::concave_edges;
 pub use rounded_shell::{shell_outward_rounded, shell_rounded};
+pub use thicken_sheet::thicken_sheet;
+pub use turned_chamfer::chamfer_two;
+pub use variable_round::fillet_variable;
 pub use crate::tweak::{move_faces, move_faces_by};
 
 /// `b` with each of `faces` tilted by `angle` about the line where it meets the `neutral` plane, its
@@ -94,8 +102,8 @@ pub enum Wall {
 
 /// `s` hollowed to a wall `thickness` thick, open through the faces of `open`. The cavity's faces
 /// are `<feature>.inner`. An inward wall leaves every face of `s` in place with its names. An
-/// outward wall's outside is new and carries no name, and each face of `s` is the wall's inside,
-/// keeping its names beside `inner`.
+/// outward wall's outside is new, each of its faces named `inner_f<k>` for the face `k` of `s` it
+/// offsets, and each face of `s` is the wall's inside, keeping its names beside `inner`.
 pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &str) -> Result<Brep> {
     if thickness.is_nan() || thickness <= tol::LINEAR {
         return Err(Error::InvalidInput(
@@ -103,14 +111,31 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
         ));
     }
     let inner = FaceName::new(feature, FaceName::INNER);
-    // Every face moved `by` along its outward normal, the open ones `open_by`.
-    let moved = |by: f64, open_by: f64| {
+    // Every face moved `by` along its outward normal, the open ones `open_by`, with the face of `s`
+    // each face of the result offsets (where the move kept, or took out rounds from, the topology).
+    let moved = |by: f64, open_by: f64| -> Result<(Brep, BTreeMap<FaceId, FaceId>)> {
         let by: BTreeMap<FaceId, f64> = s
             .face_ids()
             .map(|f| (f, if open.contains(&f) { open_by } else { by }))
             .filter(|&(_, d)| d != 0.0)
             .collect();
-        offset_faces(s, &by)
+        // Rounds the move goes past (thinner than the wall) are taken out first, their neighbours
+        // meeting where they rounded; a solid with none, or that cannot be taken so, moves as it is.
+        if let Ok(Some((sharp, kept))) = tweak::drop_vanishing_rounds(s, &by) {
+            let by_sharp: BTreeMap<FaceId, f64> = by.iter().filter_map(|(f, &d)| Some((*kept.get(f)?, d))).collect();
+            if let Ok(moved) = offset_faces(&sharp, &by_sharp) {
+                let mut from = BTreeMap::new();
+                if same_topology(&sharp, &moved) {
+                    from.extend(kept.iter().map(|(&old, &new)| (new, old)));
+                } else {
+                    from = offsets_of(s, &moved, &by);
+                }
+                return Ok((moved, from));
+            }
+        }
+        let moved = offset_faces(s, &by)?;
+        let from = if same_topology(s, &moved) { s.face_ids().map(|f| (f, f)).collect() } else { offsets_of(s, &moved, &by) };
+        Ok((moved, from))
     };
     match wall {
         Wall::Inward => {
@@ -118,30 +143,35 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
             // An open face that meets a concave edge stays where it is: moved out, its plane would cut
             // the wall that rises past the edge back from the opening.
             let open_by = if topo::local::open_at_concave_edge(s, open) { 0.0 } else { thickness };
-            let mut cavity = moved(-thickness, open_by)?;
-            // Each cavity face also names the face of `s` it offsets, where the move kept the
-            // solid's topology and so its face ids.
-            let kept = same_topology(s, &cavity);
+            // Of a frustum whose cavity closes below its far face, the far face does not bound it.
+            let (mut cavity, from) = match cone_cavity::closed_cavity(s, open, thickness)? {
+                Some(whole) => whole,
+                None => moved(-thickness, open_by)?,
+            };
+            // Each cavity face also names the face of `s` it offsets, where the move kept the solid's
+            // topology (or took rounds out of it) and so knows which.
             for f in cavity.face_ids().collect::<Vec<_>>() {
                 let mut names: BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
-                if kept {
-                    names.insert(FaceName::new(feature, format!("inner_f{}", f.index())));
+                if let Some(src) = from.get(&f) {
+                    names.insert(FaceName::new(feature, format!("inner_f{}", src.index())));
                 }
                 cavity.set_face_names(f, names);
             }
             boolean::difference(s, &cavity)
         }
         Wall::Outward => {
-            let mut outer = moved(thickness, 0.0)?;
+            let (mut outer, from) = moved(thickness, 0.0)?;
             for f in outer.face_ids().collect::<Vec<_>>() {
                 if !open.contains(&f) {
-                    outer.set_face_names(f, Default::default());
+                    // The outside is new: each of its faces offsets a face of `s`.
+                    let names = from.get(&f).map(|src| FaceName::new(feature, format!("inner_f{}", src.index()))).into_iter().collect();
+                    outer.set_face_names(f, names);
                 }
             }
             // The cavity is the solid itself, its open faces reaching out by the thickness twice over,
             // or not at all where an open face meets a concave edge (as for the inward wall).
             let open_by = if topo::local::open_at_concave_edge(s, open) { 0.0 } else { 2.0 * thickness };
-            let mut cavity = moved(0.0, open_by)?;
+            let (mut cavity, _) = moved(0.0, open_by)?;
             for f in cavity.face_ids().collect::<Vec<_>>() {
                 let mut names = cavity.face(f).names.clone();
                 names.insert(inner.clone());
@@ -163,7 +193,7 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
         return offset_in::offset_inward(s, -distance, feature);
     }
     let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, distance)).collect();
-    let moved = offset_faces(s, &by)?;
+    let moved = offset_in::offset_faces_past_rounds(s, &by)?;
     let edges = convex_edges(&moved)?;
     let kept = same_topology(s, &moved);
     let mut out = if edges.is_empty() {
@@ -224,6 +254,31 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
     Ok(out)
 }
 
+/// The face of `s` each face of `moved` offsets, found where the move changed the topology (a round
+/// closed): a face of `moved` is the offset of the face of `s` on a surface of its kind, with its
+/// outward normal, whose move by `by` puts it where the face lies.
+fn offsets_of(s: &Brep, moved: &Brep, by: &BTreeMap<FaceId, f64>) -> BTreeMap<FaceId, FaceId> {
+    let mut found = BTreeMap::new();
+    for f in moved.face_ids() {
+        let dom = crate::topo::face_domain(moved, f);
+        let Some(uv) = dom.interior_point() else { continue };
+        let p = dom.surface.eval(uv.x, uv.y);
+        let Some(n) = topo::local::face_normal_at(moved, f, p) else { continue };
+        let source = by.iter().find(|&(&g, &d)| {
+            let face = s.face(g);
+            if std::mem::discriminant(&face.surface) != std::mem::discriminant(&moved.face(f).surface) {
+                return false;
+            }
+            let q = face.surface.eval(face.surface.project(p).x, face.surface.project(p).y);
+            topo::local::face_normal_at(s, g, q).is_some_and(|m| m.dot(n) > 1.0 - 1e-6 && (p - (q + m * d)).norm() <= 10.0 * tol::LINEAR) // tol: a cosine, and a distance
+        });
+        if let Some((&g, _)) = source {
+            found.insert(f, g);
+        }
+    }
+    found
+}
+
 /// Whether `b` has `a`'s faces, edges and vertices by count: a move that kept the solid's
 /// topology, and with it the ids.
 fn same_topology(a: &Brep, b: &Brep) -> bool {
@@ -281,6 +336,168 @@ pub fn thicken(s: &Brep, faces: &[FaceId], thickness: f64) -> Result<Brep> {
 /// across their edges, joined to the solid. The faces must be a recess, a hole, or a corner cut
 /// away; a plane or a cylinder bulging outward must bound it.
 pub fn delete_faces(s: &Brep, faces: &[FaceId]) -> Result<Brep> {
+    // Each run of the faces that touch is a gap of its own: one block over several would also fill
+    // what lies between them, a hole left standing between two deleted ones.
+    let mut runs: Vec<Vec<FaceId>> = Vec::new();
+    for &f in faces {
+        let mut run = vec![f];
+        let touching = |run: &[FaceId], other: &[FaceId]| {
+            run.iter().any(|&a| {
+                s.face(a).loops.iter().any(|&lp| {
+                    s.lp(lp).coedges.iter().any(|&c| s.edge_uses(s.coedge(c).edge).iter().any(|&u| other.contains(&s.coedge_face(u))))
+                })
+            })
+        };
+        let mut k = 0;
+        while let Some(other) = runs.get(k) {
+            if touching(&run, other) {
+                run.extend(runs.remove(k));
+            } else {
+                k += 1;
+            }
+        }
+        runs.push(run);
+    }
+    let mut out = s.clone();
+    for run in &runs {
+        out = match gap_fill(s, run)? {
+            Gap::Fill(block) => boolean::union(&out, &block)?,
+            Gap::Cut(block) => boolean::difference(&out, &block)?,
+        };
+    }
+    // The healed faces and the neighbours they were healed from lie on one surface: one face each.
+    let snapped = snap_same_surfaces(&out).unwrap_or_else(|| out.clone());
+    Ok(boolean::unify(&snapped).or_else(|_| boolean::unify(&out)).unwrap_or(out))
+}
+
+/// `b` with each curved face that lies on the surface of an earlier one put on that very surface
+/// (a healed cone and the cone it heals are one surface in two frames, and faces merge only on
+/// equal surfaces), its pcurves laid anew; `None` where none does or the move cannot be made. A
+/// face's orientation follows its outward normal onto the surface it takes. A face with a pole keeps
+/// its own.
+fn snap_same_surfaces(b: &Brep) -> Option<Brep> {
+    let ids: Vec<FaceId> = b.face_ids().collect();
+    let curved = |f: FaceId| {
+        matches!(b.face(f).surface, Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_))
+            && b.face(f).loops.iter().all(|&lp| b.lp(lp).coedges.iter().all(|&c| b.edge(b.coedge(c).edge).curve.is_some()))
+    };
+    let mut onto: BTreeMap<FaceId, Surface> = BTreeMap::new();
+    let mut reversed: BTreeMap<FaceId, bool> = BTreeMap::new();
+    for (k, &fb) in ids.iter().enumerate() {
+        if !curved(fb) {
+            continue;
+        }
+        let dom = crate::topo::face_domain(b, fb);
+        let samples: Vec<Point3> = dom.interior_points().into_iter().take(3).map(|uv| dom.surface.eval(uv.x, uv.y)).collect();
+        let Some(&first) = samples.first() else { continue };
+        let Some(outward) = topo::local::face_normal_at(b, fb, first) else { continue };
+        for &fa in ids.iter().take(k) {
+            let sa = onto.get(&fa).cloned().unwrap_or_else(|| b.face(fa).surface.clone());
+            let sb = &b.face(fb).surface;
+            if &sa == sb || std::mem::discriminant(&sa) != std::mem::discriminant(sb) || !curved(fa) {
+                continue;
+            }
+            if samples.iter().all(|&p| (sa.eval(sa.project(p).x, sa.project(p).y) - p).norm() <= tol::LINEAR) {
+                let uv = sa.project(first);
+                reversed.insert(fb, sa.normal(uv.x, uv.y).dot(outward) <= 0.0);
+                onto.insert(fb, sa);
+                break;
+            }
+        }
+    }
+    if onto.is_empty() {
+        return None;
+    }
+    resurfaced(b, &onto, &reversed)
+}
+
+/// `b` with the faces of `onto` on their new surfaces (the same surface in another frame, so every
+/// edge stays where it is) and orientations from `reversed`, their pcurves laid anew from the edges.
+fn resurfaced(b: &Brep, onto: &BTreeMap<FaceId, Surface>, reversed: &BTreeMap<FaceId, bool>) -> Option<Brep> {
+    let mut out = Brep::new();
+    let verts: Vec<_> = b.vertex_ids().map(|v| out.add_vertex(b.vertex(v).point)).collect();
+    let mut edges = Vec::new();
+    for e in b.edge_ids() {
+        let x = b.edge(e);
+        let (s, t) = (*verts.get(x.start.index())?, *verts.get(x.end.index())?);
+        edges.push(match &x.curve {
+            Some(c) => out.add_edge(c.clone(), x.range, s, t),
+            None => out.add_degenerate_edge(s, x.range),
+        });
+    }
+    // The parameters nearest `last` (a periodic one continuing from it) where `p` lies on `surface`.
+    let near = |surface: &Surface, p: Point3, last: Option<Vec2>| {
+        let uv = surface.project(p);
+        match last {
+            Some(l) => Vec2::new(uv.x + TAU * ((l.x - uv.x) / TAU).round(), uv.y),
+            None => uv,
+        }
+    };
+    let mut faces = Vec::new();
+    for f in b.face_ids() {
+        let face = b.face(f);
+        let moved = onto.get(&f);
+        let surface = moved.cloned().unwrap_or_else(|| face.surface.clone());
+        let nf = out.add_face(surface.clone(), reversed.get(&f).copied().unwrap_or(face.reversed), face.names.clone());
+        for &lp in &face.loops {
+            let mut last: Option<Vec2> = None;
+            let mut specs = Vec::new();
+            for &c in &b.lp(lp).coedges {
+                let co = b.coedge(c);
+                let edge = *edges.get(co.edge.index())?;
+                let x = out.edge(edge);
+                let pcurve = match (&x.curve, moved) {
+                    (Some(cv), Some(_)) => {
+                        let (t0, t1) = if co.reversed { (x.range.1, x.range.0) } else { x.range };
+                        let from = if co.reversed { x.end } else { x.start };
+                        let start = near(&surface, out.vertex(from).point, last);
+                        let seed = crate::topo::pcurve::project_on(&surface, cv, t0, t1, last.unwrap_or(start));
+                        let mut uv = seed;
+                        for k in 1..=32 {
+                            uv = near(&surface, cv.eval(t0 + (t1 - t0) * f64::from(k) / 32.0), Some(uv));
+                        }
+                        last = Some(uv);
+                        topo::PCurve::Projected { seed }
+                    }
+                    _ => co.pcurve.clone(),
+                };
+                specs.push(topo::CoedgeSpec { edge, reversed: co.reversed, pcurve });
+            }
+            out.add_loop(nf, specs);
+        }
+        faces.push(nf);
+    }
+    for sh in b.shell_ids() {
+        let ids: Vec<FaceId> = b.shell(sh).faces.iter().filter_map(|f| faces.get(f.index()).copied()).collect();
+        let _ = out.add_shell(ids);
+    }
+    for so in b.solid_ids() {
+        out.add_solid_of(b.solid(so).shells.clone(), b.solid(so).outer);
+    }
+    out.pair_radial();
+    Some(out)
+}
+
+/// What closes a gap: a block to add (a recess, a hole, a corner cut away) or one to take away (a
+/// boss, a round filling an inside corner).
+enum Gap {
+    Fill(Brep),
+    Cut(Brep),
+}
+
+/// Whether `q` lies on the material side of face `g`; `None` for a face of another kind.
+fn behind(s: &Brep, g: FaceId, q: Point3) -> Option<bool> {
+    match &s.face(g).surface {
+        Surface::Plane(_) => {
+            let (o, n) = plane_of(s, g).ok()?;
+            Some((q - o).dot(n) <= 0.0)
+        }
+        other => enclosed::within(other, q).map(|inside| inside != enclosed::hollow(s, g)),
+    }
+}
+
+/// The block that closes the gap `faces` leave, as [`delete_faces`] describes.
+fn gap_fill(s: &Brep, faces: &[FaceId]) -> Result<Gap> {
     let mut near: Vec<FaceId> = Vec::new();
     let mut rims: Vec<EdgeId> = Vec::new();
     for &f in faces {
@@ -309,46 +526,155 @@ pub fn delete_faces(s: &Brep, faces: &[FaceId]) -> Result<Brep> {
     let x = axes
         .iter()
         .copied()
-        .find(|a| a.cross(z).norm() > 1e-6)
+        .find(|a| a.cross(z).norm() > 1e-6) // tol: axes this close to parallel are parallel
+        .or_else(|| tightest_across(s, near.iter().chain(faces), z, &rims))
         .unwrap_or_else(|| z.any_perpendicular());
     let axes = Frame::new(Point3::ZERO, z, x)?;
     let mut bounds = Aabb::EMPTY;
     for &e in &rims {
         edge_bounds(s, e, &axes, &mut bounds);
     }
-    let (lo, hi) = (bounds.min, bounds.max);
+    // A ball bulges past the rims it meets: the block grows across the axis by its radius, the ball
+    // then bounding what it holds.
+    let bulge = near.iter().filter_map(|&f| match &s.face(f).surface {
+        Surface::Sphere(sp) if !enclosed::hollow(s, f) => Some(sp.radius),
+        // A cone bounds what lies inside it, its corner with a plane further out than the rims.
+        Surface::Cone(_) if !enclosed::hollow(s, f) => Some(measure::bbox(s).diagonal()),
+        _ => None,
+    }).fold(0.0, f64::max);
+    // A box with no thickness along an axis (a flat's rims all on its plane) grows both ways by the
+    // widest ball or post round it: they bound what it holds.
+    let round = near.iter().filter_map(|&f| match &s.face(f).surface {
+        Surface::Sphere(sp) if !enclosed::hollow(s, f) => Some(sp.radius),
+        Surface::Cylinder(c) if !enclosed::hollow(s, f) => Some(c.radius),
+        Surface::Cone(_) if !enclosed::hollow(s, f) => Some(measure::bbox(s).diagonal()),
+        _ => None,
+    }).fold(0.0, f64::max);
+    let thin = |extent: f64| if extent <= tol::LINEAR { round } else { 0.0 };
+    let grow = Vec3::new(bulge + thin(bounds.max.x - bounds.min.x), bulge + thin(bounds.max.y - bounds.min.y), thin(bounds.max.z - bounds.min.z));
+    let (lo, hi) = (bounds.min - grow, bounds.max + grow);
     let size = hi - lo;
     let frame = Frame::new(axes.to_world(lo), axes.z, axes.x)?;
     let rect = Profile::rect(Vec2::new(size.x / 2.0, size.y / 2.0), size.x, size.y);
-    let mut fill = extrude(&rect, &frame, size.z, "fill")?;
+    let mut fill = match turned_block(s, faces, &rims, bulge)? {
+        Some(round) => round,
+        None => extrude(&rect, &frame, size.z, "fill")?,
+    };
+    // A point just off each deleted face, on the side the gap lies: behind every neighbour, the gap is
+    // a recess to fill; in front of some, a bump, closed by cutting it back to those. Faces that
+    // disagree, or a neighbour of a kind not known here, leave the gap to the fill below.
+    let samples: Vec<Vec<Option<bool>>> = faces
+        .iter()
+        .filter_map(|&f| {
+            let dom = crate::topo::face_domain(s, f);
+            let uv = dom.interior_point()?;
+            let p = dom.surface.eval(uv.x, uv.y);
+            let q = p + topo::local::face_normal_at(s, f, p)? * 1e-3; // tol: a step off the face, far above the tolerance, well inside the gap
+            Some(near.iter().map(|&g| behind(s, g, q)).collect())
+        })
+        .collect();
+    let known = samples.iter().flatten().all(Option::is_some);
+    let in_front = |k: usize| samples.iter().all(|row| row.get(k) == Some(&Some(false)));
+    let front: Vec<FaceId> = near.iter().enumerate().filter(|&(k, _)| in_front(k)).map(|(_, &g)| g).collect();
+    let bump = samples.len() == faces.len() && samples.iter().all(|row| row.contains(&Some(false)));
+    if known && bump && !front.is_empty() {
+        let mut cut = fill;
+        for f in front {
+            let outside = match &s.face(f).surface {
+                Surface::Plane(_) => {
+                    let (o, n) = plane_of(s, f)?;
+                    half_space(s, o, n)?
+                }
+                other => {
+                    let body = enclosed::body(s, other)?;
+                    // The void side of a post is outside it, of a bore inside it.
+                    if enclosed::hollow(s, f) { body } else { boolean::difference(&cut, &body)? }
+                }
+            };
+            cut = boolean::intersection(&cut, &outside)?;
+        }
+        return Ok(Gap::Cut(cut));
+    }
     for f in near {
         let inside = match &s.face(f).surface {
             Surface::Plane(_) => {
                 let (o, n) = plane_of(s, f)?;
                 half_space(s, o, -n)?
             }
-            Surface::Cylinder(c) if !s.face(f).reversed => {
-                let b = measure::bbox(s);
-                let reach = b.diagonal() + b.center().dist(c.frame.origin) + 1.0;
-                let base = c.frame.origin - c.frame.z * reach;
-                let fr = Frame::new(base, c.frame.z, c.frame.x)?;
-                extrude(
-                    &Profile::circle(Vec2::ZERO, 2.0 * c.radius),
-                    &fr,
-                    2.0 * reach,
-                    "cyl",
-                )?
-            }
             other => {
-                return Err(Error::Unsupported(format!(
-                    "closing a gap against a {} face",
-                    other.kind()
-                )));
+                let body = enclosed::body(s, other)?;
+                if enclosed::hollow(s, f) { boolean::difference(&fill, &body)? } else { body }
             }
         };
         fill = boolean::intersection(&fill, &inside)?;
     }
-    boolean::union(s, &fill)
+    Ok(Gap::Fill(fill))
+}
+
+/// The block round a gap that is turned about an axis: the rims all circles about one line (and
+/// the seams of the deleted faces), the cylinder of the widest of them, `bulge` more where a ball
+/// reaches out past them, from the first to the last of them along the axis. The box about such rims
+/// has corners that stand out of the part. `None` for any other gap.
+fn turned_block(s: &Brep, faces: &[FaceId], rims: &[EdgeId], bulge: f64) -> Result<Option<Brep>> {
+    let mut axis: Option<(Point3, Vec3)> = None;
+    let (mut lo, mut hi, mut wide) = (f64::INFINITY, f64::NEG_INFINITY, 0.0_f64);
+    for &e in rims {
+        let edge = s.edge(e);
+        // A seam: an edge that one deleted face runs along both ways, whatever its curve.
+        let uses = s.edge_uses(e);
+        if uses.first().map(|&u| s.coedge_face(u)).is_some_and(|f| faces.contains(&f) && uses.iter().all(|&u| s.coedge_face(u) == f)) {
+            continue;
+        }
+        match &edge.curve {
+            None => continue,
+            Some(Curve::Circle(c)) => {
+                let (o, z) = *axis.get_or_insert((c.frame.origin, c.frame.z));
+                let off = c.frame.origin - o;
+                let about_one_line = c.frame.z.cross(z).norm() <= 1e-6 && (off - z * off.dot(z)).norm() <= 1e-6; // tol: parallel axes, centres on the first one's
+                if !about_one_line {
+                    return Ok(None);
+                }
+                let along = off.dot(z);
+                lo = lo.min(along);
+                hi = hi.max(along);
+                wide = wide.max(c.radius);
+            }
+            Some(_) => return Ok(None),
+        }
+    }
+    let Some((o, z)) = axis else { return Ok(None) };
+    if hi - lo <= tol::LINEAR {
+        return Ok(None);
+    }
+    let fr = Frame::new(o + z * lo, z, z.any_perpendicular())?;
+    extrude(&Profile::circle(Vec2::ZERO, 2.0 * (wide + bulge)), &fr, hi - lo, "fill").map(Some)
+}
+
+/// Of the directions across `z` that straight edges of `faces` run in, the one whose box about
+/// `rims` (square to `z`) holds the least: the solid's own directions, not an arbitrary pair, so a
+/// fill block follows the part however it lies.
+fn tightest_across<'a>(s: &Brep, faces: impl Iterator<Item = &'a FaceId>, z: Vec3, rims: &[EdgeId]) -> Option<Vec3> {
+    let mut best: Option<(f64, Vec3)> = None;
+    for &f in faces {
+        for &lp in &s.face(f).loops {
+            for &c in &s.lp(lp).coedges {
+                let Some(Curve::Line(line)) = &s.edge(s.coedge(c).edge).curve else { continue };
+                let across = line.dir - z * line.dir.dot(z);
+                let Some(x) = across.unit().filter(|_| across.norm() > 1e-6) else { continue }; // tol: a direction this close to z is z
+                let Ok(frame) = Frame::new(Point3::ZERO, z, x) else { continue };
+                let mut bounds = Aabb::EMPTY;
+                for &e in rims {
+                    edge_bounds(s, e, &frame, &mut bounds);
+                }
+                let size = bounds.max - bounds.min;
+                let volume = size.x * size.y;
+                if best.is_none_or(|(least, _)| volume < least * (1.0 - 1e-9)) { // tol: equal boxes keep the first
+                    best = Some((volume, x));
+                }
+            }
+        }
+    }
+    best.map(|(_, x)| x)
 }
 
 /// Grows `b`, in `axes`' coordinates, to hold edge `e`: its ends, and each place between them
@@ -704,5 +1030,168 @@ mod tests {
         let o = offset(&c, 1.0, "o").unwrap();
         close(measure::volume(&o), want);
         assert!(crate::check::check(&o).is_empty());
+    }
+
+    #[test]
+    fn a_frustums_cavity_closing_below_its_far_face_is_the_cone_of_its_apex() {
+        // The 6 to 3 frustum, 4 tall (sin a = 0.6, the whole cone 8 tall), shelled 2.7 thick: the
+        // cavity cone's apex is at 8 - 2.7 / 0.6 = 3.5, below the top at 4, and its base on the
+        // bottom moved up to 2.7: a cone 0.8 tall of radius 0.6. Open at the top and at both ends
+        // alike (the bottom out to -2.7: a cone 3.5 tall from the plane z = 0, radius 2.625).
+        let f = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 4.0, "f").unwrap();
+        let face = |lo: f64, hi: f64| f.face_ids().find(|&g| {
+            let b = crate::measure::face_bbox(&f, g);
+            matches!(f.face(g).surface, Surface::Plane(_)) && b.min.z > lo && b.max.z < hi
+        }).unwrap();
+        let (bottom, top) = (face(-0.1, 0.1), face(3.9, 4.1));
+        let whole = PI / 3.0 * 4.0 * (36.0 + 18.0 + 9.0);
+        let sealed = shell(&f, &[top], 2.7, Wall::Inward, "s").unwrap();
+        close(measure::volume(&sealed), whole - PI / 3.0 * 0.36 * 0.8);
+        let through = shell(&f, &[bottom, top], 2.7, Wall::Inward, "s").unwrap();
+        close(measure::volume(&through), whole - PI / 3.0 * 2.625 * 2.625 * 3.5);
+    }
+
+    #[test]
+    fn deleting_the_holes_of_a_plate_fills_them_however_the_plate_lies() {
+        // A 10 x 5 plate, 1 thick, with three holes: deleting their walls leaves the whole plate,
+        // 50, in any pose (the fill block must not stick out of a turned plate).
+        let at = |k: f64| Vec2::new(2.5 * k, 2.5);
+        let holes = (1..=3).map(|k| Profile::circle(at(k as f64), 1.2 + 0.1 * k as f64).loops.remove(0));
+        let plate = Profile::rect(Vec2::new(5.0, 2.5), 10.0, 5.0).with_holes(holes);
+        for z in [Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 2.0, 3.0).unit().unwrap(), Vec3::new(-2.0, 1.0, 0.5).unit().unwrap()] {
+            let pose = Frame::new(Point3::new(1.0, -2.0, 3.0), z, z.any_perpendicular()).unwrap();
+            let b = extrude(&plate, &pose, 1.0, "p").unwrap();
+            let walls: Vec<FaceId> = b.face_ids().filter(|&f| matches!(b.face(f).surface, Surface::Cylinder(_))).collect();
+            assert_eq!(walls.len(), 3);
+            let filled = delete_faces(&b, &walls).unwrap();
+            close(measure::volume(&filled), 50.0);
+        }
+    }
+
+    #[test]
+    fn deleting_two_holes_leaves_the_one_between_them() {
+        // The 10 x 5 plate with holes of diameter 1, 1.5 and 2 along its middle: deleting the first and
+        // the last fills them and leaves the middle one, V = 50 - pi (0.75)^2 = 48.2327 (1 thick).
+        let holes = [(2.0, 1.0), (5.0, 1.5), (8.0, 2.0)].map(|(x, d)| Profile::circle(Vec2::new(x, 2.5), d).loops.remove(0));
+        let b = extrude(&Profile::rect(Vec2::new(5.0, 2.5), 10.0, 5.0).with_holes(holes), &Frame::WORLD, 1.0, "p").unwrap();
+        let wall = |x: f64| b.face_ids().find(|&f| matches!(b.face(f).surface, Surface::Cylinder(_)) && (crate::measure::face_bbox(&b, f).center().x - x).abs() < 0.1).unwrap();
+        let out = delete_faces(&b, &[wall(2.0), wall(8.0)]).unwrap();
+        close(measure::volume(&out), 50.0 - PI * 0.75 * 0.75);
+    }
+
+    #[test]
+    fn deleting_a_boss_leaves_the_plate_and_a_round_in_an_inside_corner_the_sharp_corner() {
+        // A disc of radius 8 and 4 thick under a post of radius 3 and 8 tall: deleting the post's wall and
+        // top leaves the disc, V = pi 8^2 4.
+        let disc = crate::primitive::cylinder(&Frame::new(Point3::new(0.0, 0.0, -4.0), Vec3::Z, Vec3::X).unwrap(), 8.0, 4.0, "d").unwrap();
+        let post = crate::primitive::cylinder(&Frame::WORLD, 3.0, 8.0, "p").unwrap();
+        let part = boolean::union(&disc, &post).unwrap();
+        let wall = part.face_ids().find(|&f| matches!(&part.face(f).surface, Surface::Cylinder(c) if c.radius < 4.0)).unwrap();
+        let top = part.face_ids().find(|&f| matches!(&part.face(f).surface, Surface::Plane(_)) && crate::measure::face_bbox(&part, f).min.z > 7.9).unwrap();
+        let out = delete_faces(&part, &[wall, top]).unwrap();
+        close(measure::volume(&out), PI * 64.0 * 4.0);
+    }
+
+    #[test]
+    fn a_shell_goes_past_a_round_thinner_than_its_wall() {
+        // A puck of radius 5 and 4 tall, its top rim rounded by 0.5, shelled 1 thick open at the bottom: the
+        // round is thinner than the wall and closes away, the cavity a cylinder of radius 4 and height 3.
+        // The rounded puck holds pi 25 4 less what the round took off the rim (Pappus: the square less the
+        // quarter disc, 0.5^2 (1 - pi/4), its centre of area 0.5 (5/6 - pi/4) / (1 - pi/4) in from the rim).
+        let puck = crate::primitive::cylinder(&Frame::WORLD, 5.0, 4.0, "p").unwrap();
+        let rim = puck.edge_ids().find(|&e| matches!(puck.edge(e).curve, Some(Curve::Circle(ref c)) if c.frame.origin.z > 3.9)).unwrap();
+        let rounded = blend::fillet_edges(&puck, &[rim], 0.5, "r").unwrap();
+        let base = rounded.face_ids().find(|&f| matches!(rounded.face(f).surface, Surface::Plane(_)) && crate::measure::face_bbox(&rounded, f).max.z < 0.1).unwrap();
+        let area = 0.25 * (1.0 - PI / 4.0);
+        let inward = 0.5 * (5.0 / 6.0 - PI / 4.0) / (1.0 - PI / 4.0);
+        let outer = PI * 25.0 * 4.0 - 2.0 * PI * (5.0 - inward) * area;
+        let cup = shell(&rounded, &[base], 1.0, Wall::Inward, "s").unwrap();
+        close(measure::volume(&cup), outer - PI * 16.0 * 3.0);
+    }
+
+    #[test]
+    fn a_healed_cone_is_one_face_again() {
+        // A frustum 6 to 3, 6 tall, its top rim rounded by 1: deleting the round heals the cone and
+        // the top, three faces again (cone, top, bottom), the frustum's 126 pi.
+        let cone = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 6.0, "c").unwrap();
+        let rim = cone.edge_ids().find(|&e| matches!(cone.edge(e).curve, Some(Curve::Circle(ref c)) if c.frame.origin.z > 5.9)).unwrap();
+        let rounded = blend::fillet_edges(&cone, &[rim], 1.0, "r").unwrap();
+        let round = rounded.face_ids().find(|&f| matches!(rounded.face(f).surface, Surface::Torus(_))).unwrap();
+        let healed = delete_faces(&rounded, &[round]).unwrap();
+        close(measure::volume(&healed), 126.0 * PI);
+        assert_eq!(healed.face_ids().count(), 3);
+        assert!(healed.face_ids().all(|f| !healed.face(f).names.is_empty()));
+    }
+
+    #[test]
+    fn a_cube_edge_rounded_with_a_radius_growing_along_it() {
+        // brep-bench fillet/variable-radius-edge: the 10 cube, the edge x = y = 10 rounded by circles
+        // square to it, radius 1 + z / 10: 1000 - (70/3)(1 - pi/4).
+        let cube = crate::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "c").unwrap();
+        let edge = cube
+            .edge_ids()
+            .find(|&e| {
+                let (a, b) = (cube.vertex(cube.edge(e).start).point, cube.vertex(cube.edge(e).end).point);
+                (a.x - 10.0).abs() < 1e-9 && (a.y - 10.0).abs() < 1e-9 && (b.x - 10.0).abs() < 1e-9 && (b.y - 10.0).abs() < 1e-9 // tol: the edge x = y = 10
+            })
+            .unwrap();
+        let rounded = fillet_variable(&cube, edge, Point3::new(10.0, 10.0, 0.0), 1.0, 2.0, "f").unwrap();
+        let want = 1000.0 - 70.0 / 3.0 * (1.0 - PI / 4.0);
+        assert!((measure::volume(&rounded) - want).abs() < 1e-9 * want, "{} against {want}", measure::volume(&rounded));
+        // The other way round is the mirror image.
+        let flipped = fillet_variable(&cube, edge, Point3::new(10.0, 10.0, 10.0), 1.0, 2.0, "f").unwrap();
+        assert!((measure::volume(&flipped) - want).abs() < 1e-9 * want);
+        assert!(rounded.face_ids().any(|f| rounded.face(f).names.iter().any(|n| n.face == "round")));
+    }
+
+    #[test]
+    fn every_face_of_a_shell_is_named_from_the_start() {
+        // The frustum whose cavity closes below its top (the cone of its apex), a puck's rounds taken
+        // out of its cavity, and a block wrapped outward: each face is named, the cavity's and the
+        // outward wall's each for the face of the solid it offsets.
+        let named = |b: &Brep| b.face_ids().all(|f| !b.face(f).names.is_empty());
+        let frustum = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 4.0, "f").unwrap();
+        let top = frustum.face_ids().find(|&g| matches!(frustum.face(g).surface, Surface::Plane(_)) && crate::measure::face_bbox(&frustum, g).min.z > 3.9).unwrap();
+        let sealed = shell(&frustum, &[top], 2.7, Wall::Inward, "s").unwrap();
+        assert!(named(&sealed));
+        let offsets = |b: &Brep| b.face_ids().filter(|&f| b.face(f).names.iter().any(|n| n.face.starts_with("inner_f"))).count();
+        assert_eq!(offsets(&sealed), 2);
+        let block = crate::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "b").unwrap();
+        let lid = block.face_ids().find(|&g| crate::measure::face_bbox(&block, g).min.z > 9.9).unwrap();
+        let wrapped = shell(&block, &[lid], 1.0, Wall::Outward, "s").unwrap();
+        assert!(named(&wrapped));
+        assert_eq!(offsets(&wrapped), 5);
+    }
+
+    #[test]
+    fn a_hemispheres_rim_chamfered_by_distances_along_its_faces() {
+        // A hemisphere of radius 5 on its plane z = 0, its rim chamfered 2 along the plane and 1 along the
+        // sphere (a chord of 1: a turn of 2 asin(1/10)): the corner left of the chord from (3, 0) to (5 cos 0.2, 5 sin 0.2)
+        // in the half plane, turned about the axis: the triangle with the plane, whose centroid is the
+        // mean of its corners, and the circular segment out to the arc (Pappus on each).
+        let o = Point3::ZERO;
+        let f = Frame::from_axis(o, Vec3::Z).unwrap();
+        let line = |a: [f64; 2], b: [f64; 2]| Segment::Line { a: Vec2::new(a[0], a[1]), b: Vec2::new(b[0], b[1]) };
+        let meridian = Profile {
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    named(line([0.0, 0.0], [5.0, 0.0]), "base"),
+                    named(Segment::Arc { center: Vec2::ZERO, radius: 5.0, start: 0.0, sweep: PI / 2.0 }, "dome"),
+                    named(line([0.0, 5.0], [0.0, 0.0]), "axis"),
+                ],
+            }],
+        };
+        let dome = revolve(&meridian, &Frame::new(o, -f.y, f.x).unwrap(), o, f.z, TAU, "h").unwrap();
+        let rim = dome.edge_ids().find(|&e| matches!(dome.edge(e).curve, Some(Curve::Circle(ref c)) if c.frame.origin.z.abs() < 1e-9 && (c.radius - 5.0).abs() < 1e-9)).unwrap();
+        let base = dome.face_ids().find(|&g| matches!(dome.face(g).surface, Surface::Plane(_))).unwrap();
+        let cut = chamfer_two(&dome, rim, base, 2.0, 1.0, "c").unwrap();
+        let theta = 2.0 * 0.1_f64.asin();
+        let (x2, y2) = (5.0 * theta.cos(), 5.0 * theta.sin());
+        let triangle = 2.0 * PI * ((3.0 + 5.0 + x2) / 3.0) * y2;
+        let segment_area = 12.5 * (theta - theta.sin());
+        let centroid = 4.0 * 5.0 * (theta / 2.0).sin().powi(3) / (3.0 * (theta - theta.sin())) * (theta / 2.0).cos();
+        let taken = triangle + 2.0 * PI * centroid * segment_area;
+        close(measure::volume(&cut), 2.0 / 3.0 * PI * 125.0 - taken);
+        assert!(cut.face_ids().any(|g| cut.face(g).names.iter().any(|n| n.face == "bevel_0")));
     }
 }

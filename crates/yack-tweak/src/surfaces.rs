@@ -2,7 +2,7 @@
 // Adapted from springrep@a03e8a1 src/edit/tweak.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from edit/tweak.rs to tweak/mod.rs (M2.4, T6) and to yack-tweak (M3 W7); split out of
 // lib.rs by what it does (hardening T1); checked access, the solid finished by the crate's `finished`
-// (hardening T2).
+// (hardening T2); a rigid move pins the vertices its faces all go with (move_faces fix, w-h1).
 //! Faces moved onto any new surfaces with the solid's topology kept: each vertex settles where its
 //! faces' new surfaces meet, and each edge is their meeting between its moved ends.
 
@@ -112,11 +112,33 @@ pub fn move_faces_by(b: &Brep, faces: &[FaceId], motion: &Transform) -> Result<B
     if !square || (det - 1.0).abs() > tol::ANGULAR {
         return invalid("faces move by a rigid motion: a rotation and a shift");
     }
-    let moved = faces
+    let moved: BTreeMap<FaceId, Surface> = faces
         .iter()
         .map(|&f| (f, b.face(f).surface.transformed(motion)))
         .collect();
-    move_faces(b, &moved)
+    // A face the motion carries onto itself (a wall the moved faces slide along) is as good as
+    // moved with them. A vertex whose faces all move with the motion so goes with it exactly:
+    // settled onto its faces' new surfaces instead, it would have to find a tangency (a round
+    // sliding along the wall it meets), where the settle is slow and lands off it.
+    let carries = |f: FaceId| {
+        moved.contains_key(&f) || {
+            let s = &b.face(f).surface;
+            let mut on = b.face(f).loops.iter().flat_map(|&lp| b.lp(lp).coedges.iter()).filter_map(|&c| {
+                let x = b.edge(b.coedge(c).edge);
+                x.curve.as_ref().map(|cv| [b.vertex(x.start).point, cv.eval(0.5 * (x.range.0 + x.range.1))])
+            });
+            on.all(|pts| pts.iter().all(|&q| crate::intersect::csi::signed_distance(s, motion.point(q)).abs() <= tol::LINEAR))
+        }
+    };
+    let carried: std::collections::BTreeSet<FaceId> = b.face_ids().filter(|&f| carries(f)).collect();
+    let pins: BTreeMap<VertexId, Point3> = vertex_faces(b)
+        .into_iter()
+        // Only where an unmoved face is carried too: a vertex of moved faces alone settles at the
+        // motion's image already.
+        .filter(|(_, fs)| fs.iter().any(|f| moved.contains_key(f)) && fs.iter().any(|f| !moved.contains_key(f)) && fs.iter().all(|f| carried.contains(f)))
+        .map(|(v, _)| (v, motion.point(b.vertex(v).point)))
+        .collect();
+    moved_with(b, &moved, &pins, Some((motion, &carried)))
 }
 
 /// Where the pole at `uv` of the surface it was a pole of lies on `s`: a moved cone keeps its
@@ -136,6 +158,20 @@ pub fn move_faces_pinned(
     b: &Brep,
     moved: &BTreeMap<FaceId, Surface>,
     pins: &BTreeMap<VertexId, Point3>,
+) -> Result<Brep> {
+    moved_with(b, moved, pins, None)
+}
+
+/// [`move_faces_pinned`]; with `carry`, a rigid motion and the faces it carries onto their new
+/// surfaces (the moved ones, and any it slides along itself), each edge of carried faces alone
+/// whose ends are pinned is the old edge carried by the motion. Traced instead, its old middle
+/// settled onto the new surfaces can land on the wrong side of a closed curve (a round's end arc
+/// moved further than its radius), and the edge would run the long way round.
+fn moved_with(
+    b: &Brep,
+    moved: &BTreeMap<FaceId, Surface>,
+    pins: &BTreeMap<VertexId, Point3>,
+    carry: Option<(&Transform, &std::collections::BTreeSet<FaceId>)>,
 ) -> Result<Brep> {
     clear_of_contacts(b, moved.keys())?;
     let surface_of = |f: FaceId| moved.get(&f).unwrap_or(&b.face(f).surface);
@@ -202,6 +238,17 @@ pub fn move_faces_pinned(
         };
         if !touched {
             edges.push(out.add_edge(old.clone(), x.range, s, t));
+            continue;
+        }
+        if let Some((motion, carried)) = carry
+            && faces.iter().all(|f| carried.contains(f))
+            && pins.contains_key(&x.start)
+            && pins.contains_key(&x.end)
+        {
+            if let Some(laid) = rebuilt.last_mut() {
+                *laid = true;
+            }
+            edges.push(out.add_edge(old.transformed(motion), x.range, s, t));
             continue;
         }
         if let Some(laid) = rebuilt.last_mut() {

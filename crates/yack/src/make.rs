@@ -143,13 +143,13 @@ pub fn spindle_torus(frame: &Frame, major: f64, minor: f64) -> Result<Solid> {
     }
     let (c, z) = (frame.origin().to_array(), frame.z().vec().to_array());
     let cadrs = || engine_cadrs::make(op, |k| yack_cadrs::yack_glue::torus(k, c, z, major, minor));
-    // yack-build's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it;
-    // its one face is `tube`, as a ring torus's
+    // yack-build's native rung first (bake-off doc/donors.md: geometry/spindle-torus bit-identical);
+    // cadrs answers what it declines (a horn torus). Its one face is `tube`, as a ring torus's
     let native = || {
         let feature = engine::feature();
         engine::made(&feature, op, yack_build::spindle::spindle_torus(&engine::frame(frame), major, minor, &feature))
     };
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }]))
 }
 
 /// A cone (or frustum) on the frame's z axis: radius `bottom` at z = 0, `top` at z = `height`.
@@ -638,9 +638,15 @@ pub fn nurbs_solid(
     weights: Option<&[Vec<f64>]>,
 ) -> Result<Solid> {
     let op = "nurbs_solid";
-    firewall::op(op, &[], || {
-        ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::nurbs_solid(op, frame, degree, knots, ctrl, weights) }])
-    })
+    let cadrs = || engine_cadrs::nurbs_solid(op, frame, degree, knots, ctrl, weights);
+    // yack-build's closed NURBS net after cadrs, as "native" until a bake-off orders it; its one
+    // face is `side`
+    let native = || {
+        let feature = engine::feature();
+        let net: Vec<Vec<_>> = ctrl.iter().map(|row| row.iter().map(|&p| engine::p3(p)).collect()).collect();
+        engine::made(&feature, op, yack_build::nurbs::nurbs_solid(&engine::frame(frame), degree, knots, &net, weights, &feature))
+    };
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
 }
 
 /// The solid with no pieces.

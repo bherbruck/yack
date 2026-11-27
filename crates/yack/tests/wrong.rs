@@ -79,7 +79,6 @@ fn shaft_two_flats_deleted() {
 }
 
 #[test]
-#[ignore = "M3: springrep's variable fillet is 1.6e-5 off its exact volume; no guard yet"]
 fn variable_radius_edge() {
     not(
         (|| {

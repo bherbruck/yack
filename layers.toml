@@ -326,6 +326,7 @@ ruled = ["loft"]
 drafted = ["loft"]
 spindle = ["sweep"]
 nurbs = ["build"]
+sewn = ["build"]
 
 [modules.yack-boolean]
 arrange = []

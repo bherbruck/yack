@@ -5,4 +5,4 @@ case = "chain-rim-after-cut-b9009b4a92bd4075"
 seed = 3
 reason = "pass -> refused, on purpose: the hole-rim fillet's contact runs 0.030 mm past the plate's edge (contact radius 4.6277 against 4.5975 to the side). The protocol fit rule says refuse; the old cadrs result only passed because the overshoot is 3.7e-4 mm high. Same failure as the wrong 2ee7ef/32e3f4, smaller. Lead ruling 2026-11-20."
 owner = "team-lead"
-expires = "M3"
+expires = "M6"

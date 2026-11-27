@@ -29,7 +29,7 @@ pub use vertices::{contacts, faces_at_contacts};
 
 use crate::{
     crossings::{Crossing, crossings, depth},
-    loops::{stray_loop, uv_gap, within_vertex},
+    loops::{slit_loop, stray_loop, uv_gap, within_vertex},
     math::{Point3, Vec2},
     solids::{nested, stray_voids},
     topo::{Brep, CoedgeId, FaceId, VertexId, coedge_params, face_domain},
@@ -379,7 +379,8 @@ fn check_with(b: &Brep, each: bool, sides: Option<&[Option<usize>]>, crossing: b
                 area
             };
             let want_positive = (li == 0) != face.reversed;
-            if !b.is_vertex_loop(lp) && (area > 0.0) != want_positive {
+            // A slit encloses nothing, so its area has no sign to test.
+            if !b.is_vertex_loop(lp) && (area > 0.0) != want_positive && !slit_loop(b, f, lp) {
                 issue(format!("face {} loop {li} runs the wrong way", f.index()));
             }
         }

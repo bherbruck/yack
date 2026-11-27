@@ -178,6 +178,20 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_slid_flat_short_of_its_hole() {
+        // brep-bench swept/ring-slid-flat-short-of-its-hole: R 6, r 2, slid 6 along x, short of
+        // the hole's widest gap, so lines through the hole keep a gap. No closed form: the value
+        // is a converged independent integral of each line's covered length over the shadow
+        // (nested Gauss–Legendre with the square-root ends smoothed; its control, the ring slid
+        // past its hole, matches that case's closed form to 7e-16).
+        let ring = yack_build::primitive::torus(&Frame::WORLD, 6.0, 2.0, "ring").unwrap();
+        let s = swept(&ring, &Motion::Slide { by: Vec3::new(6.0, 0.0, 0.0) }, "f").unwrap();
+        let got = yack_measure::volume(&s);
+        let want = 1031.8762370261993;
+        assert!((got - want).abs() <= 1e-9 * want, "{got} against {want}");
+    }
+
+    #[test]
     fn a_ring_slid_aslant_declines() {
         let ring = yack_build::primitive::torus(&Frame::WORLD, 5.0, 1.0, "ring").unwrap();
         let s = swept(&ring, &Motion::Slide { by: Vec3::new(3.0, 0.0, 4.0) }, "f");
@@ -215,6 +229,22 @@ mod tests {
     }
 
     #[test]
+    fn whole_turns_are_solids_of_revolution() {
+        let pi = std::f64::consts::PI;
+        // The cube [0, 10]³ about its edge, the z axis: the cylinder through its far corner.
+        let whole =
+            Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 2.0 * pi };
+        near(yack_measure::volume(&swept(&cube(), &whole, "f").unwrap()), 2000.0 * pi);
+        // More than a whole turn covers the same.
+        let more = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: -1.0, to: 7.0 };
+        near(yack_measure::volume(&swept(&cube(), &more, "f").unwrap()), 2000.0 * pi);
+        // A ball r 2 about (5, 0, 0), all the way round z: the torus R 5, r 2.
+        let frame = Frame::new(Point3::new(5.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap();
+        let ball = yack_build::primitive::sphere(&frame, 2.0, "ball").unwrap();
+        near(yack_measure::volume(&swept(&ball, &whole, "f").unwrap()), 40.0 * pi * pi);
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
@@ -235,8 +265,6 @@ mod tests {
             rise: Rise::PerTurn(1.0),
         };
         assert!(matches!(swept(&cube(), &screw, "f"), Err(Error::Unsupported(_))));
-        let whole = Motion::Turn { axis_point: Point3::ZERO, axis: Vec3::Z, from: 0.0, to: 7.0 };
-        assert!(matches!(swept(&cube(), &whole, "f"), Err(Error::Unsupported(_))));
         let nothing = Motion::Slide { by: Vec3::ZERO };
         assert!(matches!(swept(&cube(), &nothing, "f"), Err(Error::InvalidInput(_))));
     }

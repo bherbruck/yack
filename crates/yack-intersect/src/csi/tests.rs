@@ -415,6 +415,26 @@ fn a_line_touching_a_torus_within_rounding_meets_it_once_where_it_touches() {
 }
 
 #[test]
+fn a_line_nearly_along_a_cones_generator_meets_it_at_both_roots_however_far_apart() {
+    // The cone z² = x² + y² (apex at the origin), met by the line (1 − s + t, δt, 1 + t) with
+    // s = 1e-7 and δ = 1e-5: (1 − s + t)² + δ²t² − (1 + t)² = δ²t² − 2s·t − (2s − s²), so its
+    // roots are t = (s ± √(s² + δ²(2s − s²)))/δ², about −0.9995 and 2001, in steps of the
+    // direction (1, δ, 1), 1.414 long. The line stays within s/(2√2) of the cone midway between
+    // them, which a touching pair would also do; but the far root lies thousands of units out, so
+    // it is two crossings: one near the apex, one far along the generator.
+    let (s, delta) = (1e-7, 1e-5_f64);
+    let cone = crate::geom::Cone { frame: Frame::WORLD, radius: 0.0, half_angle: TAU / 8.0 };
+    let surface = Surface::Cone(cone.clone());
+    let d = Vec3::new(1.0, delta, 1.0);
+    let step = d.norm();
+    let hits = line_cone(Vec3::new(1.0 - s, 0.0, 1.0), d.unit().unwrap(), &surface, &cone);
+    assert_eq!(hits.ts.len(), 2, "{hits:?}");
+    let scale = |t: f64| t * step;
+    assert!((hits.ts[0] - scale(-0.9995)).abs() < 1e-2, "{hits:?}");
+    assert!((hits.ts[1] - scale(2001.0)).abs() < 1.0, "{hits:?}");
+}
+
+#[test]
 fn a_line_cutting_a_tube_between_two_samples_meets_it_twice() {
     // The tube about z, centred at z = 0.05, cut by a line along z at r = 4 + d where
     // (1.5 − d)² = 1.5² − 0.04²: it crosses at z = 0.05 ± 0.04, both between the samples at
