@@ -65,6 +65,23 @@ pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -
         };
     let open: Vec<FaceId> =
         of.iter().filter(|&(_, old)| open.contains(old)).map(|(&new, _)| new).collect();
+    let inner = FaceName::new(feature, FaceName::INNER);
+    // A frustum (with its rounds taken out) whose cavity, the cone moved in, comes to its apex
+    // before the plane nearer that apex: that plane never bounds the cavity, which is the moved
+    // cone completed to its apex on the far plane. It is convex, so it has no concave edge to round,
+    // and the rounded shell is the sharp one.
+    if let Some((mut cavity, from)) =
+        crate::cone_cavity::closed_cavity(&base, &open, thickness).map_err(declined)?
+    {
+        for f in cavity.face_ids().collect::<Vec<_>>() {
+            let mut names: BTreeSet<FaceName> = std::iter::once(inner.clone()).collect();
+            if let Some(old) = from.get(&f).and_then(|g| of.get(g)) {
+                names.insert(FaceName::new(feature, format!("inner_f{}", old.index())));
+            }
+            cavity.set_face_names(f, names);
+        }
+        return boolean::difference(s, &cavity);
+    }
     let walls: Vec<FaceId> = base.face_ids().filter(|f| !open.contains(f)).collect();
     if topo::local::radius_collapses(&base, Some(&walls), thickness, true) {
         return Err(Error::Unsupported(
@@ -85,7 +102,6 @@ pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -
             "a rounded shell whose moved walls cross or vanish (the cavity's rounds are not the moved solid's)".into(),
         ));
     }
-    let inner = FaceName::new(feature, FaceName::INNER);
     // The move kept the topology and with it the ids: each cavity face offsets the face of `base`
     // with its id, which is the face `of` names in `s`.
     let mut moved = moved;
@@ -243,8 +259,33 @@ mod tests {
         let rounded = blend::fillet_edges(&puck, &rims, 2.0, "r").unwrap();
         let out = shell_rounded(&rounded, &[], 3.0, "s").unwrap();
         close(measure::volume(&out), measure::volume(&rounded) - 36.0 * PI);
-        close(measure::volume(&out), 957.9725995316304);
         assert!(crate::check::check(&out).is_empty());
+    }
+
+    #[test]
+    fn a_rounded_frustum_shelled_past_its_round_closes_its_cavity_to_a_point() {
+        // The frustum from radius 6 at z = 0 to 3 at z = 6 (radius 6 − z/2: its cone's apex at
+        // z = 12, tan a = 1/2, sin a = 1/√5), its bottom rim rounded 1.5, shelled 2 open at the top.
+        // The round is thinner than the wall and vanishes; the side moved 2 in is the cone of the
+        // same angle with its apex 2/sin a = 2√5 lower, at h = 12 − 2√5 < 8 (where the open top
+        // would move), so the cavity is that cone down to the bottom moved up to z = 2, radius
+        // (h − z)/2. Inside the frustum it runs from z = 2 to the top at z = 6, a frustum of radii
+        // R₁ = (h − 2)/2 and R₂ = (h − 6)/2 that the wall loses: V = V(s) − (4π/3)(R₁² + R₁R₂ + R₂²).
+        let frustum = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 6.0, "c").unwrap();
+        let rim: Vec<_> = crate::convex_edges(&frustum)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| frustum.vertex(frustum.edge(e).start).point.z.abs() < 1e-9)
+            .collect();
+        let rounded = blend::fillet_edges(&frustum, &rim, 1.5, "r").unwrap();
+        let out = shell_rounded(&rounded, &[top(&rounded, 6.0)], 2.0, "s").unwrap();
+        let h = 12.0 - 2.0 * 5f64.sqrt();
+        let (r1, r2) = ((h - 2.0) / 2.0, (h - 6.0) / 2.0);
+        close(measure::volume(&out), measure::volume(&rounded) - 4.0 * PI / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2));
+        assert!(crate::check::check(&out).is_empty());
+        let inner = FaceName::new("s", FaceName::INNER);
+        assert!(out.face_ids().all(|f| !out.face(f).names.is_empty()));
+        assert!(out.face_ids().filter(|&f| out.face(f).names.contains(&inner)).count() == 2);
     }
 
     #[test]

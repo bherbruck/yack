@@ -59,6 +59,15 @@ pub fn thicken_sheet(
     if let Some(turned) = turned_slab(s, faces, thickness, feature) {
         return Ok(turned);
     }
+    // Past those, a free rim is swept along its neighbour face; where that neighbour meets the sheet
+    // at a slant, the sweep is not along the sheet's normal.
+    if !topo::local::rims_square(s, faces) {
+        return Err(Error::Unsupported(
+            "a thickened sheet: a rim meets its neighbour at a slant, which this rung would sweep \
+             along the neighbour, not the sheet's normal"
+                .into(),
+        ));
+    }
     let by: BTreeMap<FaceId, f64> = faces.iter().map(|&f| (f, thickness)).collect();
     // Bends the move closes are taken out of the solid the sheet is moved from; `kept` takes each
     // kept face of `s` to its face there.
@@ -522,8 +531,10 @@ mod tests {
         assert!(out.face_ids().all(|f| !out.face(f).names.is_empty()));
         let inward = thicken_sheet(&frustum, &side, -1.0, true, "t").unwrap();
         close(measure::volume(&inward), 2.0 * PI * 4.1 * 5.0);
-        // Moved past the axis at its narrow end: declined.
+        // Moved past the axis at its narrow end: not this case, and its rims meet the caps at a
+        // slant, so the rung declines it.
         assert!(turned_slab(&frustum, &side, -4.0, "t").is_none());
+        assert!(matches!(thicken_sheet(&frustum, &side, -4.0, true, "t"), Err(Error::Unsupported(_))));
     }
 
     #[test]

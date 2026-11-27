@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree 08fccce+486a2b7b
-# reason: M4 native rungs proven equal to cadrs (snapshot head-08fccce+cb1f1074): conformance seed 0: 913 lines (delete_faces/deleted-* ~330, shell families ~400 with the rounded-shell rungs, fillet-variable 20, offset OF4/OF5 30, move-faces 19 (MF1), part-housings-enclosure 4 (shell step)); bench 110 ids (delete_faces 44, shell 36, offset 12, thicken 9, chamfer_two 7, fillet-variable 1, spindle 1). Each family has a before/after proof (cmp-values rule: outcomes/verdicts equal, V/A/measures within 1e-9, face kinds/counts/origins equal or better); w-h6's boolean ports that moved long-chains and four other families were backed out.
+# Solid::digest() per result (cargo xtask digest); tree 3910145+0e9cfa0a
+# reason: M4 native-first move_faces and draft (springrep first, cadrs fall-through; the T-block draft case still falls to cadrs), sewn native rung behind cadrs, thicken slant guard in the kernel, rounded-shell frustum fix (snapshot head-3910145+0e9cfa0a): conformance seed 0 moves 341 lines (drafts 120, closing-drafts 120, move-faces 101), bench 18 ids (draft 14, move_faces 3, shell/frustum-bottom-rounded-shelled-open-past-its-round). Proofs: w-h1 MF1/DR1 and w-m03 move_faces and draft A/B (outcomes/verdicts equal, V/A within 1e-9, face kinds/counts/origins equal), w-h2 closed form 308.81341358533155 = cadrs for the frustum.
 boolean/box-minus-through-cylinder a383360aa7cad335c1244b4fd0f92fecf2e3d5223cb2ca561f8e01868942566e
 boolean/boxes-common 6ca20909349786779d9a0e4c4be4544baf4933abea25fa93b059c8e87d5ef91d
 boolean/boxes-cut 73fe72cd0177fde9fe6237ddcb2f3ba0e951e5218eb4576198cd4bfd058b6c68
@@ -71,20 +71,20 @@ cnc/bull-nose-profile 2439fb8622e147f6a8638aec404b8f9727a8d6a397adabe7b2e8a1dbce
 cnc/five-axis-dome refused
 cnc/flat-end-mill-profile 72a70a84c50ae5d65e9716925fc03b38f01157f854495b8938357e5a0b357806
 cnc/pocket-with-an-island 47cbaad1bd08b37c8acedcf923c79a8c4d97efdffd2f62a119c2591e17f5e8cb
-draft/boss-on-plate 9e13d5ec90168195b933645ce4f9895da4b2f07ce460e0459078b33a55a39459
-draft/box-about-its-middle 94e497f7ebcc2c408e26e4ba752ceb96da96667323197f9a2e9f797bd730aa16
-draft/box-cross-drilled 0d30e2611a9efc2e87181b4e0802640129694d6284dc68db42f077b306cba6b7
-draft/box-four-sides 0f6baf02c21fb4488bc75a3386a7889ef05bc3892a9bb5aa5ff7957176970de1
-draft/box-one-side 0675f2fae121919accca83db183ede66e5006366ba2f5d23eb1b52a62c50c201
-draft/box-outward cd04bc5499618279eb4cd74cebb830c4e7e85ae1898df75c713f581e03b2db4d
-draft/box-top-drafted-away ba02d72b7db5f9e45752203045269f66deff341894878dce5bb8510ead119a2c
-draft/cylinder-parted-both-ways a4f41a3496b2367db11fc10c0e5731995c303e047af42db6ce718aa848c66692
-draft/hole-tapered 76ba5e68ae4181f633878dd8224ba143bb22f243fde86b8ea7db7607b63bb2cd
-draft/l-block-sides 9c247ab7f3d5652c797085ea10829faadc7ed8cf8b170ff9c72009d59d9d0f06
-draft/l-block-sides-drafted-until-its-arms-close 1e53ce883ea86a5a2cdc721c62299daf4adc8dfa35c2d4387c5b50f9df9f3959
-draft/pocket-walls bd7233c9ba05ce4b24982ac8cf58c70b79c0c3888de10234328614c4631af6a6
-draft/rounded-box-sides 6e1f4369c4a2b0d1c6fd1bdee690e55778aff7c0db42a82449dff683faadea26
-draft/rounded-pocket-walls 27412ca32261a1708b8d2cb2a935d508159bba3f8e32bab3702a025cf533989e
+draft/boss-on-plate 1bb0bba7f95bb16b4d9c4a8be07f1369f64900609cf3c8d22e0db27d0c387a64
+draft/box-about-its-middle 6a61a1ceb6082fe79e228c087aa508c3f5337c6b9c73486c8de88ffb4d93799c
+draft/box-cross-drilled e75eb9ca31edccd2498827e3f74b4132f261a6badf9b78e28ec98ce607c13b34
+draft/box-four-sides 1824dae92caffd5a930dca26b415be590b013bd1411947983ae0826960783efa
+draft/box-one-side d4834ff625566590cefafcf6b1c5ce91578f72dd044292e506d5158f972ee68b
+draft/box-outward d533aa04491429a143d909275fd60f001b11d4fc420f1b57dc27a106fca8f691
+draft/box-top-drafted-away bca7760e727bae16a9e1a76d89e84850432e8b1feb5d222a5a941cc8ef96a6c0
+draft/cylinder-parted-both-ways 96f8d9475f696e3395e9b71e40b39c7c656511af9821a32c31be7c577f001cae
+draft/hole-tapered 971f860fd03f57e645b816b78b952427ae5a8dc6eda3ba46993cc5ec576ac355
+draft/l-block-sides d81c2e5ba8316fd5678ba6d6707d579c89f938c897624dbbbc00853e3517f681
+draft/l-block-sides-drafted-until-its-arms-close 27d017c36679999e9831db1dcd1b0ca8a586347bb631725ab367d1663fc4c9a0
+draft/pocket-walls ccd993e2c40f1f1830d8eadb0d3ef5ba0f7ce94ded52f0d83a6b19a3adc587c5
+draft/rounded-box-sides dd4ff3729a2461f3ba7aed7f10dc016290432e44a4dc62ddfb37fec503a113d7
+draft/rounded-pocket-walls a26dc5da849538a338039a3e8d51aa763ed0014788417957e3ea382f902198a3
 draft/t-block-sides-drafted-until-its-bar-and-stem-close 5487ceb867cbd2ec2e07f1680e0afb50f390bd98011d4b0deb2f676563d6f70c
 edit/ball-flat-deleted c5e33203295abef1d872881b545857bdb4dc84cc6074605db1ffeb4ace963743
 edit/ball-on-plate-root-bevel-deleted 11157bc1e5ffef9871bfa11d986cc6e6df33f51814eccbf34e44bf8aaa34bc50
@@ -93,7 +93,7 @@ edit/blind-bore-floor-bevel-deleted 92ae1e27d27bbb2417bf47b792a9de8a1a2261429258
 edit/blind-bore-floor-round-deleted 9bfc0d8092c56c020c3f6ad2533be6c22c751e704b09331b30c68d03a8e26f80
 edit/block-bevel-deleted 15d3fe44cadb83b1fda94658f034782567bdd049d1b27b062a445868679ba8f1
 edit/block-edge-round-deleted d82a965c8755957955f16b57f05876246dc54a86836acfa14715f16867995cf2
-edit/block-top-moved-up 4b231f685a57aa02fa71f05ae9d3d0f3573114e796abbee65c6aac81b2487a45
+edit/block-top-moved-up 6387dd0da9dbe0f8778c334f615fcc98a2c6954f7937a74578002f335191aa5f
 edit/block-two-rounds-deleted 9b057e8f1c62de51ed503e584d0927c2f866d7d8fd2b328a033488a2813fdfdb
 edit/boss-deleted 16fdf9ff629196a1f15be80d0f5a44f525df8f47dbfaaa4be48cf98651b56fd4
 edit/boss-root-round-deleted 4ed2732902ff6db725c097d47df28c91488230a9c861f08b4a1421353c358c5d
@@ -121,10 +121,10 @@ edit/hole-widened ac638b3adb30e40a28b2d39681163caa9f142c08510d5ade5fe5d27f44f8a2
 edit/holes-widened-until-merged 00c912bf9fa19ac0e357ad353dfcf3dac33713899e155e49b53a1c346a45069f
 edit/hub-keyway-deleted 387ac4f687ac6cf72df19c1b6fc26bc0968f3bfa1609584d922b146e6385a193
 edit/l-block-inside-round-deleted 68b9c1ad8821e1c8bf46f66889bd5e73a4c52c67e88b572eea9e576ef78efa46
-edit/l-block-riser-moved 2f16a9dc12af9330caa86a7d8569e481b13d417d62640ee0aa85ac8dab40c61f
+edit/l-block-riser-moved b52c88513cd910595de9aa329fcabca4cfc560901b8415e03608ab4f263fbf6f
 edit/l-block-step-deleted bcc3fb75cef6dbf54c39a6c5e3f5c7d522572fc12973d637d11fee7acc6f4025
 edit/open-slot-deleted 0ef39c70b0b3ae112bec7d1bb4c603f4fbc3a76e18a608184f29d77ee7ae94ff
-edit/rounded-block-top-moved-up 22210ad400304fa5a5f626c5be4a69b4a3ce13f5b630318e528a94a116b727a2
+edit/rounded-block-top-moved-up e5823b7d20b45206be38f68aeb8ec830474ef13f4ee8fd58c7f84d9ddd92ceb9
 edit/rounded-box-top-rim-chain-deleted 4a225044298c2570906d0677ffc86788d66b818717b3b95910f24370661032e9
 edit/rounded-frustum-rounds-deleted 9697c0ce0a0c2dc40ef72968c9c15fab4309fd5e29c40e8a23c5775ea2479d21
 edit/rounded-frustum-top-round-deleted 48bb6e44b0c10ef6f0d193cac523fe82b2c095ad5db3e580f1ac3a304cc62b94
@@ -291,7 +291,7 @@ shell/cylinder-side-open 03065bec78ff28befb97321a1f9b1aa96b564bfea65920d99cf6ec4
 shell/drilled-block-open-at-its-bore 669cbd48c6c350cb676adc208a457ba1c169dd85877be4a7b469a95b37f3440d
 shell/drilled-block-open-top 45f55428479331b30d9ef951820b8a9b037afcc0ef214ccefcbc465c54e7379f
 shell/dumbbell-neck-filled e66f70856f1b8e1f4319ebd3c60e659499028913adf8625320cd4d6d63b9c218
-shell/frustum-bottom-rounded-shelled-open-past-its-round e15a35b6fde4d1c3e262dccf6ffa2c9591c06e0e3ce841a7aea0c0ca680c144e
+shell/frustum-bottom-rounded-shelled-open-past-its-round e8b2e7b80631ff0d4d2d47a9d35bcde58bbaee816e9e1cf074fce20936b1f949
 shell/frustum-open-at-both-ends-closing-below-its-top 8534bda1dfc1bc3cd2e1b143106144d7f589f01c86f98a4a137893f5aaf1a1a6
 shell/frustum-sealed-below-its-opening 8e9cb6d5694fef498ab065b9f1b0c784327486c15424791fda8cef33f05ebd13
 shell/frustum-too-thick-to-hollow a8fd3b46907727a0a6e821cdff73e510062ce9c2ebca31fa2e18750f5de08e6e

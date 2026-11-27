@@ -685,3 +685,77 @@ fn the_native_nurbs_solid_rung_names_its_face_for_history() -> Result<()> {
     eprintln!("nurbs_solid: {} faces, every one with an origin", s.faces().len());
     Ok(())
 }
+
+
+/// move_faces runs springrep first: a drilled block's top raised on that rung under `force_op`,
+/// every face with a History origin (invariant 3), and the default ladder choosing it.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_springrep_move_faces_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let b = block(&Frame::WORLD, [40.0, 30.0, 10.0])?;
+    let drilled = b.difference(&cylinder(&Frame::at([20.0, 15.0, -1.0]), 5.0, 12.0)?)?;
+    let top = drilled.face_at([5.0, 5.0, 10.0])?;
+    let up = Rigid::translation([0.0, 0.0, 6.0]);
+    force_op("move_faces", Engine::Springrep);
+    let made = drilled.move_faces(&[top], &up);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "springrep");
+    let found = audit("move_faces", &[&drilled], &s);
+    assert!(found.is_empty(), "move_faces: {found:?}");
+    eprintln!("move_faces: {} faces, every one with an origin", s.faces().len());
+    assert_eq!(built_by(&drilled.move_faces(&[top], &up)?), "springrep");
+    Ok(())
+}
+
+
+/// sewn's native rung (yack-build's sewing, after cadrs) under `force_op`: a cube of six flat
+/// Bézier patches sewn shut, every face (`patch_<k>`) with a History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_sewn_rung_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    let quad = |a: Point3, b: Point3, c: Point3, d: Point3| Patch::Bezier { ctrl: vec![vec![a, b], vec![d, c]] };
+    let (o, x, y, z) = (p(0.0, 0.0, 0.0), p(4.0, 0.0, 0.0), p(0.0, 4.0, 0.0), p(0.0, 0.0, 4.0));
+    let (xy, xz, yz, xyz) = (p(4.0, 4.0, 0.0), p(4.0, 0.0, 4.0), p(0.0, 4.0, 4.0), p(4.0, 4.0, 4.0));
+    let cube = [quad(o, y, xy, x), quad(z, xz, xyz, yz), quad(o, x, xz, z), quad(y, yz, xyz, xy), quad(o, z, yz, y), quad(x, xy, xyz, xz)];
+    force_op("sewn", Engine::Native);
+    let made = sewn(&cube);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    assert!(s.check().is_empty() && s.volume() > 0.0);
+    let found = audit("sewn", &[], &s);
+    assert!(found.is_empty(), "sewn: {found:?}");
+    eprintln!("sewn: {} faces, every one with an origin, volume {}", s.faces().len(), s.volume());
+    Ok(())
+}
+
+
+/// draft runs springrep first: a boss's side drafted on that rung under `force_op`, every face
+/// with a History origin (invariant 3); a T block's sides drafted until its bar and stem close,
+/// which springrep declines, is still answered, by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_springrep_draft_rung_names_its_faces_and_falls_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let plate = block(&Frame::at([-20.0, -20.0, 0.0]), [40.0, 40.0, 5.0])?;
+    let part = plate.union(&cylinder(&Frame::at([0.0, 0.0, 5.0]), 8.0, 12.0)?)?;
+    let side = part.face_at([0.0, 8.0, 11.0])?;
+    force_op("draft", Engine::Springrep);
+    let made = part.draft(&[side], [0.0, 0.0, 5.0], [0.0, 0.0, 1.0], deg(4.0));
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "springrep");
+    let found = audit("draft", &[&part], &s);
+    assert!(found.is_empty(), "draft: {found:?}");
+    let t = [[0.0, 0.0], [20.0, 0.0], [20.0, 4.0], [13.0, 4.0], [13.0, 16.0], [7.0, 16.0], [7.0, 4.0], [0.0, 4.0]];
+    let tee = extrude(&Frame::WORLD, &Profile::polygon(&t)?, 8.0)?;
+    let sides = tee.faces_where(|f| f.bbox().max.z - f.bbox().min.z > 1.0)?;
+    let closed = tee.draft(&sides, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], deg(45.0))?;
+    assert_eq!(built_by(&closed), "cadrs");
+    assert!(closed.check().is_empty() && closed.volume() > 0.0);
+    Ok(())
+}

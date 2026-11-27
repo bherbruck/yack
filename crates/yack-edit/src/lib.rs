@@ -146,7 +146,10 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
             // Of a frustum whose cavity closes below its far face, the far face does not bound it.
             let (mut cavity, from) = match cone_cavity::closed_cavity(s, open, thickness)? {
                 Some(whole) => whole,
-                None => moved(-thickness, open_by)?,
+                None => match closed_past_rounds(s, open, thickness) {
+                    Some(whole) => whole,
+                    None => moved(-thickness, open_by)?,
+                },
             };
             // Each cavity face also names the face of `s` it offsets, where the move kept the solid's
             // topology (or took rounds out of it) and so knows which.
@@ -252,6 +255,18 @@ pub fn offset(s: &Brep, distance: f64, feature: &str) -> Result<Brep> {
         }
     }
     Ok(out)
+}
+
+/// The cavity of a frustum whose rounds the wall closes away and whose cavity then closes below its
+/// far face: the rounds are taken out, the sharp frustum's cavity found as for a plain one, and its
+/// faces mapped back to the faces of `s` they offset. `None` where any step does not apply.
+fn closed_past_rounds(s: &Brep, open: &[FaceId], t: f64) -> Option<(Brep, BTreeMap<FaceId, FaceId>)> {
+    let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, if open.contains(&f) { t } else { -t })).collect();
+    let (sharp, kept) = tweak::drop_vanishing_rounds(s, &by).ok().flatten()?;
+    let open_sharp: Vec<FaceId> = open.iter().filter_map(|f| kept.get(f).copied()).collect();
+    let (cavity, from) = cone_cavity::closed_cavity(&sharp, &open_sharp, t).ok().flatten()?;
+    let back: BTreeMap<FaceId, FaceId> = kept.iter().map(|(&old, &new)| (new, old)).collect();
+    Some((cavity, from.into_iter().filter_map(|(c, f)| Some((c, *back.get(&f)?))).collect()))
 }
 
 /// The face of `s` each face of `moved` offsets, found where the move changed the topology (a round
@@ -1193,5 +1208,24 @@ mod tests {
         let taken = triangle + 2.0 * PI * centroid * segment_area;
         close(measure::volume(&cut), 2.0 / 3.0 * PI * 125.0 - taken);
         assert!(cut.face_ids().any(|g| cut.face(g).names.iter().any(|n| n.face == "bevel_0")));
+    }
+
+    #[test]
+    fn a_rounded_frusta_cavity_closing_below_its_top_is_the_cone_of_its_apex() {
+        // The frustum 6 to 3, 6 tall (the whole cone 12 tall, sin a = 1/sqrt 5), its bottom rim rounded by
+        // 1.5, shelled 2 open at the top. The round is thinner than the wall and goes; the cavity is the
+        // whole cone's offset in by 2: its apex 2 sqrt 5 below 12, its base the bottom plane moved up
+        // to z = 2, so a cone of height h = 12 - 2 sqrt 5 - 2 and base radius h / 2 (tan a = 1/2): its
+        // volume pi h^3 / 12, of which the tip above the top (z > 6) is not in the solid. The wall holds the rounded solid less the rest, which lies clear of the
+        // round (the round reaches 2.17 up the side, the cavity 2 in from it).
+        let cone = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 6.0, "f").unwrap();
+        let rim = cone.edge_ids().find(|&e| matches!(cone.edge(e).curve, Some(Curve::Circle(ref c)) if c.frame.origin.z < 0.1)).unwrap();
+        let rounded = blend::fillet_edges(&cone, &[rim], 1.5, "r").unwrap();
+        let top = rounded.face_ids().find(|&g| matches!(rounded.face(g).surface, Surface::Plane(_)) && crate::measure::face_bbox(&rounded, g).min.z > 5.9).unwrap();
+        let cup = shell(&rounded, &[top], 2.0, Wall::Inward, "s").unwrap();
+        assert!(cup.face_ids().all(|g| !cup.face(g).names.is_empty()));
+        // Less the tip above the top at z = 6, a cone of height k = 6 - 2 sqrt 5, which the wall never held.
+        let (h, k) = (10.0 - 2.0 * 5.0_f64.sqrt(), 6.0 - 2.0 * 5.0_f64.sqrt());
+        close(measure::volume(&cup), measure::volume(&rounded) - PI * (h.powi(3) - k.powi(3)) / 12.0);
     }
 }

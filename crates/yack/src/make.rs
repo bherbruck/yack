@@ -434,7 +434,38 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
     if patches.is_empty() {
         return Err(Error::invalid(op, "patches", "no patches"));
     }
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::sewn(op, patches) }]))
+    let cadrs = || engine_cadrs::sewn(op, patches);
+    // yack-build's sewing after cadrs, as "native" until a bake-off orders it; its faces are
+    // `patch_<k>`, and a B-spline patch stays cadrs's alone
+    let native = || {
+        let feature = engine::feature();
+        engine::made(&feature, op, yack_build::sewn::sewn(&native_patches(op, patches)?, &feature))
+    };
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+}
+
+/// `patches` as yack-build's, their points carried unplaced; a B-spline patch declines.
+fn native_patches(op: &'static str, patches: &[Patch]) -> Result<Vec<yack_build::sewn::Patch>> {
+    use yack_build::sewn::Patch as P;
+    let unsupported = |what: &str| Error::new(crate::ErrorKind::Unsupported, op, what.to_string());
+    let chain = |boundary: &[Spline3]| {
+        boundary
+            .iter()
+            .map(|s| match engine::spline(op, s, |p| p)?.0 {
+                yack_geom::Curve::BSpline(b) => Ok(b),
+                _ => Err(unsupported("a boundary curve that is not a B-spline")),
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+    patches
+        .iter()
+        .map(|p| match p {
+            Patch::Bezier { ctrl } => Ok(P::Bezier { ctrl: ctrl.iter().map(|row| row.iter().map(|&q| engine::p3(q)).collect()).collect() }),
+            Patch::PlanarFill { boundary } => Ok(P::PlanarFill { boundary: chain(boundary)? }),
+            Patch::Fill { boundary } => Ok(P::Fill { boundary: chain(boundary)? }),
+            Patch::Bspline { .. } => Err(unsupported("a B-spline patch is not sewn by the native rung")),
+        })
+        .collect()
 }
 
 /// A tapered post: `profile` at z = 0 joined by straight lines to its copy scaled by `scale`
