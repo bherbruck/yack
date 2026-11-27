@@ -3,6 +3,7 @@
 // Changes: moved from edit/tweak.rs to tweak/mod.rs (M2.4, T6) and to yack-tweak (M3 W7); split out of
 // lib.rs by what it does (hardening T1); the fits read their nodes by checked access (hardening T2);
 // the faces offset in face-id order (hardening T3).
+// offset_followed split out of offset_faces, the follow on its own (OF3).
 //! Faces offset along their normals: onto the same kind of surface where one exists, and otherwise onto
 //! a spline fitted to the true offset within [`OFFSET_FIT`].
 
@@ -13,22 +14,27 @@ use crate::{Error, Result, entry, geom::Cone, geom::Curve, geom::Cylinder, geom:
 pub fn offset_faces(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Moved> {
     // Where a face closes on the way, a round offset past its radius or a riser between two faces
     // brought level, the offset is followed there.
-    followed(offset_kept(b, by), || {
-        let mut paths: BTreeMap<FaceId, through::Path> = BTreeMap::new();
-        for (&f, &d) in by {
-            let face = b.face(f);
-            let natural = if face.reversed { -d } else { d };
-            let (surface, bounds) = (face.surface.clone(), face_box(b, f));
-            paths.insert(
-                f,
-                Box::new(move |s| match offset_surface(&surface, s * natural) {
-                    Err(Error::Unsupported(_)) => offset_fitted(&surface, s * natural, bounds),
-                    r => r,
-                }),
-            );
-        }
-        through::through(b, &paths)
-    })
+    followed(offset_kept(b, by), || offset_followed(b, by))
+}
+
+/// [`offset_faces`] followed from the start through the faces that close on the way (a round
+/// offset in past its radius vanishing, its neighbours run on until they meet), and whether one
+/// did: its error is the follow's own, where [`offset_faces`] answers with the direct move's.
+pub fn offset_followed(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<(Brep, bool)> {
+    let mut paths: BTreeMap<FaceId, through::Path> = BTreeMap::new();
+    for (&f, &d) in by {
+        let face = b.face(f);
+        let natural = if face.reversed { -d } else { d };
+        let (surface, bounds) = (face.surface.clone(), face_box(b, f));
+        paths.insert(
+            f,
+            Box::new(move |s| match offset_surface(&surface, s * natural) {
+                Err(Error::Unsupported(_)) => offset_fitted(&surface, s * natural, bounds),
+                r => r,
+            }),
+        );
+    }
+    through::through(b, &paths)
 }
 
 /// [`offset_faces`] with the solid's topology kept.

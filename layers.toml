@@ -325,6 +325,7 @@ primitive = ["loft", "sweep"]
 ruled = ["loft"]
 drafted = ["loft"]
 spindle = ["sweep"]
+nurbs = ["build"]
 
 [modules.yack-boolean]
 arrange = []

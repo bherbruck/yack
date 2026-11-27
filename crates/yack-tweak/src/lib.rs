@@ -148,7 +148,7 @@ mod surfaces;
 mod through;
 
 pub use draft::draft;
-pub use offset::{offset_faces, offset_surface};
+pub use offset::{offset_faces, offset_followed, offset_surface};
 pub use surfaces::{move_faces, move_faces_by, move_faces_pinned};
 
 #[cfg(test)]

@@ -332,10 +332,15 @@ impl Solid {
         if !(thickness.is_finite() && thickness > 0.0) {
             return Err(Error::invalid(op, "thickness", format!("thickness {thickness} is not positive")));
         }
-        self.sr_faces(op, "open", open)?;
+        let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
+        // yack-edit's rung (w-h5), after cadrs's until its bake-off (shell_rounded is in CADRS_FIRST)
         firewall::op(op, &[self], || {
-            ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, false, true) }])
+            ladder::two(
+                op,
+                &|| engine::made_from("shell", op, yack_edit::shell_rounded(self.need(op)?, &f, thickness, "shell")),
+                &|| engine_cadrs::shell(op, self, &ix, thickness, false, true),
+            )
         })
     }
     /// As [`shell_outward`](Solid::shell_outward), the outside wall joined round where it parts
@@ -355,10 +360,15 @@ impl Solid {
         if !(thickness.is_finite() && thickness > 0.0) {
             return Err(Error::invalid(op, "thickness", format!("thickness {thickness} is not positive")));
         }
-        self.sr_faces(op, "open", open)?;
+        let f = self.sr_faces(op, "open", open)?;
         let ix = indices(open);
+        // yack-edit's rung (w-h5), after cadrs's until its bake-off (shell_outward_rounded is in CADRS_FIRST)
         firewall::op(op, &[self], || {
-            ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &|| engine_cadrs::shell(op, self, &ix, thickness, true, true) }])
+            ladder::two(
+                op,
+                &|| engine::made_from("shell", op, yack_edit::shell_outward_rounded(self.need(op)?, &f, thickness, "shell")),
+                &|| engine_cadrs::shell(op, self, &ix, thickness, true, true),
+            )
         })
     }
     /// Tilts `faces` by `angle` about the neutral plane through `origin` normal to `pull`.

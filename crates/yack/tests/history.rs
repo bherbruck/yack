@@ -434,3 +434,32 @@ fn the_native_spindle_torus_names_its_face_for_history() -> Result<()> {
     eprintln!("native spindle_torus: {} faces, every one with an origin", s.faces().len());
     Ok(())
 }
+
+
+/// yack-edit's rounded-shell rungs under `force_op(op, Springrep)`: what they build is held to
+/// invariant 3 (they decline outside their cases; at least one of these builds).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_rounded_shell_rungs_name_their_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let b = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let top = b.face_at([5.0, 5.0, 10.0])?;
+    let mut built = 0;
+    for op in ["shell_rounded", "shell_outward_rounded"] {
+        force_op(op, Engine::Springrep);
+        let made = if op == "shell_rounded" { b.shell_rounded(&[top], 1.0) } else { b.shell_outward_rounded(&[top], 1.0) };
+        force(Engine::Both);
+        match made {
+            Ok(s) => {
+                assert_eq!(built_by(&s), "springrep", "{op}");
+                let found = audit(op, &[&b], &s);
+                assert!(found.is_empty(), "{op}: {found:?}");
+                eprintln!("{op}: {} faces, every one with an origin", s.faces().len());
+                built += 1;
+            }
+            Err(e) => eprintln!("{op}: declined ({:?}: {})", e.kind, e.detail),
+        }
+    }
+    assert!(built > 0, "neither rounded-shell rung built the open box");
+    Ok(())
+}

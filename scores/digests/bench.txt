@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree c2ca68f+375d8c61
-# reason: M4 native-first reorders and native rungs proven equal to the cadrs answers: thicken (12 cases + plate-with-holes: springrep rung first), extrude_drafted native first (3), offset inward/past-hole by the springrep rung (box-shrunk, l-block-shrunk, torus-shrunk, elliptic-cylinder-shrunk, drilled-plate-grown-past-its-hole): 21 bench lines move, V/A equal to 1e-9 (parabolic-trough 4e-11, elliptic-cylinder-shrunk 1.5e-10 rel, both within 1e-6 of the case value); conformance seed 0 identical on snapshot head-c2ca68f+375d8c61
+# Solid::digest() per result (cargo xtask digest); tree 3ea9217+2fe6d3d3
+# reason: M4 native rungs proven equal to cadrs, snapshot head-3ea9217+2fe6d3d3: conformance seed 0 moves 193 lines (thicken 85 native-first, offset-past-holes 60, offset-cones-to-apex 30, chain-offset-after-cut 8, seams-poles 8, far-from-origin 2); every moved family has a before/after proof: outcomes and check verdicts unchanged, values equal (<=1e-9 relative, worst 4.3e-14 outside the apex cones whose residuals are 1e-12 mm3); bench moves offset/cone-grown (apex ball patch, V/A equal to cadrs)
 boolean/box-minus-through-cylinder a383360aa7cad335c1244b4fd0f92fecf2e3d5223cb2ca561f8e01868942566e
 boolean/boxes-common 6ca20909349786779d9a0e4c4be4544baf4933abea25fa93b059c8e87d5ef91d
 boolean/boxes-cut 73fe72cd0177fde9fe6237ddcb2f3ba0e951e5218eb4576198cd4bfd058b6c68
@@ -209,7 +209,7 @@ offset/ball-tipped-cone-shrunk-past-its-tip 668dfa28105d31fcba9b921a4c46820ec080
 offset/ball-tipped-cone-shrunk-twice-its-tip 42e8d2a2e3a01c17c93ed5a010e0042af03f70059fbf09b826f55c796e4d41b0
 offset/box-grown 4ceb53015783aeb757f34abfcd69f9c2a5bd719a09248e5de0165fd93ee513de
 offset/box-shrunk d9b138b373a441e8642d08da515c35de72b09a1a4e7a42b231801d01caa35060
-offset/cone-grown 2d0c7c313170ab97abd51d40d159bf5a0ddfc2ecfc554dd7e387cbf1733d91f7
+offset/cone-grown 045c48c0944c4e81c658014b3d66a286d592435e2cde5d4079629411cdbc9a54
 offset/cylinder-cut-at-thirty-degrees-grown 636aa29ad3ee0b771900ac6127deaea42a59d703c1f1221ff5220af781244d68
 offset/cylinder-grown 5df1046ad6760a0e67330ab4ba614a8cba76fbb9f1d140a1dc4fbc369769e474
 offset/drilled-plate-grown 8a0e110e7816ab7be8e2a455b4d8758125be73c40c0e90c3ccdbb6af39663010

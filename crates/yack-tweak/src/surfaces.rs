@@ -119,6 +119,16 @@ pub fn move_faces_by(b: &Brep, faces: &[FaceId], motion: &Transform) -> Result<B
     move_faces(b, &moved)
 }
 
+/// Where the pole at `uv` of the surface it was a pole of lies on `s`: a moved cone keeps its
+/// parameters, so its apex is where its radius runs out, `v = -radius / sin a`, and not where the
+/// apex of the old cone was; on any other surface a pole stays at its parameters.
+fn pole_uv(s: &Surface, uv: Vec2) -> Vec2 {
+    match s {
+        Surface::Cone(c) if c.half_angle.sin().abs() > 1e-9 => Vec2::new(uv.x, -c.radius / c.half_angle.sin()), // tol: a cone this close to a cylinder has no apex
+        _ => uv,
+    }
+}
+
 /// [`move_faces`], with each vertex of `pins` put at its point where that lies on every new surface
 /// at the vertex. A vertex its surfaces leave free to slide (a seam's end, on a circle) otherwise
 /// moves the least distance onto them, which keeps how far along the curve it was.
@@ -143,7 +153,7 @@ pub fn move_faces_pinned(
             continue;
         }
         if let PCurve::Affine { origin, dir } = &co.pcurve {
-            let uv = *origin + *dir * edge.range.0;
+            let uv = pole_uv(surface_of(f), *origin + *dir * edge.range.0);
             poles.insert(edge.start, surface_of(f).eval(uv.x, uv.y));
         }
     }
@@ -392,15 +402,19 @@ pub fn move_faces_pinned(
                     // A degenerate edge (a pole) keeps its own line across the parameter plane,
                     // and the next coedge carries on from its end.
                     if x.curve.is_none() {
-                        if let PCurve::Affine { origin, dir } = &co.pcurve {
+                        let mut pcurve = co.pcurve.clone();
+                        if let PCurve::Affine { origin, dir } = &mut pcurve {
+                            // The pole's line moves with the pole, across the line only.
+                            let at = *origin + *dir * x.range.0;
+                            let shift = pole_uv(&surface, at) - at;
+                            let along = dir.dot(*dir);
+                            if along > 0.0 {
+                                *origin = *origin + (shift - *dir * (shift.dot(*dir) / along));
+                            }
                             let t = if reversed { x.range.0 } else { x.range.1 };
                             last = Some(*origin + *dir * t);
                         }
-                        return Ok(CoedgeSpec {
-                            edge,
-                            reversed,
-                            pcurve: co.pcurve.clone(),
-                        });
+                        return Ok(CoedgeSpec { edge, reversed, pcurve });
                     }
                     let pcurve = if changed || entry(&rebuilt, co.edge.index())? {
                         let from = if reversed { x.end } else { x.start };
