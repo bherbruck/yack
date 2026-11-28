@@ -540,6 +540,35 @@ mod tests {
     }
 
     #[test]
+    fn a_grooved_drum_grown_past_its_groove_fills_it_and_keeps_the_notch() {
+        // brep-bench offset/grooved-drum-grown: a drum of radius 10, 10 tall, a ring groove from
+        // radius 7 out, 1.6 wide (4.2 to 5.8), grown by 1. Every point of the groove lies within
+        // 0.8 of a wall, so it fills; at its mouth the rims' arcs of 1 about (10, 4.2) and
+        // (10, 5.8) cross at (10.6, 5) and leave a notch. The faces' own move cannot follow the
+        // walls meeting (and would lose the rims and the notch); the turned growth builds it.
+        let at = |z: f64| Frame::WORLD.translated(crate::math::Vec3::new(0.0, 0.0, z));
+        let disc = |r: f64, z0: f64, z1: f64| crate::primitive::cylinder(&at(z0), r, z1 - z0, "s").unwrap();
+        let ring = crate::boolean::difference(&disc(11.0, 4.2, 5.8), &disc(7.0, 3.2, 6.8)).unwrap();
+        let drum = crate::boolean::difference(&disc(10.0, 0.0, 10.0), &ring).unwrap();
+        let grown = crate::glue::offset(&drum, 1.0).unwrap();
+        let k = 0.8f64.atan2(0.6);
+        let (v, a) = turned(&[
+            Piece::Line([0.0, -1.0], [10.0, -1.0]),
+            Piece::Arc([10.0, 0.0], 1.0, -PI / 2.0, 0.0),
+            Piece::Line([11.0, 0.0], [11.0, 4.2]),
+            Piece::Arc([10.0, 4.2], 1.0, 0.0, k),
+            Piece::Arc([10.0, 5.8], 1.0, -k, 0.0),
+            Piece::Line([11.0, 5.8], [11.0, 10.0]),
+            Piece::Arc([10.0, 10.0], 1.0, 0.0, PI / 2.0),
+            Piece::Line([10.0, 11.0], [0.0, 11.0]),
+        ]);
+        close(measure::volume(&grown), v);
+        close(measure::area(&grown), a);
+        assert!(crate::check::check(&grown).is_empty());
+        assert!(grown.face_ids().all(|f| !grown.face(f).names.is_empty()));
+    }
+
+    #[test]
     fn an_inward_offset_that_eats_a_rod_declines() {
         // A rod of radius 1, 10 long: offset −0.5 is the rod of radius 0.5, 9 long; offset −1.5
         // leaves nothing of its round face, a topology change this rung declines.

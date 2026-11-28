@@ -80,3 +80,41 @@ pub(crate) fn closed_cavity(s: &Brep, open: &[FaceId], t: f64) -> Result<Option<
     }
     Ok(Some((cavity, from)))
 }
+
+/// Whether `s`, a frustum as [`closed_cavity`] takes it, shelled inward by `t` and open through
+/// `open`, has no cavity at all: its side moved `t` in comes to its apex no more than the tolerance
+/// past its far plane moved, so every point of the frustum is within `t` of its side or that face
+/// and nothing is hollowed. False for any other solid, and for a cavity longer than the tolerance.
+pub(crate) fn cavity_vanishes(s: &Brep, open: &[FaceId], t: f64) -> bool {
+    let faces: Vec<FaceId> = s.face_ids().collect();
+    let &[_, _, _] = faces.as_slice() else { return false };
+    let Some(&side) = faces.iter().find(|&&f| matches!(s.face(f).surface, Surface::Cone(_))) else {
+        return false;
+    };
+    let Surface::Cone(c) = &s.face(side).surface else { return false };
+    let planes: Vec<(FaceId, Frame)> = faces
+        .iter()
+        .filter_map(|&f| match &s.face(f).surface {
+            Surface::Plane(p) => Some((f, p.frame)),
+            _ => None,
+        })
+        .collect();
+    let &[(f0, p0), (f1, p1)] = planes.as_slice() else { return false };
+    let (sa, ca) = c.half_angle.sin_cos();
+    let z = c.frame.z;
+    let axial = |p: Point3| (p - c.frame.origin).dot(z);
+    let square = |p: &Frame| p.z.cross(z).norm() <= 1e-6; // tol: a plane this far from square is not a frustum's
+    if sa.abs() <= 1e-9 || !square(&p0) || !square(&p1) { // tol: a half angle this small is a cylinder
+        return false;
+    }
+    let apex = -c.radius / sa * ca;
+    let held = [(f0, p0, axial(p0.origin)), (f1, p1, axial(p1.origin))];
+    let far = if (apex - held[0].2).abs() <= (apex - held[1].2).abs() { held[1] } else { held[0] };
+    let toward = (apex - far.2).signum();
+    let (f, frame, _) = far;
+    let Some(out) = face_normal_at(s, f, frame.origin) else { return false };
+    let far_at = axial(frame.origin + out * if open.contains(&f) { t } else { -t });
+    let dn = if s.face(side).reversed { t } else { -t };
+    let cavity_apex = apex - dn / sa;
+    (cavity_apex - far_at) * toward <= tol::LINEAR
+}

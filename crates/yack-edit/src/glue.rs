@@ -30,7 +30,15 @@ pub fn offset(b: &Brep, distance: f64) -> Result<Brep> {
     if distance > 0.0 && closes_exactly(sharp.as_ref().map_or(b, |(s, _)| s), distance) {
         return Err(Error::Unsupported("an offset that closes a hole exactly (its faces meet at its axis)".into()));
     }
-    crate::offset(b, distance, "offset")
+    // Where the faces' own moves cannot follow a growth (a groove closing while its rims still
+    // round), a turned solid is grown as the union of what its faces, edges and tips sweep; the
+    // move's own refusal stands if that declines too. A refusal of the input is never rescued.
+    match crate::offset(b, distance, "offset") {
+        Err(e @ (Error::Unsupported(_) | Error::InvalidResult(_) | Error::Numerical(_))) if distance > 0.0 => {
+            crate::grow_turned::grow_turned(b, distance, "offset").map_err(|_| e)
+        }
+        r => r,
+    }
 }
 
 /// Whether `b` has a hole of radius `distance`: a concave cylinder, sphere or torus tube.

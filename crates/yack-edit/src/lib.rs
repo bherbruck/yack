@@ -45,6 +45,7 @@ mod apex;
 mod cone_cavity;
 mod enclosed;
 mod offset_in;
+mod grow_turned;
 mod rounded_shell;
 mod special_cavities;
 mod corner_chamfer;
@@ -56,6 +57,7 @@ mod thicken_sheet;
 mod turned_chamfer;
 mod variable_round;
 pub mod glue;
+pub mod replace;
 pub mod requirement;
 
 pub use affine::{Affine, affine};

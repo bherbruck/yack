@@ -26,4 +26,5 @@ pub mod spindle;
 pub mod nurbs;
 pub mod sewn;
 pub mod drafted;
+pub mod mitered;
 pub mod sweep;

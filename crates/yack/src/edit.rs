@@ -464,12 +464,13 @@ impl Solid {
         if self.is_empty() {
             return Ok(Solid::empty());
         }
-        // yack-swept's native rung after cadrs's, so cadrs's answer stands until a bake-off promotes it
+        // yack-swept's native rung first (bake-off doc/donors.md: 11 of the 23 bench cases, 0 wrong),
+        // then cadrs for what it declines
         ladder::ladder(
             "swept",
             &[
-                ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) },
                 ladder::Rung { name: "native", run: &|| crate::engine_swept::swept(self, motion) },
+                ladder::Rung { name: "cadrs", run: &|| engine_cadrs::swept(self, motion) },
             ],
         )
     }

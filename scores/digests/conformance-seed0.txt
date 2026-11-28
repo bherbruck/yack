@@ -1,5 +1,5 @@
-# Solid::digest() per result (cargo xtask digest); tree 2aa4e83+840af064
-# reason: M4: offset_faces springrep first, sewn native first, special shell cavities, delete_faces torus bodies, turned round of a rim, pole-seeded projection, elliptic wall offsets (snapshot 28)
+# Solid::digest() per result (cargo xtask digest); tree 1e2033c+b92e3904
+# reason: M4: swept native first, grooved drum growth, shell cavities that vanish or never reach the opening, mitered sweep and replace_face kernels (unrouted) (snapshot 29)
 assemblies-0b6698123f5fc1db 000 box 40cdce05b1ebf256f87f687d3fb1a121d396827065189259c9b5556a04e9a7c7
 assemblies-0b6698123f5fc1db 001 sphere 06144ad26a11692bfd8d87032211e69a9d8223b9872535f325d2b159775074a8
 assemblies-0b6698123f5fc1db 002 box 3dfdf972ef0f97deeb80911ff5018df5894d8a8746e6ae2b4f8a230bc5d06c70

@@ -879,3 +879,27 @@ fn the_springrep_offset_faces_rung_names_its_faces_and_falls_through_to_cadrs() 
     assert!(merged.check().is_empty() && merged.volume() > 0.0);
     Ok(())
 }
+
+
+/// swept runs yack-swept's rung first: a tetrahedron screwed one and a half turns along z on that
+/// rung under `force_op`, every face with a History origin (invariant 3), and the default ladder
+/// choosing it.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_swept_rung_names_a_screwed_tetrahedron_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let corners = [[-1.0, -1.0, -1.0], [-1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [1.0, 1.0, -1.0]];
+    let cube = block(&Frame::at([3.0, -1.0, -1.0]), [2.0, 2.0, 2.0])?;
+    let tet = corners.iter().try_fold(cube, |s, &[a, b, c]| s.split(&Plane::new([4.0 + a / 3.0, b / 3.0, c / 3.0], [a, b, c])?).map(|p| p.back))?;
+    let screw = Motion::screw(Point3::from([0.0; 3]), Vec3::from([0.0, 0.0, 1.0]), rad(0.0), deg(540.0), Lead::per_turn(5.0));
+    force_op("swept", Engine::Native);
+    let made = tet.swept(&screw);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    let found = audit("swept", &[&tet], &s);
+    assert!(found.is_empty(), "swept: {found:?}");
+    eprintln!("swept tetrahedron: {} faces, every one with an origin", s.faces().len());
+    assert_eq!(built_by(&tet.swept(&screw)?), "native");
+    Ok(())
+}

@@ -51,6 +51,13 @@ fn declined(e: Error) -> Error {
 /// through those. The cavity's faces are `<feature>.inner`.
 pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -> Result<Brep> {
     thick_enough(thickness)?;
+    // Every point within the thickness of the walls: nothing is hollowed, and the wall is `s`.
+    if cavity_depth(s, open, thickness).is_some_and(|depth| depth <= tol::LINEAR) {
+        return Ok(s.clone());
+    }
+    if let Some(sealed) = sealed_ball(s, open, thickness, feature) {
+        return sealed;
+    }
     // The walls moved in, the open faces moved out so the cavity runs out through them.
     let move_of = |f: FaceId, open: &[FaceId]| if open.contains(&f) { thickness } else { -thickness };
     let by: BTreeMap<FaceId, f64> = s.face_ids().map(|f| (f, move_of(f, open))).collect();
@@ -81,6 +88,11 @@ pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -
             cavity.set_face_names(f, names);
         }
         return boolean::difference(s, &cavity);
+    }
+    // A frustum (its rounds taken out) whose side, moved in, closes to its apex before its far face
+    // moved: every point is within the thickness of a wall, nothing is hollowed, the wall is `s`.
+    if crate::cone_cavity::cavity_vanishes(&base, &open, thickness) {
+        return Ok(s.clone());
     }
     let walls: Vec<FaceId> = base.face_ids().filter(|f| !open.contains(f)).collect();
     if topo::local::radius_collapses(&base, Some(&walls), thickness, true) {
@@ -131,6 +143,97 @@ pub fn shell_rounded(s: &Brep, open: &[FaceId], thickness: f64, feature: &str) -
         }
     }
     boolean::difference(s, &cavity)
+}
+
+/// How deep the cavity of a convex polyhedron `s` shelled by `t` (open through `open`) is: the
+/// largest `δ` such that some point lies `δ` behind every wall moved `t` in and every open face
+/// moved `t` out, the cavity being the points behind all of them. Zero or less means the cavity
+/// has no inside: the moved walls meet or cross. `None` for a solid that is not a convex
+/// polyhedron, or where the planes do not pin the depth down.
+fn cavity_depth(s: &Brep, open: &[FaceId], t: f64) -> Option<f64> {
+    if s.face_ids().any(|f| !matches!(s.face(f).surface, Surface::Plane(_)))
+        || !crate::concave_edges(s).is_empty()
+    {
+        return None;
+    }
+    // Each moved plane as n·x ≤ b.
+    let mut planes: Vec<(Vec3, f64)> = Vec::new();
+    for f in s.face_ids() {
+        let (p, n) = plane_of(s, f).ok()?;
+        let by = if open.contains(&f) { t } else { -t };
+        planes.push((n, n.dot(p) + by));
+    }
+    // A linear programme in (x, δ): maximise δ subject to n·x + δ ≤ b for every plane. It is
+    // bounded (the normals of a closed polyhedron surround the origin), so its optimum is a vertex
+    // where four of the planes hold with equality: try each four.
+    let mut best: Option<f64> = None;
+    for (i, &pa) in planes.iter().enumerate() {
+        for (j, &pb) in planes.iter().enumerate().skip(i + 1) {
+            for (k, &pc) in planes.iter().enumerate().skip(j + 1) {
+                for &pd in planes.iter().skip(k + 1) {
+                    let Some((x, depth)) = solve4([pa, pb, pc, pd]) else { continue };
+                    let feasible =
+                        planes.iter().all(|&(n, rhs)| n.dot(x) + depth <= rhs + tol::LINEAR);
+                    if feasible && best.is_none_or(|v| depth > v) {
+                        best = Some(depth);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+/// The point and depth where the four planes `n·x + δ = b` meet: less the first, the other three
+/// are `(n − n₀)·x = b − b₀`, solved by Cramer's rule; `None` where they do not meet in one point.
+fn solve4(rows: [(Vec3, f64); 4]) -> Option<(Point3, f64)> {
+    let [(n0, b0), (n1, b1), (n2, b2), (n3, b3)] = rows;
+    let (a1, a2, a3) = (n1 - n0, n2 - n0, n3 - n0);
+    let (c1, c2, c3) = (b1 - b0, b2 - b0, b3 - b0);
+    let det = a1.dot(a2.cross(a3));
+    if det.abs() <= tol::ANGULAR {
+        return None;
+    }
+    let x = (a2.cross(a3) * c1 + a3.cross(a1) * c2 + a1.cross(a2) * c3) / det;
+    Some((x, b0 - n0.dot(x)))
+}
+
+/// A solid whose one wall is a ball's sphere, cut by open planes the sphere moved `t` in lies
+/// wholly behind: the moved sphere never reaches an opening, so the cavity is the closed ball of
+/// the moved radius and the open faces stay as they were (`s` less the ball, two shells). Its
+/// sphere is `<feature>.inner` and `<feature>.inner_f<wall>`. `None` for every other solid, and
+/// where the moved ball touches or crosses an open plane.
+fn sealed_ball(s: &Brep, open: &[FaceId], t: f64, feature: &str) -> Option<Result<Brep>> {
+    let walls: Vec<FaceId> = s.face_ids().filter(|f| !open.contains(f)).collect();
+    let &[wall] = walls.as_slice() else { return None };
+    let Surface::Sphere(sphere) = &s.face(wall).surface else { return None };
+    if s.face(wall).reversed || open.is_empty() {
+        return None;
+    }
+    let radius = sphere.radius - t;
+    if radius <= tol::LINEAR {
+        return None;
+    }
+    let centre = sphere.frame.origin;
+    for &f in open {
+        let (p, n) = plane_of(s, f).ok()?;
+        if (centre - p).dot(n) + radius >= -tol::LINEAR {
+            return None;
+        }
+    }
+    Some((|| {
+        let mut ball = yack_build::primitive::sphere(&sphere.frame, radius, feature).map_err(declined)?;
+        let names: BTreeSet<FaceName> = [
+            FaceName::new(feature, FaceName::INNER),
+            FaceName::new(feature, format!("inner_f{}", wall.index())),
+        ]
+        .into_iter()
+        .collect();
+        for f in ball.face_ids().collect::<Vec<_>>() {
+            ball.set_face_names(f, names.clone());
+        }
+        boolean::difference(s, &ball)
+    })())
 }
 
 /// `s` wrapped in a wall of every point outside it within `thickness` of its faces other than
@@ -191,7 +294,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        math::{Frame, Vec2},
+        math::{Frame, Vec2, Vec3},
         measure,
         profile::Profile,
         sweep::extrude,
@@ -286,6 +389,57 @@ mod tests {
         let inner = FaceName::new("s", FaceName::INNER);
         assert!(out.face_ids().all(|f| !out.face(f).names.is_empty()));
         assert!(out.face_ids().filter(|&f| out.face(f).names.contains(&inner)).count() == 2);
+    }
+
+    #[test]
+    fn walls_that_meet_hollow_nothing() {
+        // The box 10 × 8 × 6 open at its top: walls 4 thick moved in from y = 0 and y = 8 meet in
+        // y = 4, so the cavity has no inside and the wall is the box. At 4.5 they cross: likewise.
+        // At 3.9 the cavity is 2.2 × 0.2 × 2.1 and is made.
+        let b = prism(&[[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]], 6.0);
+        let open = [top(&b, 6.0)];
+        for t in [4.0, 4.5] {
+            let out = shell_rounded(&b, &open, t, "s").unwrap();
+            assert_eq!(out, b);
+        }
+        assert!(cavity_depth(&b, &open, 4.0).is_some_and(|d| d.abs() <= 1e-9));
+        assert!(cavity_depth(&b, &open, 3.9).is_some_and(|d| (d - 0.1).abs() <= 1e-9));
+        let out = shell_rounded(&b, &open, 3.9, "s").unwrap();
+        close(measure::volume(&out), 480.0 - 2.2 * 0.2 * 2.1);
+    }
+
+    #[test]
+    fn a_ball_cut_below_its_moved_sphere_seals_its_cavity() {
+        // The ball of radius 5 below z = 4.5, open at its flat face, walls 1 thick: the sphere moved
+        // in is the sphere of radius 4, wholly below z = 4.5, so the cavity is the closed ball of
+        // radius 4 and the flat face stays. V = (4/3)π(5³ − 4³) less the cap above z = 4.5,
+        // πh²(3·5 − h)/3 with h = 0.5.
+        let ball = crate::primitive::sphere(&Frame::WORLD, 5.0, "b").unwrap();
+        let (_, cut) =
+            boolean::split(&ball, Vec3::new(0.0, 0.0, 4.5), Vec3::new(0.0, 0.0, 1.0)).unwrap();
+        let open = [top(&cut, 4.5)];
+        let out = shell_rounded(&cut, &open, 1.0, "s").unwrap();
+        close(measure::volume(&out), 4.0 / 3.0 * PI * 61.0 - PI * 0.25 * 14.5 / 3.0);
+        assert!(crate::check::check(&out).is_empty());
+        assert!(out.face_ids().all(|f| !out.face(f).names.is_empty()));
+        assert_eq!(out.face_ids().count(), 3);
+        // Walls 0.4 thick: the sphere moved in (radius 4.6) reaches the opening; not this case.
+        assert!(sealed_ball(&cut, &open, 0.4, "s").is_none());
+    }
+
+    #[test]
+    fn a_frustum_too_thick_to_hollow_is_itself() {
+        // The frustum from radius 6 at z = 0 to 3 at z = 4 (sin a = 3/5, apex z = 8), open at its
+        // top. Its side moved t in has its apex t/sin a lower, at 8 − 5t/3; its base moved t up is at
+        // z = t. At t = 3.5 the apex, 13/6, is below the base: no cavity, the wall is the frustum.
+        // At t = 3 they meet (a cavity of one point); at 2.9 the apex is 1/6 + 0.1 above: a cavity.
+        let frustum = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 4.0, "c").unwrap();
+        let open = [top(&frustum, 4.0)];
+        assert_eq!(shell_rounded(&frustum, &open, 3.5, "s").unwrap(), frustum);
+        assert!(crate::cone_cavity::cavity_vanishes(&frustum, &open, 3.5));
+        assert!(crate::cone_cavity::cavity_vanishes(&frustum, &open, 3.0));
+        assert!(!crate::cone_cavity::cavity_vanishes(&frustum, &open, 2.9));
+        assert!(!crate::cone_cavity::cavity_vanishes(&frustum, &open, 2.0));
     }
 
     #[test]
