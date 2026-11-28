@@ -52,10 +52,18 @@ impl Solid {
             let op = "fillet";
             let ids = self.sr_edges(op, "edges", edges)?;
             let ix = crate::edit::indices(edges);
-            ladder::two(
+            let springrep = || over_blend(op, self, &ix, "round_", radius, engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))?);
+            // Where springrep declines: yack-edit's straight round of one edge, or the three concave edges of
+            // an inside corner of three orthogonal planes (anything else is declined there).
+            let native = || engine::made(&feature, op, yack_edit::fillet_edges(self.need(op)?, &ids, radius, &feature));
+            let cadrs = || engine_cadrs::blend(op, self, &ix, "round", |k, id| glue::fillet(k, id, &ix, radius));
+            ladder::ladder(
                 op,
-                &|| over_blend(op, self, &ix, "round_", radius, engine::made(&feature, op, sr::fillet_edges(self.need(op)?, &ids, radius, &feature))?),
-                &|| engine_cadrs::blend(op, self, &ix, "round", |k, id| glue::fillet(k, id, &ix, radius)),
+                &[
+                    ladder::Rung { name: "springrep", run: &springrep },
+                    ladder::Rung { name: "native", run: &native },
+                    ladder::Rung { name: "cadrs", run: &cadrs },
+                ],
             )
         })
     }
@@ -316,17 +324,10 @@ impl Solid {
             let ids = self.sr_edges(op, "edges", edges)?;
             let ix = crate::edit::indices(edges);
             let springrep = || over_blend(op, self, &ix, "bevel_", distance, engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?);
-            // one edge, where springrep declines: yack-edit's straight chamfer, ending on the faces at
-            // the edge's ends (edges meeting at a vertex are the corner cut it does not build); then
-            // cadrs (bake-off doc/donors.md)
-            let native = || {
-                let [edge] = edges else {
-                    return Err(crate::Error::new(crate::ErrorKind::Unsupported, op, "native chamfer: one edge at a time"));
-                };
-                let face = *self.faces_of(*edge)?.first().ok_or_else(|| crate::Error::new(crate::ErrorKind::Unsupported, op, "an edge with no face"))?;
-                let (e, f) = (self.sr_edge(op, "edge", *edge)?, self.sr_face(op, "face", face)?);
-                engine::made(&feature, op, yack_edit::chamfer_two_straight(self.need(op)?, e, f, distance, distance, &feature))
-            };
+            // where springrep declines: yack-edit's chamfer of a convex polyhedron's edges, each ending on
+            // the faces at its ends, a corner whose edges are all chamfered cut flat (a vertex with only
+            // some of its edges chamfered declines); then cadrs (bake-off doc/donors.md)
+            let native = || engine::made(&feature, op, yack_edit::chamfer_edges(self.need(op)?, &ids, distance, &feature));
             let cadrs = || engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance));
             ladder::ladder(
                 op,

@@ -2,7 +2,8 @@
 // Adapted from springrep@a03e8a1 src/blend/rolling.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/blend/rolling.rs to yack-blend (M3 W9a); paths and visibility only;
 // split out of rolling.rs (M3 hardening R0), paths and visibility only; then on checked access, its
-// maps BTreeMaps (looked up only), its contract panics gone, its small literals named (R1).
+// maps BTreeMaps (looked up only), its contract panics gone, its small literals named (R1); rolled again by the spine rule where the edge rule's square
+// planes fold or find no centre (M4 slant-cut offsets).
 //! The rolling-ball fillet built: the ball rolled along the chain, its strip sewn into the body.
 
 use super::*;
@@ -19,8 +20,33 @@ const SNAP_V: f64 = 1e-6; // tol: a section parameter, not a length
 /// Segment bounds closer than this share of the chain's length (or a millimetre) are one.
 const SAME_BOUND: f64 = 1e-9; // tol: a share of a length, not a length
 
-/// The fillet of `radius` along the tangent chain `picked`, edge `i`'s faces named `names[i]`.
+/// The fillet of `radius` along the tangent chain `picked`, edge `i`'s faces named `names[i]`:
+/// rolled by [`Rule::Edge`], and where that finds no centre or folds the blend back, by
+/// [`Rule::Spine`] (keeping the first refusal when that refuses too).
 pub(crate) fn fillet(
+    body: &Brep,
+    picked: &[Picked],
+    radius: f64,
+    names: &[BTreeSet<FaceName>],
+) -> Result<Brep> {
+    match fillet_by(Rule::Edge, body, picked, radius, names) {
+        Err(first) if folds(&first) => fillet_by(Rule::Spine, body, picked, radius, names).or(Err(first)),
+        done => done,
+    }
+}
+
+/// Whether `e` is the edge rule's refusal where its square planes cross within the ball's reach.
+fn folds(e: &Error) -> bool {
+    match e {
+        Error::Unsupported(m) => m.strip_prefix("a rolling-ball fillet ") == Some(NO_SETTLE),
+        Error::Numerical(m) => m == FACING_IN,
+        _ => false,
+    }
+}
+
+/// [`fillet`] with each section's centre in the plane `rule` gives.
+fn fillet_by(
+    rule: Rule,
     body: &Brep,
     picked: &[Picked],
     radius: f64,
@@ -148,6 +174,7 @@ pub(crate) fn fillet(
             .map(|f| (f, face_domain(body, f)))
             .collect(),
         joints,
+        rule,
     };
 
     // An open chain's ends, each on the plane of the one other face there.
@@ -826,9 +853,7 @@ pub(crate) fn fillet(
         let sec = roll.section(u, None)?;
         let away = (p - sec.centre) * if convex { 1.0 } else { -1.0 };
         if (-s.normal(u, 0.5)).dot(away) <= 0.0 {
-            return Err(Error::Numerical(
-                "a rolling-ball fillet's face came out facing into the body".into(),
-            ));
+            return Err(Error::Numerical(FACING_IN.into()));
         }
         blends.push(bf);
     }

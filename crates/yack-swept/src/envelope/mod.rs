@@ -9,3 +9,4 @@
 #![allow(dead_code)] // unrouted until the strategy lands (w-h6 W1)
 
 pub(crate) mod motion;
+pub(crate) mod grazing;

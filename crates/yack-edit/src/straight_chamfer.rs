@@ -10,7 +10,7 @@ use crate::{
     geom::Curve,
     math::{Frame, Vec2, Vec3},
     measure,
-    profile::Profile,
+    profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::extrude,
     tol,
     topo::{Brep, EdgeId, FaceId, FaceName},
@@ -21,6 +21,27 @@ use crate::{
 /// Declines an edge that is not straight between two planes, a convex edge of a solid with a concave
 /// edge elsewhere (the prism could cut other material), and distances that leave a face.
 pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_other: f64, feature: &str) -> Result<Brep> {
+    let (prism, convex) = bevel_prism(s, e, face, along_face, along_other)?;
+    let mut done = if convex { boolean::difference(s, &prism)? } else { boolean::union(s, &prism)? };
+    done.rename_faces(|n| match n.feature.strip_prefix('\u{1}') {
+        Some(_) => vec![FaceName::new(feature, "bevel_0")],
+        None => vec![n.clone()],
+    });
+    Ok(done)
+}
+
+/// The prism the chamfer of `e` cuts out (a convex edge) or adds (a concave one, the flag false):
+/// the section triangle swept along the edge, its faces named `\u{1}bevel` with the chamfer's own
+/// face `a`. The checks of [`chamfer_two`] are made here.
+pub(crate) fn bevel_prism(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_other: f64) -> Result<(Brep, bool)> {
+    edge_prism(s, e, face, along_face, along_other, false)
+}
+
+/// [`bevel_prism`], or with `round` the prism of a round of radius `along_face` (`along_other` is
+/// ignored): the section is then the corner, the two feet `r / tan(phi / 2)` along the faces, and
+/// the arc of the circle of radius `r` tangent to both between them, `phi` the angle between the
+/// faces' directions away from the edge; the round's face is named `a`, as the chamfer's is.
+pub(crate) fn edge_prism(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_other: f64, round: bool) -> Result<(Brep, bool)> {
     let edge = s.edge(e);
     let Some(Curve::Line(line)) = &edge.curve else {
         return Err(Error::Unsupported("a straight chamfer on an edge that is not straight".into()));
@@ -47,6 +68,17 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     };
     let (Some(ua), Some(ub)) = (along(na, nb), along(nb, na)) else {
         return Err(Error::InvalidInput("a flat edge".into()));
+    };
+    let phi = ua.dot(ub).clamp(-1.0, 1.0).acos();
+    let radius = along_face;
+    let (along_face, along_other) = if round {
+        if phi <= 1e-6 || phi >= std::f64::consts::PI - 1e-6 { // tol: an angle: faces that are not a corner
+            return Err(Error::InvalidInput("a round on a flat edge".into()));
+        }
+        let t = radius / (phi / 2.0).tan();
+        (t, t)
+    } else {
+        (along_face, along_other)
     };
     // The edge's middle: its section square to it is where the triangle is drawn.
     let mid = Curve::Line(line.clone()).eval(0.5 * (edge.range.0 + edge.range.1));
@@ -83,12 +115,34 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     let frame = Frame::new(from, dir, x)?;
     let local = |p: Vec3| Vec2::new((p - from).dot(frame.x), (p - from).dot(frame.y));
     let triangle = [local(mid), local(pa), local(pb)];
-    let profile = Profile::polygon(&triangle, &["corner", "a", "b"]);
+    let profile = if round {
+        // The ball's centre, out along the bisector of the faces, and the arc between the feet.
+        let Some(bis) = (ua + ub).unit() else {
+            return Err(Error::InvalidInput("a round on a flat edge".into()));
+        };
+        let k = local(mid + bis * (radius / (phi / 2.0).sin()));
+        let angle = |p: Vec2| (p.y - k.y).atan2(p.x - k.x);
+        let start = angle(triangle[1]);
+        let mut sweep = angle(triangle[2]) - start;
+        while sweep > std::f64::consts::PI {
+            sweep -= std::f64::consts::TAU;
+        }
+        while sweep <= -std::f64::consts::PI {
+            sweep += std::f64::consts::TAU;
+        }
+        let named = |segment: Segment, name: &str| NamedSegment::new(segment, name);
+        Profile {
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    named(Segment::Line { a: triangle[0], b: triangle[1] }, "corner"),
+                    named(Segment::Arc { center: k, radius, start, sweep }, "a"),
+                    named(Segment::Line { a: triangle[2], b: triangle[0] }, "b"),
+                ],
+            }],
+        }
+    } else {
+        Profile::polygon(&triangle, &["corner", "a", "b"])
+    };
     let prism = extrude(&profile, &frame, length, "\u{1}bevel")?;
-    let mut done = if convex { boolean::difference(s, &prism)? } else { boolean::union(s, &prism)? };
-    done.rename_faces(|n| match n.feature.strip_prefix('\u{1}') {
-        Some(_) => vec![FaceName::new(feature, "bevel_0")],
-        None => vec![n.clone()],
-    });
-    Ok(done)
+    Ok((prism, convex))
 }

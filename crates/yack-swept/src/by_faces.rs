@@ -2,8 +2,9 @@
 // Adapted from cadrs@eb5899ef crates/cadrs_kernel/src/native/sweep_faces.rs (MIT OR Apache-2.0, (c) 2026 Rouan van der Ende).
 // Changes: rewritten onto yack's crates, not ported: each leading face's sweep is a solid built from
 //   its parts (yack-build's `solid_of`), united with the start by yack-boolean, and checked; for a
-//   slide or a turn, a face the motion crosses split along its contact (a plane, or a torus's
-//   coaxial cylinder) by yack-boolean first. Screws and everything else decline.
+//   slide, a turn or a screw (of constant lead, a quarter turn at a time, its tracks and sides
+//   yack-build's helix fits), a face the motion crosses split along its contact (a plane, or a
+//   torus's coaxial cylinder) by yack-boolean first. Everything else declines.
 //! What any solid passes through as it slides, turns or screws: the solid where it starts, with
 //! what each of its *leading* faces sweeps.
 //!
@@ -33,7 +34,8 @@ use yack_geom::{Circle, Curve, Cylinder, Ellipse, Extrusion, Line, Plane, Surfac
 use yack_math::kernel::{Frame, Point3, Transform, Vec3};
 use yack_topo::{Brep, FaceName};
 
-use crate::Motion;
+use crate::{Motion, Rise};
+use yack_build::sweep::Helix;
 
 mod turn;
 
@@ -135,6 +137,9 @@ enum How {
     /// A turn by `angle` (more than 0, at most a whole turn, which is exactly `TAU`),
     /// counter-clockwise looking down the unit `axis`, about the line through `origin`.
     Turn { origin: Point3, axis: Vec3, angle: f64 },
+    /// A turn as [`How::Turn`] (short of a whole one) that rises `rise` (not 0) along the axis
+    /// each radian.
+    Screw { origin: Point3, axis: Vec3, angle: f64, rise: f64 },
 }
 
 /// A sweep: how the solid moves, and the feature its new faces are named under.
@@ -154,6 +159,7 @@ impl Sweep<'_> {
         match self.how {
             How::Slide { dir, .. } => dir,
             How::Turn { origin, axis, .. } => axis.cross(p - origin),
+            How::Screw { origin, axis, rise, .. } => axis.cross(p - origin) + axis * rise,
         }
     }
 
@@ -163,6 +169,7 @@ impl Sweep<'_> {
             How::Slide { by, .. } => Transform::translation(by),
             How::Turn { .. } if self.whole() => Transform::translation(Vec3::ZERO),
             How::Turn { origin, axis, angle } => Transform::rotation(origin, axis, angle),
+            How::Screw { origin, axis, angle, rise } => screw_move(origin, axis, rise, angle),
         }
     }
 
@@ -179,6 +186,10 @@ impl Sweep<'_> {
                 let frame = Frame::new(foot, axis, out)?;
                 Ok(Some(Curve::Circle(Circle { frame, radius: out.norm() })))
             }
+            How::Screw { origin, axis, angle, rise } => {
+                let helix = Helix { origin, axis, rise, sign: 1.0 };
+                Ok(Some(yack_build::sweep::helix_rail(&helix, p, angle)?))
+            }
         }
     }
 
@@ -187,6 +198,9 @@ impl Sweep<'_> {
         match self.how {
             How::Slide { dir, .. } => stand(face, parts, dir),
             How::Turn { origin, axis, .. } => turn::stand(face, origin, axis),
+            How::Screw { origin, axis, rise, .. } => {
+                turn::screw_stand(face, parts, self, origin, axis, rise)
+            }
         }
     }
 
@@ -201,6 +215,10 @@ impl Sweep<'_> {
             How::Slide { dir, .. } => side_surface(curve, ends, reversed, dir),
             How::Turn { origin, axis, angle } => {
                 turn::side(&seam_safe(curve, ends)?, ends, reversed, origin, axis, angle)
+            }
+            How::Screw { origin, axis, angle, rise } => {
+                let helix = Helix { origin, axis, rise, sign: 1.0 };
+                turn::screw_side(curve, ends, reversed, &helix, angle)
             }
         }
     }
@@ -237,26 +255,96 @@ pub(crate) fn swept(body: &Brep, motion: &Motion, feature: &str) -> Result<Brep>
             let how = How::Turn { origin: *axis_point, axis, angle };
             built(&start, &Sweep { how, feature })
         }
-        Motion::Screw { .. } => {
-            Err(Error::Unsupported("by faces: screws are not built yet".into()))
+        Motion::Screw { axis_point, axis, from, to, rise } => {
+            let axis =
+                axis.unit().ok_or_else(|| Error::InvalidInput("a screw needs an axis".into()))?;
+            // A constant lead only: the rise at turn t is `start + per·t`.
+            let (start, per) = match rise {
+                Rise::PerTurn(x) => (0.0, x / std::f64::consts::TAU),
+                Rise::PerRadian(x) => (0.0, *x),
+                Rise::Polynomial(c) => {
+                    if c.iter().skip(2).any(|&x| x != 0.0) {
+                        return Err(Error::Unsupported(
+                            "by faces: a screw whose lead changes as it turns".into(),
+                        ));
+                    }
+                    (c.first().copied().unwrap_or(0.0), c.get(1).copied().unwrap_or(0.0))
+                }
+            };
+            let (a0, a1) = (from.min(*to), from.max(*to));
+            let angle = a1 - a0;
+            if angle <= yack_tol::ANGULAR {
+                return Err(Error::InvalidInput("a screw through no angle moves nothing".into()));
+            }
+            if per.abs() <= yack_tol::LINEAR {
+                let turn = Motion::Turn { axis_point: *axis_point, axis, from: *from, to: *to };
+                let mut moved = body.clone();
+                moved.transform(&Transform::translation(axis * start));
+                return swept(&moved, &turn, feature);
+            }
+            // Cut into quarter turns, as cadrs's sweep_faces does: each its own sweep, from where
+            // the solid is at its start; the sweep is their union. A screw moves every pose along
+            // the same way, so step k's sweep is the first step's moved by k steps of the screw:
+            // built once, then copied.
+            let steps = (angle / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
+            let step = angle / steps;
+            let mut first = body.clone();
+            first.transform(&Transform::translation(axis * start).then(&screw_move(
+                *axis_point,
+                axis,
+                per,
+                a0,
+            )));
+            let how = How::Screw { origin: *axis_point, axis, angle: step, rise: per };
+            let sweep = Sweep { how, feature };
+            let mut prisms = Vec::new();
+            prisms_of(&first, &sweep, &[], &mut prisms).map_err(declined)?;
+            let mut all = Vec::new();
+            for k in 0..(steps as usize) {
+                let on = screw_move(*axis_point, axis, per, step * k as f64);
+                for b in std::iter::once(&first).chain(prisms.iter()) {
+                    let mut moved = b.clone();
+                    moved.transform(&on);
+                    all.push(moved);
+                }
+            }
+            yack_boolean::union_all(&all.iter().collect::<Vec<_>>()).map_err(declined)
         }
     }
 }
 
+/// The rigid move of turn `t` of the screw about the line through `origin` along the unit `axis`
+/// rising `rise` a radian: the turn, then the rise.
+fn screw_move(origin: Point3, axis: Vec3, rise: f64, t: f64) -> Transform {
+    Transform::rotation(origin, axis, t).then(&Transform::translation(axis * (rise * t)))
+}
+
 /// Everything `body` passes through on `sweep`.
 fn built(body: &Brep, sweep: &Sweep) -> Result<Brep> {
+    built_all(std::slice::from_ref(body), sweep)
+}
+
+/// Everything the solids `starts` pass through, each on `sweep` from where it is.
+fn built_all(starts: &[Brep], sweep: &Sweep) -> Result<Brep> {
     let mut prisms = Vec::new();
-    let built = prisms_of(body, sweep, &[], &mut prisms).and_then(|()| {
-        let mut all: Vec<&Brep> = vec![body];
-        all.extend(prisms.iter());
-        yack_boolean::union_all(&all)
-    });
-    // The motion is sound by now: whatever the pieces this builds say against themselves is this
-    // strategy's failure, a decline, never the caller's input.
-    built.map_err(|e| match e {
+    let built = starts
+        .iter()
+        .try_for_each(|body| prisms_of(body, sweep, &[], &mut prisms))
+        .and_then(|()| {
+            let mut all: Vec<&Brep> = starts.iter().collect();
+            all.extend(prisms.iter());
+            yack_boolean::union_all(&all)
+        });
+    built.map_err(declined)
+}
+
+/// The motion is sound by now: whatever the pieces this builds say against themselves is this
+/// strategy's failure, a decline, never the caller's input.
+fn declined(e: Error) -> Error {
+    match e {
         Error::InvalidInput(why) => Error::Unsupported(format!("by faces: {why}")),
         other => other,
-    })
+    }
 }
 
 /// Adds to `prisms` what each leading face of each solid of `body` sweeps on `slide`, splitting a
@@ -919,6 +1007,21 @@ mod tests {
         for p in &prisms {
             assert!(yack_check::check(p).is_empty(), "{:?}", yack_check::check(p));
         }
+    }
+
+    #[test]
+    fn a_ball_turned_part_way_sweeps_a_torus_not_a_bare_revolution() {
+        // r 2 about (5, 0, 0), a quarter turn about z: its leading half's equator, in a plane
+        // through the axis, sweeps a piece of the torus R 5, r 2.
+        let frame = Frame::new(Point3::new(5.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap();
+        let ball = yack_build::primitive::sphere(&frame, 2.0, "ball").unwrap();
+        let how = How::Turn { origin: Point3::ZERO, axis: Vec3::Z, angle: 1.0 };
+        let mut prisms = Vec::new();
+        prisms_of(&ball, &Sweep { how, feature: "f" }, &[], &mut prisms).unwrap();
+        let kinds: Vec<_> =
+            prisms.iter().flat_map(|p| p.face_ids().map(|f| p.face(f).surface.kind())).collect();
+        assert!(kinds.contains(&"torus"), "{kinds:?}");
+        assert!(!kinds.contains(&"revolution"), "{kinds:?}");
     }
 
     #[test]

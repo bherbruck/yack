@@ -9,6 +9,7 @@
 //! unsure.
 
 mod by_faces;
+mod envelope;
 
 use yack_base::kernel::{Error, Result};
 use yack_math::kernel::{Point3, Vec3};
@@ -256,6 +257,65 @@ mod tests {
     }
 
     #[test]
+    fn a_rod_screwed_along_its_own_axis_is_a_longer_rod() {
+        // r 2, 3 tall about z, half a turn rising 1 a radian: it turns within itself and rises π.
+        let pi = std::f64::consts::PI;
+        let rod = yack_build::primitive::cylinder(&Frame::WORLD, 2.0, 3.0, "rod").unwrap();
+        let screw = Motion::Screw {
+            axis_point: Point3::ZERO,
+            axis: Vec3::Z,
+            from: 0.0,
+            to: pi,
+            rise: Rise::PerRadian(1.0),
+        };
+        near(yack_measure::volume(&swept(&rod, &screw, "f").unwrap()), pi * 4.0 * (3.0 + pi));
+    }
+
+    #[test]
+    fn a_ball_screwed_is_a_tube_round_its_helix_with_round_ends() {
+        // r 1 about (5, 0, 0), half a turn about z rising 1 a radian (one turn's rise 2π): the
+        // tube of radius 1 round the helix of its centre, πr² times the helix's length
+        // π·√(5² + 1²) (Pappus; the helix bends no tighter than 26/5 > 1), and the ball.
+        let pi = std::f64::consts::PI;
+        let frame = Frame::new(Point3::new(5.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap();
+        let ball = yack_build::primitive::sphere(&frame, 1.0, "ball").unwrap();
+        let screw = Motion::Screw {
+            axis_point: Point3::ZERO,
+            axis: Vec3::Z,
+            from: 0.0,
+            to: pi,
+            rise: Rise::PerTurn(2.0 * pi),
+        };
+        let want = pi * pi * 26f64.sqrt() + 4.0 * pi / 3.0;
+        near(yack_measure::volume(&swept(&ball, &screw, "f").unwrap()), want);
+    }
+
+    #[test]
+    fn a_tetrahedron_screwed_one_and_a_half_turns() {
+        // The regular tetrahedron with corners (4, 0, 0) − (±1, ±1, ±1) (an even number of minus
+        // signs), screwed 540° about z at 5 a turn. The velocity z × p + (5/2π)·z has no
+        // divergence, so the sweep is V_T + θ·½∮|v·n| dA where no point is entered twice (2 tall
+        // against a pitch of 5): 8/3 + 3π·½∮|v·n| dA, |v·n| affine on each face, integrated exactly.
+        let corner = Frame::new(Point3::new(3.0, -1.0, -1.0), Vec3::Z, Vec3::X).unwrap();
+        let mut tet = yack_build::primitive::block(&corner, Vec3::new(2.0, 2.0, 2.0), "t").unwrap();
+        for [a, b, c] in [[-1.0, -1.0, -1.0], [-1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [1.0, 1.0, -1.0]]
+        {
+            let at = Point3::new(4.0 + a / 3.0, b / 3.0, c / 3.0);
+            tet = yack_boolean::split(&tet, at, Vec3::new(a, b, c)).unwrap().1;
+        }
+        let screw = Motion::Screw {
+            axis_point: Point3::ZERO,
+            axis: Vec3::Z,
+            from: 0.0,
+            to: 3.0 * std::f64::consts::PI,
+            rise: Rise::PerTurn(5.0),
+        };
+        let got = yack_measure::volume(&swept(&tet, &screw, "f").unwrap());
+        let want = 153.46311403897673;
+        assert!((got - want).abs() <= 1e-9 * want, "{got} against {want}");
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();
@@ -268,14 +328,14 @@ mod tests {
 
     #[test]
     fn what_is_not_built_yet_declines() {
-        let screw = Motion::Screw {
+        let growing = Motion::Screw {
             axis_point: Point3::ZERO,
             axis: Vec3::Z,
             from: 0.0,
             to: 1.0,
-            rise: Rise::PerTurn(1.0),
+            rise: Rise::Polynomial(vec![0.0, 1.0, 0.5]),
         };
-        assert!(matches!(swept(&cube(), &screw, "f"), Err(Error::Unsupported(_))));
+        assert!(matches!(swept(&cube(), &growing, "f"), Err(Error::Unsupported(_))));
         let nothing = Motion::Slide { by: Vec3::ZERO };
         assert!(matches!(swept(&cube(), &nothing, "f"), Err(Error::InvalidInput(_))));
     }

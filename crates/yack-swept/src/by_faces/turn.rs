@@ -21,7 +21,9 @@ use yack_build::build::PartFace;
 use yack_geom::{Cone, Curve, Cylinder, Plane, Revolution, Sphere, Surface, Torus};
 use yack_math::kernel::{Frame, Point3, Transform, Vec3};
 
-use super::{Cut, Stand, middle_param};
+use super::{Cut, Stand, Sweep, leans, middle_param, seam_safe};
+use yack_build::build::{Parts, param_of};
+use yack_build::sweep::{Helix, screwed_side};
 
 /// How `face` stands to a turn about the line through `origin` along the unit `axis`.
 pub(super) fn stand(face: &PartFace, origin: Point3, axis: Vec3) -> Result<Stand> {
@@ -64,7 +66,7 @@ pub(super) fn stand(face: &PartFace, origin: Point3, axis: Vec3) -> Result<Stand
 /// along the unit `axis`, and whether the side faces against it; `curve` is already
 /// seam-safe for the piece from `ends.0` to `ends.1`, `reversed` whether the leading face's loop
 /// runs against it. A straight piece along the axis sweeps a cylinder, one square to it a plane;
-/// anything else its surface of revolution. The surface's own seam (where its turn parameter
+/// anything else what [`whole_side`] makes of it. The surface's own seam (where its turn parameter
 /// starts) goes opposite the side, so no side face meets it; on a whole turn (`angle` = `TAU`)
 /// the side meets itself all the way round, its seam is the piece, and the surface is the
 /// piece's revolution whatever the piece.
@@ -100,11 +102,15 @@ pub(super) fn side(
         Curve::Line(l) if l.dir.dot(axis).abs() <= yack_tol::ANGULAR => {
             Surface::Plane(Plane { frame: Frame::new(mid, out, l.dir)? })
         }
-        _ => Surface::Revolution(Box::new(Revolution {
-            curve: curve.transformed(&away),
+        // Anything else as a whole turn sweeps it (a torus or sphere for a circle in a plane
+        // through the axis, a cone for a line in one), its seam turned away from the side.
+        _ => whole_side(
+            &curve.transformed(&away),
+            (away.point(ends.0), away.point(ends.1)),
+            away.point(mid),
             origin,
             axis,
-        })),
+        )?,
     };
     let uv = surface.project(mid);
     let natural = surface.normal(uv.x, uv.y);
@@ -182,4 +188,105 @@ fn whole_side(
         }
         _ => revolution(),
     })
+}
+
+/// How `face` of `parts` stands to a screw about the line through `origin` along the unit `axis`
+/// rising `rise` a radian, its velocity `axis × (p − origin) + rise·axis`. Contacts as for a turn,
+/// shifted by the rise:
+/// - a plane with normal `n` touches where `(p − origin)·(n × axis) + rise·(n·axis) = 0`, a plane
+///   square to `n × axis`; a plane square to the axis leads (or trails) all over;
+/// - a sphere about `c` on the plane through `c` square to `axis × (c − origin) + rise·axis`;
+/// - a cylinder parallel to the axis as for a turn (its normal has no part along the axis);
+/// - a cone about the axis leans one way all over, a torus about it touches on its equator plane.
+///
+/// Every other face declines. A screw is swept a quarter turn at a time (see [`super::swept`]).
+pub(super) fn screw_stand(
+    face: &PartFace,
+    parts: &Parts,
+    sweep: &Sweep,
+    origin: Point3,
+    axis: Vec3,
+    rise: f64,
+) -> Result<Stand> {
+    let parallel = |v: Vec3| v.cross(axis).norm() <= yack_tol::ANGULAR;
+    let on_axis = |p: Point3| (p - origin).cross(axis).norm() <= yack_tol::LINEAR;
+    match &face.surface {
+        Surface::Plane(p) => {
+            let n = p.frame.z;
+            let w = n.cross(axis);
+            let Some(normal) = w.unit() else {
+                return leans(face, parts, sweep);
+            };
+            let offset = -rise * n.dot(axis) / w.norm();
+            Ok(Stand::Contact(Cut::Plane { origin: origin + normal * offset, normal }, None))
+        }
+        Surface::Sphere(s) => {
+            let c = s.frame.origin;
+            let normal = (axis.cross(c - origin) + axis * rise)
+                .unit()
+                .ok_or_else(|| Error::Unsupported("by faces: a still screw".into()))?;
+            Ok(Stand::Contact(Cut::Plane { origin: c, normal }, None))
+        }
+        Surface::Cylinder(c) if parallel(c.frame.z) => {
+            match axis.cross(c.frame.origin - origin).unit() {
+                Some(normal) if !on_axis(c.frame.origin) => {
+                    Ok(Stand::Contact(Cut::Plane { origin: c.frame.origin, normal }, None))
+                }
+                _ => Ok(Stand::Along),
+            }
+        }
+        Surface::Cone(c) if parallel(c.frame.z) && on_axis(c.frame.origin) => {
+            leans(face, parts, sweep)
+        }
+        Surface::Torus(t) if parallel(t.frame.z) && on_axis(t.frame.origin) => {
+            Ok(Stand::Contact(Cut::Plane { origin: t.frame.origin, normal: axis }, None))
+        }
+        other => Err(Error::Unsupported(format!(
+            "by faces: a {} face a screw crosses is not built yet",
+            other.kind()
+        ))),
+    }
+}
+
+/// The surface a piece of boundary sweeps through `angle` of `helix`, and whether the side faces
+/// against it: yack-build's screwed side of the piece from `ends.0` to `ends.1` (the exact
+/// cylinder for a piece along the axis, else a rational surface within its screw fit).
+pub(super) fn screw_side(
+    curve: &Curve,
+    ends: (Point3, Point3),
+    reversed: bool,
+    helix: &Helix,
+    angle: f64,
+) -> Result<(Surface, bool)> {
+    let curve = &seam_safe(curve, ends)?;
+    let t0 = param_of(curve, ends.0);
+    let t1 = 2.0 * middle_param(curve, ends) - t0;
+    let (mid, d) = curve.d1(middle_param(curve, ends));
+    let travel = if reversed { -d } else { d };
+    let velocity = helix.axis.cross(mid - helix.origin) + helix.axis * helix.rise;
+    let Some(out) = travel.cross(velocity).unit() else {
+        return Err(Error::Unsupported("by faces: an edge that runs along its screw".into()));
+    };
+    // A circle about the axis itself screws along its own cylinder: that cylinder, exactly (a
+    // fitted copy of it would lie on the solid's own face, which the union cannot sort out).
+    let coaxial = match curve {
+        Curve::Circle(c) => {
+            c.frame.z.cross(helix.axis).norm() <= yack_tol::ANGULAR
+                && (c.frame.origin - helix.origin).cross(helix.axis).norm() <= yack_tol::LINEAR
+        }
+        _ => false,
+    };
+    let surface = match curve {
+        Curve::Circle(c) if coaxial => {
+            let x = mid - c.frame.origin;
+            Surface::Cylinder(Cylinder {
+                frame: Frame::new(c.frame.origin, helix.axis, x)?,
+                radius: c.radius,
+            })
+        }
+        _ => screwed_side(helix, curve, (t0, t1), angle)?,
+    };
+    let uv = surface.project(mid);
+    let natural = surface.normal(uv.x, uv.y);
+    Ok((surface, natural.dot(out) < 0.0))
 }

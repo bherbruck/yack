@@ -119,13 +119,22 @@ pub struct Moved {
 }
 
 /// The direct move, or where it fails, the move followed through the faces that close on the way.
+/// Where both fail, the direct move's error, its kind kept, with the follow's reason added (to an
+/// invalid result's issues or an unsupported move's reason).
 fn followed(direct: Result<Brep>, through: impl FnOnce() -> Result<(Brep, bool)>) -> Result<Moved> {
     match direct {
         Ok(brep) => Ok(Moved { brep, merge: None }),
         Err(e) => match through() {
             Ok((brep, true)) => Ok(Moved { brep, merge: Some(e) }),
             Ok((brep, false)) => Ok(Moved { brep, merge: None }),
-            Err(_) => Err(e),
+            Err(why) => Err(match e {
+                Error::InvalidResult(mut issues) => {
+                    issues.push(format!("followed through what closes: {why}"));
+                    Error::InvalidResult(issues)
+                }
+                Error::Unsupported(m) => Error::Unsupported(format!("{m}; followed through what closes: {why}")),
+                e => e,
+            }),
         },
     }
 }

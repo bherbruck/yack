@@ -803,3 +803,47 @@ fn the_native_straight_chamfer_names_its_faces_for_history() -> Result<()> {
     }
     Ok(())
 }
+
+
+/// yack-edit's chamfer of a convex polyhedron's edges (native, after springrep, before cadrs) under
+/// `force_op`: every edge of a cube chamfered at once, 26 faces (6 faces, 12 bevels, 8 corner cuts),
+/// every one with a History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_multi_edge_chamfer_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let cube = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    force_op("chamfer", Engine::Native);
+    let made = cube.chamfer(&cube.edges(), 2.0);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "native");
+    assert_eq!(s.faces().len(), 26);
+    let found = audit("chamfer", &[&cube], &s);
+    assert!(found.is_empty(), "chamfer: {found:?}");
+    assert!(s.check().is_empty());
+    Ok(())
+}
+
+
+/// yack-edit's round of an inside corner (native, after springrep, before cadrs) under `force_op`:
+/// the three concave edges of a notched cube's corner rounded at once, 13 faces, every one with a
+/// History origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_inside_corner_round_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let notch = block(&Frame::at([10.0, 10.0, 10.0]), [10.0, 10.0, 10.0])?;
+    let s = block(&Frame::WORLD, [20.0, 20.0, 20.0])?.difference(&notch)?;
+    let edges = [s.edge_at([15.0, 10.0, 10.0])?, s.edge_at([10.0, 15.0, 10.0])?, s.edge_at([10.0, 10.0, 15.0])?];
+    force_op("fillet", Engine::Native);
+    let made = s.fillet(&edges, 3.0);
+    force(Engine::Both);
+    let r = made?;
+    assert_eq!(built_by(&r), "native");
+    assert_eq!(r.faces().len(), 13);
+    let found = audit("fillet", &[&s], &r);
+    assert!(found.is_empty(), "fillet: {found:?}");
+    assert!(r.check().is_empty());
+    Ok(())
+}

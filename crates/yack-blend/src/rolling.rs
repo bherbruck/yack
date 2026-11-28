@@ -2,13 +2,18 @@
 // Adapted from springrep@a03e8a1 src/blend/rolling.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from springrep's src/blend/rolling.rs to yack-blend (M3 W9a); paths and visibility only;
 // the fillet's build split out into rolling/build.rs (M3 hardening R0), paths and visibility only; the
-// roll on checked access, its face-domain map a BTreeMap (looked up only), its small literals named (R1).
+// roll on checked access, its face-domain map a BTreeMap (looked up only), its small literals named (R1); a second section rule, square to the ball's own path, for an
+// edge whose square planes cross within the ball's reach (M4 slant-cut offsets).
 //! A fillet along a tangent chain of edges no constant section sweeps: the surface a ball of the
 //! fillet's radius sweeps rolling along the chain in contact with the faces on both sides.
 //!
 //! The chain runs the way its side-0 face uses it, with one parameter `s` along it. At each `s` the
 //! ball's centre lies in the plane square to the chain, at the radius from both sides, found by
-//! Newton steps whose rows are the two surface normals and the chain's tangent. A side's contact is
+//! Newton steps whose rows are the two surface normals and the chain's tangent. Where those planes
+//! cross within the ball's reach (an outward offset's edge, past the curvature of the edge it grew
+//! from) the sections fold back or find no centre; the chain is then rolled again with each centre
+//! in the plane through the chain's point that holds both contact normals, square to the ball's own
+//! path, by Newton steps on numerical rows. A side's contact is
 //! the nearest point on whichever of that side's faces holds it: where a side changes face at a
 //! joint, between faces that meet tangentially, the ball's contact slides from one onto the other,
 //! and a foot counts only on its own face's side of the edge between them.
@@ -33,6 +38,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod build;
+#[cfg(test)]
+mod tests;
 
 use super::{Picked, outward, run};
 pub(super) use self::build::fillet;
@@ -71,6 +78,15 @@ const FIRST_STEP: f64 = 1e-3; // tol: a share of the radius, not a length
 
 /// A Newton step on a curve parameter this short, as a share of its size, has settled.
 const SETTLED_PARAM: f64 = 1e-15; // tol: a share at rounding's scale, not a length
+
+/// The step of a spine section's numerical rows, as a share of the radius.
+const SPINE_STEP: f64 = 1e-6; // tol: a share of the radius, not a length
+
+/// Why the edge rule refuses where its square planes find no centre.
+const NO_SETTLE: &str = "whose ball's centre does not settle";
+
+/// Why the edge rule refuses where its square planes fold the blend back on itself.
+const FACING_IN: &str = "a rolling-ball fillet's face came out facing into the body";
 
 /// The step of a curve's numerical second derivative, as a share of its range.
 const DIFF_STEP: f64 = 1e-6; // tol: a share of a parameter range, not a length
@@ -124,6 +140,16 @@ impl Section {
             Some(vec![1.0, w, 1.0]),
         )
     }
+}
+
+/// Which plane a section's centre lies in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    /// Square to the chain at its point: the first rule.
+    Edge,
+    /// Through the chain's point and both contact normals, square to the ball's own path: for a
+    /// chain whose square planes cross within the ball's reach.
+    Spine,
 }
 
 /// One picked edge in the chain, `s` running from `s0` for `len` along it.
@@ -183,6 +209,8 @@ struct Roll<'a> {
     joints: Vec<[Option<Junction>; 2]>,
     /// The trimmed domain of every face a side has, to tell whether a foot lies in the face.
     domains: BTreeMap<FaceId, Domain>,
+    /// The plane each section lies in.
+    rule: Rule,
 }
 
 impl Roll<'_> {
@@ -334,6 +362,9 @@ impl Roll<'_> {
 
     /// The section at chain parameter `s`, starting Newton from `guess` or from the chain.
     fn section(&self, s: f64, guess: Option<Point3>) -> Result<Section> {
+        if self.rule == Rule::Spine {
+            return self.spine_section(s, guess);
+        }
         let (e, along, i) = self.chain_at(s)?;
         let faces = self.link(i)?.faces;
         let mut c = guess.unwrap_or_else(|| {
@@ -365,7 +396,63 @@ impl Roll<'_> {
                 });
             }
         }
-        unsupported("whose ball's centre does not settle")
+        unsupported(NO_SETTLE)
+    }
+
+    /// The section at chain parameter `s` by [`Rule::Spine`]: the centre at the radius from both
+    /// sides, in the plane through the chain's point that holds both contact normals. That plane
+    /// turns with the feet, so the Newton rows are central differences. With no `guess` it starts
+    /// where a ball in the wedge of the two tangent planes at the chain's point would sit.
+    fn spine_section(&self, s: f64, guess: Option<Point3>) -> Result<Section> {
+        let (e, _, i) = self.chain_at(s)?;
+        let faces = self.link(i)?.faces;
+        let reach = self.side * self.radius;
+        let residual = |c: Point3| -> Result<Vec3> {
+            let (pa, na, _) = self.foot(i, 0, c)?;
+            let (pb, nb, _) = self.foot(i, 1, c)?;
+            let Some(square) = na.cross(nb).unit() else {
+                return unsupported("whose faces are parallel");
+            };
+            Ok(Vec3::new((c - pa).dot(na) - reach, (c - pb).dot(nb) - reach, (c - e).dot(square)))
+        };
+        let mut c = match guess {
+            Some(g) => g,
+            None => {
+                let [f0, f1] = faces;
+                let n = outward(self.body, f0, e) + outward(self.body, f1, e);
+                let size = n.dot(n);
+                if size <= DEGENERATE {
+                    return unsupported("whose faces turn by a half turn");
+                }
+                // the bisector, as far out as a ball touching both tangent planes sits
+                e + n * (2.0 * reach / size)
+            }
+        };
+        let h = SPINE_STEP * self.radius;
+        for _ in 0..60 {
+            let f = residual(c)?;
+            let [dx, dy, dz] = [Vec3::X, Vec3::Y, Vec3::Z].map(|axis| (residual(c + axis * h), residual(c - axis * h)));
+            let column = |(p, m): (Result<Vec3>, Result<Vec3>)| -> Result<Vec3> { Ok((p? - m?) / (2.0 * h)) };
+            let (cx, cy, cz) = (column(dx)?, column(dy)?, column(dz)?);
+            let rows = [Vec3::new(cx.x, cy.x, cz.x), Vec3::new(cx.y, cy.y, cz.y), Vec3::new(cx.z, cy.z, cz.z)];
+            let step = solve3(rows, [f.x, f.y, f.z]).ok_or_else(|| {
+                Error::Unsupported("a rolling-ball fillet whose faces are parallel".into())
+            })?;
+            c -= step;
+            if step.norm() <= SETTLED * tol::LINEAR {
+                let (a, _, fa) = self.foot(i, 0, c)?;
+                let (b, _, fb) = self.foot(i, 1, c)?;
+                if a.dist(e) > 10.0 * self.radius || b.dist(e) > 10.0 * self.radius {
+                    return unsupported("whose ball leaves the edge");
+                }
+                return Ok(Section {
+                    centre: c,
+                    contact: [a, b],
+                    face: [fa, fb],
+                });
+            }
+        }
+        unsupported(NO_SETTLE)
     }
 
     /// Where, near the joint at the end of link `i`, side `k`'s contact crosses its junction.
