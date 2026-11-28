@@ -24,7 +24,7 @@ fn split(m: [[f64; 4]; 3]) -> ([[f64; 3]; 3], Vec3) {
 /// collapses.)
 pub fn offset(b: &Brep, distance: f64) -> Result<Brep> {
     // A concave round the growth takes past its radius is not a hole: the growth takes it out
-    // first (crate::offset_in::offset_faces_past_rounds), so only what is left can close.
+    // first (the outward offset's own round drop), so only what is left can close.
     let by: BTreeMap<FaceId, f64> = b.face_ids().map(|f| (f, distance)).collect();
     let sharp = if distance > 0.0 { crate::tweak::drop_vanishing_rounds(b, &by).ok().flatten() } else { None };
     if distance > 0.0 && closes_exactly(sharp.as_ref().map_or(b, |(s, _)| s), distance) {

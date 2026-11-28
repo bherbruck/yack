@@ -107,6 +107,9 @@ const POLE_FRACTION: f64 = 1e-3; // tol: fraction of the linear tolerance
 /// The most Newton steps a projection takes.
 const PROJECTION_STEPS: usize = 60;
 
+/// How many seeds after the nearest a projection that starts stuck at a pole tries.
+const POLE_RETRIES: usize = 3;
+
 /// The most Newton steps along an extrusion's curve.
 const EXTRUSION_STEPS: usize = 30;
 
@@ -523,33 +526,24 @@ impl Surface {
 
     /// Newton's method on the distance to `p` from the nearest of `seeds`, each step taken only
     /// if it comes no farther; periodic parameters are wrapped into their first period after.
+    /// Where the nearest seed is a pole (the surface's first derivatives there are dependent, so no
+    /// step can be taken), the next nearest seeds are tried too, and the nearest result kept: a point
+    /// closer to a pole than to the seed beside it would otherwise be put on the pole itself.
     fn refine_projection(&self, p: Point3, seeds: impl Iterator<Item = Vec2>) -> Vec2 {
-        let mut best = (f64::INFINITY, Vec2::ZERO);
-        for seed in seeds {
-            let distance = self.eval(seed.x, seed.y).dist(p);
-            if distance < best.0 {
-                best = (distance, seed);
+        let mut scored: Vec<(f64, Vec2)> = seeds.map(|seed| (self.eval(seed.x, seed.y).dist(p), seed)).collect();
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut best: Option<(f64, Vec2)> = None;
+        for &(_, seed) in scored.iter().take(POLE_RETRIES + 1) {
+            let (uv, stuck) = self.newton_from(p, seed);
+            let distance = self.eval(uv.x, uv.y).dist(p);
+            if best.is_none_or(|(least, _)| distance < least) {
+                best = Some((distance, uv));
             }
-        }
-        let mut uv = best.1;
-        for _ in 0..PROJECTION_STEPS {
-            let (q, su, sv) = self.d1(uv.x, uv.y);
-            let r = q - p;
-            let Some((du, dv)) =
-                solve2(su.dot(su), su.dot(sv), su.dot(sv), sv.dot(sv), -su.dot(r), -sv.dot(r))
-            else {
-                break;
-            };
-            let next = Vec2::new(uv.x + du, uv.y + dv);
-            let done = du.abs() + dv.abs() <= STEP_DONE * (1.0 + uv.x.abs() + uv.y.abs());
-            if self.eval(next.x, next.y).dist(p) > r.norm() * (1.0 + FARTHER) + DISTANCE_ROUNDING {
-                break;
-            }
-            uv = next;
-            if done {
+            if !stuck {
                 break;
             }
         }
+        let uv = best.map_or(Vec2::ZERO, |(_, uv)| uv);
         let wrap = |x: f64, period: Option<f64>, start: f64| match period {
             Some(period) => start + (x - start).rem_euclid(period),
             None => x,
@@ -563,6 +557,33 @@ impl Surface {
             _ => 0.0,
         };
         Vec2::new(wrap(uv.x, self.u_period(), u0), wrap(uv.y, self.v_period(), v0))
+    }
+
+    /// Newton's method on the distance to `p` from `seed`, and whether it could not take a first step
+    /// (the surface's derivatives are dependent at the seed, as at a pole).
+    fn newton_from(&self, p: Point3, seed: Vec2) -> (Vec2, bool) {
+        let mut uv = seed;
+        let mut stuck = false;
+        for step in 0..PROJECTION_STEPS {
+            let (q, su, sv) = self.d1(uv.x, uv.y);
+            let r = q - p;
+            let Some((du, dv)) =
+                solve2(su.dot(su), su.dot(sv), su.dot(sv), sv.dot(sv), -su.dot(r), -sv.dot(r))
+            else {
+                stuck = step == 0;
+                break;
+            };
+            let next = Vec2::new(uv.x + du, uv.y + dv);
+            let done = du.abs() + dv.abs() <= STEP_DONE * (1.0 + uv.x.abs() + uv.y.abs());
+            if self.eval(next.x, next.y).dist(p) > r.norm() * (1.0 + FARTHER) + DISTANCE_ROUNDING {
+                break;
+            }
+            uv = next;
+            if done {
+                break;
+            }
+        }
+        (uv, stuck)
     }
 }
 

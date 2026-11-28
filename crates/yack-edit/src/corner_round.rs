@@ -96,7 +96,7 @@ pub fn fillet_edges(s: &Brep, edges: &[EdgeId], r: f64, feature: &str) -> Result
                 .first()
                 .map(|&u| s.coedge_face(u))
                 .ok_or_else(|| Error::InvalidInput("a rounded edge lies between two faces".into()))?;
-            crate::straight_round::fillet_edge(s, *e, face, r, feature)
+            crate::straight_round::fillet_edge(s, *e, face, r, feature).or_else(|_| crate::turned_chamfer::fillet_edge(s, *e, face, r, feature))
         }
         [_, _, _] => fillet_concave_corner(s, edges, r, feature),
         _ if edges.len() == s.edge_ids().count() => crate::convex_grow::round_all_edges(s, r, feature),

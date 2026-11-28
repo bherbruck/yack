@@ -790,3 +790,262 @@ fn every_edge_of_an_octahedron_rounded_is_its_opening() {
     let thin = crate::primitive::block(&Frame::WORLD, Vec3::new(3.0, 4.0, 5.0), "b").unwrap();
     assert!(matches!(round_all_edges(&thin, 2.0, "r"), Err(Error::Unsupported(_) | Error::InvalidInput(_))));
 }
+
+#[test]
+fn what_the_native_blend_rungs_decline_never_names_a_stated_requirement() {
+    // The facade ends a ladder only on a refusal that names a stated requirement; a native rung is a
+    // fall-through to cadrs, so none of its declines may read as one.
+    let cube = polyhedron(&[([1.0, 0.0, 0.0], 10.0), ([-1.0, 0.0, 0.0], 0.0), ([0.0, 1.0, 0.0], 10.0), ([0.0, -1.0, 0.0], 0.0), ([0.0, 0.0, 1.0], 10.0), ([0.0, 0.0, -1.0], 0.0)]);
+    let corner = cube.vertex_ids().next().unwrap();
+    let two: Vec<EdgeId> = cube.edge_ids().filter(|&e| cube.edge(e).start == corner || cube.edge(e).end == corner).take(2).collect();
+    let l = Profile::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 3.0), Vec2::new(3.0, 3.0), Vec2::new(3.0, 10.0), Vec2::new(0.0, 10.0)], &["a", "b", "c", "d", "e", "f"]);
+    let ell = extrude(&l, &Frame::WORLD, 10.0, "l").unwrap();
+    let outer = edge_through(&ell, Point3::new(0.0, 0.0, 5.0));
+    let outer_face = ell.edge_uses(outer).first().map(|&u| ell.coedge_face(u)).unwrap();
+    let all: Vec<EdgeId> = cube.edge_ids().collect();
+    let declines = [
+        ("chamfer", chamfer_edges(&cube, &two, 1.0, "c")),
+        ("chamfer", chamfer_two_straight(&ell, outer, outer_face, 1.0, 1.0, "c")),
+        ("chamfer", chamfer_edges(&cube, &all, 6.0, "c")),
+        ("fillet", fillet_edges(&cube, &two, 1.0, "r")),
+        ("fillet", fillet_edges(&cube, &all, 6.0, "r")),
+        ("fillet", fillet_concave_corner(&ell, &two, 1.0, "r")),
+    ];
+    for (op, result) in declines {
+        let Err(e) = result else { panic!("{op}: expected a decline") };
+        assert!(!crate::requirement::breaks_requirement(op, &e.to_string()), "{op}: {e}");
+    }
+}
+
+/// The volume of the cap of height `h` of a ball of radius `r`.
+fn cap(r: f64, h: f64) -> f64 {
+    PI * h * h * (3.0 * r - h) / 3.0
+}
+
+fn turned(profile: Vec<Segment>) -> Brep {
+    let o = Point3::ZERO;
+    let f = Frame::from_axis(o, Vec3::Z).unwrap();
+    let meridian = Profile { loops: vec![ProfileLoop { segments: profile.into_iter().enumerate().map(|(i, s)| named(s, &format!("m{i}"))).collect() }] };
+    revolve(&meridian, &Frame::new(o, -f.y, f.x).unwrap(), o, f.z, TAU, "t").unwrap()
+}
+
+#[test]
+fn a_ball_cap_shelled_open_at_its_plane_has_the_whole_ball_for_a_cavity() {
+    // The ball of radius 5 cut at z = c, shelled 1 open at the cut: the plane moved out reaches z = c + 1,
+    // at or past the ball of radius 4 about the same centre, whose cavity is whole. With c = 3 (tangent) the wall
+    // is (ball 5 less its cap above 3) less (ball 4 less its cap above 3); c = 3.9999 leaves a pinhole.
+    for c in [3.0_f64, 3.9999] {
+        let line = |a: [f64; 2], b: [f64; 2]| Segment::Line { a: Vec2::new(a[0], a[1]), b: Vec2::new(b[0], b[1]) };
+        let r_at = (25.0 - c * c).sqrt();
+        let sweep_start = -PI / 2.0;
+        let top = c.atan2(r_at);
+        let solid = turned(vec![
+            Segment::Arc { center: Vec2::ZERO, radius: 5.0, start: sweep_start, sweep: top - sweep_start },
+            line([r_at, c], [0.0, c]),
+            line([0.0, c], [0.0, -5.0]),
+        ]);
+        let plane = solid.face_ids().find(|&f| matches!(solid.face(f).surface, Surface::Plane(_))).unwrap();
+        let cup = shell(&solid, &[plane], 1.0, Wall::Inward, "s").unwrap();
+        let held = 4.0 / 3.0 * PI * 125.0 - cap(5.0, 5.0 - c);
+        let taken = 4.0 / 3.0 * PI * 64.0 - cap(4.0, 4.0 - c);
+        close(measure::volume(&cup), held - taken);
+        assert!(crate::check::check(&cup).is_empty());
+        assert!(cup.face_ids().all(|f| !cup.face(f).names.is_empty()));
+    }
+}
+
+#[test]
+fn a_capsule_shelled_open_at_its_dome_keeps_the_walls_running_on_to_meet_it() {
+    // The cylinder of radius 5 and 10 tall under a hemisphere of radius 5, shelled 1 open at the dome: the
+    // cavity is the cylinder of radius 4 from z = 1 on up, through the dome. It holds the cylinder 16 pi 9
+    // and, in the dome, the points within r <= 4: integral of 2 pi r sqrt(25 - r^2) over [0, 4]
+    // = (2 pi / 3)(125 - 27). The wall is the capsule (250 pi + 250 pi / 3) less that.
+    let solid = turned(vec![
+        Segment::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(5.0, 0.0) },
+        Segment::Line { a: Vec2::new(5.0, 0.0), b: Vec2::new(5.0, 10.0) },
+        Segment::Arc { center: Vec2::new(0.0, 10.0), radius: 5.0, start: 0.0, sweep: PI / 2.0 },
+        Segment::Line { a: Vec2::new(0.0, 15.0), b: Vec2::new(0.0, 0.0) },
+    ]);
+    let dome = solid.face_ids().find(|&f| matches!(solid.face(f).surface, Surface::Sphere(_))).unwrap();
+    let cup = shell(&solid, &[dome], 1.0, Wall::Inward, "s").unwrap();
+    close(measure::volume(&cup), 124.0 * PI);
+    assert!(crate::check::check(&cup).is_empty());
+    assert!(cup.face_ids().all(|f| !cup.face(f).names.is_empty()));
+}
+
+#[test]
+fn a_ball_tipped_cone_shelled_past_its_tip_has_the_sharp_cones_cavity() {
+    // The cone of base radius 6 and apex at z = 12 (tan a = 1/2, sin a = 1/sqrt 5), its tip rounded by a ball of
+    // radius 1 about (0, 12 - sqrt 5), shelled 1.5 (more than the ball): the tip closes and the cavity is the sharp
+    // cone shrunk by 1.5, apex at 12 - 1.5 sqrt 5, base at z = 1.5 (a cone of height h = 10.5 - 1.5 sqrt 5, radius
+    // h / 2: pi h^3 / 12) when sealed, or from z = 0 up when open at the base: pi (12 - 1.5 sqrt 5)^3 / 12.
+    // The solid: the frustum up to the tangent circle at 12 - 4 / sqrt 5 (radii 6 and 2 / sqrt 5) and the ball's cap
+    // above it, of height 1 - 1 / sqrt 5.
+    let (r5, c) = (5.0_f64.sqrt(), 12.0 - 5.0_f64.sqrt());
+    let zt = 12.0 - 4.0 / r5;
+    let held = PI * zt / 3.0 * (36.0 + 6.0 * (2.0 / r5) + 4.0 / 5.0) + cap(1.0, 1.0 - 1.0 / r5);
+    let start = (zt - c).atan2(2.0 / r5);
+    let solid = turned(vec![
+        Segment::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(6.0, 0.0) },
+        Segment::Line { a: Vec2::new(6.0, 0.0), b: Vec2::new(2.0 / r5, zt) },
+        Segment::Arc { center: Vec2::new(0.0, c), radius: 1.0, start, sweep: PI / 2.0 - start },
+        Segment::Line { a: Vec2::new(0.0, c + 1.0), b: Vec2::new(0.0, 0.0) },
+    ]);
+    let base = solid.face_ids().find(|&f| matches!(solid.face(f).surface, Surface::Plane(_))).unwrap();
+    let sealed = shell(&solid, &[], 1.5, Wall::Inward, "s").unwrap();
+    let h = 10.5 - 1.5 * r5;
+    close(measure::volume(&sealed), held - PI * h.powi(3) / 12.0);
+    let open = shell(&solid, &[base], 1.5, Wall::Inward, "s").unwrap();
+    close(measure::volume(&open), held - PI * (12.0 - 1.5 * r5).powi(3) / 12.0);
+    assert!(crate::check::check(&open).is_empty() && crate::check::check(&sealed).is_empty());
+    assert!(open.face_ids().all(|f| !open.face(f).names.is_empty()));
+}
+
+#[test]
+#[ignore = "probe: a paraboloid cut by a plane a tenth of a thousandth above its tip"]
+fn probe_paraboloid_tip() {
+    let mut report = String::new();
+    for h in [1.0_f64, 1e-1, 1e-2, 1e-3, 1e-4] {
+        let o = Point3::ZERO;
+        let f = Frame::from_axis(o, Vec3::Z).unwrap();
+        let conic = Segment::Bezier { ctrl: vec![Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(8.0, 8.0)], weights: vec![1.0, 1.0, 1.0] };
+        let meridian = Profile {
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    named(conic, "bowl"),
+                    named(Segment::Line { a: Vec2::new(8.0, 8.0), b: Vec2::new(0.0, 8.0) }, "top"),
+                    named(Segment::Line { a: Vec2::new(0.0, 8.0), b: Vec2::new(0.0, 0.0) }, "axis"),
+                ],
+            }],
+        };
+        let para = revolve(&meridian, &Frame::new(o, -f.y, f.x).unwrap(), o, f.z, TAU, "p").unwrap();
+        let block = crate::primitive::block(&Frame::WORLD.translated(Vec3::new(-9.0, -9.0, -1.0)), Vec3::new(18.0, 18.0, 1.0 + h), "b").unwrap();
+        let want = 4.0 * PI * h * h;
+        let line = match boolean::intersection(&para, &block) {
+            Ok(r) => format!("ok V {:e} faces {}", measure::volume(&r), r.face_ids().count()),
+            Err(e) => format!("err {e}"),
+        };
+        report.push_str(&format!("h={h:e} want {want:e}: {line} (paraboloid V {:e})\n", measure::volume(&para)));
+    }
+    panic!("{report}");
+}
+
+#[test]
+#[ignore = "probe: the interior of the thin strip of a paraboloid's tip"]
+fn probe_paraboloid_tip_domain() {
+    let mut report = String::new();
+    for h in [1.0_f64, 1e-1, 1e-2, 1e-3, 1e-4] {
+        let o = Point3::ZERO;
+        let f = Frame::from_axis(o, Vec3::Z).unwrap();
+        // x^2 = 8 z up to z = h: the conic from the vertex to (sqrt(8 h), h), end tangents meeting at (sqrt(8 h)/2, 0).
+        let r = (8.0 * h).sqrt();
+        let conic = Segment::Bezier { ctrl: vec![Vec2::new(0.0, 0.0), Vec2::new(r / 2.0, 0.0), Vec2::new(r, h)], weights: vec![1.0, 1.0, 1.0] };
+        let meridian = Profile {
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    named(conic, "bowl"),
+                    named(Segment::Line { a: Vec2::new(r, h), b: Vec2::new(0.0, h) }, "top"),
+                    named(Segment::Line { a: Vec2::new(0.0, h), b: Vec2::new(0.0, 0.0) }, "axis"),
+                ],
+            }],
+        };
+        let tip = revolve(&meridian, &Frame::new(o, -f.y, f.x).unwrap(), o, f.z, TAU, "p").unwrap();
+        let bowl = tip.face_ids().find(|&g| matches!(tip.face(g).surface, Surface::Revolution(_))).unwrap();
+        let dom = crate::topo::face_domain(&tip, bowl);
+        let points = dom.interior_points();
+        report.push_str(&format!("h={h:e} V {:e} want {:e} interior points {} first {:?} loops {}\n", measure::volume(&tip), 4.0 * PI * h * h, points.len(), dom.interior_point(), tip.face(bowl).loops.len()));
+    }
+    panic!("{report}");
+}
+
+#[test]
+#[ignore = "probe: the paraboloid cut by planes near its tip, by what the boolean finds"]
+fn probe_paraboloid_planes() {
+    let mut report = String::new();
+    let o = Point3::ZERO;
+    let f = Frame::from_axis(o, Vec3::Z).unwrap();
+    let conic = Segment::Bezier { ctrl: vec![Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(8.0, 8.0)], weights: vec![1.0, 1.0, 1.0] };
+    let meridian = Profile {
+        loops: vec![ProfileLoop {
+            segments: vec![
+                named(conic, "bowl"),
+                named(Segment::Line { a: Vec2::new(8.0, 8.0), b: Vec2::new(0.0, 8.0) }, "top"),
+                named(Segment::Line { a: Vec2::new(0.0, 8.0), b: Vec2::new(0.0, 0.0) }, "axis"),
+            ],
+        }],
+    };
+    let para = revolve(&meridian, &Frame::new(o, -f.y, f.x).unwrap(), o, f.z, TAU, "p").unwrap();
+    for h in [1e-1_f64, 5e-2, 3e-2, 2e-2, 1e-2, 1e-3] {
+        let area = boolean::section_area(&para, Point3::new(0.0, 0.0, h), Vec3::Z);
+        let (below, above) = match boolean::split(&para, Point3::new(0.0, 0.0, h), -Vec3::Z) {
+            Ok((a, b)) => (format!("{:e}", measure::volume(&a)), format!("{:e}", measure::volume(&b))),
+            Err(e) => (format!("err {e}"), String::new()),
+        };
+        report.push_str(&format!("h={h:e}: section_area {area:?} want {:e}; split below {below} above {above} (want {:e})\n", 8.0 * PI * h, 4.0 * PI * h * h));
+    }
+    panic!("{report}");
+}
+
+#[test]
+#[ignore = "probe: small caps of a sphere, a cone and a torus cut by planes"]
+fn probe_small_caps() {
+    let mut report = String::new();
+    let sphere = crate::primitive::sphere(&Frame::WORLD, 8.0, "s").unwrap();
+    let cone = crate::primitive::cone(&Frame::WORLD, 8.0, 0.0, 8.0, "c").unwrap();
+    for h in [0.2_f64, 0.1, 0.05, 0.03, 0.01, 0.001] {
+        // sphere: the cap above z = 8 - h; cone (apex at z = 8): the tip above z = 8 - h
+        let cap = PI * h * h * (24.0 - h) / 3.0;
+        let tip = PI * h * h * h / 3.0;
+        let a = boolean::split(&sphere, Point3::new(0.0, 0.0, 8.0 - h), Vec3::Z).map(|(top, _)| measure::volume(&top));
+        let b = boolean::split(&cone, Point3::new(0.0, 0.0, 8.0 - h), Vec3::Z).map(|(top, _)| measure::volume(&top));
+        report.push_str(&format!("h={h}: sphere cap {a:?} want {cap:e}; cone tip {b:?} want {tip:e}\n"));
+    }
+    panic!("{report}");
+}
+
+#[test]
+fn a_cylinders_rim_rounded_to_its_own_radius_is_a_dome_and_chamfered_to_its_own_radius_a_cone() {
+    // The cylinder of radius 5 and 10 tall. Rounded to r = 5 the top shrinks to the point (0, 0, 10): the
+    // cylinder to z = 5 under a hemisphere of radius 5, V = 25 pi 5 + (2/3) pi 125 = 625 pi / 3. Chamfered 5 and 5
+    // it is a cone from the circle at z = 5 to the apex: V = 125 pi + 125 pi / 3 = 500 pi / 3.
+    let cylinder = crate::primitive::cylinder(&Frame::WORLD, 5.0, 10.0, "c").unwrap();
+    let rim = cylinder.edge_ids().find(|&e| matches!(cylinder.edge(e).curve, Some(Curve::Circle(ref c)) if (c.frame.origin.z - 10.0).abs() < 1e-9)).unwrap();
+    let top = cylinder.face_ids().find(|&g| matches!(cylinder.face(g).surface, Surface::Plane(_)) && crate::measure::face_bbox(&cylinder, g).min.z > 9.9).unwrap();
+    let dome = fillet_edges(&cylinder, &[rim], 5.0, "r").unwrap();
+    close(measure::volume(&dome), 625.0 * PI / 3.0);
+    assert!(crate::check::check(&dome).is_empty());
+    assert!(dome.face_ids().any(|g| dome.face(g).names.iter().any(|n| n.face == "round_0")));
+    let cone = chamfer_edges(&cylinder, &[rim], 5.0, "c").unwrap();
+    close(measure::volume(&cone), 500.0 * PI / 3.0);
+    assert!(crate::check::check(&cone).is_empty());
+    let _ = top;
+}
+
+#[test]
+fn a_cylinders_rim_rounded_by_less_than_its_radius_loses_the_corner_less_the_quarter_disc() {
+    // Rim round r = 1 on the cylinder of radius 5: the corner square less the quarter disc, 1 - pi/4, turned
+    // about the axis at its centroid's radius (Pappus): the area (1 - pi/4) at radius 5 - c, where the
+    // square's centroid is 1/2 in and the quarter disc's is 4 / (3 pi) in from the rim's corner side:
+    // 2 pi (5 (1 - pi/4) - (1/2 - (pi/4)(1 - 4/(3 pi)))) .
+    let cylinder = crate::primitive::cylinder(&Frame::WORLD, 5.0, 10.0, "c").unwrap();
+    let rim = cylinder.edge_ids().find(|&e| matches!(cylinder.edge(e).curve, Some(Curve::Circle(ref c)) if (c.frame.origin.z - 10.0).abs() < 1e-9)).unwrap();
+    let round = fillet_edges(&cylinder, &[rim], 1.0, "r").unwrap();
+    let removed = 2.0 * PI * (5.0 * (1.0 - PI / 4.0) - (0.5 - (PI / 4.0) * (1.0 - 4.0 / (3.0 * PI))));
+    close(measure::volume(&round), 250.0 * PI - removed);
+}
+
+#[test]
+fn deleting_the_round_of_a_half_torus_rim_leaves_the_half_torus() {
+    // The half of the torus of tube radius 2 about the circle of radius 6 above z = 0, its outer rim (the circle of
+    // radius 8 at z = 0) rounded to 1/2 and the round deleted: the flat ring and the tube meet again, and the
+    // half torus holds half of (pi 2^2)(2 pi 6) = 24 pi^2 (Pappus).
+    let tube = crate::primitive::torus(&Frame::WORLD, 6.0, 2.0, "t").unwrap();
+    let below = boolean::half_space(&tube, Point3::ZERO, -Vec3::Z).unwrap();
+    let half = boolean::difference(&tube, &below).unwrap();
+    let rim = half.edge_ids().find(|&e| matches!(half.edge(e).curve, Some(Curve::Circle(ref c)) if (c.radius - 8.0).abs() < 1e-9 && c.frame.origin.z.abs() < 1e-9)).unwrap();
+    let rounded = blend::fillet_edges(&half, &[rim], 0.5, "r").unwrap();
+    let round = rounded.face_ids().find(|&f| matches!(&rounded.face(f).surface, Surface::Torus(t) if (t.minor - 0.5).abs() < 1e-9)).unwrap();
+    let healed = delete_faces(&rounded, &[round]).unwrap();
+    close(measure::volume(&healed), 24.0 * PI * PI);
+    assert!(crate::check::check(&healed).is_empty());
+}

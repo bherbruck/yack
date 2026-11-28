@@ -46,6 +46,7 @@ mod cone_cavity;
 mod enclosed;
 mod offset_in;
 mod rounded_shell;
+mod special_cavities;
 mod corner_chamfer;
 mod convex_grow;
 mod corner_round;
@@ -158,7 +159,10 @@ pub fn shell(s: &Brep, open: &[FaceId], thickness: f64, wall: Wall, feature: &st
                 Some(whole) => whole,
                 None => match closed_past_rounds(s, open, thickness) {
                     Some(whole) => whole,
-                    None => moved(-thickness, open_by)?,
+                    None => match special_cavities::cavity(s, open, thickness)? {
+                        Some(found) => found,
+                        None => moved(-thickness, open_by)?,
+                    },
                 },
             };
             // Each cavity face also names the face of `s` it offsets, where the move kept the solid's
@@ -565,6 +569,8 @@ fn gap_fill(s: &Brep, faces: &[FaceId]) -> Result<Gap> {
         Surface::Sphere(sp) if !enclosed::hollow(s, f) => Some(sp.radius),
         // A cone bounds what lies inside it, its corner with a plane further out than the rims.
         Surface::Cone(_) if !enclosed::hollow(s, f) => Some(measure::bbox(s).diagonal()),
+        // A tube bounds what lies inside it: its outer circle lies a tube radius beyond the rims' centre line.
+        Surface::Torus(t) if !enclosed::hollow(s, f) => Some(t.minor),
         _ => None,
     }).fold(0.0, f64::max);
     // A box with no thickness along an axis (a flat's rims all on its plane) grows both ways by the

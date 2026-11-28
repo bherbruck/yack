@@ -435,13 +435,13 @@ pub fn sewn(patches: &[Patch]) -> Result<Solid> {
         return Err(Error::invalid(op, "patches", "no patches"));
     }
     let cadrs = || engine_cadrs::sewn(op, patches);
-    // yack-build's sewing after cadrs, as "native" until a bake-off orders it; its faces are
-    // `patch_<k>`, and a B-spline patch stays cadrs's alone
+    // yack-build's sewing first (bake-off doc/donors.md: the Utah teapot equal to cadrs), then
+    // cadrs; its faces are `patch_<k>`, and a B-spline patch stays cadrs's alone
     let native = || {
         let feature = engine::feature();
         engine::made(&feature, op, yack_build::sewn::sewn(&native_patches(op, patches)?, &feature))
     };
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }]))
 }
 
 /// `patches` as yack-build's, their points carried unplaced; a B-spline patch declines.

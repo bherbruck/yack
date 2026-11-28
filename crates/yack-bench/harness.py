@@ -184,7 +184,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=None)
     ap.add_argument("--scores", help="the ratchet baseline, e.g. scores/bench.json")
     ap.add_argument("--bless", action="store_true", help="write the baseline instead of failing")
-    ap.add_argument("--engine", choices=["springrep", "cadrs", "both"],
+    ap.add_argument("--engine", choices=["springrep", "cadrs", "nocadrs", "both"],
                     help="force one engine (a `--features bakeoff` build of the runner)")
     args = ap.parse_args()
 

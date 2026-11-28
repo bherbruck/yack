@@ -19,6 +19,9 @@ pub enum Engine {
     Cadrs,
     /// yack's own rungs only (the `native` ones: yack-swept's, yack-blend's).
     Native,
+    /// Every rung but cadrs's, in the ladder's order: what yack answers without cadrs (the
+    /// cadrs-removal measurement).
+    NoCadrs,
 }
 
 thread_local! {
@@ -63,6 +66,7 @@ pub(crate) fn allows(op: &str, name: &str) -> bool {
         Engine::Springrep => name == "springrep",
         Engine::Cadrs => name == "cadrs",
         Engine::Native => name == "native",
+        Engine::NoCadrs => name != "cadrs",
     }
 }
 

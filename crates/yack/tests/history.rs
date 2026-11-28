@@ -525,11 +525,11 @@ fn the_sharp_thicken_rung_names_its_faces_for_history() -> Result<()> {
 
 
 /// shell runs springrep first: an open box and an open cylinder shelled on that rung, every face
-/// with a History origin (invariant 3); a sphere open at a cap, which springrep declines, is
-/// answered by cadrs.
+/// with a History origin (invariant 3); a sphere open at a cap, which springrep declined until
+/// w-h5-95 (special cavities), is answered by it too, every face named.
 #[cfg(feature = "bakeoff")]
 #[test]
-fn the_shell_rungs_name_their_faces_and_fall_through_to_cadrs() -> Result<()> {
+fn the_shell_rungs_name_their_faces_for_history() -> Result<()> {
     use yack::bakeoff::{Engine, built_by, force, force_op};
     let b = block(&Frame::WORLD, [10.0, 8.0, 6.0])?;
     let lid = b.face_at([5.0, 4.0, 6.0])?;
@@ -547,8 +547,10 @@ fn the_shell_rungs_name_their_faces_and_fall_through_to_cadrs() -> Result<()> {
     }
     let cut = sphere(&Frame::WORLD, 5.0)?.split(&Plane::new([0.0, 0.0, 3.0], [0.0, 0.0, -1.0])?)?.front;
     let domed = cut.shell(&[cut.face_at([1.0, 1.0, 3.0])?], 1.0)?;
-    assert_eq!(built_by(&domed), "cadrs");
+    assert_eq!(built_by(&domed), "springrep");
     assert!(domed.check().is_empty() && domed.volume() > 0.0);
+    let found = audit("shell", &[&cut], &domed);
+    assert!(found.is_empty(), "shell: {found:?}");
     Ok(())
 }
 
@@ -710,7 +712,7 @@ fn the_springrep_move_faces_rung_names_its_faces_for_history() -> Result<()> {
 }
 
 
-/// sewn's native rung (yack-build's sewing, after cadrs) under `force_op`: a cube of six flat
+/// sewn's native rung (yack-build's sewing, first, before cadrs) under `force_op`: a cube of six flat
 /// Bézier patches sewn shut, every face (`patch_<k>`) with a History origin (invariant 3).
 #[cfg(feature = "bakeoff")]
 #[test]
@@ -730,6 +732,7 @@ fn the_native_sewn_rung_names_its_faces_for_history() -> Result<()> {
     let found = audit("sewn", &[], &s);
     assert!(found.is_empty(), "sewn: {found:?}");
     eprintln!("sewn: {} faces, every one with an origin, volume {}", s.faces().len(), s.volume());
+    assert_eq!(built_by(&sewn(&cube)?), "native");
     Ok(())
 }
 
@@ -845,5 +848,34 @@ fn the_native_inside_corner_round_names_its_faces_for_history() -> Result<()> {
     let found = audit("fillet", &[&s], &r);
     assert!(found.is_empty(), "fillet: {found:?}");
     assert!(r.check().is_empty());
+    Ok(())
+}
+
+
+/// offset_faces runs springrep first: a drilled plate's bore widened on that rung under `force_op`,
+/// every face with a History origin (invariant 3); two bores widened until they merge, which
+/// springrep declines, is still answered, by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_springrep_offset_faces_rung_names_its_faces_and_falls_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let plate = block(&Frame::WORLD, [40.0, 30.0, 8.0])?;
+    let plate = plate.difference(&cylinder(&Frame::at([20.0, 15.0, -1.0]), 5.0, 10.0)?)?;
+    let bore = plate.face_at([20.0, 20.0, 4.0])?;
+    force_op("offset_faces", Engine::Springrep);
+    let made = plate.offset_faces(&[bore], -2.0);
+    force(Engine::Both);
+    let s = made?;
+    assert_eq!(built_by(&s), "springrep");
+    let found = audit("offset_faces", &[&plate], &s);
+    assert!(found.is_empty(), "offset_faces: {found:?}");
+    assert_eq!(built_by(&plate.offset_faces(&[bore], -2.0)?), "springrep");
+    let left = cylinder(&Frame::at([15.0, 15.0, -1.0]), 3.0, 10.0)?;
+    let right = cylinder(&Frame::at([25.0, 15.0, -1.0]), 3.0, 10.0)?;
+    let two = block(&Frame::WORLD, [40.0, 30.0, 8.0])?.difference_all(&[left, right])?;
+    let bores = [two.face_at([15.0, 18.0, 4.0])?, two.face_at([25.0, 18.0, 4.0])?];
+    let merged = two.offset_faces(&bores, -3.0)?;
+    assert_eq!(built_by(&merged), "cadrs");
+    assert!(merged.check().is_empty() && merged.volume() > 0.0);
     Ok(())
 }

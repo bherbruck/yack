@@ -32,7 +32,7 @@ pub fn chamfer_edges(s: &Brep, edges: &[EdgeId], d: f64, feature: &str) -> Resul
             .first()
             .map(|&u| s.coedge_face(u))
             .ok_or_else(|| Error::InvalidInput("a chamfered edge lies between two faces".into()))?;
-        return crate::straight_chamfer::chamfer_two(s, *e, face, d, d, feature);
+        return crate::straight_chamfer::chamfer_two(s, *e, face, d, d, feature).or_else(|_| crate::turned_chamfer::chamfer_two(s, *e, face, d, d, feature));
     }
     if s.edge_ids().any(|e| crate::topo::local::convexity(s, e) != Some(true)) {
         return Err(Error::Unsupported("a corner chamfer on a solid with an edge that is not convex".into()));

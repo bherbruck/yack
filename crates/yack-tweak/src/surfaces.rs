@@ -2,7 +2,7 @@
 // Adapted from springrep@a03e8a1 src/edit/tweak.rs (MIT, (c) 2026 Springcraft, Inc.).
 // Changes: moved from edit/tweak.rs to tweak/mod.rs (M2.4, T6) and to yack-tweak (M3 W7); split out of
 // lib.rs by what it does (hardening T1); checked access, the solid finished by the crate's `finished`
-// (hardening T2); a rigid move pins the vertices its faces all go with (move_faces fix, w-h1).
+// (hardening T2); fitted offsets tangent at a corner are one row to the fits' budget (w-h1); a rigid move pins the vertices its faces all go with (move_faces fix, w-h1).
 //! Faces moved onto any new surfaces with the solid's topology kept: each vertex settles where its
 //! faces' new surfaces meet, and each edge is their meeting between its moved ends.
 
@@ -29,14 +29,30 @@ fn settle(p: Point3, on: &[&Surface]) -> Option<Point3> {
             return Some(x);
         }
         // Faces tangent at the point (a round and the wall it runs into) stay tangent when both
-        // move by one distance: their rows say the same, and one of them is kept.
-        let mut kept: Vec<(Vec3, f64)> = Vec::new();
-        for r in rows {
-            if !kept.iter().any(|q| q.0.cross(r.0).norm() <= 1e-9) {
-                kept.push(r);
+        // move by one distance: their rows say the same, and one of them is kept. Two fitted
+        // offsets tangent there (the offsets of two arcs of one smooth curve) each lie within
+        // OFFSET_FIT of the true offset, not of each other's: their normals part by up to about
+        // √(OFFSET_FIT / size), so they are one row to that angle, and the row left out need only
+        // hold to the fits' own budget, 2·OFFSET_FIT, both straying at most that far.
+        let fitted = |s: &Surface| !matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
+        let mut kept: Vec<(Vec3, f64, bool)> = Vec::new();
+        let mut left: Vec<f64> = Vec::new();
+        for (r, s) in rows.into_iter().zip(on.iter().copied()) {
+            let fit = fitted(s);
+            let twin = |q: &(Vec3, f64, bool)| {
+                let angle = q.0.cross(r.0).norm();
+                angle <= 1e-9 || (fit && q.2 && angle <= tol::TANGENT)
+            };
+            if kept.iter().any(twin) {
+                left.push(r.1);
+            } else {
+                kept.push((r.0, r.1, fit));
             }
         }
-        let rows = kept;
+        if kept.iter().all(|r| r.1.abs() <= 1e-3 * tol::LINEAR) && left.iter().all(|r| r.abs() <= 2.0 * crate::offset::OFFSET_FIT) { // tol: the all-rows check's own bound, above
+            return Some(x);
+        }
+        let rows: Vec<(Vec3, f64)> = kept.into_iter().map(|(n, d, _)| (n, d)).collect();
         let k = rows.len();
         let step = if k <= 3 {
             // Least norm: x moves by Jᵀy with (J Jᵀ) y = r.

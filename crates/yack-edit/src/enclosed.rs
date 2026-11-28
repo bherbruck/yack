@@ -1,6 +1,6 @@
 // yack: the solid a cylinder, cone or sphere surface encloses, for closing a deleted gap against it
-//! A face on a cylinder, a cone or a sphere bounds the solid its surface encloses: the prism of the
-//! cylinder, the nappe of the cone, the ball. Closing a gap against such a face fills or cuts to
+//! A face on a cylinder, a cone, a sphere or a torus bounds the solid its surface encloses: the prism of the
+//! cylinder, the nappe of the cone, the ball, the tube. Closing a gap against such a face fills or cuts to
 //! that body, or to its complement where the face is a hole's (its normal turned inward).
 
 use crate::{
@@ -28,6 +28,12 @@ pub(crate) fn within(surface: &Surface, q: Point3) -> Option<bool> {
             Some(reach >= 0.0 && (off - c.frame.z * h).norm() <= reach)
         }
         Surface::Sphere(sp) => Some(q.dist(sp.frame.origin) <= sp.radius),
+        Surface::Torus(tor) => {
+            let off = q - tor.frame.origin;
+            let axial = off.dot(tor.frame.z);
+            let radial = (off - tor.frame.z * axial).norm();
+            Some((radial - tor.major).hypot(axial) <= tor.minor)
+        }
         _ => None,
     }
 }
@@ -71,6 +77,7 @@ pub(crate) fn body(s: &Brep, surface: &Surface) -> Result<Brep> {
             let radius = |h: f64| if at(h) <= tol::LINEAR { 0.0 } else { at(h) };
             yack_build::primitive::cone(&fr, radius(lo), radius(hi), hi - lo, "cone")
         }
+        Surface::Torus(tor) => yack_build::primitive::torus(&Frame::new(tor.frame.origin, tor.frame.z, tor.frame.x)?, tor.major, tor.minor, "tube"),
         Surface::Sphere(sp) => yack_build::primitive::sphere(&sp.frame, sp.radius, "ball"),
         other => Err(Error::Unsupported(format!("closing a gap against a {} face", other.kind()))),
     }

@@ -14,6 +14,7 @@ yack: pub use yack_math::{Aabb, Affine, Angle, Dir3, Frame, Point2, Point3, Rigi
 yack::bakeoff: enum Engine variant Both
 yack::bakeoff: enum Engine variant Cadrs
 yack::bakeoff: enum Engine variant Native
+yack::bakeoff: enum Engine variant NoCadrs
 yack::bakeoff: enum Engine variant Springrep
 yack::bakeoff: pub enum Engine
 yack::bakeoff: pub fn built_by(s: &Solid) -> &'static str

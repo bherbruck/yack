@@ -10,7 +10,7 @@
 //! yack-bench --strategy CASE  (`<strategy> <built_by>` or `refused`)
 //! yack-bench --roundtrip [CASE]  (with `--features bakeoff`: the bridge round trip per case)
 //! yack-bench --pcurve-scan [CASE]  (with `--features bakeoff`: cadrs's dense p-curve scan of each case's held body)
-//! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only; springrep, cadrs, native or both)
+//! yack-bench --engine cadrs CASE OUT.stl [OUT.step]  (with `--features bakeoff`: one engine only; springrep, cadrs, native, nocadrs or both)
 //! yack-bench --engine native@swept CASE ...  (the engine for op `swept` only; every other op runs its whole ladder)
 //! ```
 //!
@@ -333,6 +333,7 @@ fn force(spec: &str) -> bool {
         "springrep" => Engine::Springrep,
         "cadrs" => Engine::Cadrs,
         "native" => Engine::Native,
+        "nocadrs" => Engine::NoCadrs,
         "both" => Engine::Both,
         _ => return false,
     };
@@ -353,7 +354,7 @@ fn main() -> ExitCode {
     if args.get(1).map(String::as_str) == Some("--engine") {
         let name = args.get(2).cloned().unwrap_or_default();
         if !force(&name) {
-            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs, native or both, optionally @OP");
+            eprintln!("--engine {name}: needs a build with `--features bakeoff` and springrep, cadrs, native, nocadrs or both, optionally @OP");
             return ExitCode::from(2);
         }
         args.drain(1..3);

@@ -19,6 +19,17 @@ fn a_forced_engine_holds_through_an_op_that_fans_out() {
 }
 
 #[test]
+fn without_cadrs_a_cadrs_only_op_refuses_and_the_rest_keep_their_ladder() {
+    force(Engine::NoCadrs);
+    let a = block(&Frame::WORLD, [4.0, 4.0, 4.0]).unwrap();
+    let b = sphere(&Frame::at([4.0, 4.0, 4.0]), 2.5).unwrap();
+    assert_eq!(yack::bakeoff::built_by(&a.union(&b).unwrap()), "springrep");
+    let helix = sweep_helix(&Frame::along([10.0, 0.0, 0.0], [0.0, 62.83, 5.0]).unwrap(), &Profile::circle([0.0, 0.0], 1.0).unwrap(), [0.0; 3], Dir3::Z, Lead::per_turn(5.0), deg(360.0));
+    assert_eq!(helix.unwrap_err().kind, ErrorKind::Unsupported);
+    force(Engine::Both);
+}
+
+#[test]
 fn under_a_forced_engine_every_constructor_builds_on_it_or_refuses() {
     for (engine, name) in [(Engine::Cadrs, "cadrs"), (Engine::Springrep, "springrep")] {
         force(engine);

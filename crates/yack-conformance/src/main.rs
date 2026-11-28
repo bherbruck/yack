@@ -433,6 +433,7 @@ fn force_engine() {
         "springrep" => Engine::Springrep,
         "cadrs" => Engine::Cadrs,
         "native" => Engine::Native,
+        "nocadrs" => Engine::NoCadrs,
         _ => return,
     };
     match op {

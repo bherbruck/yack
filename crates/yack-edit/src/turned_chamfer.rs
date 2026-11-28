@@ -12,7 +12,7 @@ use crate::{
     Error, Result, boolean,
     geom::{Curve, Surface},
     math::{Frame, Point3, Vec2},
-    profile::Profile,
+    profile::{NamedSegment, Profile, ProfileLoop, Segment},
     sweep::revolve,
     tol,
     topo::{Brep, EdgeId, FaceId, FaceName},
@@ -60,6 +60,20 @@ impl Face {
 /// `<feature>.bevel_0`. Declines an edge that is not a whole circle between two faces of the kinds
 /// above about its axis, or distances that leave a face.
 pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_other: f64, feature: &str) -> Result<Brep> {
+    turned(s, e, face, along_face, along_other, false, feature)
+}
+
+/// `s` with the circular edge `e`, between `face` and its other face, rounded to radius `r`: the
+/// faces' lines in the half plane of the axis (a plane, a cylinder or a cone; a sphere is declined)
+/// are rounded by the arc of the circle of radius `r` tangent to both, its feet `r / tan(phi / 2)`
+/// from the edge along them, revolved about the axis, and cut from a convex edge or added to a
+/// concave one. The round is named `<feature>.round_0`.
+pub fn fillet_edge(s: &Brep, e: EdgeId, face: FaceId, r: f64, feature: &str) -> Result<Brep> {
+    turned(s, e, face, r, r, true, feature)
+}
+
+/// [`chamfer_two`], or with `round` the round of radius `along_face` ([`fillet_edge`]).
+fn turned(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_other: f64, round: bool, feature: &str) -> Result<Brep> {
     let edge = s.edge(e);
     let Some(Curve::Circle(circle)) = &edge.curve else {
         return Err(Error::Unsupported("a turned chamfer on an edge that is not a circle".into()));
@@ -121,6 +135,20 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
         let (p, n) = face.along(shifted(face, k), t, d).ok_or_else(|| Error::Unsupported("a turned chamfer along a face of this kind".into()))?;
         Ok((unshifted(face, p), n))
     };
+    let radius = along_face;
+    let (along_face, along_other, half_turn) = if round {
+        if matches!(a.surface, Surface::Sphere(_)) || matches!(b.surface, Surface::Sphere(_)) {
+            return Err(Error::Unsupported("a turned round against a sphere".into()));
+        }
+        let phi = ta.dot(tb).clamp(-1.0, 1.0).acos();
+        if phi <= 1e-6 || phi >= std::f64::consts::PI - 1e-6 { // tol: an angle: faces that are not a corner
+            return Err(Error::InvalidInput("a round on a flat edge".into()));
+        }
+        let foot = radius / (phi / 2.0).tan();
+        (foot, foot, phi)
+    } else {
+        (along_face, along_other, 0.0)
+    };
     let (pa, _) = go(&a, ta, along_face)?;
     let (pb, _) = go(&b, tb, along_other)?;
     // Both contact points lie on their faces (one may be on the axis: the chamfer then runs to its apex).
@@ -131,6 +159,52 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     }
     // What the chamfer takes off a convex edge is the strip beyond the chord, reaching past the corner;
     // what it puts on a concave one is the triangle between the chord and the corner.
+    let sketch = Frame::new(o, radial.cross(up), radial)?;
+    if round {
+        let sum = ta + tb;
+        let norm = sum.dot(sum).sqrt();
+        if norm <= tol::LINEAR {
+            return Err(Error::InvalidInput("a round on a flat edge".into()));
+        }
+        let centre = k + sum * (radius / (half_turn / 2.0).sin() / norm);
+        let angle = |p: Vec2| (p.y - centre.y).atan2(p.x - centre.x);
+        let start = angle(pa);
+        let mut sweep = angle(pb) - start;
+        while sweep > std::f64::consts::PI {
+            sweep -= TAU;
+        }
+        while sweep <= -std::f64::consts::PI {
+            sweep += TAU;
+        }
+        let named = |segment: Segment, name: &str| NamedSegment::new(segment, name);
+        // A convex edge's round is cut by the kite and a margin beyond the faces (the kite's own sides
+        // would lie on the faces, which the cut does not take off cleanly where the round consumes a
+        // whole face); a concave one is filled by the kite alone.
+        let margin = radius + along_face;
+        let mut segments = vec![named(Segment::Arc { center: centre, radius, start, sweep }, "round")];
+        if convex {
+            let (na, nb) = (a.normal, b.normal);
+            let points = [pb + nb * margin, k + (na + nb) * margin, pa + na * margin];
+            let mut from = pb;
+            for (i, &to) in points.iter().enumerate() {
+                segments.push(named(Segment::Line { a: from, b: to }, &format!("m{i}")));
+                from = to;
+            }
+            segments.push(named(Segment::Line { a: from, b: pa }, "m3"));
+        } else {
+            segments.push(named(Segment::Line { a: pb, b: k }, "b"));
+            segments.push(named(Segment::Line { a: k, b: pa }, "corner"));
+        }
+        let kite = Profile { loops: vec![ProfileLoop { segments }] };
+        let ring = revolve(&kite, &sketch, o, up, TAU, "\u{1}round")?;
+        let mut done = if convex { boolean::difference(s, &ring)? } else { boolean::union(s, &ring)? };
+        done.rename_faces(|n| match n.feature.strip_prefix('\u{1}') {
+            Some(_) if n.face == "round" => vec![FaceName::new(feature, "round_0")],
+            Some(_) => Vec::new(),
+            None => vec![n.clone()],
+        });
+        return Ok(done);
+    }
     let section: Vec<Vec2> = if convex {
         let mid = (pa + pb) * 0.5;
         let gap = (k - mid).dot(k - mid).sqrt();
@@ -145,8 +219,6 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     };
     let names = ["chord", "b", "far", "a"];
     let profile = Profile::polygon(&section, names.get(..section.len()).unwrap_or(&names));
-    // The sketch plane holds the axis and the radial direction of the edge point.
-    let sketch = Frame::new(o, radial.cross(up), radial)?;
     let ring = revolve(&profile, &sketch, o, up, TAU, "\u{1}bevel")?;
     let mut done = if convex { boolean::difference(s, &ring)? } else { boolean::union(s, &ring)? };
     done.rename_faces(|n| match n.feature.strip_prefix('\u{1}') {
