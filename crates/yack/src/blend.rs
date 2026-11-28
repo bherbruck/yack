@@ -315,10 +315,26 @@ impl Solid {
             let op = "chamfer";
             let ids = self.sr_edges(op, "edges", edges)?;
             let ix = crate::edit::indices(edges);
-            ladder::two(
+            let springrep = || over_blend(op, self, &ix, "bevel_", distance, engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?);
+            // one edge, where springrep declines: yack-edit's straight chamfer, ending on the faces at
+            // the edge's ends (edges meeting at a vertex are the corner cut it does not build); then
+            // cadrs (bake-off doc/donors.md)
+            let native = || {
+                let [edge] = edges else {
+                    return Err(crate::Error::new(crate::ErrorKind::Unsupported, op, "native chamfer: one edge at a time"));
+                };
+                let face = *self.faces_of(*edge)?.first().ok_or_else(|| crate::Error::new(crate::ErrorKind::Unsupported, op, "an edge with no face"))?;
+                let (e, f) = (self.sr_edge(op, "edge", *edge)?, self.sr_face(op, "face", face)?);
+                engine::made(&feature, op, yack_edit::chamfer_two_straight(self.need(op)?, e, f, distance, distance, &feature))
+            };
+            let cadrs = || engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance));
+            ladder::ladder(
                 op,
-                &|| over_blend(op, self, &ix, "bevel_", distance, engine::made(&feature, op, sr::chamfer_edges(self.need(op)?, &ids, distance, &feature))?),
-                &|| engine_cadrs::blend(op, self, &ix, "bevel", |k, id| glue::chamfer(k, id, &ix, distance)),
+                &[
+                    ladder::Rung { name: "springrep", run: &springrep },
+                    ladder::Rung { name: "native", run: &native },
+                    ladder::Rung { name: "cadrs", run: &cadrs },
+                ],
             )
         })
     }
@@ -352,16 +368,19 @@ impl Solid {
             let e = self.sr_edge(op, "edge", edge)?;
             let f = self.sr_face(op, "face", face)?;
             let (ei, fi) = (u64::from(edge), u64::from(face));
-            // springrep, then yack-edit's turned-rim chamfer where springrep declines (a springrep
-            // Invalid still ends the ladder), then cadrs (bake-off doc/donors.md)
+            // springrep, then yack-edit's turned-rim chamfer and its straight chamfer where springrep
+            // declines (two native rungs; an Invalid from any rung ends the ladder), then cadrs
+            // (bake-off doc/donors.md)
             let springrep = || engine::made(&feature, op, sr::chamfer_two_edges(self.need(op)?, e, f, along_face, along_other, &feature));
-            let native = || engine::made(&feature, op, yack_edit::chamfer_two(self.need(op)?, e, f, along_face, along_other, &feature));
+            let turned = || engine::made(&feature, op, yack_edit::chamfer_two(self.need(op)?, e, f, along_face, along_other, &feature));
+            let straight = || engine::made(&feature, op, yack_edit::chamfer_two_straight(self.need(op)?, e, f, along_face, along_other, &feature));
             let cadrs = || engine_cadrs::blend(op, self, &[ei], "bevel", |k, id| glue::chamfer_two(k, id, ei, fi, along_face, along_other));
             ladder::ladder(
                 op,
                 &[
                     ladder::Rung { name: "springrep", run: &springrep },
-                    ladder::Rung { name: "native", run: &native },
+                    ladder::Rung { name: "native", run: &turned },
+                    ladder::Rung { name: "native", run: &straight },
                     ladder::Rung { name: "cadrs", run: &cadrs },
                 ],
             )

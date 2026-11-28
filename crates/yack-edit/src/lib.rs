@@ -46,6 +46,7 @@ mod cone_cavity;
 mod enclosed;
 mod offset_in;
 mod rounded_shell;
+mod straight_chamfer;
 mod thicken_sheet;
 mod turned_chamfer;
 mod variable_round;
@@ -57,6 +58,7 @@ pub use offset_in::concave_edges;
 pub use rounded_shell::{shell_outward_rounded, shell_rounded};
 pub use thicken_sheet::thicken_sheet;
 pub use turned_chamfer::chamfer_two;
+pub use straight_chamfer::chamfer_two as chamfer_two_straight;
 pub use variable_round::fillet_variable;
 pub use crate::tweak::{move_faces, move_faces_by};
 
@@ -1227,5 +1229,84 @@ mod tests {
         // Less the tip above the top at z = 6, a cone of height k = 6 - 2 sqrt 5, which the wall never held.
         let (h, k) = (10.0 - 2.0 * 5.0_f64.sqrt(), 6.0 - 2.0 * 5.0_f64.sqrt());
         close(measure::volume(&cup), measure::volume(&rounded) - PI * (h.powi(3) - k.powi(3)) / 12.0);
+    }
+
+    #[test]
+    fn a_concave_rim_is_chamfered_by_filling_its_corner() {
+        // A disc of radius 5 and 2 thick under a post of radius 2 and 3 tall: the circle where the post
+        // meets the disc's top is concave. Chamfered 1 along the top and 1 up the post, it gains the
+        // triangle (2, 2), (3, 2), (2, 3) in the half plane turned about the axis: 2 pi (7/3) (1/2).
+        let disc = crate::primitive::cylinder(&Frame::WORLD, 5.0, 2.0, "d").unwrap();
+        let post = crate::primitive::cylinder(&Frame::WORLD.translated(Vec3::new(0.0, 0.0, 2.0)), 2.0, 3.0, "p").unwrap();
+        let part = boolean::union(&disc, &post).unwrap();
+        let rim = part.edge_ids().find(|&e| matches!(part.edge(e).curve, Some(Curve::Circle(ref c)) if (c.radius - 2.0).abs() < 1e-9 && (c.frame.origin.z - 2.0).abs() < 1e-9)).unwrap();
+        let top = part.face_ids().find(|&g| matches!(part.face(g).surface, Surface::Plane(_)) && part.edge_uses(rim).iter().any(|&u| part.coedge_face(u) == g)).unwrap();
+        let chamfered = chamfer_two(&part, rim, top, 1.0, 1.0, "c").unwrap();
+        close(measure::volume(&chamfered), measure::volume(&part) + 7.0 * PI / 3.0);
+        assert!(chamfered.face_ids().any(|g| chamfered.face(g).names.iter().any(|n| n.face == "bevel_0")));
+    }
+
+    /// The edge of  through , found again after a cut renumbers the solid.
+    fn edge_through(b: &Brep, p: Point3) -> EdgeId {
+        b.edge_ids()
+            .filter_map(|e| {
+                let x = b.edge(e);
+                let c = x.curve.as_ref()?;
+                let t = c.project(p, x.range.0.min(x.range.1), x.range.0.max(x.range.1));
+                Some((c.eval(t).dist(p), e))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|x| x.1)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_cube_chamfered_edge_by_edge_ends_each_chamfer_on_the_ones_before() {
+        // The 10 cube, all twelve edges chamfered 2 one after another: a^3 - 6 a d^2 + 6 d^3 = 808
+        // (twelve prisms d^2/2 (a - 2d) and a corner piece 3 d^3 / 4 at each of eight corners).
+        let cube = crate::primitive::block(&Frame::WORLD, Vec3::new(10.0, 10.0, 10.0), "c").unwrap();
+        let mids: Vec<Point3> = cube.edge_ids().map(|e| { let x = cube.edge(e); x.curve.as_ref().unwrap().eval(0.5 * (x.range.0 + x.range.1)) }).collect();
+        let mut part = cube;
+        for p in mids {
+            let e = edge_through(&part, p);
+            let face = part.edge_uses(e).first().map(|&u| part.coedge_face(u)).unwrap();
+            part = chamfer_two_straight(&part, e, face, 2.0, 2.0, "c").unwrap();
+        }
+        close(measure::volume(&part), 808.0);
+        assert_eq!(part.face_ids().count(), 18);
+        assert!(crate::check::check(&part).is_empty());
+    }
+
+    #[test]
+    fn a_boxs_top_edge_chamfered_unequally_loses_the_prism_of_its_triangle() {
+        // A 20 x 10 x 6 box, the edge along x at y = 0, z = 6 chamfered 1 along the top and 2 down the
+        // side: the triangle 1 x 2 / 2 = 1 times 20.
+        let b = crate::primitive::block(&Frame::WORLD, Vec3::new(20.0, 10.0, 6.0), "b").unwrap();
+        let e = edge_through(&b, Point3::new(10.0, 0.0, 6.0));
+        let top = b.face_ids().find(|&g| crate::measure::face_bbox(&b, g).min.z > 5.9).unwrap();
+        let cut = chamfer_two_straight(&b, e, top, 1.0, 2.0, "c").unwrap();
+        close(measure::volume(&cut), 1200.0 - 20.0);
+    }
+
+    #[test]
+    fn a_concave_corner_is_filled_by_the_prism_of_its_triangle() {
+        // The L of arms 10 x 3 and 3 x 10, 10 thick: its inside corner chamfered 7 (the walls' whole length)
+        // gains the triangle 7 x 7 / 2 = 24.5, times 10: 245.
+        let l = Profile::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 3.0), Vec2::new(3.0, 3.0), Vec2::new(3.0, 10.0), Vec2::new(0.0, 10.0)], &["a", "b", "c", "d", "e", "f"]);
+        let s = extrude(&l, &Frame::WORLD, 10.0, "l").unwrap();
+        let e = edge_through(&s, Point3::new(3.0, 3.0, 5.0));
+        let face = s.edge_uses(e).first().map(|&u| s.coedge_face(u)).unwrap();
+        let filled = chamfer_two_straight(&s, e, face, 7.0, 7.0, "c").unwrap();
+        close(measure::volume(&filled), measure::volume(&s) + 245.0);
+    }
+
+    #[test]
+    fn a_straight_chamfer_declines_a_convex_edge_of_a_solid_with_a_concave_one() {
+        // The L's outer corner edge: the solid has a concave edge, so the prism might cut other material.
+        let l = Profile::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 3.0), Vec2::new(3.0, 3.0), Vec2::new(3.0, 10.0), Vec2::new(0.0, 10.0)], &["a", "b", "c", "d", "e", "f"]);
+        let s = extrude(&l, &Frame::WORLD, 10.0, "l").unwrap();
+        let e = edge_through(&s, Point3::new(0.0, 0.0, 5.0));
+        let face = s.edge_uses(e).first().map(|&u| s.coedge_face(u)).unwrap();
+        assert!(matches!(chamfer_two_straight(&s, e, face, 1.0, 1.0, "c"), Err(Error::Unsupported(_))));
     }
 }

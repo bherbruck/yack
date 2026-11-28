@@ -246,14 +246,9 @@ impl Solid {
             Ok(out)
         };
         // yack-edit's thicken_sheet (round joins, bends the move closes) after springrep and before
-        // cadrs (bake-off doc/donors.md); its free rims are swept square too, so the same slant refuses
-        let native = || {
-            let out = engine::made(engine::PROVISIONAL, op, yack_edit::thicken_sheet(self.need(op)?, &f, thickness, true, engine::PROVISIONAL))?;
-            if !yack_topo::local::rims_square(self.need(op)?, &f) {
-                return refuse(out, op, "a rim of the sheet meets its neighbour at a slant; the native rung would sweep it along the neighbour, not the sheet's normal");
-            }
-            Ok(out)
-        };
+        // cadrs (bake-off doc/donors.md); it declines a rim slanted to its neighbour itself, past the
+        // turned sheets whose rims it sweeps along the normal
+        let native = || engine::made(engine::PROVISIONAL, op, yack_edit::thicken_sheet(self.need(op)?, &f, thickness, true, engine::PROVISIONAL));
         firewall::op(op, &[self], || {
             ladder::ladder(
                 op,

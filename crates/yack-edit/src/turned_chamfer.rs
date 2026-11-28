@@ -35,7 +35,7 @@ impl Face {
     /// tangent direction `away`, and the outward normal there.
     fn along(&self, at: Vec2, away: Vec2, d: f64) -> Option<(Vec2, Vec2)> {
         match &self.surface {
-            Surface::Plane(_) | Surface::Cylinder(_) => Some((at + away * d, self.normal)),
+            Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) => Some((at + away * d, self.normal)),
             Surface::Sphere(sp) => {
                 let r = sp.radius;
                 // The distance is the chord, straight from the edge in the half plane: it turns the point
@@ -74,9 +74,10 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     let (first, second) = if f0 == face { (f0, f1) } else if f1 == face { (f1, f0) } else {
         return Err(Error::InvalidInput("the face is not one of the edge's two faces".into()));
     };
-    if crate::topo::local::convexity(s, e) != Some(true) {
-        return Err(Error::Unsupported("a turned chamfer on an edge that is not convex".into()));
-    }
+    // A concave edge is chamfered by filling its corner, a convex one by cutting it.
+    let Some(convex) = crate::topo::local::convexity(s, e) else {
+        return Err(Error::Unsupported("a turned chamfer on an edge that meets tangentially".into()));
+    };
     let (o, up) = (circle.frame.origin, circle.frame.z);
     let radial = circle.frame.x;
     let rho_k = circle.radius;
@@ -91,6 +92,7 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
             Surface::Plane(p) => p.frame.z.cross(up).norm() <= 1e-9, // tol: a cosine
             Surface::Cylinder(c) => c.frame.z.cross(up).norm() <= 1e-9 && (c.frame.origin - o).cross(up).norm() <= 1e-9, // tol: a cosine, and a distance
             Surface::Sphere(sp) => (sp.frame.origin - o).cross(up).norm() <= 1e-9, // tol: a distance
+            Surface::Cone(c) => c.frame.z.cross(up).norm() <= 1e-9 && (c.frame.origin - o).cross(up).norm() <= 1e-9, // tol: a cosine, and a distance
             _ => false,
         };
         if !about_axis {
@@ -112,7 +114,7 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
     // Along each face away from the edge: square to its normal, toward the other face's inside.
     let toward = |n: Vec2, other: Vec2| {
         let t = perp(n);
-        if t.dot(other) < 0.0 { t } else { -t }
+        if (t.dot(other) < 0.0) == convex { t } else { -t }
     };
     let (ta, tb) = (toward(a.normal, b.normal), toward(b.normal, a.normal));
     let go = |face: &Face, t: Vec2, d: f64| -> Result<(Vec2, Vec2)> {
@@ -127,20 +129,26 @@ pub fn chamfer_two(s: &Brep, e: EdgeId, face: FaceId, along_face: f64, along_oth
             return Err(Error::InvalidInput("a chamfer whose contact leaves its face".into()));
         }
     }
-    // The strip beyond the chord, reaching past the corner.
-    let mid = (pa + pb) * 0.5;
-    let gap = (k - mid).dot(k - mid).sqrt();
-    if gap <= tol::LINEAR {
-        return Err(Error::InvalidInput("a chamfer with no width".into()));
-    }
-    let out = (k - mid) * (1.0 / gap);
-    let reach = 2.0 * gap + along_face + along_other;
-    let strip = [pa, pb, pb + out * reach, pa + out * reach];
-    let profile = Profile::polygon(&strip, &["chord", "b", "far", "a"]);
+    // What the chamfer takes off a convex edge is the strip beyond the chord, reaching past the corner;
+    // what it puts on a concave one is the triangle between the chord and the corner.
+    let section: Vec<Vec2> = if convex {
+        let mid = (pa + pb) * 0.5;
+        let gap = (k - mid).dot(k - mid).sqrt();
+        if gap <= tol::LINEAR {
+            return Err(Error::InvalidInput("a chamfer with no width".into()));
+        }
+        let out = (k - mid) * (1.0 / gap);
+        let reach = 2.0 * gap + along_face + along_other;
+        vec![pa, pb, pb + out * reach, pa + out * reach]
+    } else {
+        vec![pa, pb, k]
+    };
+    let names = ["chord", "b", "far", "a"];
+    let profile = Profile::polygon(&section, names.get(..section.len()).unwrap_or(&names));
     // The sketch plane holds the axis and the radial direction of the edge point.
     let sketch = Frame::new(o, radial.cross(up), radial)?;
     let ring = revolve(&profile, &sketch, o, up, TAU, "\u{1}bevel")?;
-    let mut done = boolean::difference(s, &ring)?;
+    let mut done = if convex { boolean::difference(s, &ring)? } else { boolean::union(s, &ring)? };
     done.rename_faces(|n| match n.feature.strip_prefix('\u{1}') {
         Some(_) => vec![FaceName::new(feature, "bevel_0")],
         None => vec![n.clone()],

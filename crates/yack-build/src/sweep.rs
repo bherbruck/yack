@@ -12,7 +12,7 @@ mod curve;
 mod helix;
 
 pub use curve::along_curve;
-pub use helix::{Helix, helix};
+pub use helix::{Helix, helix, helix_rail, screwed_side};
 
 use std::f64::consts::TAU;
 
@@ -82,10 +82,7 @@ fn sharp_turn(
         return Ok(Vec::new());
     }
     let parts = outside.profiles()?;
-    parts
-        .iter()
-        .map(|p| revolve(p, fr, fr.origin, n, angle, feature))
-        .collect()
+    parts.iter().map(|p| revolve(p, fr, fr.origin, n, angle, feature)).collect()
 }
 
 /// `profile`, drawn on `frame`'s xy plane, carried along `legs` from the frame's origin, starting
@@ -108,11 +105,7 @@ pub fn along(
                 fr = fr.translated(fr.z * length);
                 vec![b]
             }
-            Leg::Arc {
-                radius,
-                angle,
-                axis,
-            } => {
+            Leg::Arc { radius, angle, axis } => {
                 let n = turn_axis(axis, &fr)?;
                 let centre = fr.origin + n.cross(fr.z) * radius;
                 let b = revolve(profile, &fr, centre, n, angle, feature)?;
@@ -151,31 +144,20 @@ fn plane_uv(frame: &Frame, p: Point3) -> Vec2 {
 /// The pcurve of `curve` on the plane of `frame`, starting at `start`.
 fn plane_pcurve(frame: &Frame, curve: &Curve, start: Point3) -> PCurve {
     match curve {
-        Curve::Line(l) => affine(
-            plane_uv(frame, l.origin),
-            Vec2::new(l.dir.dot(frame.x), l.dir.dot(frame.y)),
-        ),
-        _ => PCurve::Projected {
-            seed: plane_uv(frame, start),
-        },
+        Curve::Line(l) => {
+            affine(plane_uv(frame, l.origin), Vec2::new(l.dir.dot(frame.x), l.dir.dot(frame.y)))
+        }
+        _ => PCurve::Projected { seed: plane_uv(frame, start) },
     }
 }
 
 fn coedge(edge: EdgeId, reversed: bool, pcurve: PCurve) -> CoedgeSpec {
-    CoedgeSpec {
-        edge,
-        reversed,
-        pcurve,
-    }
+    CoedgeSpec { edge, reversed, pcurve }
 }
 
 /// The parameters a placed segment starts and ends at, in the loop's direction.
 fn traversal(s: &PlacedSegment) -> (f64, f64) {
-    if s.forward {
-        s.range
-    } else {
-        (s.range.1, s.range.0)
-    }
+    if s.forward { s.range } else { (s.range.1, s.range.0) }
 }
 
 fn finish(b: Brep) -> Result<Brep> {
@@ -183,9 +165,7 @@ fn finish(b: Brep) -> Result<Brep> {
     if issues.is_empty() {
         Ok(b)
     } else {
-        Err(Error::InvalidResult(
-            issues.into_iter().map(|i| i.to_string()).collect(),
-        ))
+        Err(Error::InvalidResult(issues.into_iter().map(|i| i.to_string()).collect()))
     }
 }
 
@@ -198,11 +178,7 @@ fn place(profile: &Profile, frame: &Frame) -> Vec<PlacedLoop> {
         .loops
         .iter()
         .map(|lp| PlacedLoop {
-            segs: lp
-                .segments
-                .iter()
-                .map(|s| (s.segment.place(frame), s.names.clone()))
-                .collect(),
+            segs: lp.segments.iter().map(|s| (s.segment.place(frame), s.names.clone())).collect(),
         })
         .collect()
 }
@@ -226,23 +202,14 @@ pub fn extrude(profile: &Profile, frame: &Frame, distance: f64, feature: &str) -
     let up = n * h;
     let lift = Transform::translation(up);
     let top = base.translated(up);
-    let (lo_name, hi_name) = if swap {
-        (FaceName::END, FaceName::START)
-    } else {
-        (FaceName::START, FaceName::END)
-    };
+    let (lo_name, hi_name) =
+        if swap { (FaceName::END, FaceName::START) } else { (FaceName::START, FaceName::END) };
 
     let mut b = Brep::new();
-    let lo = b.add_face(
-        Surface::Plane(Plane { frame: base }),
-        true,
-        [FaceName::new(feature, lo_name)],
-    );
-    let hi = b.add_face(
-        Surface::Plane(Plane { frame: top }),
-        false,
-        [FaceName::new(feature, hi_name)],
-    );
+    let lo =
+        b.add_face(Surface::Plane(Plane { frame: base }), true, [FaceName::new(feature, lo_name)]);
+    let hi =
+        b.add_face(Surface::Plane(Plane { frame: top }), false, [FaceName::new(feature, hi_name)]);
     let mut faces = vec![lo, hi];
     let mut lo_loops = Vec::new();
     let mut hi_loops = Vec::new();
@@ -394,52 +361,26 @@ fn classify(axis: &Axis, s: &PlacedSegment) -> Sweep {
                     dv: dh,
                 }
             } else if dh.abs() <= tol::ANGULAR {
-                Sweep::Plane {
-                    surface: Surface::Plane(Plane { frame }),
-                    frame,
-                }
+                Sweep::Plane { surface: Surface::Plane(Plane { frame }), frame }
             } else {
-                let cone = Cone {
-                    frame,
-                    radius: rho,
-                    half_angle: dr.atan2(dh),
-                };
-                Sweep::Curved {
-                    surface: Surface::Cone(cone),
-                    v0: 0.0,
-                    dv: 1.0,
-                }
+                let cone = Cone { frame, radius: rho, half_angle: dr.atan2(dh) };
+                Sweep::Curved { surface: Surface::Cone(cone), v0: 0.0, dv: 1.0 }
             }
         }
         Curve::Circle(c) => {
             let (rho, h) = (axis.radius(c.frame.origin), axis.height(c.frame.origin));
             let x = c.frame.x;
             let phi0 = x.dot(a).atan2(x.dot(e_rho));
-            let sign = if c.frame.z.dot(axis.frame.y) > 0.0 {
-                -1.0
-            } else {
-                1.0
-            };
+            let sign = if c.frame.z.dot(axis.frame.y) > 0.0 { -1.0 } else { 1.0 };
             let mid = phi0 + sign * 0.5 * (s.range.0 + s.range.1);
             let phi0 = phi0 - (mid / TAU).round() * TAU;
             let frame = axis.at_height(h);
             let surface = if rho <= tol::LINEAR {
-                Surface::Sphere(Sphere {
-                    frame,
-                    radius: c.radius,
-                })
+                Surface::Sphere(Sphere { frame, radius: c.radius })
             } else {
-                Surface::Torus(Torus {
-                    frame,
-                    major: rho,
-                    minor: c.radius,
-                })
+                Surface::Torus(Torus { frame, major: rho, minor: c.radius })
             };
-            Sweep::Curved {
-                surface,
-                v0: phi0,
-                dv: sign,
-            }
+            Sweep::Curved { surface, v0: phi0, dv: sign }
         }
         other => Sweep::Curved {
             surface: Surface::Revolution(Box::new(Revolution {
@@ -504,15 +445,7 @@ pub fn revolve(
     if hi <= tol::LINEAR {
         e_rho = -e_rho;
     }
-    let axis = Axis {
-        origin,
-        frame: Frame {
-            origin,
-            x: e_rho,
-            y: a.cross(e_rho),
-            z: a,
-        },
-    };
+    let axis = Axis { origin, frame: Frame { origin, x: e_rho, y: a.cross(e_rho), z: a } };
     let e_theta = axis.frame.y;
     if frame.z.dot(e_theta) < 0.0 {
         for lp in &mut profile.loops {
@@ -523,12 +456,7 @@ pub fn revolve(
     let on_axis = |p: Point3| axis.radius(p) <= tol::LINEAR;
 
     let mut b = Brep::new();
-    let start_frame = Frame {
-        origin,
-        x: e_rho,
-        y: a,
-        z: e_rho.cross(a),
-    };
+    let start_frame = Frame { origin, x: e_rho, y: a, z: e_rho.cross(a) };
     let end_frame = start_frame.transformed(&turn);
     let caps = (!full).then(|| {
         (

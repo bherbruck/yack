@@ -245,6 +245,17 @@ mod tests {
     }
 
     #[test]
+    fn a_convex_solids_leading_faces_sweep_one_prism() {
+        // A 10 × 6 × 4 block slid by (8, 5, 3): convex, so its three leading faces sweep one
+        // prism together; the volume is its own and each leading face's area times the slide's
+        // part along its normal: 240 + 24·8 + 40·5 + 60·3.
+        let b =
+            yack_build::primitive::block(&Frame::WORLD, Vec3::new(10.0, 6.0, 4.0), "b").unwrap();
+        let s = swept(&b, &Motion::Slide { by: Vec3::new(8.0, 5.0, 3.0) }, "f").unwrap();
+        near(yack_measure::volume(&s), 240.0 + 24.0 * 8.0 + 40.0 * 5.0 + 60.0 * 3.0);
+    }
+
+    #[test]
     fn carried_faces_keep_their_names_and_new_ones_are_the_features() {
         use yack_topo::FaceName;
         let s = swept(&cube(), &Motion::Slide { by: Vec3::new(5.0, 0.0, 0.0) }, "f").unwrap();

@@ -300,8 +300,15 @@ fn prisms_of(body: &Brep, sweep: &Sweep, sides: &[Cut], prisms: &mut Vec<Brep>) 
             }
             continue;
         }
-        for k in leading {
-            prisms.push(prism(&parts, k, sweep)?);
+        // A convex piece's leading faces, slid, sweep one prism together: a line along the
+        // slide leaves a convex solid once, so no two of their sweeps overlap, and the sides
+        // between two of them cancel. Elsewhere each leading face sweeps its own.
+        if matches!(sweep.how, How::Slide { .. }) && !leading.is_empty() && convex(&parts)? {
+            prisms.push(prism(&parts, &leading, sweep)?);
+        } else {
+            for k in leading {
+                prisms.push(prism(&parts, &[k], sweep)?);
+            }
         }
     }
     Ok(())
@@ -632,60 +639,109 @@ fn missing(what: &str) -> Error {
     Error::Unsupported(format!("by faces: no such {what}"))
 }
 
-/// The solid face `k` of `parts` sweeps on `sweep`, the face leading all over: the face where it
-/// starts (facing back), where it ends, and the side each piece of its boundary sweeps; named
-/// `start`, `end` and `side` under the sweep's feature.
-fn prism(parts: &Parts, k: usize, sweep: &Sweep) -> Result<Brep> {
-    let face = parts.faces.get(k).ok_or_else(|| missing("face"))?;
-    let mut p = Prism::new(parts, sweep);
-    // A seam the face uses both ways sweeps no side: its two sides would cancel.
-    let uses = |e: usize| face.loops.iter().flatten().filter(|&&(x, _)| x == e).count();
-    let (mut start_loops, mut end_loops, mut sides) = (Vec::new(), Vec::new(), Vec::new());
-    for lp in &face.loops {
-        let (mut start_loop, mut end_loop) = (Vec::new(), Vec::new());
-        for &(e, reversed) in lp {
-            let mut pieces = p.pieces(e)?;
-            if reversed {
-                pieces.reverse();
+/// Whether the solid `parts` describe is convex: every edge between two of its faces folds
+/// outward or is smooth (a connected closed shell all of whose edges do is a convex solid's).
+/// Each edge is judged at its middle, from its faces' outward normals `n₁`, `n₂` and the way the
+/// first face's loop runs along it, `t`: outward where `(n₁ × n₂)·t ≥ 0`.
+fn convex(parts: &Parts) -> Result<bool> {
+    let mut seen: BTreeMap<usize, (usize, bool)> = BTreeMap::new();
+    for (f, face) in parts.faces.iter().enumerate() {
+        if face.shell != 0 {
+            return Ok(false);
+        }
+        for &(e, reversed) in face.loops.iter().flatten() {
+            let Some(&(first, first_reversed)) = seen.get(&e) else {
+                seen.insert(e, (f, reversed));
+                continue;
+            };
+            if first == f {
+                continue; // a seam
             }
-            for (piece, e0, e1) in pieces {
-                start_loop.push((e0, !reversed));
-                end_loop.push((e1, reversed));
-                // A seam sweeps no side, nor a piece that stays where it is.
-                let stays = p.at(piece.start)?.rail.is_none() && p.at(piece.end)?.rail.is_none();
-                if uses(e) == 1 && !stays {
-                    sides.push((piece, reversed, e0, e1));
-                }
+            let (curve, a, b) = parts.edges.get(e).ok_or_else(|| missing("edge"))?;
+            let pa = *parts.points.get(*a).ok_or_else(|| missing("point"))?;
+            let pb = *parts.points.get(*b).ok_or_else(|| missing("point"))?;
+            let t = match curve.period() {
+                Some(period) if a == b => param_of(curve, pa) + period / 2.0,
+                _ => middle_param(curve, (pa, pb)),
+            };
+            let (mid, d) = curve.d1(t);
+            let travel = if first_reversed { -d } else { d };
+            let normal = |k: usize| -> Result<Vec3> {
+                let face = parts.faces.get(k).ok_or_else(|| missing("face"))?;
+                let uv = face.surface.project(mid);
+                let n = face.surface.normal(uv.x, uv.y);
+                Ok(if face.reversed { -n } else { n })
+            };
+            let fold = normal(first)?.cross(normal(f)?).dot(travel.unit().unwrap_or(travel));
+            if fold < -CLEAR {
+                return Ok(false);
             }
         }
-        // The start cap runs the other way round (it faces back), so its uses go in reverse.
-        start_loop.reverse();
-        start_loops.push(start_loop);
-        end_loops.push(end_loop);
     }
+    Ok(true)
+}
+
+/// The solid the faces `ks` of `parts` sweep on `sweep`, each leading all over and no two
+/// sweeping into each other: each face where it starts (facing back) and where it ends, and the
+/// side each piece of their boundary sweeps (a piece two of them share sweeps none); named
+/// `start`, `end` and `side` under the sweep's feature.
+fn prism(parts: &Parts, ks: &[usize], sweep: &Sweep) -> Result<Brep> {
+    let faces_of: Vec<&PartFace> = ks
+        .iter()
+        .map(|&k| parts.faces.get(k).ok_or_else(|| missing("face")))
+        .collect::<Result<_>>()?;
+    let mut p = Prism::new(parts, sweep);
+    // A seam a face uses both ways, or an edge two of the faces share, sweeps no side: its two
+    // sides would cancel.
+    let uses = |e: usize| {
+        faces_of.iter().flat_map(|f| f.loops.iter().flatten()).filter(|&&(x, _)| x == e).count()
+    };
     let named = |part: &str| BTreeSet::from([FaceName::new(sweep.feature, part)]);
-    // A whole turn ends where it starts: no caps, its sides close on themselves (each meets
-    // itself along its piece, its seam).
-    let mut faces = if sweep.whole() {
-        Vec::new()
-    } else {
-        vec![
-            PartFace {
+    let (mut faces, mut sides) = (Vec::new(), Vec::new());
+    for face in &faces_of {
+        let (mut start_loops, mut end_loops) = (Vec::new(), Vec::new());
+        for lp in &face.loops {
+            let (mut start_loop, mut end_loop) = (Vec::new(), Vec::new());
+            for &(e, reversed) in lp {
+                let mut pieces = p.pieces(e)?;
+                if reversed {
+                    pieces.reverse();
+                }
+                for (piece, e0, e1) in pieces {
+                    start_loop.push((e0, !reversed));
+                    end_loop.push((e1, reversed));
+                    // A seam sweeps no side, nor a piece that stays where it is.
+                    let stays =
+                        p.at(piece.start)?.rail.is_none() && p.at(piece.end)?.rail.is_none();
+                    if uses(e) == 1 && !stays {
+                        sides.push((piece, reversed, e0, e1));
+                    }
+                }
+            }
+            // The start cap runs the other way round (it faces back), so its uses go in reverse.
+            start_loop.reverse();
+            start_loops.push(start_loop);
+            end_loops.push(end_loop);
+        }
+        // A whole turn ends where it starts: no caps, its sides close on themselves (each meets
+        // itself along its piece, its seam).
+        if !sweep.whole() {
+            faces.push(PartFace {
                 surface: face.surface.clone(),
                 reversed: !face.reversed,
                 loops: start_loops,
                 names: named(FaceName::START),
                 shell: 0,
-            },
-            PartFace {
+            });
+            faces.push(PartFace {
                 surface: face.surface.transformed(&p.moved),
                 reversed: face.reversed,
                 loops: end_loops,
                 names: named(FaceName::END),
                 shell: 0,
-            },
-        ]
-    };
+            });
+        }
+    }
     for (piece, reversed, e0, e1) in sides {
         // Along the loop: the piece (as the face uses it), the rail up from its end, the slid
         // piece back, the rail down to its start; the face's material lies on the loop's left.

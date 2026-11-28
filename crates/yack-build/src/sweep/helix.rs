@@ -17,11 +17,10 @@
 use std::f64::consts::TAU;
 
 use crate::{
-    Error, Result,
-    intersect::csi,
-    check,
+    Error, Result, check,
     error::invalid,
     geom::{Curve, Cylinder, NurbsCurve, NurbsSurface, Plane, Surface},
+    intersect::csi,
     loft::rail::{Hom, Rail, hom, point},
     math::{Frame, Point3, Transform, Vec2, Vec3},
     profile::{Names, Profile},
@@ -117,11 +116,7 @@ fn nodes(angle: f64, radius: f64) -> Vec<f64> {
 }
 
 fn coedge(edge: EdgeId, reversed: bool, pcurve: PCurve) -> CoedgeSpec {
-    CoedgeSpec {
-        edge,
-        reversed,
-        pcurve,
-    }
+    CoedgeSpec { edge, reversed, pcurve }
 }
 
 fn affine(origin: Vec2, dir: Vec2) -> PCurve {
@@ -130,18 +125,13 @@ fn affine(origin: Vec2, dir: Vec2) -> PCurve {
 
 fn plane_seed(frame: &Frame, p: Point3) -> PCurve {
     let l = frame.to_local(p);
-    PCurve::Projected {
-        seed: Vec2::new(l.x, l.y),
-    }
+    PCurve::Projected { seed: Vec2::new(l.x, l.y) }
 }
 
 fn split(pw: &[Hom]) -> (Vec<Point3>, Option<Vec<f64>>) {
     let w: Vec<f64> = pw.iter().map(|h| h[3]).collect();
     let rational = w.iter().any(|&x| (x - 1.0).abs() > 1e-15);
-    (
-        pw.iter().map(|&h| point(h)).collect(),
-        rational.then_some(w),
-    )
+    (pw.iter().map(|&h| point(h)).collect(), rational.then_some(w))
 }
 
 /// One profile segment: its rail on `[0, 1]` in the loop's direction and its name.
@@ -190,9 +180,7 @@ fn self_contact(profile: &Profile, frame: &Frame, screw: &Helix, angle: f64) -> 
         let shift = Transform::translation(screw.axis * (k * rise));
         let meets = curves.iter().any(|(c, r)| {
             let moved = c.transformed(&shift);
-            curves
-                .iter()
-                .any(|(d, rd)| !csi::curve_curve(&moved, *r, d, *rd).is_empty())
+            curves.iter().any(|(d, rd)| !csi::curve_curve(&moved, *r, d, *rd).is_empty())
         });
         if meets || (k * rise).abs() <= tol::LINEAR {
             return invalid("a screw sweep's coils meet: its pitch is too short for its profile");
@@ -276,10 +264,7 @@ pub fn helix(
                     } else {
                         (placed.range.1, placed.range.0)
                     };
-                    Ok(Seg {
-                        rail: Rail::of_curve(&placed.curve, t0, t1)?,
-                        name: s.names.clone(),
-                    })
+                    Ok(Seg { rail: Rail::of_curve(&placed.curve, t0, t1)?, name: s.names.clone() })
                 })
                 .collect::<Result<Vec<_>>>()
         })
@@ -310,6 +295,73 @@ pub fn helix(
     assemble(&loops, frame, &motion, feature)
 }
 
+/// `p`'s track from turn 0 to `angle` of `screw`: degree-7 Hermite pieces through the helix's
+/// points and first three derivatives, within `SCREW_FIT` of it (as each column of [`helix`]'s
+/// side faces). A point on the axis tracks a straight piece of it.
+pub fn helix_rail(screw: &Helix, p: Point3, angle: f64) -> Result<Curve> {
+    if !(angle.is_finite() && angle > tol::ANGULAR) {
+        return invalid("a screw's track turns through a positive angle");
+    }
+    let q = p - screw.origin;
+    let radius = (q - screw.axis * q.dot(screw.axis)).norm();
+    let nodes = nodes(angle, radius);
+    let c = NurbsCurve::new(DEGREE, knots(&nodes), column(screw, p, &nodes), None)?;
+    Ok(Curve::Nurbs(Box::new(c)))
+}
+
+/// The surface `curve` from its parameter `range.0` to `range.1` sweeps through `angle` of
+/// `screw`: a straight piece along the axis sweeps its exact cylinder; any other piece of a line,
+/// conic or polynomial spline the rational surface whose `u` is the turn (0 to `angle`) and whose
+/// `v` (0 to 1) is the piece's own rational parameter from `range.0`, each column of its control
+/// net following its control point's helix within `SCREW_FIT` (as [`helix`]'s side faces do).
+pub fn screwed_side(
+    screw: &Helix,
+    curve: &Curve,
+    range: (f64, f64),
+    angle: f64,
+) -> Result<Surface> {
+    if !(angle.is_finite() && angle > tol::ANGULAR) {
+        return invalid("a screw's side turns through a positive angle");
+    }
+    let r = Rail::of_curve(curve, range.0, range.1)?;
+    let (pts, w) = split(&r.pw);
+    if let Some((_, _, radius)) = along_axis(screw, &pts, &w) {
+        let p = pts.first().copied().ok_or_else(|| Error::InvalidInput("an empty piece".into()))?;
+        let q = p - screw.origin;
+        let x = (q - screw.axis * q.dot(screw.axis))
+            .unit()
+            .ok_or_else(|| Error::InvalidInput("a screw's crest lies on its axis".into()))?;
+        return Ok(Surface::Cylinder(Cylinder {
+            frame: Frame::new(screw.origin, screw.axis, x)?,
+            radius,
+        }));
+    }
+    // A rational piece's inner control points lie off it: the widest decides the spacing.
+    let far = pts
+        .iter()
+        .map(|&p| {
+            let q = p - screw.origin;
+            (q - screw.axis * q.dot(screw.axis)).norm()
+        })
+        .fold(0.0, f64::max);
+    let nodes = nodes(angle, far);
+    let ku = knots(&nodes);
+    let cols: Vec<Vec<Point3>> = pts.iter().map(|&p| column(screw, p, &nodes)).collect();
+    let nu = cols.first().map_or(0, Vec::len);
+    let mut net = Vec::with_capacity(nu * pts.len());
+    for row in 0..nu {
+        net.extend(cols.iter().filter_map(|c| c.get(row).copied()));
+    }
+    let weights = w.map(|w| (0..nu).flat_map(|_| w.iter().copied()).collect());
+    Ok(Surface::Nurbs(Box::new(NurbsSurface::new(
+        (DEGREE, r.degree),
+        (ku, r.knots.clone()),
+        (nu, pts.len()),
+        net,
+        weights,
+    )?)))
+}
+
 /// How a profile moves along a sweep: each point's track as a curve of `degree` on `knots` over
 /// `range` (its control points), where it ends, and its velocity at the start; and the frame the
 /// end cap lies in.
@@ -332,12 +384,7 @@ pub struct Motion<'a> {
 /// made exactly, so that a boolean meeting a shank of that radius finds the two faces on one
 /// surface. A cylinder's angle runs once round, so the strip is cut at each whole turn, and with
 /// it the helices along every corner of the profile, each other face bounded by their pieces.
-pub fn assemble(
-    loops: &[Vec<Seg>],
-    frame: Frame,
-    m: &Motion,
-    feature: &str,
-) -> Result<Brep> {
+pub fn assemble(loops: &[Vec<Seg>], frame: Frame, m: &Motion, feature: &str) -> Result<Brep> {
     let helix = |p: Point3| -> Result<Curve> {
         let c = NurbsCurve::new(m.degree, m.knots.clone(), (m.column)(p), None)?;
         Ok(Curve::Nurbs(Box::new(c)))
@@ -362,12 +409,7 @@ pub fn assemble(
         }
     };
     let line = |a: Point3, b: Point3| -> Result<Curve> {
-        Ok(Curve::Nurbs(Box::new(NurbsCurve::new(
-            1,
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![a, b],
-            None,
-        )?)))
+        Ok(Curve::Nurbs(Box::new(NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], None)?)))
     };
     let end_frame = m.end_frame;
     let mut b = Brep::new();
@@ -414,8 +456,7 @@ pub fn assemble(
         for (s, (here, next)) in segs.iter().zip(round(&corners)) {
             let r = &s.rail;
             let (pts, w) = split(&r.pw);
-            let at_end: Vec<Hom> =
-                r.pw.iter().map(|&h| hom((m.at_end)(point(h)), h[3])).collect();
+            let at_end: Vec<Hom> = r.pw.iter().map(|&h| hom((m.at_end)(point(h)), h[3])).collect();
             let (end_pts, _) = split(&at_end);
             let c0 = NurbsCurve::new(r.degree, r.knots.clone(), pts.clone(), w.clone())?;
             let c1 = NurbsCurve::new(r.degree, r.knots.clone(), end_pts, w.clone())?;
@@ -474,10 +515,8 @@ pub fn assemble(
                     let x = (p - sc.axis * p.dot(sc.axis)).unit().ok_or_else(|| {
                         Error::InvalidInput("a screw's crest lies on its axis".into())
                     })?;
-                    let surface = Surface::Cylinder(Cylinder {
-                        frame: Frame::new(sc.origin, z, x)?,
-                        radius,
-                    });
+                    let surface =
+                        Surface::Cylinder(Cylinder { frame: Frame::new(sc.origin, z, x)?, radius });
                     let (t0, t1) = (from.t(), to.t());
                     let v = |t: f64, s: f64| sign * (h0 + rise * t + s * dh);
                     // A line's end is affine in its parameter; an arc's angle is not in its
@@ -578,9 +617,7 @@ pub fn assemble(
     if issues.is_empty() {
         Ok(b)
     } else {
-        Err(Error::InvalidResult(
-            issues.into_iter().map(|i| i.to_string()).collect(),
-        ))
+        Err(Error::InvalidResult(issues.into_iter().map(|i| i.to_string()).collect()))
     }
 }
 
@@ -693,3 +730,55 @@ fn following<T>(items: &[T]) -> impl Iterator<Item = &T> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+    use crate::geom::Line;
+
+    /// A right-hand screw about z, rising 0.5 mm a radian.
+    fn screw() -> Helix {
+        Helix { origin: Point3::ZERO, axis: Vec3::Z, rise: 0.5, sign: 1.0 }
+    }
+
+    /// The exact helix: `p` turned by `t` about z and raised 0.5·t.
+    fn exact(p: Point3, t: f64) -> Point3 {
+        let (s, c) = t.sin_cos();
+        Point3::new(p.x * c - p.y * s, p.x * s + p.y * c, p.z + 0.5 * t)
+    }
+
+    #[test]
+    fn a_track_follows_its_helix_within_the_fit() {
+        let p = Point3::new(3.0, 0.0, 1.0);
+        let rail = helix_rail(&screw(), p, 2.0).unwrap();
+        // Its parameter is the turn: at each, the point the helix is at.
+        for k in 0..=40 {
+            let t = 2.0 * f64::from(k) / 40.0;
+            let gap = rail.eval(t).dist(exact(p, t));
+            assert!(gap <= 10.0 * SCREW_FIT, "{t}: {gap:e}");
+        }
+    }
+
+    #[test]
+    fn a_radial_line_screws_a_helicoid_and_an_axial_one_its_cylinder() {
+        // From (1, 0, 0) to (3, 0, 0): the surface at turn u and parameter v is the helix of
+        // the point v of the way along, the helicoid z = 0.5·θ.
+        let (a, b) = (Point3::new(1.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
+        let line = Curve::Line(Line { origin: a, dir: Vec3::X });
+        let side = screwed_side(&screw(), &line, (0.0, 2.0), 1.5).unwrap();
+        for i in 0..=10 {
+            for j in 0..=10 {
+                let (u, v) = (1.5 * f64::from(i) / 10.0, f64::from(j) / 10.0);
+                let want = exact(a + (b - a) * v, u);
+                let gap = side.eval(u, v).dist(want);
+                assert!(gap <= 10.0 * SCREW_FIT, "({u}, {v}): {gap:e}");
+            }
+        }
+        // A line along the axis 2 away sweeps the cylinder of radius 2.
+        let axial = Curve::Line(Line { origin: Point3::new(0.0, 2.0, 0.0), dir: Vec3::Z });
+        let Surface::Cylinder(c) = screwed_side(&screw(), &axial, (0.0, 1.0), 1.0).unwrap() else {
+            panic!("not a cylinder");
+        };
+        assert!((c.radius - 2.0).abs() < 1e-12 && c.frame.z.cross(Vec3::Z).norm() < 1e-12);
+    }
+}

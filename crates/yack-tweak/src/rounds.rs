@@ -34,14 +34,22 @@ pub fn drop_vanishing_rounds(b: &Brep, by: &BTreeMap<FaceId, f64>) -> Result<Opt
         // The rounds still to go, as faces of `cur`: each face of `b` that `by` moves past its radius.
         let next = map.iter().find_map(|(&f, &g)| {
             let face = cur.face(g);
-            let Surface::Torus(t) = &face.surface else { return None };
+            // A ring round's tube, or a ball's cap rounding a cone's tip (convex only).
+            let radius = match &face.surface {
+                Surface::Torus(t) => t.minor,
+                Surface::Sphere(s) if !face.reversed => s.radius,
+                _ => return None,
+            };
             // How far the move takes the face towards the round's axis: in for a convex round,
             // out for a concave one.
             let towards = if face.reversed { by.get(&f).copied()? } else { -by.get(&f).copied()? };
-            (towards >= t.minor - tol::LINEAR).then_some((g, towards))
+            (towards >= radius - tol::LINEAR).then_some(g)
         });
-        let Some((round, towards)) = next else { break };
-        let (out, kept) = drop_round(&cur, round, towards)?;
+        let Some(round) = next else { break };
+        let (out, kept) = match &cur.face(round).surface {
+            Surface::Sphere(_) => drop_cap(&cur, round)?,
+            _ => drop_round(&cur, round)?,
+        };
         map = map.into_iter().filter_map(|(f, g)| Some((f, *kept.get(&g)?))).collect();
         cur = out;
         dropped = true;
@@ -108,30 +116,74 @@ fn crossing(a: &Meridian, c: &Meridian, near: Vec2) -> Option<Vec2> {
         .min_by(|x, y| (*x - near).norm().total_cmp(&(*y - near).norm()))
 }
 
-/// Whether an edge of `b` where its faces meet concavely (convexly, unless `concave`) comes within
-/// `reach` of the circle `x` (radius and height) about the axis `(o, k)`.
-fn creased_near(b: &Brep, (o, k): (Point3, Vec3), x: Vec2, reach: f64, concave: bool) -> bool {
-    let outward = |f: FaceId, p: Point3| {
-        let s = &b.face(f).surface;
-        let uv = s.project(p);
-        let n = s.normal(uv.x, uv.y);
-        if b.face(f).reversed { -n } else { n }
+/// The outward normal of face `f` of `b` at `p`, a point on it.
+fn outward(b: &Brep, f: FaceId, p: Point3) -> Vec3 {
+    let s = &b.face(f).surface;
+    let uv = s.project(p);
+    let n = s.normal(uv.x, uv.y);
+    if b.face(f).reversed { -n } else { n }
+}
+
+/// Whether the round `r` is tangent to face `g` all along their edge `e`: their outward normals
+/// agree at each of a rail's sample points.
+fn tangent_along(b: &Brep, r: FaceId, e: EdgeId, g: FaceId) -> bool {
+    let x = b.edge(e);
+    let Some(c) = &x.curve else { return false };
+    (0..8).all(|i| {
+        let p = c.eval(x.range.0 + (x.range.1 - x.range.0) * f64::from(i) / 8.0);
+        let (n, m) = (outward(b, r, p), outward(b, g, p));
+        n.cross(m).norm() <= tol::TANGENT && n.dot(m) > 0.0
+    })
+}
+
+/// `p` in the half plane of the axis `(o, k)`: its distance from the axis and its height.
+fn in_meridian(p: Point3, (o, k): (Point3, Vec3)) -> Vec2 {
+    let q = p - o;
+    let z = q.dot(k);
+    Vec2::new((q - k * z).norm(), z)
+}
+
+/// Whether some edge of `b` other than the round `r`'s own comes inside the region the round cut
+/// off its corner: in the half plane of the axis, the region between the rails' points `a` and
+/// `c`, the corner `x` their faces meet in, and the round's arc about `spine` of radius `minor`.
+fn intrudes(b: &Brep, r: FaceId, axis: (Point3, Vec3), (a, x, c): (Vec2, Vec2, Vec2), (spine, minor): (Vec2, f64)) -> bool {
+    // The arc from `c` back to `a` the short way, the side the corner is on.
+    let (ta, tc) = ((a - spine).y.atan2((a - spine).x), (c - spine).y.atan2((c - spine).x));
+    let mut sweep = ta - tc;
+    while sweep > std::f64::consts::PI {
+        sweep -= TAU;
+    }
+    while sweep < -std::f64::consts::PI {
+        sweep += TAU;
+    }
+    let mut poly = vec![a, x, c];
+    poly.extend((1..16).map(|i| {
+        let t = tc + sweep * f64::from(i) / 16.0;
+        spine + Vec2::new(t.cos(), t.sin()) * minor
+    }));
+    let off_boundary = |q: Vec2| {
+        poly.iter().zip(poly.iter().cycle().skip(1)).all(|(&u, &v)| {
+            let d = v - u;
+            let s = ((q - u).dot(d) / d.dot(d).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+            (u + d * s).dist(q) > tol::LINEAR
+        })
     };
-    let to_circle = |p: Point3| {
-        let q = p - o;
-        let z = q.dot(k);
-        Vec2::new((q - k * z).norm(), z).dist(x)
+    let inside = |q: Vec2| {
+        let mut wind = false;
+        for (&u, &v) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+            if (u.y > q.y) != (v.y > q.y) && q.x < u.x + (q.y - u.y) / (v.y - u.y) * (v.x - u.x) {
+                wind = !wind;
+            }
+        }
+        wind && off_boundary(q)
     };
-    b.edge_ids().any(|e| {
-        let edge = b.edge(e);
-        let (Some(c), &[cf, cg]) = (&edge.curve, b.edge_uses(e)) else { return false };
-        let (f, g) = (b.coedge_face(cf), b.coedge_face(cg));
-        let (p, dp) = c.d1(0.5 * (edge.range.0 + edge.range.1));
-        let (n, m) = (outward(f, p), outward(g, p));
-        let t = if b.coedge(cf).reversed { -dp } else { dp };
-        let side = m.dot(n.cross(t));
-        let kind = if concave { side > 0.0 } else { side < 0.0 };
-        f != g && n.cross(m).norm() > tol::TANGENT && kind && (0..=16).any(|i| to_circle(c.eval(edge.range.0 + (edge.range.1 - edge.range.0) * f64::from(i) / 16.0)) <= reach)
+    let own: std::collections::BTreeSet<EdgeId> =
+        b.face(r).loops.iter().flat_map(|&lp| b.lp(lp).coedges.iter().map(|&co| b.coedge(co).edge)).collect();
+    b.edge_ids().filter(|e| !own.contains(e)).any(|e| {
+        let x = b.edge(e);
+        x.curve.as_ref().is_some_and(|cv| {
+            (0..=16).any(|i| inside(in_meridian(cv.eval(x.range.0 + (x.range.1 - x.range.0) * f64::from(i) / 16.0), axis)))
+        })
     })
 }
 
@@ -141,11 +193,10 @@ fn across(b: &Brep, e: EdgeId, f: FaceId) -> Option<FaceId> {
 }
 
 /// `b` with the ring round `r` taken out (see [`drop_vanishing_rounds`]), and each face of `b`
-/// kept mapped on to its face in the result. Only a round moved `towards` its axis by at least its
-/// radius (a convex one in, a concave one out), with no edge of the other kind (concave, convex)
-/// within `towards` plus its radius of the edge it rounded: the move of the round is then the move
-/// of that edge, which a groove, step or rib narrower than the round close by could change.
-fn drop_round(b: &Brep, r: FaceId, towards: f64) -> Result<(Brep, BTreeMap<FaceId, FaceId>)> {
+/// kept mapped on to its face in the result. Only a round the move takes past its axis (a convex
+/// one in, a concave one out; the caller's test), tangent to both its faces along both rails, with
+/// nothing else in the corner it cut off: the move of the round is then the move of that edge.
+fn drop_round(b: &Brep, r: FaceId) -> Result<(Brep, BTreeMap<FaceId, FaceId>)> {
     let no = |why: &str| Error::Unsupported(format!("taking out a round the offset goes past: {why}"));
     let Surface::Torus(Torus { frame, major, minor }) = &b.face(r).surface else {
         return Err(no("the round is no torus"));
@@ -173,13 +224,21 @@ fn drop_round(b: &Brep, r: FaceId, towards: f64) -> Result<(Brep, BTreeMap<FaceI
     let Some(x) = crossing(&ma, &mb, Vec2::new(*major, 0.0)).filter(|x| (*x - Vec2::new(*major, 0.0)).norm() <= 10.0 * minor) else {
         return Err(no("the neighbours' meridians do not meet by the round"));
     };
-    let convex = !b.face(r).reversed;
-    if creased_near(b, (o, k), x, towards + minor, convex) {
-        return Err(no(if convex {
-            "a concave edge lies near the round (a feature narrower than the round may change the erosion)"
-        } else {
-            "a convex edge lies near the round (a feature narrower than the round may change the growth)"
-        }));
+    // A true rolling-ball round: tangent to both its faces all along both rails. Then any ball of
+    // the move's radius inside the solid is made of balls of the round's radius that keep out of
+    // the corner it cut off, so the move past it is the sharp edge's, whatever lies near.
+    if !tangent_along(b, r, ea, fa) || !tangent_along(b, r, eb, fb) {
+        return Err(no("the round is not tangent to both its faces"));
+    }
+    let rail_at = |e: EdgeId| {
+        let x = b.edge(e);
+        b.edge(e).curve.as_ref().map(|c| in_meridian(c.eval(0.5 * (x.range.0 + x.range.1)), (o, k)))
+    };
+    let (Some(pa), Some(pb)) = (rail_at(ea), rail_at(eb)) else {
+        return Err(no("a rail has no curve"));
+    };
+    if intrudes(b, r, (o, k), (pa, x, pb), (Vec2::new(*major, 0.0), *minor)) {
+        return Err(no("another edge lies in the corner the round cut off"));
     }
     // The new edge's one vertex, on the rails' vertices' meridian.
     let (va, vb) = (b.edge(ea).start, b.edge(eb).start);
@@ -203,7 +262,57 @@ fn drop_round(b: &Brep, r: FaceId, towards: f64) -> Result<(Brep, BTreeMap<FaceI
     };
     let along = circle.d1(0.0).1;
     let (flip_a, flip_b) = (along.dot(ta) < 0.0, along.dot(tb) < 0.0);
-    rebuild(b, r, (ea, flip_a), (eb, flip_b), (va, vb), w, circle).map_err(|why| no(&why))
+    rebuild(b, r, (ea, flip_a), (eb, flip_b), (va, vb), w, Some(circle)).map_err(|why| no(&why))
+}
+
+/// `b` with the ball's cap `r` that rounds a cone's tip taken out (see [`drop_vanishing_rounds`]),
+/// the cone run on to its tip. Only a cap tangent to a coaxial cone all along its one rail, with
+/// nothing else in the corner it cut off.
+fn drop_cap(b: &Brep, r: FaceId) -> Result<(Brep, BTreeMap<FaceId, FaceId>)> {
+    let no = |why: &str| Error::Unsupported(format!("taking out a ball's cap the offset goes past: {why}"));
+    let Surface::Sphere(ball) = &b.face(r).surface else {
+        return Err(no("the cap is no ball"));
+    };
+    let mut rails: Vec<(EdgeId, FaceId)> = Vec::new();
+    for &lp in &b.face(r).loops {
+        for &c in &b.lp(lp).coedges {
+            let e = b.coedge(c).edge;
+            if let Some(g) = across(b, e, r) {
+                rails.push((e, g));
+            }
+        }
+    }
+    let &[(ea, fa)] = rails.as_slice() else {
+        return Err(no("the cap is no ring with one rail on a cone"));
+    };
+    let Surface::Cone(cone) = &b.face(fa).surface else {
+        return Err(no("the cap's neighbour is no cone"));
+    };
+    let k = cone.frame.z;
+    let o = ball.frame.origin;
+    if b.edge(ea).start != b.edge(ea).end || (o - cone.frame.origin).cross(k).norm() > tol::LINEAR || cone.half_angle.sin().abs() <= tol::TANGENT {
+        return Err(no("the cap's rail is not closed, or its ball is off the cone's axis"));
+    }
+    if !tangent_along(b, r, ea, fa) {
+        return Err(no("the cap is not tangent to its cone"));
+    }
+    // The cone's tip: where its radius runs out.
+    let v_tip = -cone.radius / cone.half_angle.sin();
+    let w = cone.frame.origin + k * (v_tip * cone.half_angle.cos());
+    let axis = (o, k);
+    let rail_at = {
+        let x = b.edge(ea);
+        b.edge(ea).curve.as_ref().map(|c| in_meridian(c.eval(0.5 * (x.range.0 + x.range.1)), axis))
+    };
+    let Some(pa) = rail_at else { return Err(no("the rail has no curve")) };
+    let tip = in_meridian(w, axis);
+    // The cap's pole, on the axis on the tip's side of the ball.
+    let pole = Vec2::new(0.0, ball.radius * tip.y.signum());
+    if intrudes(b, r, axis, (pa, tip, pole), (Vec2::new(0.0, 0.0), ball.radius)) {
+        return Err(no("another edge lies in the tip the cap cut off"));
+    }
+    let va = b.edge(ea).start;
+    rebuild(b, r, (ea, false), (ea, false), (va, va), w, None).map_err(|why| no(&why))
 }
 
 /// `b` without face `r`: rails `ea` and `eb` become one edge on `circle` (flipped against each
@@ -216,13 +325,17 @@ fn rebuild(
     (eb, flip_b): (EdgeId, bool),
     (va, vb): (VertexId, VertexId),
     w: Point3,
-    circle: Curve,
+    circle: Option<Curve>,
 ) -> std::result::Result<(Brep, BTreeMap<FaceId, FaceId>), String> {
     let mut out = Brep::new();
     let joined = out.add_vertex(w);
     let mut verts: BTreeMap<VertexId, VertexId> = BTreeMap::from([(va, joined), (vb, joined)]);
     let mut vertex = |out: &mut Brep, v: VertexId| *verts.entry(v).or_insert_with(|| out.add_vertex(b.vertex(v).point));
-    let ring = out.add_edge(circle, (0.0, TAU), joined, joined);
+    // The ring the rails become, or, for a cap, the tip: a degenerate edge at `w`.
+    let ring = match circle {
+        Some(c) => out.add_edge(c, (0.0, TAU), joined, joined),
+        None => out.add_degenerate_edge(joined, (0.0, TAU)),
+    };
     // Every edge some kept face uses, the rails becoming the ring.
     let mut edges: BTreeMap<EdgeId, (EdgeId, bool)> = BTreeMap::from([(ea, (ring, flip_a)), (eb, (ring, flip_b))]);
     let faces: Vec<FaceId> = b.face_ids().filter(|&f| f != r).collect();
@@ -268,10 +381,28 @@ fn rebuild(
             for &c in &b.lp(lp).coedges {
                 let co = b.coedge(c);
                 let &(edge, flip) = edges.get(&co.edge).ok_or("a loop runs on an edge the rebuild lost")?;
-                let reversed = co.reversed != flip;
+                // The tip's degenerate edge is this coedge's alone, so it runs the coedge's way.
+                let tip = (co.edge == ea || co.edge == eb) && out.edge(edge).curve.is_none();
+                let reversed = !tip && co.reversed != flip;
                 // Every edge keeps its parameters (one carried on to `w` along its own line); the
                 // ring is projected, from where the rail it stands for began on this face.
-                let pcurve = if co.edge == ea || co.edge == eb {
+                let pcurve = if tip {
+                    // The tip: the rail's turn round the face, at the tip's parameters.
+                    let ts = crate::topo::coedge_params(b, c, 2);
+                    let uvs = b.coedge_uvs(c, &ts);
+                    let (Some(&first), Some(&last)) = (uvs.first(), uvs.last()) else {
+                        return Err("a rail's parameters are unknown".into());
+                    };
+                    let tip_v = match &face.surface {
+                        Surface::Cone(c) if c.half_angle.sin().abs() > tol::TANGENT => -c.radius / c.half_angle.sin(),
+                        s => s.project(w).y,
+                    };
+                    let turn = last.x - first.x;
+                    if turn.abs() < 1.0 {
+                        return Err("a rail that does not go round its face".into());
+                    }
+                    PCurve::Affine { origin: Vec2::new(first.x, tip_v), dir: Vec2::new(turn / TAU, 0.0) }
+                } else if co.edge == ea || co.edge == eb {
                     let old = b.edge(co.edge);
                     let t = if co.reversed { old.range.1 } else { old.range.0 };
                     let began = match &co.pcurve {

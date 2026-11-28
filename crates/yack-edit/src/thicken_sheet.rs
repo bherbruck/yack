@@ -538,6 +538,40 @@ mod tests {
     }
 
     #[test]
+    fn a_slanted_rim_that_is_not_a_turned_slab_declines() {
+        // The sheets below meet a neighbour at a slant, so their rims would be swept along that
+        // neighbour, not their normal, and none is a sphere or cone bounded by whole circles about
+        // its axis: each declines, as the facade's check declined them before.
+        // A frustum's flat top (its rim meets the cone at a slant).
+        let frustum = crate::primitive::cone(&Frame::WORLD, 6.0, 3.0, 4.0, "c").unwrap();
+        let top = faces_where(&frustum, |bb| bb.min.z > 4.0 - 1e-9);
+        assert!(!topo::local::rims_square(&frustum, &top));
+        assert!(matches!(thicken_sheet(&frustum, &top, 1.0, true, "t"), Err(Error::Unsupported(_))));
+        // A trapezoid prism's flat top, both sides leaning in.
+        let wedge = crate::sweep::extrude(
+            &crate::profile::Profile::polygon(
+                &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(8.0, 4.0), Vec2::new(2.0, 4.0)],
+                &["a", "b", "c", "d"],
+            ),
+            &Frame::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            5.0,
+            "w",
+        )
+        .unwrap();
+        let roof = faces_where(&wedge, |bb| bb.min.z > 4.0 - 1e-9);
+        assert_eq!(roof.len(), 1);
+        assert!(!topo::local::rims_square(&wedge, &roof));
+        assert!(matches!(thicken_sheet(&wedge, &roof, 1.0, true, "t"), Err(Error::Unsupported(_))));
+        // Half a frustum's side: a cone, but its rims are half circles and two lines.
+        let (half, _) =
+            boolean::split(&frustum, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap();
+        let side = faces_where(&half, |bb| bb.max.z - bb.min.z > 3.0 && bb.max.y > 1.0);
+        assert_eq!(side.len(), 1);
+        assert!(turned_slab(&half, &side, 1.0, "t").is_none());
+        assert!(matches!(thicken_sheet(&half, &side, 1.0, true, "t"), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
     fn a_round_join_inward_declines() {
         // The bracket's crease thickened 1 in opens on its concave side, which this rung does not
         // round.

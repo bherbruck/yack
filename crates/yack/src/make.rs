@@ -670,14 +670,14 @@ pub fn nurbs_solid(
 ) -> Result<Solid> {
     let op = "nurbs_solid";
     let cadrs = || engine_cadrs::nurbs_solid(op, frame, degree, knots, ctrl, weights);
-    // yack-build's closed NURBS net after cadrs, as "native" until a bake-off orders it; its one
-    // face is `side`
+    // yack-build's closed NURBS net first (bake-off doc/donors.md: 3 bench cases bit-identical);
+    // cadrs answers what it declines (a net whose poles meet, a cone's). Its one face is `side`
     let native = || {
         let feature = engine::feature();
         let net: Vec<Vec<_>> = ctrl.iter().map(|row| row.iter().map(|&p| engine::p3(p)).collect()).collect();
         engine::made(&feature, op, yack_build::nurbs::nurbs_solid(&engine::frame(frame), degree, knots, &net, weights, &feature))
     };
-    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "cadrs", run: &cadrs }, ladder::Rung { name: "native", run: &native }]))
+    firewall::op(op, &[], || ladder::ladder(op, &[ladder::Rung { name: "native", run: &native }, ladder::Rung { name: "cadrs", run: &cadrs }]))
 }
 
 /// The solid with no pieces.

@@ -759,3 +759,47 @@ fn the_springrep_draft_rung_names_its_faces_and_falls_through_to_cadrs() -> Resu
     assert!(closed.check().is_empty() && closed.volume() > 0.0);
     Ok(())
 }
+
+
+/// nurbs_solid runs yack-build's rung first; a NURBS cone (its apex row pinched to one pole), which
+/// that rung declines, is still answered, by cadrs.
+#[cfg(feature = "bakeoff")]
+#[test]
+fn a_nurbs_cone_falls_through_to_cadrs() -> Result<()> {
+    use yack::bakeoff::built_by;
+    let c = [[1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [-1.0, 1.0], [-1.0, 0.0], [-1.0, -1.0], [0.0, -1.0], [1.0, -1.0]];
+    let ring: Vec<Vec<Point3>> = c.iter().chain(c.first()).map(|&[x, y]| vec![[5.0 * x, 5.0 * y, 0.0].into(), [0.0, 0.0, 10.0].into()]).collect();
+    let ku = [0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0];
+    let weights: Vec<Vec<f64>> = (0..9).map(|i| vec![if i % 2 == 0 { 1.0 } else { std::f64::consts::FRAC_1_SQRT_2 }; 2]).collect();
+    let cone = nurbs_solid(&Frame::WORLD, [2, 1], [&ku, &[0.0, 0.0, 1.0, 1.0]], &ring, Some(&weights))?;
+    assert_eq!(built_by(&cone), "cadrs");
+    assert!(cone.check().is_empty() && cone.volume() > 0.0);
+    Ok(())
+}
+
+
+/// yack-edit's straight chamfer (native, after springrep, before cadrs) under `force_op`: one cube
+/// edge chamfered, and one box rim edge chamfered by two setbacks, every face with a History
+/// origin (invariant 3).
+#[cfg(feature = "bakeoff")]
+#[test]
+fn the_native_straight_chamfer_names_its_faces_for_history() -> Result<()> {
+    use yack::bakeoff::{Engine, built_by, force, force_op};
+    let cube = block(&Frame::WORLD, [10.0, 10.0, 10.0])?;
+    let edge = cube.edge_at([5.0, 0.0, 10.0])?;
+    let b = block(&Frame::WORLD, [20.0, 10.0, 6.0])?;
+    let (rim, top) = (b.edge_at([10.0, 10.0, 6.0])?, b.face_at([10.0, 5.0, 6.0])?);
+    force_op("chamfer", Engine::Native);
+    let even = cube.chamfer(&[edge], 2.0);
+    force_op("chamfer_two", Engine::Native);
+    let uneven = b.chamfer_two(rim, top, 1.0, 2.0);
+    force(Engine::Both);
+    for (input, out) in [(&cube, even), (&b, uneven)] {
+        let s = out?;
+        assert_eq!(built_by(&s), "native");
+        let found = audit("chamfer", &[input], &s);
+        assert!(found.is_empty(), "chamfer: {found:?}");
+        eprintln!("straight chamfer: {} faces, every one with an origin", s.faces().len());
+    }
+    Ok(())
+}
